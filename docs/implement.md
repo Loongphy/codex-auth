@@ -11,6 +11,13 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
 - `~/.codex/sessions/...`
 
+`codex-auth` resolves `codex_home` in this order:
+
+1. `CODEX_HOME` (when set and non-empty)
+2. `HOME/.codex`
+3. `USERPROFILE/.codex` (Windows fallback)
+4. `HOMEDRIVE + HOMEPATH + "/.codex"` (Windows fallback)
+
 ## Testing Conventions (BDD Style on std.testing)
 
 - The project keeps using Zig native tests (`zig build test`) for CI and local checks.

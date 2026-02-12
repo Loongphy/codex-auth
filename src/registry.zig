@@ -72,15 +72,43 @@ fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) vo
     }
 }
 
-pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
-    if (std.process.getEnvVarOwned(allocator, "CODEX_HOME")) |val| {
-        if (val.len > 0) return val;
+fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
+    const val = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return err,
+    };
+    if (val.len == 0) {
         allocator.free(val);
-    } else |_| {}
+        return null;
+    }
+    return val;
+}
 
-    const home = try std.process.getEnvVarOwned(allocator, "HOME");
-    defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
+pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
+    if (try getNonEmptyEnvVarOwned(allocator, "CODEX_HOME")) |val| return val;
+
+    if (try getNonEmptyEnvVarOwned(allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
+    }
+
+    if (try getNonEmptyEnvVarOwned(allocator, "USERPROFILE")) |user_profile| {
+        defer allocator.free(user_profile);
+        return try std.fs.path.join(allocator, &[_][]const u8{ user_profile, ".codex" });
+    }
+
+    const home_drive = try getNonEmptyEnvVarOwned(allocator, "HOMEDRIVE");
+    defer if (home_drive) |v| allocator.free(v);
+    const home_path = try getNonEmptyEnvVarOwned(allocator, "HOMEPATH");
+    defer if (home_path) |v| allocator.free(v);
+
+    if (home_drive != null and home_path != null) {
+        const combined = try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
+        defer allocator.free(combined);
+        return try std.fs.path.join(allocator, &[_][]const u8{ combined, ".codex" });
+    }
+
+    return error.EnvironmentVariableNotFound;
 }
 
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
