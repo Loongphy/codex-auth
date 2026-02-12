@@ -3,10 +3,12 @@ name: CI
 on:
   push:
     branches:
-      - "**"
+      - "main"
     tags:
       - "v*"
   pull_request:
+    branches:
+      - "main"
 
 permissions:
   contents: write
@@ -29,11 +31,10 @@ jobs:
         with:
           version: 0.15.1
 
-      - name: Zig version
-        run: zig version
-
-      - name: Test
-        run: zig build test
+      - name: Zig test
+        run: |
+          zig version
+          zig build test
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseSafe
