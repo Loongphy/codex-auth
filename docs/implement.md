@@ -97,8 +97,8 @@ If `auth.json` has no email, sync is skipped.
 
 Important limits:
 
-- There is no background sync. Tokens are updated only when you run `codex-auth`.
-- Matching is strictly by email; no fallback to an alternate key or “active” heuristic.
+- Foreground commands still sync `auth.json` strictly by email; there is no alternate key or “active” heuristic.
+- When background auto-switching is enabled, a daemon keeps polling rollout usage and can switch accounts without a foreground `codex-auth` command.
 
 ## Switching Accounts
 
@@ -116,6 +116,40 @@ When switching:
 2. The selected account’s `accounts/<email_b64>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_email` is updated.
 
+## Background Auto Switch
+
+`auto` supports three user-facing commands:
+
+- `codex-auth auto enable`
+- `codex-auth auto disable`
+- `codex-auth auto status`
+
+The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
+`help` prints the current `Auto Switch: ON/OFF` state.
+
+When enabled:
+
+1. A background daemon runs continuously.
+2. It refreshes usage from the newest rollout file and assigns that snapshot to the current active account.
+   The daemon also remembers the last attributed rollout `(path, mtime)` and will not reassign an unchanged rollout after an automatic switch.
+3. If active-account remaining quota is below either threshold, it silently switches to the best alternative account:
+   - `5h` remaining `< 10%`
+   - `weekly` remaining `< 5%`
+4. Candidate scoring is reset-aware:
+   - if `resets_at <= now`, that window is treated as fully reset (`100%`)
+   - if both 5h and weekly are known, the candidate score is the lower remaining value
+   - if only one window is known, that window is the score
+   - if an account has no usage snapshot at all, it is treated as a fresh account with `100%` remaining
+
+Service bootstrap is platform-specific:
+
+- Linux/WSL: `systemd --user`
+- macOS: `LaunchAgent`
+- Windows: user scheduled task
+
+Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
+The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth auto enable` was run.
+
 ## Backups
 
 - `auth.json` backups are created only when the contents change.
@@ -124,13 +158,16 @@ When switching:
 
 ## Usage and Rate Limits
 
-Usage data is read from the newest `~/.codex/sessions/**/rollout-*.jsonl` file only.
+Usage data is read from the newest `~/.codex/sessions/**/rollout-*.jsonl` file that still contains a parseable rate-limit snapshot.
 
 - The scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
+- If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), that file is skipped and the scanner falls back to the most recent rollout that does contain a parseable snapshot.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
-- If `resets_at` is in the past, the UI shows `100% -`.
+- If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a snapshot was observed.
-- `list` and `switch` trigger a one-time scan of the newest rollout file for the active account.
+- `list`, `switch`, and the auto-switch daemon scan the newest rollout file with a parseable snapshot and write that snapshot to the current active account.
+- The auto-switch daemon persists the last attributed rollout signature so that the same unchanged rollout is not reassigned immediately after an automatic account switch.
+- The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond the active-account + last-attributed-rollout guard.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):
 

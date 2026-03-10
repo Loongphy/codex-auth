@@ -50,6 +50,7 @@ codex-auth login [--skip] # login and add current account (runs `codex login` by
 codex-auth switch [<email>] # switch active account (interactive or partial/fragment match)
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
 codex-auth remove # remove accounts (interactive multi-select)
+codex-auth auto enable|disable|status # manage background auto-switching
 ```
 
 Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`. The old `--no-login` flag has been replaced by `--skip`.
@@ -101,3 +102,23 @@ Remove accounts (interactive multi-select):
 ```shell
 codex-auth remove
 ```
+
+Enable background auto-switching:
+
+```shell
+codex-auth auto enable
+```
+
+Show background auto-switch status:
+
+```shell
+codex-auth auto status
+```
+
+When auto-switching is enabled, a background daemon watches the active account's latest rollout usage and silently switches accounts when:
+
+- 5h remaining drops below `10%`, or
+- weekly remaining drops below `5%`
+
+Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
+`codex-auth help` also shows whether auto-switching is currently `ON` or `OFF`.

@@ -50,7 +50,12 @@ test "registry save/load" {
     defer gpa.free(codex_home);
     try tmp.dir.makePath("accounts");
 
-    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    var reg = registry.Registry{
+        .version = 3,
+        .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
     defer reg.deinit(gpa);
 
     const rec = registry.AccountRecord{
@@ -65,12 +70,17 @@ test "registry save/load" {
     };
     try reg.accounts.append(gpa, rec);
     try registry.setActiveAccount(gpa, &reg, "a@b.com");
+    try registry.setTrackedRolloutSignature(gpa, &reg.auto_switch, "/tmp/rollout.jsonl", 42);
 
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
+    try std.testing.expect(loaded.auto_switch.last_rollout.path != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.auto_switch.last_rollout.path.?, "/tmp/rollout.jsonl"));
+    try std.testing.expect(loaded.auto_switch.last_rollout.mtime != null);
+    try std.testing.expect(loaded.auto_switch.last_rollout.mtime.? == 42);
 }
 
 test "auth backup only on change" {
@@ -150,7 +160,12 @@ test "sync active auth matches by email and updates account auth" {
     defer gpa.free(codex_home);
     try tmp.dir.makePath("accounts");
 
-    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    var reg = registry.Registry{
+        .version = 3,
+        .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
     defer reg.deinit(gpa);
 
     const rec = registry.AccountRecord{
@@ -199,7 +214,12 @@ test "registry backup only on change" {
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
 
-    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    var reg = registry.Registry{
+        .version = 3,
+        .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
     defer reg.deinit(gpa);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
@@ -245,7 +265,12 @@ test "import auth path with single file keeps explicit alias" {
     const one_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
     defer gpa.free(one_path);
 
-    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    var reg = registry.Registry{
+        .version = 3,
+        .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
     defer reg.deinit(gpa);
 
     const summary = try registry.importAuthPath(gpa, codex_home, &reg, one_path, "personal");
@@ -276,7 +301,12 @@ test "import auth path with directory imports multiple json files and skips bad 
     const imports_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
     defer gpa.free(imports_dir);
 
-    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    var reg = registry.Registry{
+        .version = 3,
+        .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
     defer reg.deinit(gpa);
 
     const summary = try registry.importAuthPath(gpa, codex_home, &reg, imports_dir, null);

@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-const registry_version: u32 = 2;
+const registry_version: u32 = 3;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -31,6 +31,16 @@ pub const RateLimitSnapshot = struct {
     plan_type: ?PlanType,
 };
 
+pub const RolloutSignature = struct {
+    path: ?[]u8 = null,
+    mtime: ?i64 = null,
+};
+
+pub const AutoSwitchConfig = struct {
+    enabled: bool = false,
+    last_rollout: RolloutSignature = .{},
+};
+
 pub const AccountRecord = struct {
     email: []u8,
     alias: []u8,
@@ -51,6 +61,7 @@ pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
 pub const Registry = struct {
     version: u32,
     active_email: ?[]u8,
+    auto_switch: AutoSwitchConfig,
     accounts: std.ArrayList(AccountRecord),
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
@@ -58,18 +69,49 @@ pub const Registry = struct {
             freeAccountRecord(allocator, rec);
         }
         if (self.active_email) |k| allocator.free(k);
+        freeAutoSwitchConfig(allocator, &self.auto_switch);
         self.accounts.deinit(allocator);
     }
 };
+
+pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
+    return .{};
+}
 
 fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) void {
     allocator.free(rec.email);
     allocator.free(rec.alias);
     if (rec.last_usage) |*u| {
-        if (u.credits) |*c| {
-            if (c.balance) |b| allocator.free(b);
-        }
+        freeRateLimitSnapshot(allocator, u);
     }
+}
+
+fn freeAutoSwitchConfig(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig) void {
+    if (cfg.last_rollout.path) |path| allocator.free(path);
+}
+
+pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const RateLimitSnapshot) void {
+    if (snapshot.credits) |*c| {
+        if (c.balance) |b| allocator.free(b);
+    }
+}
+
+pub fn hasTrackedRolloutSignature(cfg: *const AutoSwitchConfig, path: []const u8, mtime: i64) bool {
+    return cfg.last_rollout.path != null and
+        cfg.last_rollout.mtime != null and
+        cfg.last_rollout.mtime.? == mtime and
+        std.mem.eql(u8, cfg.last_rollout.path.?, path);
+}
+
+pub fn setTrackedRolloutSignature(
+    allocator: std.mem.Allocator,
+    cfg: *AutoSwitchConfig,
+    path: []const u8,
+    mtime: i64,
+) !void {
+    if (cfg.last_rollout.path) |existing| allocator.free(existing);
+    cfg.last_rollout.path = try allocator.dupe(u8, path);
+    cfg.last_rollout.mtime = mtime;
 }
 
 fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
@@ -87,25 +129,25 @@ fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8
 pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
     if (try getNonEmptyEnvVarOwned(allocator, "CODEX_HOME")) |val| return val;
 
-    if (try getNonEmptyEnvVarOwned(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
-    }
+    const home = try resolveUserHome(allocator);
+    defer allocator.free(home);
+    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
+}
 
-    if (try getNonEmptyEnvVarOwned(allocator, "USERPROFILE")) |user_profile| {
-        defer allocator.free(user_profile);
-        return try std.fs.path.join(allocator, &[_][]const u8{ user_profile, ".codex" });
-    }
+pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
+    if (try getNonEmptyEnvVarOwned(allocator, "HOME")) |home| return home;
+
+    if (try getNonEmptyEnvVarOwned(allocator, "USERPROFILE")) |user_profile| return user_profile;
 
     const home_drive = try getNonEmptyEnvVarOwned(allocator, "HOMEDRIVE");
-    defer if (home_drive) |v| allocator.free(v);
+    errdefer if (home_drive) |v| allocator.free(v);
     const home_path = try getNonEmptyEnvVarOwned(allocator, "HOMEPATH");
-    defer if (home_path) |v| allocator.free(v);
+    errdefer if (home_path) |v| allocator.free(v);
 
     if (home_drive != null and home_path != null) {
-        const combined = try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
-        defer allocator.free(combined);
-        return try std.fs.path.join(allocator, &[_][]const u8{ combined, ".codex" });
+        defer allocator.free(home_drive.?);
+        defer allocator.free(home_path.?);
+        return try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
     }
 
     return error.EnvironmentVariableNotFound;
@@ -526,11 +568,12 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
 
 pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     if (reg.accounts.items.len == 0) return null;
+    const now = std.time.timestamp();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
     for (reg.accounts.items, 0..) |rec, i| {
-        const score = usageScore(rec.last_usage);
+        const score = usageScoreAt(rec.last_usage, now) orelse -1;
         const seen = rec.last_usage_at orelse -1;
         if (score > best_score) {
             best_score = score;
@@ -544,26 +587,29 @@ pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     return best_idx;
 }
 
-fn usageScore(usage: ?RateLimitSnapshot) i64 {
+pub fn usageScoreAt(usage: ?RateLimitSnapshot, now: i64) ?i64 {
     const rate_5h = resolveRateWindow(usage, 300, true);
     const rate_week = resolveRateWindow(usage, 10080, false);
-    const rem_5h = remainingPercent(rate_5h);
-    const rem_week = remainingPercent(rate_week);
+    const rem_5h = remainingPercentAt(rate_5h, now);
+    const rem_week = remainingPercentAt(rate_week, now);
     if (rem_5h != null and rem_week != null) return @min(rem_5h.?, rem_week.?);
     if (rem_5h != null) return rem_5h.?;
     if (rem_week != null) return rem_week.?;
-    return -1;
+    return null;
 }
 
-fn remainingPercent(window: ?RateLimitWindow) ?i64 {
+pub fn remainingPercentAt(window: ?RateLimitWindow, now: i64) ?i64 {
     if (window == null) return null;
+    if (window.?.resets_at) |resets_at| {
+        if (resets_at <= now) return 100;
+    }
     const remaining = 100.0 - window.?.used_percent;
     if (remaining <= 0.0) return 0;
     if (remaining >= 100.0) return 100;
     return @as(i64, @intFromFloat(remaining));
 }
 
-fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?RateLimitWindow {
+pub fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?RateLimitWindow {
     if (usage == null) return null;
     if (usage.?.primary) |p| {
         if (p.window_minutes != null and p.window_minutes.? == minutes) return p;
@@ -572,6 +618,23 @@ fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_primary: 
         if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
     }
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
+}
+
+pub fn activateAccountByEmail(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    email: []const u8,
+) !void {
+    const src = try accountAuthPath(allocator, codex_home, email);
+    defer allocator.free(src);
+
+    const dest = try activeAuthPath(allocator, codex_home);
+    defer allocator.free(dest);
+
+    try backupAuthIfChanged(allocator, codex_home, dest, src);
+    try copyFile(src, dest);
+    try setActiveAccount(allocator, reg, email);
 }
 
 pub fn accountFromAuth(
@@ -623,7 +686,12 @@ pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: Accou
 }
 
 fn loadRegistryV2(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !Registry {
-    var reg = Registry{ .version = registry_version, .active_email = null, .accounts = std.ArrayList(AccountRecord).empty };
+    var reg = Registry{
+        .version = registry_version,
+        .active_email = null,
+        .auto_switch = defaultAutoSwitchConfig(),
+        .accounts = std.ArrayList(AccountRecord).empty,
+    };
 
     if (root_obj.get("active_email")) |v| {
         switch (v) {
@@ -688,6 +756,10 @@ fn loadRegistryV2(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !R
         }
     }
 
+    if (root_obj.get("auto_switch")) |v| {
+        parseAutoSwitch(allocator, &reg.auto_switch, v);
+    }
+
     return reg;
 }
 
@@ -698,7 +770,12 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const cwd = std.fs.cwd();
     var file = cwd.openFile(path, .{}) catch |err| {
         if (err == error.FileNotFound) {
-            return Registry{ .version = registry_version, .active_email = null, .accounts = std.ArrayList(AccountRecord).empty };
+            return Registry{
+                .version = registry_version,
+                .active_email = null,
+                .auto_switch = defaultAutoSwitchConfig(),
+                .accounts = std.ArrayList(AccountRecord).empty,
+            };
         }
         return err;
     };
@@ -713,7 +790,12 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const root = parsed.value;
     const root_obj = switch (root) {
         .object => |o| o,
-        else => return Registry{ .version = registry_version, .active_email = null, .accounts = std.ArrayList(AccountRecord).empty },
+        else => return Registry{
+            .version = registry_version,
+            .active_email = null,
+            .auto_switch = defaultAutoSwitchConfig(),
+            .accounts = std.ArrayList(AccountRecord).empty,
+        },
     };
     return loadRegistryV2(allocator, root_obj);
 }
@@ -727,6 +809,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
     const out = RegistryOut{
         .version = registry_version,
         .active_email = reg.active_email,
+        .auto_switch = reg.auto_switch,
         .accounts = reg.accounts.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -749,6 +832,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 const RegistryOut = struct {
     version: u32,
     active_email: ?[]const u8,
+    auto_switch: AutoSwitchConfig,
     accounts: []const AccountRecord,
 };
 
@@ -786,6 +870,36 @@ fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSnapsho
     if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
     if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
     return snap;
+}
+
+fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.json.Value) void {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return,
+    };
+    if (obj.get("enabled")) |enabled| {
+        switch (enabled) {
+            .bool => |flag| cfg.enabled = flag,
+            else => {},
+        }
+    }
+    if (obj.get("last_rollout")) |last_rollout| {
+        parseRolloutSignature(allocator, &cfg.last_rollout, last_rollout);
+    }
+}
+
+fn parseRolloutSignature(allocator: std.mem.Allocator, sig: *RolloutSignature, v: std.json.Value) void {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return,
+    };
+    if (obj.get("path")) |path_val| {
+        switch (path_val) {
+            .string => |path| sig.path = allocator.dupe(u8, path) catch null,
+            else => {},
+        }
+    }
+    sig.mtime = readInt(obj.get("mtime"));
 }
 
 fn parseWindow(v: std.json.Value) ?RateLimitWindow {

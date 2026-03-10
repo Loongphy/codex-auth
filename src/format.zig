@@ -162,7 +162,12 @@ fn printAccountsJson(reg: *registry.Registry) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    const dump = RegistryOut{ .version = reg.version, .active_email = reg.active_email, .accounts = reg.accounts.items };
+    const dump = RegistryOut{
+        .version = reg.version,
+        .active_email = reg.active_email,
+        .auto_switch = reg.auto_switch,
+        .accounts = reg.accounts.items,
+    };
     try std.json.Stringify.value(dump, .{ .whitespace = .indent_2 }, out);
     try out.writeAll("\n");
     try out.flush();
@@ -221,6 +226,7 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
 const RegistryOut = struct {
     version: u32,
     active_email: ?[]const u8,
+    auto_switch: registry.AutoSwitchConfig,
     accounts: []const registry.AccountRecord,
 };
 
@@ -241,7 +247,7 @@ fn formatRateLimitStatusAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     const now = std.time.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
+        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     const time_str = try formatResetTimeAlloc(reset_at, now);
@@ -335,7 +341,7 @@ fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     const now = std.time.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
+        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(reset_at, now);
@@ -352,7 +358,7 @@ fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8
     const now = std.time.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
+        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(reset_at, now);
@@ -685,4 +691,18 @@ test "truncateAlloc respects max_len" {
     const out2 = try truncateAlloc("abcdef", 1);
     defer std.heap.page_allocator.free(out2);
     try std.testing.expect(out2.len == 1);
+}
+
+test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
+    const now = std.time.timestamp();
+    const window = registry.RateLimitWindow{
+        .used_percent = 100.0,
+        .window_minutes = 300,
+        .resets_at = now - 60,
+    };
+
+    const formatted = try formatRateLimitFullAlloc(window);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expectEqualStrings("100%", formatted);
 }

@@ -2,7 +2,7 @@ const std = @import("std");
 const cli = @import("cli.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
-const sessions = @import("sessions.zig");
+const auto = @import("auto.zig");
 const format = @import("format.zig");
 
 pub fn main() !void {
@@ -25,8 +25,14 @@ pub fn main() !void {
         .import_auth => |opts| try handleImport(allocator, codex_home, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
         .remove_account => |_| try handleRemove(allocator, codex_home),
+        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
+            .enable => .enable,
+            .disable => .disable,
+            .status => .status,
+        }),
+        .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
         .version => try cli.printVersion(),
-        .help => try cli.printHelp(),
+        .help => try handleHelp(allocator, codex_home),
     }
 }
 
@@ -48,7 +54,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         try registry.refreshAccountsFromAuth(allocator, codex_home, &reg);
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try refreshActiveUsageFromSessions(allocator, codex_home, &reg)) {
+    if (try auto.refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try format.printAccounts(allocator, &reg, .table);
@@ -95,7 +101,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try refreshActiveUsageFromSessions(allocator, codex_home, &reg)) {
+    if (try auto.refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
@@ -122,16 +128,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
     const email = selected_email.?;
 
-    const src = try registry.accountAuthPath(allocator, codex_home, email);
-    defer allocator.free(src);
-
-    const dest = try registry.activeAuthPath(allocator, codex_home);
-    defer allocator.free(dest);
-
-    try registry.backupAuthIfChanged(allocator, codex_home, dest, src);
-    try registry.copyFile(src, dest);
-
-    try registry.setActiveAccount(allocator, &reg, email);
+    try registry.activateAccountByEmail(allocator, codex_home, &reg, email);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -166,31 +163,22 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
         const email = reg.accounts.items[best_idx].email;
 
-        const src = try registry.accountAuthPath(allocator, codex_home, email);
-        defer allocator.free(src);
-
-        const dest = try registry.activeAuthPath(allocator, codex_home);
-        defer allocator.free(dest);
-
-        try registry.backupAuthIfChanged(allocator, codex_home, dest, src);
-        try registry.copyFile(src, dest);
-        try registry.setActiveAccount(allocator, &reg, email);
+        try registry.activateAccountByEmail(allocator, codex_home, &reg, email);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
-fn refreshActiveUsageFromSessions(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
-    const snapshot = sessions.scanLatestUsage(allocator, codex_home) catch return false;
-    if (snapshot == null) return false;
-    const email = reg.active_email orelse return false;
-    registry.updateUsage(allocator, reg, email, snapshot.?);
-    return true;
+fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    try cli.printHelp(reg.auto_switch.enabled);
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
 test {
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");
+    _ = @import("tests/auto_test.zig");
     _ = @import("tests/registry_test.zig");
     _ = @import("tests/registry_bdd_test.zig");
     _ = @import("tests/cli_bdd_test.zig");

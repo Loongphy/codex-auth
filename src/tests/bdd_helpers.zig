@@ -36,8 +36,9 @@ pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
-        .version = 2,
+        .version = 3,
         .active_email = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
 }

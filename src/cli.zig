@@ -37,6 +37,9 @@ pub const LoginOptions = struct {
 pub const ImportOptions = struct { auth_path: []u8, alias: ?[]u8 };
 pub const SwitchOptions = struct { email: ?[]u8 };
 pub const RemoveOptions = struct {};
+pub const AutoAction = enum { enable, disable, status };
+pub const AutoOptions = struct { action: AutoAction };
+pub const DaemonOptions = struct { watch: bool };
 
 pub const Command = union(enum) {
     list: ListOptions,
@@ -44,6 +47,8 @@ pub const Command = union(enum) {
     import_auth: ImportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
+    auto_switch: AutoOptions,
+    daemon: DaemonOptions,
     version: void,
     help: void,
 };
@@ -130,6 +135,22 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         return Command{ .remove_account = .{} };
     }
 
+    if (std.mem.eql(u8, cmd, "auto")) {
+        if (args.len != 3) return Command{ .help = {} };
+        const action = std.mem.sliceTo(args[2], 0);
+        if (std.mem.eql(u8, action, "enable")) return Command{ .auto_switch = .{ .action = .enable } };
+        if (std.mem.eql(u8, action, "disable")) return Command{ .auto_switch = .{ .action = .disable } };
+        if (std.mem.eql(u8, action, "status")) return Command{ .auto_switch = .{ .action = .status } };
+        return Command{ .help = {} };
+    }
+
+    if (std.mem.eql(u8, cmd, "daemon")) {
+        if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[2], 0), "--watch")) {
+            return Command{ .daemon = .{ .watch = true } };
+        }
+        return Command{ .help = {} };
+    }
+
     return Command{ .help = {} };
 }
 
@@ -146,16 +167,16 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
     }
 }
 
-pub fn printHelp() !void {
+pub fn printHelp(auto_enabled: bool) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     const use_color = colorEnabled();
-    try writeHelp(out, use_color);
+    try writeHelp(out, use_color, auto_enabled);
     try out.flush();
 }
 
-pub fn writeHelp(out: *std.Io.Writer, use_color: bool) !void {
+pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void {
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("codex-auth");
     if (use_color) try out.writeAll(ansi.reset);
@@ -164,6 +185,11 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool) !void {
     try out.writeAll(version.app_version);
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
+
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("Auto Switch:");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.print(" {s}\n\n", .{if (auto_enabled) "ON" else "OFF"});
 
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");
@@ -176,6 +202,7 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool) !void {
     try writeHelpCommand(out, use_color, "import <path> [--alias <alias>]", "Import one auth file or a directory");
     try writeHelpCommand(out, use_color, "switch [<email-prefix-or-part>]", "Switch the active account");
     try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
+    try writeHelpCommand(out, use_color, "auto enable|disable|status", "Manage background auto-switching");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);
@@ -1022,7 +1049,7 @@ fn formatRateLimitSwitchAlloc(allocator: std.mem.Allocator, window: ?registry.Ra
     const now = std.time.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(allocator, "100% -", .{});
+        return try std.fmt.allocPrint(allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(allocator, reset_at, now);

@@ -1,12 +1,40 @@
 const std = @import("std");
 const registry = @import("registry.zig");
 
+pub const LatestUsage = struct {
+    path: []u8,
+    mtime: i64,
+    snapshot: registry.RateLimitSnapshot,
+
+    pub fn deinit(self: *LatestUsage, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        registry.freeRateLimitSnapshot(allocator, &self.snapshot);
+    }
+};
+
+const RolloutCandidate = struct {
+    path: []u8,
+    mtime: i64,
+};
+
 pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
+    const latest = try scanLatestUsageWithSource(allocator, codex_home);
+    if (latest == null) return null;
+    allocator.free(latest.?.path);
+    return latest.?.snapshot;
+}
+
+pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestUsage {
     const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
     defer allocator.free(sessions_root);
 
-    var latest_path: ?[]u8 = null;
-    var latest_mtime: i128 = -1;
+    var candidates = std.ArrayList(RolloutCandidate).empty;
+    defer {
+        for (candidates.items) |candidate| {
+            allocator.free(candidate.path);
+        }
+        candidates.deinit(allocator);
+    }
 
     var dir = try std.fs.cwd().openDir(sessions_root, .{ .iterate = true });
     defer dir.close();
@@ -17,18 +45,36 @@ pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?r
         if (entry.kind != .file) continue;
         if (!isRolloutFile(entry.path)) continue;
         const stat = try dir.statFile(entry.path);
-        const mtime = stat.mtime;
-        if (mtime > latest_mtime) {
-            latest_mtime = mtime;
-            if (latest_path) |p| allocator.free(p);
-            latest_path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
-        }
+        try candidates.append(allocator, .{
+            .path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path }),
+            .mtime = @intCast(stat.mtime),
+        });
     }
 
-    if (latest_path == null) return null;
-    defer allocator.free(latest_path.?);
+    std.mem.sort(RolloutCandidate, candidates.items, {}, struct {
+        fn lessThan(_: void, a: RolloutCandidate, b: RolloutCandidate) bool {
+            return a.mtime > b.mtime;
+        }
+    }.lessThan);
 
-    return try scanFileForUsage(allocator, latest_path.?);
+    for (candidates.items) |candidate| {
+        const snapshot = try scanFileForUsage(allocator, candidate.path);
+        if (snapshot == null) continue;
+
+        const path = candidate.path;
+        const mtime = candidate.mtime;
+        for (candidates.items) |other| {
+            if (other.path.ptr != path.ptr) allocator.free(other.path);
+        }
+        candidates.clearRetainingCapacity();
+        return .{
+            .path = path,
+            .mtime = mtime,
+            .snapshot = snapshot.?,
+        };
+    }
+
+    return null;
 }
 
 fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?registry.RateLimitSnapshot {
@@ -46,18 +92,12 @@ fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?registry.R
         if (trimmed.len == 0) continue;
         if (parseUsageLine(allocator, trimmed)) |snap| {
             if (last) |*prev| {
-                freeUsageSnapshot(allocator, prev);
+                registry.freeRateLimitSnapshot(allocator, prev);
             }
             last = snap;
         }
     }
     return last;
-}
-
-fn freeUsageSnapshot(allocator: std.mem.Allocator, snapshot: *registry.RateLimitSnapshot) void {
-    if (snapshot.credits) |*credits| {
-        if (credits.balance) |balance| allocator.free(balance);
-    }
 }
 
 pub fn parseUsageLine(allocator: std.mem.Allocator, line: []const u8) ?registry.RateLimitSnapshot {
