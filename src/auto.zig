@@ -111,19 +111,19 @@ pub fn refreshTrackedActiveUsage(allocator: std.mem.Allocator, codex_home: []con
     if (registry.hasTrackedRolloutSignature(&reg.auto_switch, latest.path, latest.mtime)) {
         return false;
     }
-    const email = reg.active_email orelse return false;
+    const account_id = reg.active_account_id orelse return false;
     try registry.setTrackedRolloutSignature(allocator, &reg.auto_switch, latest.path, latest.mtime);
-    registry.updateUsage(allocator, reg, email, latest.snapshot);
+    registry.updateUsage(allocator, reg, account_id, latest.snapshot);
     snapshot_consumed = true;
     return true;
 }
 
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
-    const active = reg.active_email orelse return null;
+    const active = reg.active_account_id orelse return null;
     var best_idx: ?usize = null;
     var best: ?CandidateScore = null;
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.mem.eql(u8, rec.email, active)) continue;
+        if (std.mem.eql(u8, rec.account_id, active)) continue;
         const score = candidateScore(rec, now);
         if (best == null or candidateBetter(score, best.?)) {
             best = score;
@@ -134,8 +134,8 @@ pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
 }
 
 pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
-    const email = reg.active_email orelse return false;
-    const idx = findAccountIndexByEmail(reg, email) orelse return false;
+    const account_id = reg.active_account_id orelse return false;
+    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
     const rec = &reg.accounts.items[idx];
     const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
@@ -144,17 +144,17 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
     if (!reg.auto_switch.enabled) return false;
-    const active = reg.active_email orelse return false;
+    const active = reg.active_account_id orelse return false;
     const now = std.time.timestamp();
     if (!shouldSwitchCurrent(reg, now)) return false;
 
-    const active_idx = findAccountIndexByEmail(reg, active) orelse return false;
+    const active_idx = registry.findAccountIndexByAccountId(reg, active) orelse return false;
     const current = candidateScore(&reg.accounts.items[active_idx], now);
     const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return false;
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
     if (candidate.value <= current.value) return false;
 
-    try registry.activateAccountByEmail(allocator, codex_home, reg, reg.accounts.items[candidate_idx].email);
+    try registry.activateAccountById(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_id);
     return true;
 }
 
@@ -230,13 +230,6 @@ fn candidateBetter(a: CandidateScore, b: CandidateScore) bool {
     if (a.value != b.value) return a.value > b.value;
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;
     return a.created_at > b.created_at;
-}
-
-fn findAccountIndexByEmail(reg: *registry.Registry, email: []const u8) ?usize {
-    for (reg.accounts.items, 0..) |rec, idx| {
-        if (std.mem.eql(u8, rec.email, email)) return idx;
-    }
-    return null;
 }
 
 fn queryRuntimeState(allocator: std.mem.Allocator) RuntimeState {

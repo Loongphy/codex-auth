@@ -13,7 +13,7 @@ test "parse auth info from jwt" {
     const gpa = std.testing.allocator;
 
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_plan_type\":\"pro\"}}";
+    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acc:user@example.com\",\"chatgpt_plan_type\":\"pro\"}}";
 
     const h64 = try b64url(gpa, header);
     defer gpa.free(h64);
@@ -24,7 +24,7 @@ test "parse auth info from jwt" {
     defer gpa.free(jwt);
 
     const json = try std.fmt.allocPrint(gpa,
-        "{{\"tokens\":{{\"id_token\":\"{s}\"}}}}",
+        "{{\"tokens\":{{\"account_id\":\"acc:user@example.com\",\"id_token\":\"{s}\"}}}}",
         .{jwt},
     );
     defer gpa.free(json);
@@ -41,6 +41,8 @@ test "parse auth info from jwt" {
     defer info.deinit(gpa);
     try std.testing.expect(info.email != null);
     try std.testing.expect(std.mem.eql(u8, info.email.?, "user@example.com"));
+    try std.testing.expect(info.account_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.account_id.?, "acc:user@example.com"));
 }
 
 test "api key auth" {

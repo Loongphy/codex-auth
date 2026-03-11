@@ -20,24 +20,36 @@ fn authJsonFromPayload(allocator: std.mem.Allocator, payload: []const u8) ![]u8 
     return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"id_token\":\"{s}\"}}}}", .{jwt});
 }
 
+pub fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "acc:{s}", .{email});
+}
+
 pub fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
+    const account_id = try accountIdForEmailAlloc(allocator, email);
+    defer allocator.free(account_id);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_plan_type\":\"{s}\"}}}}",
-        .{ email, plan },
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, account_id, plan },
     );
     defer allocator.free(payload);
-    return try authJsonFromPayload(allocator, payload);
+    const auth = try authJsonFromPayload(allocator, payload);
+    defer allocator.free(auth);
+    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ account_id, extractToken(auth) });
 }
 
 pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
-    return try authJsonFromPayload(allocator, "{\"sub\":\"missing-email\"}");
+    const account_id = "acc:missing-email";
+    const payload = "{\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acc:missing-email\",\"chatgpt_plan_type\":\"pro\"},\"sub\":\"missing-email\"}";
+    const auth = try authJsonFromPayload(allocator, payload);
+    defer allocator.free(auth);
+    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ account_id, extractToken(auth) });
 }
 
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
         .version = 3,
-        .active_email = null,
+        .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -50,7 +62,10 @@ pub fn appendAccount(
     alias: []const u8,
     plan: ?registry.PlanType,
 ) !void {
+    const account_id = try accountIdForEmailAlloc(allocator, email);
+    errdefer allocator.free(account_id);
     const rec = registry.AccountRecord{
+        .account_id = account_id,
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = plan,
@@ -68,6 +83,13 @@ pub fn findAccountIndexByEmail(reg: *registry.Registry, email: []const u8) ?usiz
         if (std.mem.eql(u8, rec.email, email)) return i;
     }
     return null;
+}
+
+fn extractToken(auth_json: []const u8) []const u8 {
+    const prefix = "{\"tokens\":{\"id_token\":\"";
+    const start = std.mem.indexOf(u8, auth_json, prefix).? + prefix.len;
+    const end = std.mem.lastIndexOf(u8, auth_json, "\"}}").?;
+    return auth_json[start..end];
 }
 
 pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

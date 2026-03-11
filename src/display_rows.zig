@@ -1,0 +1,169 @@
+const std = @import("std");
+const registry = @import("registry.zig");
+
+pub const DisplayRow = struct {
+    account_index: ?usize,
+    account_cell: []u8,
+    depth: u8,
+    is_active: bool,
+
+    fn deinit(self: *DisplayRow, allocator: std.mem.Allocator) void {
+        allocator.free(self.account_cell);
+    }
+};
+
+pub const DisplayRows = struct {
+    rows: []DisplayRow,
+    selectable_row_indices: []usize,
+
+    pub fn deinit(self: *DisplayRows, allocator: std.mem.Allocator) void {
+        for (self.rows) |*row| row.deinit(allocator);
+        allocator.free(self.rows);
+        allocator.free(self.selectable_row_indices);
+    }
+};
+
+pub fn buildDisplayRows(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    account_indices: ?[]const usize,
+) !DisplayRows {
+    const source_len = if (account_indices) |indices| indices.len else reg.accounts.items.len;
+    var ordered = try allocator.alloc(usize, source_len);
+    defer allocator.free(ordered);
+
+    if (account_indices) |indices| {
+        @memcpy(ordered, indices);
+    } else {
+        for (ordered, 0..) |*slot, idx| slot.* = idx;
+    }
+
+    std.sort.insertion(usize, ordered, SortContext{ .reg = reg }, lessThanByDisplayOrder);
+
+    var row_list = std.ArrayList(DisplayRow).empty;
+    defer row_list.deinit(allocator);
+    var selectable = std.ArrayList(usize).empty;
+    defer selectable.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < ordered.len) {
+        const group_start = i;
+        const email = reg.accounts.items[ordered[i]].email;
+        while (i < ordered.len and std.mem.eql(u8, reg.accounts.items[ordered[i]].email, email)) : (i += 1) {}
+        const group_indices = ordered[group_start..i];
+
+        if (group_indices.len == 1) {
+            const account_idx = group_indices[0];
+            const rec = &reg.accounts.items[account_idx];
+            const cell = try singletonAccountCellAlloc(allocator, rec);
+            try row_list.append(allocator, .{
+                .account_index = account_idx,
+                .account_cell = cell,
+                .depth = 0,
+                .is_active = isActive(reg, account_idx),
+            });
+            try selectable.append(allocator, row_list.items.len - 1);
+            continue;
+        }
+
+        try row_list.append(allocator, .{
+            .account_index = null,
+            .account_cell = try allocator.dupe(u8, email),
+            .depth = 0,
+            .is_active = false,
+        });
+
+        for (group_indices) |account_idx| {
+            const cell = try groupedAccountCellAlloc(allocator, reg, group_indices, account_idx);
+            try row_list.append(allocator, .{
+                .account_index = account_idx,
+                .account_cell = cell,
+                .depth = 1,
+                .is_active = isActive(reg, account_idx),
+            });
+            try selectable.append(allocator, row_list.items.len - 1);
+        }
+    }
+
+    return .{
+        .rows = try row_list.toOwnedSlice(allocator),
+        .selectable_row_indices = try selectable.toOwnedSlice(allocator),
+    };
+}
+
+const SortContext = struct {
+    reg: *const registry.Registry,
+};
+
+fn lessThanByDisplayOrder(ctx: SortContext, lhs: usize, rhs: usize) bool {
+    const reg = ctx.reg;
+    const a = &reg.accounts.items[lhs];
+    const b = &reg.accounts.items[rhs];
+
+    const email_cmp = std.mem.order(u8, a.email, b.email);
+    if (email_cmp != .eq) return email_cmp == .lt;
+
+    const a_active = isActive(reg, lhs);
+    const b_active = isActive(reg, rhs);
+    if (a_active != b_active) return a_active;
+
+    const a_rank = planSortRank(registry.resolvePlan(a));
+    const b_rank = planSortRank(registry.resolvePlan(b));
+    if (a_rank != b_rank) return a_rank < b_rank;
+
+    const a_plan = displayPlan(a);
+    const b_plan = displayPlan(b);
+    const plan_cmp = std.mem.order(u8, a_plan, b_plan);
+    if (plan_cmp != .eq) return plan_cmp == .lt;
+
+    return std.mem.lessThan(u8, a.account_id, b.account_id);
+}
+
+fn planSortRank(plan: ?registry.PlanType) u8 {
+    return switch (plan orelse .unknown) {
+        .team, .business, .enterprise, .edu => 0,
+        .free, .plus, .pro => 1,
+        else => 2,
+    };
+}
+
+fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
+    return if (registry.resolvePlan(rec)) |plan| @tagName(plan) else "-";
+}
+
+fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
+    const active = reg.active_account_id orelse return false;
+    return std.mem.eql(u8, active, reg.accounts.items[account_idx].account_id);
+}
+
+fn singletonAccountCellAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord) ![]u8 {
+    if (rec.alias.len == 0) return allocator.dupe(u8, rec.email);
+    return std.fmt.allocPrint(allocator, "({s}){s}", .{ rec.alias, rec.email });
+}
+
+fn groupedAccountCellAlloc(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    group_indices: []const usize,
+    account_idx: usize,
+) ![]u8 {
+    const rec = &reg.accounts.items[account_idx];
+    if (rec.alias.len != 0) return allocator.dupe(u8, rec.alias);
+
+    const base = displayPlan(rec);
+    var total_same: usize = 0;
+    var ordinal: usize = 1;
+    for (group_indices) |candidate_idx| {
+        const candidate = &reg.accounts.items[candidate_idx];
+        if (candidate.alias.len != 0) continue;
+        if (!std.mem.eql(u8, displayPlan(candidate), base)) continue;
+        total_same += 1;
+        if (candidate_idx == account_idx) continue;
+        if (std.mem.lessThan(u8, candidate.account_id, rec.account_id)) {
+            ordinal += 1;
+        }
+    }
+
+    if (total_same <= 1) return allocator.dupe(u8, base);
+    return std.fmt.allocPrint(allocator, "{s} #{d}", .{ base, ordinal });
+}

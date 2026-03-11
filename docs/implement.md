@@ -27,7 +27,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `~/.codex/auth.json`
 - `~/.codex/accounts/registry.json`
-- `~/.codex/accounts/<email_b64>.auth.json`
+- `~/.codex/accounts/<account_id_b64>.auth.json`
 - `~/.codex/accounts/auth.json.bak.<timestamp>`
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
 - `~/.codex/sessions/...`
@@ -49,23 +49,31 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## First Run and Empty Registry
 
-- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<email_b64>.auth.json`.
+- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account_id_b64>.auth.json`.
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
 - `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
-## Account Identity (Email-Only)
+## Account Identity
 
-The email is the unique key for an account.
+`account_id` is the unique key for a ChatGPT account snapshot.
 
-- Emails are normalized to lowercase.
-- The auth file name is `base64url(email)` (URL-safe, no padding).
+- `account_id` is read from `tokens.account_id`.
+- The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must also exist and match `tokens.account_id`.
+- The auth snapshot file name is `base64url(account_id)` (URL-safe, no padding).
+- Email is still normalized to lowercase, but it is now a display/grouping field instead of the unique key.
+- Older email-key registries are migrated by re-reading legacy auth snapshots and extracting `account_id`.
 
 ## Auth Parsing
 
 `auth.json` is parsed as follows:
 
 - If `OPENAI_API_KEY` is present, the account is treated as API-key auth (`auth_mode = apikey`).
-- Otherwise it looks for `tokens.id_token`, decodes the JWT, and reads the `email` claim and `https://api.openai.com/auth.chatgpt_plan_type`.
+- Otherwise it requires:
+  - `tokens.account_id`
+  - `tokens.id_token`
+  - JWT `https://api.openai.com/auth.chatgpt_account_id`
+- The CLI decodes the JWT and reads `email`, `chatgpt_account_id`, and `chatgpt_plan_type`.
+- If `account_id` is missing or mismatched between token fields and JWT claims, import/login/sync fails.
 - If plan is missing, it remains blank in the registry. If email is missing, the account is not imported/synced.
 
 ## Import Behavior
@@ -85,19 +93,20 @@ Each command (`list`, `switch`, `remove`) runs `syncActiveAccountFromAuth` befor
 The sync flow is:
 
 1. Read `~/.codex/auth.json` and parse email/plan/auth mode.
-2. Match by **email only** against the registry.
-3. If an email match is found:
+2. Match by **account_id** against the registry.
+3. If an `account_id` match is found:
    - Set that account as active.
-   - Overwrite `accounts/<email_b64>.auth.json` with the current `auth.json` if content differs.
-4. If no email match is found:
-   - Create a **new** account record for that email.
-   - Import the current `auth.json` into `accounts/<email_b64>.auth.json`.
+   - Update the stored email/plan/auth mode from the current auth.
+   - Overwrite `accounts/<account_id_b64>.auth.json` with the current `auth.json` if content differs.
+4. If no `account_id` match is found:
+   - Create a **new** account record for that auth snapshot.
+   - Import the current `auth.json` into `accounts/<account_id_b64>.auth.json`.
 
-If `auth.json` has no email, sync is skipped.
+If `auth.json` has no email or `account_id`, sync fails.
 
 Important limits:
 
-- Foreground commands still sync `auth.json` strictly by email; there is no alternate key or “active” heuristic.
+- Foreground commands sync `auth.json` strictly by `account_id`; there is no alternate key or “active” heuristic.
 - When background auto-switching is enabled, a daemon keeps polling rollout usage and can switch accounts without a foreground `codex-auth` command.
 
 ## Switching Accounts
@@ -105,16 +114,22 @@ Important limits:
 `switch` supports two modes:
 
 - Interactive: `codex-auth switch`
-- Non-interactive: `codex-auth switch <email>`
+- Non-interactive: `codex-auth switch <query>`
 
-For non-interactive switching, the target account is matched by email case-insensitively using fragment/prefix matching.
+For non-interactive switching, the target account is matched case-insensitively by:
+
+- exact `account_id`
+- `account_id` prefix
+- alias fragment
+- email fragment
+
 If multiple accounts match, interactive selection is shown.
 
 When switching:
 
 1. `auth.json` is backed up if its contents would change.
-2. The selected account’s `accounts/<email_b64>.auth.json` is copied to `~/.codex/auth.json`.
-3. The registry’s `active_email` is updated.
+2. The selected account’s `accounts/<account_id_b64>.auth.json` is copied to `~/.codex/auth.json`.
+3. The registry’s `active_account_id` is updated.
 
 ## Background Auto Switch
 
@@ -194,9 +209,16 @@ Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_co
 
 ## Output Notes
 
-- Default list table columns: `EMAIL`, `PLAN`, `5H USAGE`, `WEEKLY`, `LAST ACTIVITY`.
-- The `EMAIL` cell uses `(alias)email` when an alias is set for that account.
-- The switch/remove UI shows `EMAIL`, `PLAN`, `5H`, `WEEKLY`, `LAST`.
+- Default list table columns: `ACCOUNT`, `PLAN`, `5H USAGE`, `WEEKLY`, `LAST ACTIVITY`.
+- Human-readable `list`, `switch`, and `remove` group records by email when the same email owns multiple account snapshots.
+- In grouped output:
+  - the top-level email line is a header only
+  - child rows are the selectable accounts
+  - alias takes precedence for the child label
+  - otherwise the child label is the plan name (`team`, `plus`, etc.)
+  - repeated plans under the same email are rendered as stable numbered labels like `team #1`, `team #2`
+- Single-account emails still render as one flat row; when an alias is set, that row shows `(alias)email`.
+- The switch/remove UI shows `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`.
 - Usage limit cells show remaining percent plus reset time: `NN% (HH:MM)` for same-day resets, or `NN% (HH:MM on D Mon)` when the reset is on a different day.
 - `LAST ACTIVITY` is derived from `last_usage_at` and rendered as a relative time like `Now` or `2m ago`.
 - `PLAN` comes from the auth claim when available, and falls back to the last usage snapshot's `plan_type` (e.g. `free`, `plus`, `team`).

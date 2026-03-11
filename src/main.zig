@@ -75,7 +75,9 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     defer reg.deinit(allocator);
 
     const email = info.email orelse return error.MissingEmail;
-    const dest = try registry.accountAuthPath(allocator, codex_home, email);
+    _ = email;
+    const account_id = info.account_id orelse return error.MissingAccountId;
+    const dest = try registry.accountAuthPath(allocator, codex_home, account_id);
     defer allocator.free(dest);
 
     try registry.ensureAccountsDir(allocator, codex_home);
@@ -105,41 +107,44 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    var selected_email: ?[]const u8 = null;
-    if (opts.email) |target_email| {
-        var matches = try findMatchingAccounts(allocator, &reg, target_email);
+    var selected_account_id: ?[]const u8 = null;
+    if (opts.query) |query| {
+        var matches = try findMatchingAccounts(allocator, &reg, query);
         defer matches.deinit(allocator);
 
         if (matches.items.len == 0) {
-            std.log.err("account not found: {s}", .{target_email});
+            std.log.err("account not found: {s}", .{query});
             return error.AccountNotFound;
         }
 
         if (matches.items.len == 1) {
-            selected_email = reg.accounts.items[matches.items[0]].email;
+            selected_account_id = reg.accounts.items[matches.items[0]].account_id;
         } else {
-            selected_email = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
+            selected_account_id = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
         }
-        if (selected_email == null) return;
+        if (selected_account_id == null) return;
     } else {
         const selected = try cli.selectAccount(allocator, &reg);
         if (selected == null) return;
-        selected_email = selected.?;
+        selected_account_id = selected.?;
     }
-    const email = selected_email.?;
+    const account_id = selected_account_id.?;
 
-    try registry.activateAccountByEmail(allocator, codex_home, &reg, email);
+    try registry.activateAccountById(allocator, codex_home, &reg, account_id);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
-fn findMatchingAccounts(
+pub fn findMatchingAccounts(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
     query: []const u8,
 ) !std.ArrayList(usize) {
     var matches = std.ArrayList(usize).empty;
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.ascii.indexOfIgnoreCase(rec.email, query) != null) {
+        if (std.mem.eql(u8, rec.account_id, query) or std.mem.startsWith(u8, rec.account_id, query) or
+            std.ascii.indexOfIgnoreCase(rec.email, query) != null or
+            (rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null))
+        {
             try matches.append(allocator, idx);
         }
     }
@@ -159,11 +164,11 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     if (selected.?.len == 0) return;
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    if (reg.active_email == null and reg.accounts.items.len > 0) {
+    if (reg.active_account_id == null and reg.accounts.items.len > 0) {
         const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
-        const email = reg.accounts.items[best_idx].email;
+        const account_id = reg.accounts.items[best_idx].account_id;
 
-        try registry.activateAccountByEmail(allocator, codex_home, &reg, email);
+        try registry.activateAccountById(allocator, codex_home, &reg, account_id);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
@@ -182,4 +187,6 @@ test {
     _ = @import("tests/registry_test.zig");
     _ = @import("tests/registry_bdd_test.zig");
     _ = @import("tests/cli_bdd_test.zig");
+    _ = @import("tests/display_rows_test.zig");
+    _ = @import("tests/main_test.zig");
 }

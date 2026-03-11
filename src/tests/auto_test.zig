@@ -39,7 +39,9 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
         .plan_type = null,
     }, 200);
     try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
-    try registry.setActiveAccount(gpa, &reg, "active@example.com");
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
@@ -56,7 +58,9 @@ test "Scenario: Given weekly remaining below threshold when checking current the
         .credits = null,
         .plan_type = null,
     }, 100);
-    try registry.setActiveAccount(gpa, &reg, "active@example.com");
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
 
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
@@ -81,16 +85,20 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
         .plan_type = null,
     }, 100);
     try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
-    try registry.setActiveAccount(gpa, &reg, "low@example.com");
+    const low_account_id = try bdd.accountIdForEmailAlloc(gpa, "low@example.com");
+    defer gpa.free(low_account_id);
+    try registry.setActiveAccount(gpa, &reg, low_account_id);
 
     const low_auth = try bdd.authJsonWithEmailPlan(gpa, "low@example.com", "pro");
     defer gpa.free(low_auth);
     const fresh_auth = try bdd.authJsonWithEmailPlan(gpa, "fresh@example.com", "pro");
     defer gpa.free(fresh_auth);
 
-    const low_path = try registry.accountAuthPath(gpa, codex_home, "low@example.com");
+    const low_path = try registry.accountAuthPath(gpa, codex_home, low_account_id);
     defer gpa.free(low_path);
-    const fresh_path = try registry.accountAuthPath(gpa, codex_home, "fresh@example.com");
+    const fresh_account_id = try bdd.accountIdForEmailAlloc(gpa, "fresh@example.com");
+    defer gpa.free(fresh_account_id);
+    const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
     defer gpa.free(fresh_path);
     const active_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_path);
@@ -100,8 +108,8 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
 
     try std.testing.expect(try auto.maybeAutoSwitch(gpa, codex_home, &reg));
-    try std.testing.expect(reg.active_email != null);
-    try std.testing.expect(std.mem.eql(u8, reg.active_email.?, "fresh@example.com"));
+    try std.testing.expect(reg.active_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_id.?, fresh_account_id));
 
     const active_data = try bdd.readFileAlloc(gpa, active_path);
     defer gpa.free(active_data);
@@ -166,7 +174,9 @@ test "Scenario: Given missing sessions dir when refreshing active usage then it 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
-    try registry.setActiveAccount(gpa, &reg, "active@example.com");
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
 
     try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
@@ -186,7 +196,9 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
-    try registry.setActiveAccount(gpa, &reg, "a@example.com");
+    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    defer gpa.free(account_id_a);
+    try registry.setActiveAccount(gpa, &reg, account_id_a);
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
@@ -195,7 +207,9 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[a_idx].last_usage != null);
 
-    try registry.setActiveAccount(gpa, &reg, "b@example.com");
+    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    defer gpa.free(account_id_b);
+    try registry.setActiveAccount(gpa, &reg, account_id_b);
     try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
     try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
 }

@@ -42,8 +42,10 @@ const SyncBddContext = struct {
     }
 
     fn thenActiveEmailShouldBe(self: *SyncBddContext, expected: []const u8) !void {
-        try std.testing.expect(self.reg.active_email != null);
-        try std.testing.expect(std.mem.eql(u8, self.reg.active_email.?, expected));
+        const idx = bdd.findAccountIndexByEmail(&self.reg, expected) orelse return error.TestExpectedEqual;
+        const expected_account_id = self.reg.accounts.items[idx].account_id;
+        try std.testing.expect(self.reg.active_account_id != null);
+        try std.testing.expect(std.mem.eql(u8, self.reg.active_account_id.?, expected_account_id));
     }
 
     fn thenAccountShouldExist(self: *SyncBddContext, email: []const u8) !void {
@@ -54,7 +56,9 @@ const SyncBddContext = struct {
     fn thenAccountAuthShouldMatchActive(self: *SyncBddContext, email: []const u8) !void {
         const active_auth_path = try registry.activeAuthPath(self.allocator, self.codex_home);
         defer self.allocator.free(active_auth_path);
-        const account_auth_path = try registry.accountAuthPath(self.allocator, self.codex_home, email);
+        const account_id = try bdd.accountIdForEmailAlloc(self.allocator, email);
+        defer self.allocator.free(account_id);
+        const account_auth_path = try registry.accountAuthPath(self.allocator, self.codex_home, account_id);
         defer self.allocator.free(account_auth_path);
 
         const active_data = try bdd.readFileAlloc(self.allocator, active_auth_path);
@@ -83,21 +87,21 @@ test "Scenario: Given empty registry when syncing auth then auto import and acti
     try ctx.thenAccountAuthShouldMatchActive("auto@example.com");
 }
 
-test "Scenario: Given auth without email when syncing then keep registry unchanged" {
+test "Scenario: Given auth without account id when syncing then sync fails" {
     const gpa = std.testing.allocator;
     var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
     defer ctx.deinit();
 
     try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
-    try registry.setActiveAccount(gpa, &ctx.reg, "keep@example.com");
+    const keep_account_id = try bdd.accountIdForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccount(gpa, &ctx.reg, keep_account_id);
 
     const invalid_auth = try bdd.authJsonWithoutEmail(gpa);
     defer gpa.free(invalid_auth);
     try ctx.givenActiveAuthJson(invalid_auth);
 
-    const changed = try ctx.whenSyncActiveAccountFromAuth();
-
-    try std.testing.expect(!changed);
+    try std.testing.expectError(error.MissingAccountId, ctx.whenSyncActiveAccountFromAuth());
     try ctx.thenAccountCountShouldBe(1);
     try ctx.thenActiveEmailShouldBe("keep@example.com");
 }
@@ -108,7 +112,9 @@ test "Scenario: Given unmatched active auth email when syncing then append accou
     defer ctx.deinit();
 
     try ctx.givenRegisteredAccount("old@example.com", "old", .free);
-    try registry.setActiveAccount(gpa, &ctx.reg, "old@example.com");
+    const old_account_id = try bdd.accountIdForEmailAlloc(gpa, "old@example.com");
+    defer gpa.free(old_account_id);
+    try registry.setActiveAccount(gpa, &ctx.reg, old_account_id);
 
     const active_auth = try bdd.authJsonWithEmailPlan(gpa, "new@example.com", "team");
     defer gpa.free(active_auth);
