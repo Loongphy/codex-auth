@@ -101,7 +101,9 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login [--skip]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable|disable|status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "migrate") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`add` is accepted as a deprecated alias for `login`.") != null);
 }
 
@@ -113,6 +115,30 @@ test "Scenario: Given auto status when parsing then auto command is preserved" {
 
     switch (cmd) {
         .auto_switch => |opts| try std.testing.expect(opts.action == .status),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given migrate when parsing then migrate command is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "migrate" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .migrate => {},
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given clean when parsing then clean command is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "clean" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .clean => {},
         else => return error.TestExpectedEqual,
     }
 }

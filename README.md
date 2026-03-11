@@ -121,4 +121,5 @@ When auto-switching is enabled, a background daemon watches the active account's
 - weekly remaining drops below `5%`
 
 Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
+Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so an enabled daemon is restarted onto the current binary after upgrades or stale service drift.
 `codex-auth help` also shows whether auto-switching is currently `ON` or `OFF`.

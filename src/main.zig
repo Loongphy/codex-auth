@@ -4,6 +4,7 @@ const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
+const migration = @import("migration.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,19 +21,31 @@ pub fn main() !void {
     defer allocator.free(codex_home);
 
     switch (cmd) {
-        .list => |opts| try handleList(allocator, codex_home, opts),
-        .login => |opts| try handleLogin(allocator, codex_home, opts),
-        .import_auth => |opts| try handleImport(allocator, codex_home, opts),
-        .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
-        .remove_account => |_| try handleRemove(allocator, codex_home),
-        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
-            .enable => .enable,
-            .disable => .disable,
-            .status => .status,
-        }),
-        .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
         .version => try cli.printVersion(),
         .help => try handleHelp(allocator, codex_home),
+        .migrate => {
+            _ = try migration.ensureMigrated(allocator, codex_home, .explicit);
+            try auto.reconcileManagedService(allocator, codex_home);
+        },
+        .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
+        else => {
+            _ = try migration.ensureMigrated(allocator, codex_home, .automatic);
+            switch (cmd) {
+                .list => |opts| try handleList(allocator, codex_home, opts),
+                .login => |opts| try handleLogin(allocator, codex_home, opts),
+                .import_auth => |opts| try handleImport(allocator, codex_home, opts),
+                .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
+                .remove_account => |_| try handleRemove(allocator, codex_home),
+                .clean => |_| try handleClean(allocator, codex_home),
+                .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
+                    .enable => .enable,
+                    .disable => .disable,
+                    .status => .status,
+                }),
+                else => unreachable,
+            }
+            try auto.reconcileManagedService(allocator, codex_home);
+        },
     }
 }
 
@@ -174,9 +187,33 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
+    var auto_enabled = false;
+    var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
+        error.RegistryMigrationRequired, error.UnsupportedSchemaVersion => {
+            try cli.printHelp(false);
+            return;
+        },
+        else => return err,
+    };
     defer reg.deinit(allocator);
-    try cli.printHelp(reg.auto_switch.enabled);
+    auto_enabled = reg.auto_switch.enabled;
+    try cli.printHelp(auto_enabled);
+}
+
+fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const summary = try registry.cleanAccountsBackups(allocator, codex_home);
+    var stdout: [256]u8 = undefined;
+    var writer = std.fs.File.stdout().writer(&stdout);
+    const out = &writer.interface;
+    try out.print(
+        "cleaned accounts: auth_backups={d}, registry_backups={d}, stale_entries={d}\n",
+        .{
+            summary.auth_backups_removed,
+            summary.registry_backups_removed,
+            summary.stale_snapshot_files_removed,
+        },
+    );
+    try out.flush();
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
@@ -189,4 +226,5 @@ test {
     _ = @import("tests/cli_bdd_test.zig");
     _ = @import("tests/display_rows_test.zig");
     _ = @import("tests/main_test.zig");
+    _ = @import("tests/migration_test.zig");
 }

@@ -38,9 +38,11 @@ pub const LoginOptions = struct {
 pub const ImportOptions = struct { auth_path: []u8, alias: ?[]u8 };
 pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
+pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable, status };
 pub const AutoOptions = struct { action: AutoAction };
 pub const DaemonOptions = struct { watch: bool };
+pub const MigrateOptions = struct {};
 
 pub const Command = union(enum) {
     list: ListOptions,
@@ -48,8 +50,10 @@ pub const Command = union(enum) {
     import_auth: ImportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
+    clean: CleanOptions,
     auto_switch: AutoOptions,
     daemon: DaemonOptions,
+    migrate: MigrateOptions,
     version: void,
     help: void,
 };
@@ -136,6 +140,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         return Command{ .remove_account = .{} };
     }
 
+    if (std.mem.eql(u8, cmd, "clean")) {
+        if (args.len > 2) return Command{ .help = {} };
+        return Command{ .clean = .{} };
+    }
+
     if (std.mem.eql(u8, cmd, "auto")) {
         if (args.len != 3) return Command{ .help = {} };
         const action = std.mem.sliceTo(args[2], 0);
@@ -150,6 +159,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
             return Command{ .daemon = .{ .watch = true } };
         }
         return Command{ .help = {} };
+    }
+
+    if (std.mem.eql(u8, cmd, "migrate")) {
+        if (args.len > 2) return Command{ .help = {} };
+        return Command{ .migrate = .{} };
     }
 
     return Command{ .help = {} };
@@ -203,7 +217,9 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void
     try writeHelpCommand(out, use_color, "import <path> [--alias <alias>]", "Import one auth file or a directory");
     try writeHelpCommand(out, use_color, "switch [<query>]", "Switch the active account");
     try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
+    try writeHelpCommand(out, use_color, "clean", "Delete backup and stale files under accounts/");
     try writeHelpCommand(out, use_color, "auto enable|disable|status", "Manage background auto-switching");
+    try writeHelpCommand(out, use_color, "migrate", "Migrate registry data to the latest schema");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);

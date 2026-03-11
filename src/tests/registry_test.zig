@@ -121,9 +121,7 @@ test "auth backup only on change" {
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
-    const encoded = try b64url(gpa, user_account_id);
-    defer gpa.free(encoded);
-    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{encoded});
+    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{user_account_id});
     defer gpa.free(account_path);
 
     try tmp.dir.makePath("accounts");
@@ -157,9 +155,7 @@ test "auth backup rotation" {
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
-    const encoded = try b64url(gpa, user_account_id);
-    defer gpa.free(encoded);
-    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{encoded});
+    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{user_account_id});
     defer gpa.free(account_path);
 
     try tmp.dir.makePath("accounts");
@@ -198,9 +194,7 @@ test "sync active auth matches by email and updates account auth" {
     defer gpa.free(account_auth);
     const user_account_id = try accountIdForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
-    const encoded = try b64url(gpa, user_account_id);
-    defer gpa.free(encoded);
-    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{encoded});
+    const account_path = try std.fmt.allocPrint(gpa, "accounts/{s}.auth.json", .{user_account_id});
     defer gpa.free(account_path);
     try tmp.dir.writeFile(.{ .sub_path = account_path, .data = account_auth });
 
@@ -249,6 +243,53 @@ test "registry backup only on change" {
     try registry.saveRegistry(gpa, codex_home, &reg);
     const count2 = try countBackups(accounts, "registry.json");
     try std.testing.expect(count2 == 1);
+}
+
+test "clean uses a whitelist and only removes non-current entries under accounts" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    const active_record = try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 1);
+    try reg.accounts.append(gpa, active_record);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.1", .data = "a1" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.2", .data = "a2" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.3", .data = "a3" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.1", .data = "r1" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.2", .data = "r2" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/acc:keep@example.com.auth.json", .data = "keep" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .data = "legacy" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/notes.txt", .data = "junk" });
+    try tmp.dir.makePath("accounts/tmpdir");
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/tmpdir/old.txt", .data = "junk" });
+    try tmp.dir.makePath("backups/v2/20260312-063235");
+    try tmp.dir.writeFile(.{ .sub_path = "backups/v2/20260312-063235/registry.json", .data = "keep" });
+
+    const summary = try registry.cleanAccountsBackups(gpa, codex_home);
+    try std.testing.expect(summary.auth_backups_removed == 3);
+    try std.testing.expect(summary.registry_backups_removed == 2);
+    try std.testing.expect(summary.stale_snapshot_files_removed == 3);
+
+    var accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
+    defer accounts.close();
+    try std.testing.expect(try countBackups(accounts, "auth.json") == 0);
+    try std.testing.expect(try countBackups(accounts, "registry.json") == 0);
+    var kept = try tmp.dir.openFile("accounts/acc:keep@example.com.auth.json", .{});
+    kept.close();
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/notes.txt", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/tmpdir/old.txt", .{}));
+
+    var preserved_backup = try tmp.dir.openFile("backups/v2/20260312-063235/registry.json", .{});
+    preserved_backup.close();
 }
 
 test "import auth path with single file keeps explicit alias" {

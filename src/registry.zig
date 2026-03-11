@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-const registry_version: u32 = 3;
+pub const current_schema_version: u32 = 3;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -174,9 +174,7 @@ fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
 }
 
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
-    const key = try encodedFileKey(allocator, account_id);
-    defer allocator.free(key);
-    const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
+    const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ account_id, ".auth.json" });
     defer allocator.free(filename);
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
@@ -198,6 +196,12 @@ pub fn copyFile(src: []const u8, dest: []const u8) !void {
 }
 
 const max_backups: usize = 5;
+
+pub const CleanSummary = struct {
+    auth_backups_removed: usize = 0,
+    registry_backups_removed: usize = 0,
+    stale_snapshot_files_removed: usize = 0,
+};
 
 fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
     const cwd = std.fs.cwd();
@@ -296,6 +300,90 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
         const old = list.items[i].name;
         dir_handle.deleteFile(old) catch {};
     }
+}
+
+fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) !usize {
+    var count: usize = 0;
+    var dir_handle = try std.fs.cwd().openDir(dir, .{ .iterate = true });
+    defer dir_handle.close();
+
+    var it = dir_handle.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.startsWith(u8, entry.name, base_name)) continue;
+        if (!std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) continue;
+        _ = allocator;
+        count += 1;
+    }
+    return count;
+}
+
+fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
+    for (reg.accounts.items) |rec| {
+        if (entry_name.len == rec.account_id.len + ".auth.json".len and
+            std.mem.startsWith(u8, entry_name, rec.account_id) and
+            std.mem.endsWith(u8, entry_name, ".auth.json"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
+    if (std.mem.eql(u8, entry_name, "registry.json")) return true;
+    if (std.mem.eql(u8, entry_name, "auto-switch.lock")) return true;
+    return isAllowedCurrentSnapshot(reg, entry_name);
+}
+
+pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8) !CleanSummary {
+    const dir = try backupDir(allocator, codex_home);
+    defer allocator.free(dir);
+
+    var cwd = std.fs.cwd();
+    var dir_handle = cwd.openDir(dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    dir_handle.close();
+
+    const auth_before = try countBackupsByBaseName(allocator, dir, "auth.json");
+    const registry_before = try countBackupsByBaseName(allocator, dir, "registry.json");
+
+    try pruneBackups(allocator, dir, "auth.json", 0);
+    try pruneBackups(allocator, dir, "registry.json", 0);
+
+    const auth_after = try countBackupsByBaseName(allocator, dir, "auth.json");
+    const registry_after = try countBackupsByBaseName(allocator, dir, "registry.json");
+
+    var reg = loadRegistry(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound => defaultRegistry(),
+        else => return err,
+    };
+    defer reg.deinit(allocator);
+
+    var stale_snapshot_files_removed: usize = 0;
+    var accounts_dir = try std.fs.cwd().openDir(dir, .{ .iterate = true });
+    defer accounts_dir.close();
+    var it = accounts_dir.iterate();
+    while (try it.next()) |entry| {
+        if (isAllowedAccountsEntry(&reg, entry.name)) {
+            continue;
+        }
+
+        switch (entry.kind) {
+            .file, .sym_link => try accounts_dir.deleteFile(entry.name),
+            .directory => try accounts_dir.deleteTree(entry.name),
+            else => continue,
+        }
+        stale_snapshot_files_removed += 1;
+    }
+
+    return .{
+        .auth_backups_removed = auth_before - auth_after,
+        .registry_backups_removed = registry_before - registry_after,
+        .stale_snapshot_files_removed = stale_snapshot_files_removed,
+    };
 }
 
 pub fn backupAuthIfChanged(
@@ -729,7 +817,7 @@ fn freeLegacyAccountRecord(allocator: std.mem.Allocator, rec: *LegacyAccountReco
 
 fn defaultRegistry() Registry {
     return Registry{
-        .version = registry_version,
+        .version = current_schema_version,
         .active_account_id = null,
         .auto_switch = defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
@@ -1035,6 +1123,40 @@ fn loadRegistryV2(allocator: std.mem.Allocator, codex_home: []const u8, root_obj
     return reg;
 }
 
+fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !Registry {
+    var reg = defaultRegistry();
+    errdefer reg.deinit(allocator);
+
+    if (root_obj.get("active_account_id")) |v| {
+        switch (v) {
+            .string => |s| reg.active_account_id = try allocator.dupe(u8, s),
+            else => {},
+        }
+    }
+
+    if (root_obj.get("accounts")) |v| {
+        switch (v) {
+            .array => |arr| {
+                for (arr.items) |item| {
+                    const obj = switch (item) {
+                        .object => |o| o,
+                        else => continue,
+                    };
+                    const rec = try parseAccountRecord(allocator, obj);
+                    upsertAccount(allocator, &reg, rec);
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (root_obj.get("auto_switch")) |v| {
+        parseAutoSwitch(allocator, &reg.auto_switch, v);
+    }
+
+    return reg;
+}
+
 pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Registry {
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
@@ -1059,17 +1181,20 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         .object => |o| o,
         else => return defaultRegistry(),
     };
-    return loadRegistryV2(allocator, codex_home, root_obj);
+    const version = readInt(root_obj.get("version")) orelse current_schema_version;
+    if (version < current_schema_version) return error.RegistryMigrationRequired;
+    if (version > current_schema_version) return error.UnsupportedSchemaVersion;
+    return loadCurrentRegistry(allocator, root_obj);
 }
 
 pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
-    reg.version = registry_version;
+    reg.version = current_schema_version;
     try ensureAccountsDir(allocator, codex_home);
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
     const out = RegistryOut{
-        .version = registry_version,
+        .version = current_schema_version,
         .active_account_id = reg.active_account_id,
         .auto_switch = reg.auto_switch,
         .accounts = reg.accounts.items,

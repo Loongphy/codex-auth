@@ -4,6 +4,7 @@ const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
+const version = @import("version.zig");
 
 const linux_service_name = "codex-auth-autoswitch.service";
 const mac_label = "com.loongphy.codex-auth.auto";
@@ -20,6 +21,8 @@ pub const Status = struct {
     enabled: bool,
     runtime: RuntimeState,
 };
+
+const service_version_env_name = "CODEX_AUTH_VERSION";
 
 const CandidateScore = struct {
     value: i64,
@@ -77,6 +80,24 @@ pub fn handleCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: 
         .disable => try disable(allocator, codex_home),
         .status => try printStatus(allocator, codex_home),
     }
+}
+
+pub fn shouldEnsureManagedService(enabled: bool, runtime: RuntimeState, definition_matches: bool) bool {
+    if (!enabled) return false;
+    return runtime != .running or !definition_matches;
+}
+
+pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    const runtime = queryRuntimeState(allocator);
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+    const definition_matches = try currentServiceDefinitionMatches(allocator, codex_home, self_exe);
+    if (!shouldEnsureManagedService(reg.auto_switch.enabled, runtime, definition_matches)) return;
+
+    try installService(allocator, codex_home, self_exe);
 }
 
 pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -217,6 +238,16 @@ fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try uninstallService(allocator, codex_home);
 }
 
+pub fn stopServiceForMigration(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    try uninstallService(allocator, codex_home);
+}
+
+pub fn startServiceForMigration(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+    try installService(allocator, codex_home, self_exe);
+}
+
 fn candidateScore(rec: *const registry.AccountRecord, now: i64) CandidateScore {
     const usage_score = registry.usageScoreAt(rec.last_usage, now) orelse 100;
     return .{
@@ -269,7 +300,11 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     try std.fs.cwd().makePath(unit_dir);
     try std.fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
-    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", "--now", linux_service_name });
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
+    switch (queryLinuxRuntimeState(allocator)) {
+        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_service_name }),
+        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_service_name }),
+    }
 }
 
 fn uninstallLinuxService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -309,6 +344,15 @@ fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !vo
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
     const action = try windowsTaskAction(allocator, self_exe, codex_home);
     defer allocator.free(action);
+    const end_script = try windowsEndTaskScript(allocator);
+    defer allocator.free(end_script);
+    _ = runChecked(allocator, &[_][]const u8{
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        end_script,
+    }) catch {};
     try runChecked(allocator, &[_][]const u8{
         "schtasks",
         "/Create",
@@ -390,10 +434,12 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     defer allocator.free(exec);
     const escaped_home = try escapeSystemdValue(allocator, codex_home);
     defer allocator.free(escaped_home);
+    const escaped_version = try escapeSystemdValue(allocator, version.app_version);
+    defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch daemon\n\n[Service]\nEnvironment=\"CODEX_HOME={s}\"\nExecStart={s}\nRestart=always\nRestartSec=15\n\n[Install]\nWantedBy=default.target\n",
-        .{ escaped_home, exec },
+        "[Unit]\nDescription=codex-auth auto-switch daemon\n\n[Service]\nEnvironment=\"CODEX_HOME={s}\"\nEnvironment=\"{s}={s}\"\nExecStart={s}\nRestart=always\nRestartSec=15\n\n[Install]\nWantedBy=default.target\n",
+        .{ escaped_home, service_version_env_name, escaped_version, exec },
     );
 }
 
@@ -402,10 +448,12 @@ pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_ho
     defer allocator.free(exe);
     const home = try escapeXml(allocator, codex_home);
     defer allocator.free(home);
+    const current_version = try escapeXml(allocator, version.app_version);
+    defer allocator.free(current_version);
     return try std.fmt.allocPrint(
         allocator,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>CODEX_HOME</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
-        .{ mac_label, exe, home },
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>CODEX_HOME</key>\n    <string>{s}</string>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
+        .{ mac_label, exe, home, service_version_env_name, current_version },
     );
 }
 
@@ -414,10 +462,20 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, self_exe: []const u8, cod
     defer allocator.free(escaped_exe);
     const escaped_home = try escapePowerShellSingleQuoted(allocator, codex_home);
     defer allocator.free(escaped_home);
+    const escaped_version = try escapePowerShellSingleQuoted(allocator, version.app_version);
+    defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command \"$env:CODEX_HOME = '{s}'; & '{s}' daemon --watch\"",
-        .{ escaped_home, escaped_exe },
+        "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command \"$env:CODEX_HOME = '{s}'; $env:{s} = '{s}'; & '{s}' daemon --watch\"",
+        .{ escaped_home, service_version_env_name, escaped_version, escaped_exe },
+    );
+}
+
+pub fn windowsEndTaskScript(allocator: std.mem.Allocator) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 0 }}; if ($task.State -eq 4) {{ Stop-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue }}",
+        .{ windows_task_name, windows_task_name },
     );
 }
 
@@ -446,6 +504,57 @@ fn linuxUnitPath(allocator: std.mem.Allocator, service_name: []const u8) ![]u8 {
     return try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", service_name });
 }
 
+fn currentServiceDefinitionMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    return switch (builtin.os.tag) {
+        .linux => try linuxUnitMatches(allocator, codex_home, self_exe),
+        .macos => try macPlistMatches(allocator, codex_home, self_exe),
+        .windows => try windowsTaskMatches(allocator, codex_home, self_exe),
+        else => true,
+    };
+}
+
+fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const unit_path = try linuxUnitPath(allocator, linux_service_name);
+    defer allocator.free(unit_path);
+    const expected = try linuxUnitText(allocator, self_exe, codex_home);
+    defer allocator.free(expected);
+    return try fileEqualsBytes(allocator, unit_path, expected);
+}
+
+fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const plist_path = try macPlistPath(allocator);
+    defer allocator.free(plist_path);
+    const expected = try macPlistText(allocator, self_exe, codex_home);
+    defer allocator.free(expected);
+    return try fileEqualsBytes(allocator, plist_path, expected);
+}
+
+fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const expected = try windowsTaskAction(allocator, self_exe, codex_home);
+    defer allocator.free(expected);
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; Write-Output ($action.Execute + ' ' + $action.Arguments)",
+        .{windows_task_name},
+    );
+    defer allocator.free(script);
+    const result = runCapture(allocator, &[_][]const u8{
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        script,
+    }) catch return false;
+    defer {
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
+    }
+    return switch (result.term) {
+        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected),
+        else => false,
+    };
+}
+
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
@@ -468,6 +577,22 @@ fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8) !void {
         std.log.err("{s}", .{std.mem.trim(u8, result.stderr, " \n\r\t")});
     }
     return error.CommandFailed;
+}
+
+fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
+    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        if (err == error.FileNotFound) return null;
+        return err;
+    };
+    defer file.close();
+    return try file.readToEndAlloc(allocator, 1024 * 1024);
+}
+
+fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
+    const data = try readFileIfExists(allocator, path);
+    defer if (data) |buf| allocator.free(buf);
+    if (data == null) return false;
+    return std.mem.eql(u8, data.?, bytes);
 }
 
 fn runCapture(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.Child.RunResult {

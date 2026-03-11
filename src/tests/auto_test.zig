@@ -123,6 +123,7 @@ test "Scenario: Given linux service unit when rendering then daemon watch comman
 
     try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch daemon") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_HOME=/tmp/custom-codex-home\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
 }
@@ -134,6 +135,7 @@ test "Scenario: Given mac plist when rendering then CODEX_HOME environment is pr
 
     try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_HOME</key>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>/tmp/custom-codex-home</string>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_AUTH_VERSION</key>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>daemon</string>") != null);
 }
 
@@ -144,7 +146,19 @@ test "Scenario: Given windows task action when rendering then it preserves CODEX
 
     try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_HOME = 'D:\\Codex Home'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_AUTH_VERSION = '") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "& 'C:\\Program Files\\codex-auth.exe' daemon --watch") != null);
+}
+
+test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
+    try std.testing.expect(!auto.shouldEnsureManagedService(false, .stopped, false));
+    try std.testing.expect(!auto.shouldEnsureManagedService(false, .running, true));
+}
+
+test "Scenario: Given auto-switch enabled with stopped or stale service when reconciling then it is refreshed" {
+    try std.testing.expect(auto.shouldEnsureManagedService(true, .stopped, true));
+    try std.testing.expect(auto.shouldEnsureManagedService(true, .running, false));
+    try std.testing.expect(!auto.shouldEnsureManagedService(true, .running, true));
 }
 
 test "Scenario: Given windows delete task script when rendering then missing tasks are treated as success" {

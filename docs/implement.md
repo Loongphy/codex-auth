@@ -27,9 +27,10 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `~/.codex/auth.json`
 - `~/.codex/accounts/registry.json`
-- `~/.codex/accounts/<account_id_b64>.auth.json`
+- `~/.codex/accounts/<account_id>.auth.json`
 - `~/.codex/accounts/auth.json.bak.<timestamp>`
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
+- `~/.codex/backups/v2/<timestamp>/...`
 - `~/.codex/sessions/...`
 
 `codex-auth` resolves `codex_home` in this order:
@@ -49,9 +50,23 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## First Run and Empty Registry
 
-- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account_id_b64>.auth.json`.
+- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account_id>.auth.json`.
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
 - `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
+
+## Schema Migration
+
+Schema versioning, migration history, command behavior, and local migration testing are maintained in the dedicated Chinese document:
+
+- [`docs/schema-migration.md`](./schema-migration.md)
+
+That file is the canonical reference for:
+
+- formal schema definitions (`v2`, `v3`, ...)
+- adjacent migrator chain rules (`vN -> vN+1`)
+- automatic migration entry points and output
+- `codex-auth migrate`
+- local development workflow for testing `v2 -> v3`
 
 ## Account Identity
 
@@ -59,7 +74,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `account_id` is read from `tokens.account_id`.
 - The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must also exist and match `tokens.account_id`.
-- The auth snapshot file name is `base64url(account_id)` (URL-safe, no padding).
+- The auth snapshot file name is the raw `account_id`, stored as `accounts/<account_id>.auth.json`.
 - Email is still normalized to lowercase, but it is now a display/grouping field instead of the unique key.
 - Older email-key registries are migrated by re-reading legacy auth snapshots and extracting `account_id`.
 
@@ -97,10 +112,10 @@ The sync flow is:
 3. If an `account_id` match is found:
    - Set that account as active.
    - Update the stored email/plan/auth mode from the current auth.
-   - Overwrite `accounts/<account_id_b64>.auth.json` with the current `auth.json` if content differs.
+   - Overwrite `accounts/<account_id>.auth.json` with the current `auth.json` if content differs.
 4. If no `account_id` match is found:
    - Create a **new** account record for that auth snapshot.
-   - Import the current `auth.json` into `accounts/<account_id_b64>.auth.json`.
+   - Import the current `auth.json` into `accounts/<account_id>.auth.json`.
 
 If `auth.json` has no email or `account_id`, sync fails.
 
@@ -128,7 +143,7 @@ If multiple accounts match, interactive selection is shown.
 When switching:
 
 1. `auth.json` is backed up if its contents would change.
-2. The selected account’s `accounts/<account_id_b64>.auth.json` is copied to `~/.codex/auth.json`.
+2. The selected account’s `accounts/<account_id>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_id` is updated.
 
 ## Background Auto Switch
@@ -164,12 +179,19 @@ Service bootstrap is platform-specific:
 
 Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
 The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth auto enable` was run.
+The generated service definition also stamps the current `codex-auth` version. Any successful foreground `codex-auth` command except `help`, `version`, and `daemon` reconciles the managed service after command execution:
+
+- if `auto_switch.enabled = false`, it leaves the background service stopped
+- if `auto_switch.enabled = true` and the service is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
 
 ## Backups
 
 - `auth.json` backups are created only when the contents change.
 - `registry.json` backups are created only when the contents change.
 - Both are stored under `~/.codex/accounts/` and capped at the most recent 5 files.
+- Schema migration adds a separate whole-directory backup under `~/.codex/backups/v2/<timestamp>`.
+- `codex-auth clean` is whitelist-based for the current schema and only affects `~/.codex/accounts/`: it keeps only live snapshot files referenced by the registry and deletes other stale entries under `accounts/`.
+
 
 ## Usage and Rate Limits
 
