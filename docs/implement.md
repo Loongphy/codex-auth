@@ -1,6 +1,8 @@
-# Implementation Details (Local-Only)
+# Implementation Details (Local-Only Core)
 
-This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool never calls external APIs; it reads only local files under `~/.codex` (or `CODEX_HOME`).
+This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The core account-management flows read and write local files under `~/.codex` (or `CODEX_HOME`) and do not include built-in HTTP/API calls.
+
+`codex-auth login` (without `--skip`) invokes the external `codex login` command as a child process. Any network/API behavior in that path comes from the `codex` CLI, not from `codex-auth`'s own file-sync logic.
 
 ## Packaging and Release
 
@@ -31,6 +33,17 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `~/.codex/accounts/auth.json.bak.<timestamp>`
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
 - `~/.codex/sessions/...`
+
+## File Permissions
+
+- On Unix-like systems, `codex-auth` hardens sensitive files to mode `0600` after write/copy:
+  - `~/.codex/auth.json` (when written by `codex-auth`)
+  - `~/.codex/accounts/registry.json`
+  - `~/.codex/accounts/<email_b64>.auth.json`
+  - `~/.codex/accounts/auth.json.bak.<timestamp>`
+  - `~/.codex/accounts/registry.json.bak.<timestamp>`
+- On Unix-like systems, `~/.codex/accounts/` is hardened to mode `0700`.
+- On Windows, POSIX mode bits are not enforced; the tool logs a warning instead of failing.
 
 `codex-auth` resolves `codex_home` in this order:
 

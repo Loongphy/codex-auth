@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 const registry_version: u32 = 2;
+const private_file_mode: std.fs.File.Mode = 0o600;
+const private_dir_mode: std.fs.File.Mode = 0o700;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -111,10 +114,31 @@ pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
+fn hardenFilePermissions(path: []const u8) !void {
+    if (comptime builtin.os.tag == .windows) {
+        std.log.warn("cannot enforce 0600 on Windows: {s}", .{path});
+        return;
+    }
+    var file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    try file.chmod(private_file_mode);
+}
+
+fn hardenDirectoryPermissions(path: []const u8) !void {
+    if (comptime builtin.os.tag == .windows) {
+        std.log.warn("cannot enforce 0700 on Windows: {s}", .{path});
+        return;
+    }
+    var dir = try std.fs.cwd().openDir(path, .{});
+    defer dir.close();
+    try dir.chmod(private_dir_mode);
+}
+
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
     try std.fs.cwd().makePath(accounts_dir);
+    try hardenDirectoryPermissions(accounts_dir);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -143,6 +167,7 @@ pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u
 
 pub fn copyFile(src: []const u8, dest: []const u8) !void {
     try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{});
+    try hardenFilePermissions(dest);
 }
 
 const max_backups: usize = 5;
@@ -175,6 +200,7 @@ fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []cons
 
 fn ensureDir(path: []const u8) !void {
     try std.fs.cwd().makePath(path);
+    try hardenDirectoryPermissions(path);
 }
 
 fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -264,7 +290,7 @@ pub fn backupAuthIfChanged(
         }
         const backup = try makeBackupPath(allocator, dir, "auth.json");
         defer allocator.free(backup);
-        try std.fs.cwd().copyFile(current_auth_path, std.fs.cwd(), backup, .{});
+        try copyFile(current_auth_path, backup);
         try pruneBackups(allocator, dir, "auth.json", max_backups);
     }
 }
@@ -291,7 +317,7 @@ fn backupRegistryIfChanged(
 
     const backup = try makeBackupPath(allocator, dir, "registry.json");
     defer allocator.free(backup);
-    try std.fs.cwd().copyFile(current_registry_path, std.fs.cwd(), backup, .{});
+    try copyFile(current_registry_path, backup);
     try pruneBackups(allocator, dir, "registry.json", max_backups);
 }
 
@@ -741,9 +767,13 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 
     try backupRegistryIfChanged(allocator, codex_home, path, data);
 
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = try std.fs.cwd().createFile(path, .{
+        .truncate = true,
+        .mode = private_file_mode,
+    });
     defer file.close();
     try file.writeAll(data);
+    try hardenFilePermissions(path);
 }
 
 const RegistryOut = struct {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 
 fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
@@ -41,6 +42,12 @@ fn countBackups(dir: std.fs.Dir, prefix: []const u8) !usize {
     return count;
 }
 
+fn assertModeUnix(path: []const u8, expected_mode: u32) !void {
+    if (comptime builtin.os.tag == .windows) return;
+    const stat = try std.fs.cwd().statFile(path);
+    try std.testing.expectEqual(expected_mode, @as(u32, @intCast(stat.mode & 0o777)));
+}
+
 test "registry save/load" {
     var gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -71,6 +78,56 @@ test "registry save/load" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
+}
+
+test "accounts directory is hardened to 0700" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const accounts_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts" });
+    defer gpa.free(accounts_path);
+    try assertModeUnix(accounts_path, 0o700);
+}
+
+test "copyFile hardens destination to 0600" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    try tmp.dir.writeFile(.{ .sub_path = "source.json", .data = "secret" });
+    const src = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "source.json" });
+    defer gpa.free(src);
+    const dest = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "dest.json" });
+    defer gpa.free(dest);
+
+    try registry.copyFile(src, dest);
+    try assertModeUnix(dest, 0o600);
+}
+
+test "saveRegistry writes registry with 0600 mode" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = registry.Registry{ .version = 2, .active_email = null, .accounts = std.ArrayList(registry.AccountRecord).empty };
+    defer reg.deinit(gpa);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(path);
+    try assertModeUnix(path, 0o600);
 }
 
 test "auth backup only on change" {
