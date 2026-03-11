@@ -154,8 +154,7 @@ pub fn findMatchingAccounts(
 ) !std.ArrayList(usize) {
     var matches = std.ArrayList(usize).empty;
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.mem.eql(u8, rec.account_id, query) or std.mem.startsWith(u8, rec.account_id, query) or
-            std.ascii.indexOfIgnoreCase(rec.email, query) != null or
+        if (std.ascii.indexOfIgnoreCase(rec.email, query) != null or
             (rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null))
         {
             try matches.append(allocator, idx);

@@ -32,21 +32,6 @@ fn appendAccount(
     });
 }
 
-test "Scenario: Given account_id prefix query when finding matching accounts then only matching account is returned" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, "acc-team-1234", "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, "acc-plus-9999", "other@example.com", "", .plus);
-
-    var matches = try main_mod.findMatchingAccounts(gpa, &reg, "acc-team");
-    defer matches.deinit(gpa);
-
-    try std.testing.expect(matches.items.len == 1);
-    try std.testing.expect(matches.items[0] == 0);
-}
-
 test "Scenario: Given alias and email queries when finding matching accounts then both matching strategies still work" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
@@ -64,4 +49,16 @@ test "Scenario: Given alias and email queries when finding matching accounts the
     defer email_matches.deinit(gpa);
     try std.testing.expect(email_matches.items.len == 1);
     try std.testing.expect(email_matches.items[0] == 1);
+}
+
+test "Scenario: Given account_id query when finding matching accounts then it is ignored for switch lookup" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "acc-team-1234", "user@example.com", "work", .team);
+
+    var matches = try main_mod.findMatchingAccounts(gpa, &reg, "acc-team");
+    defer matches.deinit(gpa);
+    try std.testing.expect(matches.items.len == 0);
 }

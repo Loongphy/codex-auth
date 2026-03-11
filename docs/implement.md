@@ -133,8 +133,6 @@ Important limits:
 
 For non-interactive switching, the target account is matched case-insensitively by:
 
-- exact `account_id`
-- `account_id` prefix
 - alias fragment
 - email fragment
 

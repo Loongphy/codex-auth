@@ -615,14 +615,22 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
     if (!std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
         allocator.free(reg.accounts.items[idx].email);
         reg.accounts.items[idx].email = try allocator.dupe(u8, email);
+        changed = true;
     }
-    if (info.plan != null) reg.accounts.items[idx].plan = info.plan;
-    reg.accounts.items[idx].auth_mode = info.auth_mode;
+    if (info.plan != null and reg.accounts.items[idx].plan != info.plan) {
+        reg.accounts.items[idx].plan = info.plan;
+        changed = true;
+    }
+    if (reg.accounts.items[idx].auth_mode != info.auth_mode) {
+        reg.accounts.items[idx].auth_mode = info.auth_mode;
+        changed = true;
+    }
 
     const dest = try accountAuthPath(allocator, codex_home, rec_account_id);
     defer allocator.free(dest);
     if (!(try fileEqualsBytes(allocator, dest, auth_bytes))) {
         try copyFile(auth_path, dest);
+        changed = true;
     }
 
     try setActiveAccount(allocator, reg, rec_account_id);
