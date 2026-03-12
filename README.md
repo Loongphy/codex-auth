@@ -7,6 +7,10 @@
 - It reads and updates local Codex files under `~/.codex` (including `sessions/` and auth files).
 - For ChatGPT-auth accounts, it refreshes the active account's usage from the ChatGPT usage API first, then falls back to local rollout files when API refresh is unavailable.
 
+> [!IMPORTANT]
+> After switching accounts, you must fully exit `codex` and start it again for the new account to take effect.
+> If you want seamless automatic account switching without restarting `codex`, use [codext](https://github.com/Loongphy/codext), but you need to build it yourself because there is no prebuilt install method yet.
+
 ## Install
 
 - npm:
