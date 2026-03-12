@@ -62,29 +62,29 @@ pub fn ensureMigratedWithWriter(
 
     if (detected_version >= latest_schema_version) {
         if (mode == .explicit) {
-            try out.print("当前已是最新版本：v{d}\n", .{latest_schema_version});
+            try out.print("Already on latest schema: v{d}\n", .{latest_schema_version});
             try out.flush();
         }
         return .{ .migrated = false, .current_version = detected_version };
     }
 
-    try out.print("正在迁移到新版本：v{d} -> v{d}\n", .{ detected_version, latest_schema_version });
+    try out.print("Migrating schema: v{d} -> v{d}\n", .{ detected_version, latest_schema_version });
 
     var current = detected_version;
     while (current < latest_schema_version) {
         switch (current) {
             2 => {
-                try out.writeAll("迁移 v2 -> v3 中……\n");
+                try out.writeAll("Running v2 -> v3 migration...\n");
                 const backup_path = try migrateV2ToV3(allocator, codex_home, out);
                 defer allocator.free(backup_path);
-                try out.print("备份当前数据到：{s}\n", .{backup_path});
+                try out.print("Backed up current data to: {s}\n", .{backup_path});
                 current = 3;
             },
             else => return error.UnsupportedSchemaMigration,
         }
     }
 
-    try out.print("迁移完成，当前版本：v{d}\n", .{latest_schema_version});
+    try out.print("Migration complete. Current version: v{d}\n", .{latest_schema_version});
     try out.flush();
     return .{ .migrated = true, .current_version = latest_schema_version };
 }
@@ -230,7 +230,9 @@ fn appendMigratedLegacyAccount(
     out: *std.Io.Writer,
 ) !bool {
     const old_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
+    var keep_old_path = false;
     errdefer allocator.free(old_path);
+    defer if (!keep_old_path) allocator.free(old_path);
 
     const info = auth.parseAuthInfo(allocator, old_path) catch |err| {
         try reportSkippedLegacyAccount(out, legacy.email, err);
@@ -265,6 +267,7 @@ fn appendMigratedLegacyAccount(
     legacy.last_usage = null;
 
     registry.upsertAccount(allocator, reg, rec);
+    keep_old_path = true;
     try old_files.append(allocator, old_path);
 
     if (active_email) |expected| {
@@ -284,7 +287,7 @@ fn legacyAccountLabel(obj: std.json.ObjectMap) []const u8 {
 }
 
 fn reportSkippedLegacyAccount(out: *std.Io.Writer, label: []const u8, err: anyerror) !void {
-    try out.print("跳过损坏的旧账号 {s}: {s}\n", .{ label, @errorName(err) });
+    try out.print("Skipped broken legacy account {s}: {s}\n", .{ label, @errorName(err) });
 }
 
 fn writeNewAccountFiles(

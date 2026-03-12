@@ -98,9 +98,9 @@ test "Scenario: Given v2 registry when ensuring migrated then account snapshots 
     try std.testing.expect(result.current_version == 3);
 
     const migration_output = output.written();
-    try std.testing.expect(std.mem.indexOf(u8, migration_output, "正在迁移到新版本：v2 -> v3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, migration_output, "迁移 v2 -> v3 中……") != null);
-    try std.testing.expect(std.mem.indexOf(u8, migration_output, "迁移完成，当前版本：v3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, migration_output, "Migrating schema: v2 -> v3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, migration_output, "Running v2 -> v3 migration...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, migration_output, "Migration complete. Current version: v3") != null);
 
     const a_account_id = try accountIdForEmailAlloc(gpa, a_email);
     defer gpa.free(a_account_id);
@@ -219,7 +219,7 @@ test "Scenario: Given mixed v2 snapshots when one is malformed then valid accoun
     defer output.deinit();
     const result = try migration.ensureMigratedWithWriter(gpa, codex_home, .automatic, &output.writer);
     try std.testing.expect(result.migrated);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "跳过损坏的旧账号 broken@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Skipped broken legacy account broken@example.com") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -312,5 +312,5 @@ test "Scenario: Given latest registry when explicit migrate runs then it reports
     defer output.deinit();
     const result = try migration.ensureMigratedWithWriter(gpa, codex_home, .explicit, &output.writer);
     try std.testing.expect(!result.migrated);
-    try std.testing.expect(std.mem.indexOf(u8, output.written(), "当前已是最新版本：v3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.written(), "Already on latest schema: v3") != null);
 }
