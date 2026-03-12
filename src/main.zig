@@ -22,7 +22,10 @@ pub fn main() !void {
     switch (cmd) {
         .version => try cli.printVersion(),
         .help => try handleHelp(allocator, codex_home),
-        .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
+        .daemon => |opts| switch (opts.mode) {
+            .watch => try auto.runDaemon(allocator, codex_home),
+            .once => try auto.runDaemonOnce(allocator, codex_home),
+        },
         .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, opts),
         else => {
             switch (cmd) {

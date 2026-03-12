@@ -168,16 +168,29 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
 }
 
-test "Scenario: Given linux service unit when rendering then daemon watch command is included" {
+test "Scenario: Given linux service unit when rendering then oneshot daemon command is included" {
     const gpa = std.testing.allocator;
     const unit = try auto.linuxUnitText(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home");
     defer gpa.free(unit);
 
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch daemon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch check") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Type=oneshot") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_HOME=/tmp/custom-codex-home\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") == null);
+}
+
+test "Scenario: Given linux timer unit when rendering then it schedules the oneshot service every minute" {
+    const gpa = std.testing.allocator;
+    const timer = try auto.linuxTimerText(gpa);
+    defer gpa.free(timer);
+
+    try std.testing.expect(std.mem.indexOf(u8, timer, "Description=Run codex-auth auto-switch every minute") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=1min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "OnUnitActiveSec=1min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "Unit=codex-auth-autoswitch.service") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "WantedBy=timers.target") != null);
 }
 
 test "Scenario: Given mac plist when rendering then CODEX_HOME environment is preserved" {
@@ -199,7 +212,7 @@ test "Scenario: Given windows task action when rendering then it preserves CODEX
     try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_HOME = 'D:\\Codex Home'") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_AUTH_VERSION = '") != null);
-    try std.testing.expect(std.mem.indexOf(u8, action, "& 'C:\\Program Files\\codex-auth.exe' daemon --watch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "& 'C:\\Program Files\\codex-auth.exe' daemon --once") != null);
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -241,7 +254,8 @@ test "Scenario: Given windows delete task script when rendering then missing tas
 
 test "Scenario: Given windows task state output when parsing then localized text is no longer required" {
     try std.testing.expect(auto.parseWindowsTaskStateOutput("4\r\n") == .running);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .stopped);
+    try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .running);
+    try std.testing.expect(auto.parseWindowsTaskStateOutput("1\r\n") == .stopped);
     try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
 }
 

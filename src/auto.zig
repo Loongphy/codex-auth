@@ -7,11 +7,22 @@ const sessions = @import("sessions.zig");
 const version = @import("version.zig");
 
 const linux_service_name = "codex-auth-autoswitch.service";
+const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const lock_file_name = "auto-switch.lock";
 const poll_interval_ns = 60 * std.time.ns_per_s;
 pub const RuntimeState = enum { running, stopped, unknown };
+
+const ansi = struct {
+    const reset = "\x1b[0m";
+    const red = "\x1b[31m";
+    const bold_red = "\x1b[1;31m";
+    const green = "\x1b[32m";
+    const bold = "\x1b[1m";
+    const bold_green = "\x1b[1;32m";
+    const yellow = "\x1b[33m";
+};
 
 pub const Status = struct {
     enabled: bool,
@@ -36,7 +47,7 @@ const DaemonLock = struct {
         defer allocator.free(path);
         var file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
         errdefer file.close();
-        if (!(try file.tryLock(.exclusive))) {
+        if (!(try tryExclusiveLock(file))) {
             file.close();
             return null;
         }
@@ -49,15 +60,46 @@ const DaemonLock = struct {
     }
 };
 
+fn tryExclusiveLock(file: std.fs.File) !bool {
+    if (builtin.os.tag == .windows) {
+        const windows = std.os.windows;
+        const range_off: windows.LARGE_INTEGER = 0;
+        const range_len: windows.LARGE_INTEGER = 1;
+        var io_status_block: windows.IO_STATUS_BLOCK = undefined;
+        windows.LockFile(
+            file.handle,
+            null,
+            null,
+            null,
+            &io_status_block,
+            &range_off,
+            &range_len,
+            null,
+            windows.TRUE,
+            windows.TRUE,
+        ) catch |err| switch (err) {
+            error.WouldBlock => return false,
+            else => |e| return e,
+        };
+        return true;
+    }
+
+    return try file.tryLock(.exclusive);
+}
+
 pub fn helpStateLabel(enabled: bool) []const u8 {
     return if (enabled) "ON" else "OFF";
+}
+
+fn colorEnabled() bool {
+    return std.fs.File.stdout().isTty();
 }
 
 pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const status = try getStatus(allocator, codex_home);
     var stdout: io_util.Stdout = undefined;
     stdout.init();
-    try writeStatus(stdout.out(), status);
+    try writeStatusWithColor(stdout.out(), status, colorEnabled());
 }
 
 pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
@@ -72,12 +114,37 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
 }
 
 pub fn writeStatus(out: *std.Io.Writer, status: Status) !void {
-    try out.print("auto-switch: {s}\n", .{helpStateLabel(status.enabled)});
-    try out.print("service: {s}\n", .{@tagName(status.runtime)});
+    try writeStatusWithColor(out, status, false);
+}
+
+fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("auto-switch: ");
+    if (use_color) try out.writeAll(if (status.enabled) ansi.bold_green else ansi.bold_red);
+    try out.writeAll(helpStateLabel(status.enabled));
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
+
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("service: ");
+    if (use_color) try out.writeAll(switch (status.runtime) {
+        .running => ansi.bold_green,
+        .stopped => ansi.bold_red,
+        .unknown => ansi.bold_red,
+    });
+    try out.writeAll(@tagName(status.runtime));
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
+
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("thresholds: ");
+    if (use_color) try out.writeAll(ansi.yellow);
     try out.print(
-        "thresholds: 5h<{d}%, weekly<{d}%\n",
+        "5h<{d}%, weekly<{d}%",
         .{ status.threshold_5h_percent, status.threshold_weekly_percent },
     );
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
     try out.flush();
 }
 
@@ -116,6 +183,11 @@ pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
+    if (!reg.auto_switch.enabled) {
+        try uninstallService(allocator, codex_home);
+        return;
+    }
+
     const runtime = queryRuntimeState(allocator);
     const self_exe = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
@@ -138,6 +210,14 @@ pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         if (!keep_running) return;
         std.Thread.sleep(poll_interval_ns);
     }
+}
+
+pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    try registry.ensureAccountsDir(allocator, codex_home);
+    var daemon_lock = (try DaemonLock.acquire(allocator, codex_home)) orelse return;
+    defer daemon_lock.release();
+
+    _ = try daemonCycle(allocator, codex_home);
 }
 
 pub fn refreshTrackedActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -339,20 +419,28 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     defer allocator.free(unit_path);
     const unit_text = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(unit_text);
+    const timer_path = try linuxUnitPath(allocator, linux_timer_name);
+    defer allocator.free(timer_path);
+    const timer_text = try linuxTimerText(allocator);
+    defer allocator.free(timer_text);
 
     const unit_dir = std.fs.path.dirname(unit_path).?;
     try std.fs.cwd().makePath(unit_dir);
     try std.fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
+    try std.fs.cwd().writeFile(.{ .sub_path = timer_path, .data = timer_text });
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
-    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
+    // Clean up the legacy long-running service enablement before switching to the timer model.
+    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "disable", "--now", linux_service_name });
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_timer_name });
     switch (queryLinuxRuntimeState(allocator)) {
-        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_service_name }),
-        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_service_name }),
+        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_timer_name }),
+        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_timer_name }),
     }
 }
 
 fn uninstallLinuxService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     _ = codex_home;
+    try removeLinuxUnit(allocator, linux_timer_name);
     try removeLinuxUnit(allocator, linux_service_name);
 }
 
@@ -401,7 +489,9 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
         "schtasks",
         "/Create",
         "/SC",
-        "ONLOGON",
+        "MINUTE",
+        "/MO",
+        "1",
         "/TN",
         windows_task_name,
         "/TR",
@@ -429,7 +519,7 @@ fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
 }
 
 fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", linux_service_name }) catch return .unknown;
+    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", linux_timer_name }) catch return .unknown;
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
@@ -474,7 +564,7 @@ fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
 }
 
 pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
-    const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --watch", .{self_exe});
+    const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --once", .{self_exe});
     defer allocator.free(exec);
     const escaped_home = try escapeSystemdValue(allocator, codex_home);
     defer allocator.free(escaped_home);
@@ -482,8 +572,16 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch daemon\n\n[Service]\nEnvironment=\"CODEX_HOME={s}\"\nEnvironment=\"{s}={s}\"\nExecStart={s}\nRestart=always\nRestartSec=15\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=codex-auth auto-switch check\n\n[Service]\nType=oneshot\nEnvironment=\"CODEX_HOME={s}\"\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
         .{ escaped_home, service_version_env_name, escaped_version, exec },
+    );
+}
+
+pub fn linuxTimerText(allocator: std.mem.Allocator) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "[Unit]\nDescription=Run codex-auth auto-switch every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
+        .{linux_service_name},
     );
 }
 
@@ -510,7 +608,7 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, self_exe: []const u8, cod
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command \"$env:CODEX_HOME = '{s}'; $env:{s} = '{s}'; & '{s}' daemon --watch\"",
+        "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command \"$env:CODEX_HOME = '{s}'; $env:{s} = '{s}'; & '{s}' daemon --once\"",
         .{ escaped_home, service_version_env_name, escaped_version, escaped_exe },
     );
 }
@@ -539,7 +637,11 @@ pub fn parseWindowsTaskStateOutput(output: []const u8) RuntimeState {
     const trimmed = std.mem.trim(u8, output, " \n\r\t");
     if (trimmed.len == 0) return .unknown;
     const value = std.fmt.parseInt(u8, trimmed, 10) catch return .unknown;
-    return if (value == 4) .running else .stopped;
+    return switch (value) {
+        2, 3, 4 => .running,
+        0, 1 => .stopped,
+        else => .unknown,
+    };
 }
 
 fn linuxUnitPath(allocator: std.mem.Allocator, service_name: []const u8) ![]u8 {
@@ -562,7 +664,13 @@ fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_e
     defer allocator.free(unit_path);
     const expected = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(expected);
-    return try fileEqualsBytes(allocator, unit_path, expected);
+    if (!(try fileEqualsBytes(allocator, unit_path, expected))) return false;
+
+    const timer_path = try linuxUnitPath(allocator, linux_timer_name);
+    defer allocator.free(timer_path);
+    const expected_timer = try linuxTimerText(allocator);
+    defer allocator.free(expected_timer);
+    return try fileEqualsBytes(allocator, timer_path, expected_timer);
 }
 
 fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {

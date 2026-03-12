@@ -123,7 +123,7 @@ If `auth.json` has no email or `account_id`, sync fails.
 Important limits:
 
 - Foreground commands sync `auth.json` strictly by `account_id`; there is no alternate key or “active” heuristic.
-- When background auto-switching is enabled, a daemon keeps polling rollout usage and can switch accounts without a foreground `codex-auth` command.
+- When background auto-switching is enabled, a background worker keeps checking rollout usage and can switch accounts without a foreground `codex-auth` command.
 
 ## Switching Accounts
 
@@ -163,17 +163,17 @@ The threshold configuration is also persisted in `registry.json`:
 - `auto_switch.threshold_weekly_percent` (default `5`)
 
 The configuration command can update either threshold independently or both in one command.
-If the daemon is already running, threshold changes do not require reinstalling or restarting the managed service; the daemon reads the updated registry on its next poll cycle.
+If background auto-switching is already active, threshold changes do not require reinstalling or restarting the managed service. On Linux/WSL and Windows the next scheduled run reads the updated registry; on macOS the running daemon reads it on the next poll cycle.
 
 When enabled:
 
-1. A background daemon runs continuously.
+1. A background worker checks usage continuously or on a fixed schedule, depending on platform.
 2. It refreshes usage from the newest rollout file and assigns that snapshot to the current active account.
-   The daemon also remembers the last attributed rollout `(path, mtime)` and will not reassign an unchanged rollout after an automatic switch.
+   The worker also remembers the last attributed rollout `(path, mtime)` and will not reassign an unchanged rollout after an automatic switch.
 3. If active-account remaining quota is below either threshold, it switches to the best alternative account without foreground CLI output:
    - `5h` remaining `< auto_switch.threshold_5h_percent` (default `10%`)
    - `weekly` remaining `< auto_switch.threshold_weekly_percent` (default `5%`)
-   - on Linux/WSL, the daemon writes a user-service journal line with the source and destination emails when an automatic switch happens
+   - on Linux/WSL, the timer-triggered service writes a user-service journal line with the source and destination emails when an automatic switch happens
 4. Candidate scoring is reset-aware:
    - if `resets_at <= now`, that window is treated as fully reset (`100%`)
    - if both 5h and weekly are known, the candidate score is the lower remaining value
@@ -182,16 +182,16 @@ When enabled:
 
 Service bootstrap is platform-specific:
 
-- Linux/WSL: `systemd --user`
+- Linux/WSL: `systemd --user` oneshot service plus timer, running once per minute
 - macOS: `LaunchAgent`
-- Windows: user scheduled task
+- Windows: user scheduled task running once per minute
 
 Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
 The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth auto enable` was run.
 The generated service definition also stamps the current `codex-auth` version. Any successful foreground `codex-auth` command except `help`, `version`, and `daemon` reconciles the managed service after command execution:
 
-- if `auto_switch.enabled = false`, it leaves the background service stopped
-- if `auto_switch.enabled = true` and the service is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
+- if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
+- if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
 
 ## Backups
 
@@ -212,7 +212,7 @@ Usage data is read from the three newest `~/.codex/sessions/**/rollout-*.jsonl` 
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a snapshot was observed.
-- `list`, `switch`, and the auto-switch daemon all use the same tracked-rollout refresh path: they scan the three newest rollout files and write the selected snapshot to the current active account only when its event `timestamp` is newer than the persisted `auto_switch.last_rollout.event_timestamp_ms` signature.
+- `list`, `switch`, and the auto-switch background worker all use the same tracked-rollout refresh path: they scan the three newest rollout files and write the selected snapshot to the current active account only when its event `timestamp` is newer than the persisted `auto_switch.last_rollout.event_timestamp_ms` signature.
 - Because that tracked event timestamp is persisted in `registry.json`, foreground `list`/`switch` also honor it. After an automatic switch, the same unchanged usage event is intentionally not reassigned to the newly active account even if it is later observed from a different rollout file.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond the active-account + last-attributed-rollout guard.
 

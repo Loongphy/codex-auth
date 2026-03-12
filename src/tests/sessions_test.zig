@@ -18,6 +18,12 @@ fn usageLineAlloc(allocator: std.mem.Allocator, timestamp: []const u8, used_perc
     );
 }
 
+fn updateFileTimes(path: []const u8, atime: i128, mtime: i128) !void {
+    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
+    defer file.close();
+    try file.updateTimes(atime, mtime);
+}
+
 test "parse token_count usage" {
     const gpa = std.testing.allocator;
     const snap = sessions.parseUsageLine(gpa, line) orelse return error.TestExpectedEqual;
@@ -34,56 +40,54 @@ test "scan latest usage chooses newest valid event from the most recent three ro
     defer gpa.free(codex_home);
     try tmp.dir.makePath("sessions/2025/01/01");
 
-    const rollout_a = try usageLineAlloc(gpa, "2025-01-01T00:00:05.000Z", 50.0);
-    defer gpa.free(rollout_a);
-    const rollout_b = try usageLineAlloc(gpa, "2025-01-01T00:00:07.000Z", 70.0);
-    defer gpa.free(rollout_b);
-    const rollout_d = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
-    defer gpa.free(rollout_d);
+    const names = [_][]const u8{
+        "rollout-a.jsonl",
+        "rollout-b.jsonl",
+        "rollout-c.jsonl",
+        "rollout-d.jsonl",
+        "rollout-e.jsonl",
+        "rollout-f.jsonl",
+        "rollout-g.jsonl",
+        "rollout-h.jsonl",
+        "rollout-i.jsonl",
+        "rollout-j.jsonl",
+    };
+    var paths: [names.len][]u8 = undefined;
+    defer for (paths) |path| gpa.free(path);
 
-    const path_a = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
-    defer gpa.free(path_a);
-    const path_b = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-b.jsonl" });
-    defer gpa.free(path_b);
-    const path_c = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-c.jsonl" });
-    defer gpa.free(path_c);
-    const path_d = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-d.jsonl" });
-    defer gpa.free(path_d);
+    for (names, 0..) |name, idx| {
+        paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+    }
 
-    try std.fs.cwd().writeFile(.{ .sub_path = path_a, .data = rollout_a });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_b, .data = rollout_b });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_c, .data = null_rate_limits_line ++ "\n" });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_d, .data = rollout_d });
+    const newer_valid = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
+    defer gpa.free(newer_valid);
+    const older_valid = try usageLineAlloc(gpa, "2025-01-01T00:00:07.000Z", 70.0);
+    defer gpa.free(older_valid);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[0], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[1], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[2], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[3], .data = older_valid });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[4], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[5], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[6], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[7], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[8], .data = newer_valid });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[9], .data = null_rate_limits_line ++ "\n" });
 
     const base_time = @as(i128, std.time.nanoTimestamp());
-    {
-        var file = try std.fs.cwd().openFile(path_d, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time, base_time);
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_c, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_b, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + (2 * std.time.ns_per_s), base_time + (2 * std.time.ns_per_s));
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_a, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
+    for (paths, 0..) |path, idx| {
+        const ts = base_time + (@as(i128, @intCast(idx)) * std.time.ns_per_s);
+        try updateFileTimes(path, ts, ts);
     }
 
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings(path_b, latest.path);
-    try std.testing.expectEqual(@as(i64, 1735689607000), latest.event_timestamp_ms);
+    try std.testing.expectEqualStrings(paths[8], latest.path);
+    try std.testing.expectEqual(@as(i64, 1735689609000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
-    try std.testing.expectEqual(@as(f64, 70.0), latest.snapshot.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 90.0), latest.snapshot.primary.?.used_percent);
 }
 
 test "scan latest usage ignores rollout files beyond the most recent three" {
@@ -95,42 +99,38 @@ test "scan latest usage ignores rollout files beyond the most recent three" {
     defer gpa.free(codex_home);
     try tmp.dir.makePath("sessions/2025/01/01");
 
-    const path_a = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
-    defer gpa.free(path_a);
-    const path_b = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-b.jsonl" });
-    defer gpa.free(path_b);
-    const path_c = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-c.jsonl" });
-    defer gpa.free(path_c);
-    const path_d = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-d.jsonl" });
-    defer gpa.free(path_d);
+    const names = [_][]const u8{
+        "rollout-a.jsonl",
+        "rollout-b.jsonl",
+        "rollout-c.jsonl",
+        "rollout-d.jsonl",
+        "rollout-e.jsonl",
+        "rollout-f.jsonl",
+        "rollout-g.jsonl",
+        "rollout-h.jsonl",
+        "rollout-i.jsonl",
+        "rollout-j.jsonl",
+        "rollout-k.jsonl",
+    };
+    var paths: [names.len][]u8 = undefined;
+    defer for (paths) |path| gpa.free(path);
+
+    for (names, 0..) |name, idx| {
+        paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+    }
 
     const older_valid = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
     defer gpa.free(older_valid);
-    try std.fs.cwd().writeFile(.{ .sub_path = path_a, .data = null_rate_limits_line ++ "\n" });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_b, .data = null_rate_limits_line ++ "\n" });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_c, .data = null_rate_limits_line ++ "\n" });
-    try std.fs.cwd().writeFile(.{ .sub_path = path_d, .data = older_valid });
+    for (paths[0 .. paths.len - 1]) |path| {
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = null_rate_limits_line ++ "\n" });
+    }
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[paths.len - 1], .data = older_valid });
 
     const base_time = @as(i128, std.time.nanoTimestamp());
-    {
-        var file = try std.fs.cwd().openFile(path_d, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time, base_time);
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_c, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_b, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + (2 * std.time.ns_per_s), base_time + (2 * std.time.ns_per_s));
-    }
-    {
-        var file = try std.fs.cwd().openFile(path_a, .{ .mode = .read_write });
-        defer file.close();
-        try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
+    try updateFileTimes(paths[paths.len - 1], base_time, base_time);
+    for (paths[0 .. paths.len - 1], 0..) |path, idx| {
+        const ts = base_time + (@as(i128, @intCast(idx + 1)) * std.time.ns_per_s);
+        try updateFileTimes(path, ts, ts);
     }
 
     const latest = try sessions.scanLatestUsageWithSource(gpa, codex_home);

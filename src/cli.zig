@@ -52,7 +52,8 @@ pub const AutoOptions = union(enum) {
     action: AutoAction,
     configure: AutoThresholdOptions,
 };
-pub const DaemonOptions = struct { watch: bool };
+pub const DaemonMode = enum { watch, once };
+pub const DaemonOptions = struct { mode: DaemonMode };
 
 pub const Command = union(enum) {
     list: ListOptions,
@@ -198,7 +199,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
 
     if (std.mem.eql(u8, cmd, "daemon")) {
         if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[2], 0), "--watch")) {
-            return Command{ .daemon = .{ .watch = true } };
+            return Command{ .daemon = .{ .mode = .watch } };
+        }
+        if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[2], 0), "--once")) {
+            return Command{ .daemon = .{ .mode = .once } };
         }
         return Command{ .help = {} };
     }
@@ -1286,7 +1290,6 @@ fn remainingPercent(used: f64) i64 {
     if (remaining >= 100.0) return 100;
     return @as(i64, @intFromFloat(remaining));
 }
-
 
 fn indexWidth(count: usize) usize {
     var n = count;

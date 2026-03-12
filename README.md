@@ -131,12 +131,13 @@ codex-auth auto --5h 12
 codex-auth auto --5h 12 --weekly 8
 ```
 
-When auto-switching is enabled, a background daemon watches the active account's latest rollout usage and silently switches accounts when:
+When auto-switching is enabled, a background worker checks the active account's latest rollout usage and silently switches accounts when:
 
 - 5h remaining drops below the configured 5h threshold (default `10%`), or
 - weekly remaining drops below the configured weekly threshold (default `5%`)
 
 Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
-Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so an enabled daemon is restarted onto the current binary after upgrades or stale service drift.
-Changing thresholds updates `registry.json`; the running daemon picks up the new values on its next polling cycle and does not need a service restart.
+On Linux/WSL, background checks run through `systemd --user` as a oneshot service triggered every minute by a timer. On Windows, a user scheduled task runs the same one-shot check every minute. On macOS, the background worker remains long-running.
+Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or stale service drift.
+Changing thresholds updates `registry.json`; Linux/WSL and Windows pick them up on the next scheduled run, while macOS picks them up on the next polling cycle, without a service restart.
 `codex-auth help` also shows whether auto-switching is currently `ON` or `OFF`, plus the current thresholds.

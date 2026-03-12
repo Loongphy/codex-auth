@@ -288,7 +288,19 @@ test "Scenario: Given daemon watch when parsing then daemon command is preserved
     defer cli.freeCommand(gpa, &cmd);
 
     switch (cmd) {
-        .daemon => |opts| try std.testing.expect(opts.watch),
+        .daemon => |opts| try std.testing.expect(opts.mode == .watch),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given daemon once when parsing then one-shot daemon command is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "daemon", "--once" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .daemon => |opts| try std.testing.expect(opts.mode == .once),
         else => return error.TestExpectedEqual,
     }
 }
