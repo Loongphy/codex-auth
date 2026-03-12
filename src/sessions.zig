@@ -57,24 +57,23 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
         }
     }.lessThan);
 
-    for (candidates.items) |candidate| {
-        const snapshot = try scanFileForUsage(allocator, candidate.path);
-        if (snapshot == null) continue;
+    if (candidates.items.len == 0) return null;
 
-        const path = candidate.path;
-        const mtime = candidate.mtime;
-        for (candidates.items) |other| {
-            if (other.path.ptr != path.ptr) allocator.free(other.path);
-        }
-        candidates.clearRetainingCapacity();
-        return .{
-            .path = path,
-            .mtime = mtime,
-            .snapshot = snapshot.?,
-        };
+    const latest_idx: usize = 0;
+    const snapshot = try scanFileForUsage(allocator, candidates.items[latest_idx].path);
+    if (snapshot == null) return null;
+
+    const path = candidates.items[latest_idx].path;
+    const mtime = candidates.items[latest_idx].mtime;
+    for (candidates.items, 0..) |other, idx| {
+        if (idx != latest_idx) allocator.free(other.path);
     }
-
-    return null;
+    candidates.clearRetainingCapacity();
+    return .{
+        .path = path,
+        .mtime = mtime,
+        .snapshot = snapshot.?,
+    };
 }
 
 fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?registry.RateLimitSnapshot {

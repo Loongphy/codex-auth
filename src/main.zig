@@ -24,11 +24,7 @@ pub fn main() !void {
         .version => try cli.printVersion(),
         .help => try handleHelp(allocator, codex_home),
         .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
-        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
-            .enable => .enable,
-            .disable => .disable,
-            .status => .status,
-        }),
+        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, opts),
         else => {
             _ = try migration.ensureMigrated(allocator, codex_home, .automatic);
             switch (cmd) {
@@ -182,17 +178,16 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var auto_enabled = false;
     var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
         error.RegistryMigrationRequired, error.UnsupportedSchemaVersion => {
-            try cli.printHelp(false);
+            const auto_cfg = registry.defaultAutoSwitchConfig();
+            try cli.printHelp(&auto_cfg);
             return;
         },
         else => return err,
     };
     defer reg.deinit(allocator);
-    auto_enabled = reg.auto_switch.enabled;
-    try cli.printHelp(auto_enabled);
+    try cli.printHelp(&reg.auto_switch);
 }
 
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {

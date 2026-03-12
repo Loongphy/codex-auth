@@ -51,6 +51,7 @@ codex-auth switch [<email>] # switch active account (interactive or partial/frag
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
 codex-auth remove # remove accounts (interactive multi-select)
 codex-auth auto enable|disable|status # manage background auto-switching
+codex-auth auto [--5h <percent>] [--weekly <percent>] # configure auto-switch thresholds
 ```
 
 Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`. The old `--no-login` flag has been replaced by `--skip`.
@@ -115,11 +116,19 @@ Show background auto-switch status:
 codex-auth auto status
 ```
 
+Configure auto-switch thresholds:
+
+```shell
+codex-auth auto --5h 12
+codex-auth auto --5h 12 --weekly 8
+```
+
 When auto-switching is enabled, a background daemon watches the active account's latest rollout usage and silently switches accounts when:
 
-- 5h remaining drops below `10%`, or
-- weekly remaining drops below `5%`
+- 5h remaining drops below the configured 5h threshold (default `10%`), or
+- weekly remaining drops below the configured weekly threshold (default `5%`)
 
 Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so an enabled daemon is restarted onto the current binary after upgrades or stale service drift.
-`codex-auth help` also shows whether auto-switching is currently `ON` or `OFF`.
+Changing thresholds updates `registry.json`; the running daemon picks up the new values on its next polling cycle and does not need a service restart.
+`codex-auth help` also shows whether auto-switching is currently `ON` or `OFF`, plus the current thresholds.

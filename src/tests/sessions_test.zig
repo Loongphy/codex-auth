@@ -17,7 +17,7 @@ test "parse token_count usage" {
     try std.testing.expect(snap.secondary != null);
 }
 
-test "scan latest usage skips newer rollout files without parseable rate limits" {
+test "scan latest usage reads only the newest rollout file" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -46,10 +46,6 @@ test "scan latest usage skips newer rollout files without parseable rate limits"
         try newer_null_file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
     }
 
-    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
-    defer latest.deinit(gpa);
-
-    try std.testing.expectEqualStrings(valid_path, latest.path);
-    try std.testing.expect(latest.snapshot.primary != null);
-    try std.testing.expectEqual(@as(f64, 50.0), latest.snapshot.primary.?.used_percent);
+    const latest = try sessions.scanLatestUsageWithSource(gpa, codex_home);
+    try std.testing.expect(latest == null);
 }

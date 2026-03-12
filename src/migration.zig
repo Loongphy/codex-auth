@@ -510,6 +510,16 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *registry.AutoSwitchConfig
     if (obj.get("last_rollout")) |last_rollout| {
         parseRolloutSignature(allocator, &cfg.last_rollout, last_rollout);
     }
+    if (obj.get("threshold_5h_percent")) |threshold| {
+        if (parseThresholdPercent(threshold)) |value| {
+            cfg.threshold_5h_percent = value;
+        }
+    }
+    if (obj.get("threshold_weekly_percent")) |threshold| {
+        if (parseThresholdPercent(threshold)) |value| {
+            cfg.threshold_weekly_percent = value;
+        }
+    }
 }
 
 fn parseRolloutSignature(allocator: std.mem.Allocator, sig: *registry.RolloutSignature, v: std.json.Value) void {
@@ -613,6 +623,15 @@ fn readInt(v: ?std.json.Value) ?i64 {
         .integer => |i| i,
         else => null,
     };
+}
+
+fn parseThresholdPercent(v: std.json.Value) ?u8 {
+    const raw = switch (v) {
+        .integer => |i| i,
+        else => return null,
+    };
+    if (raw < 1 or raw > 100) return null;
+    return @as(u8, @intCast(raw));
 }
 
 fn localtimeCompat(ts: i64, out_tm: *c.struct_tm) bool {

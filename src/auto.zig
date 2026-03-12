@@ -11,15 +11,13 @@ const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const lock_file_name = "auto-switch.lock";
 const poll_interval_ns = 60 * std.time.ns_per_s;
-const threshold_5h: i64 = 10;
-const threshold_weekly: i64 = 5;
-
-pub const AutoCommand = enum { enable, disable, status };
 pub const RuntimeState = enum { running, stopped, unknown };
 
 pub const Status = struct {
     enabled: bool,
     runtime: RuntimeState,
+    threshold_5h_percent: u8,
+    threshold_weekly_percent: u8,
 };
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
@@ -59,10 +57,7 @@ pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const status = try getStatus(allocator, codex_home);
     var stdout: io_util.Stdout = undefined;
     stdout.init();
-    const out = stdout.out();
-    try out.print("auto-switch: {s}\n", .{helpStateLabel(status.enabled)});
-    try out.print("service: {s}\n", .{@tagName(status.runtime)});
-    try out.flush();
+    try writeStatus(stdout.out(), status);
 }
 
 pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
@@ -71,14 +66,44 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
     return .{
         .enabled = reg.auto_switch.enabled,
         .runtime = queryRuntimeState(allocator),
+        .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
+        .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
     };
 }
 
-pub fn handleCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: AutoCommand) !void {
+pub fn writeStatus(out: *std.Io.Writer, status: Status) !void {
+    try out.print("auto-switch: {s}\n", .{helpStateLabel(status.enabled)});
+    try out.print("service: {s}\n", .{@tagName(status.runtime)});
+    try out.print(
+        "thresholds: 5h<{d}%, weekly<{d}%\n",
+        .{ status.threshold_5h_percent, status.threshold_weekly_percent },
+    );
+    try out.flush();
+}
+
+pub fn writeAutoSwitchLogLine(
+    out: *std.Io.Writer,
+    from: *const registry.AccountRecord,
+    to: *const registry.AccountRecord,
+) !void {
+    try out.print("auto-switch: {s} -> {s}\n", .{ from.email, to.email });
+    try out.flush();
+}
+
+fn emitAutoSwitchLog(from: *const registry.AccountRecord, to: *const registry.AccountRecord) void {
+    var stderr_buffer: [256]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&stderr_buffer);
+    writeAutoSwitchLogLine(&writer.interface, from, to) catch {};
+}
+
+pub fn handleCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: cli.AutoOptions) !void {
     switch (cmd) {
-        .enable => try enable(allocator, codex_home),
-        .disable => try disable(allocator, codex_home),
-        .status => try printStatus(allocator, codex_home),
+        .action => |action| switch (action) {
+            .enable => try enable(allocator, codex_home),
+            .disable => try disable(allocator, codex_home),
+            .status => try printStatus(allocator, codex_home),
+        },
+        .configure => |opts| try configureThresholds(allocator, codex_home, opts),
     }
 }
 
@@ -160,7 +185,8 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const rec = &reg.accounts.items[idx];
     const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
-    return (rem_5h != null and rem_5h.? < threshold_5h) or (rem_week != null and rem_week.? < threshold_weekly);
+    return (rem_5h != null and rem_5h.? < @as(i64, reg.auto_switch.threshold_5h_percent)) or
+        (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -204,8 +230,19 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
     if (try refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
         changed = true;
     }
+    const active_idx_before = if (reg.active_account_id) |account_id|
+        registry.findAccountIndexByAccountId(&reg, account_id)
+    else
+        null;
     if (try maybeAutoSwitch(allocator, codex_home, &reg)) {
         changed = true;
+        if (active_idx_before) |from_idx| {
+            if (reg.active_account_id) |account_id| {
+                if (registry.findAccountIndexByAccountId(&reg, account_id)) |to_idx| {
+                    emitAutoSwitchLog(&reg.accounts.items[from_idx], &reg.accounts.items[to_idx]);
+                }
+            }
+        }
     }
 
     if (changed) {
@@ -236,6 +273,23 @@ fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     reg.auto_switch.enabled = false;
     try registry.saveRegistry(allocator, codex_home, &reg);
     try uninstallService(allocator, codex_home);
+}
+
+pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThresholdOptions) void {
+    if (opts.threshold_5h_percent) |value| {
+        cfg.threshold_5h_percent = value;
+    }
+    if (opts.threshold_weekly_percent) |value| {
+        cfg.threshold_weekly_percent = value;
+    }
+}
+
+fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoThresholdOptions) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    applyThresholdConfig(&reg.auto_switch, opts);
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    try printStatus(allocator, codex_home);
 }
 
 pub fn stopServiceForMigration(allocator: std.mem.Allocator, codex_home: []const u8) !void {

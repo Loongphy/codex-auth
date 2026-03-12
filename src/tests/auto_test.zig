@@ -65,6 +65,58 @@ test "Scenario: Given weekly remaining below threshold when checking current the
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
+test "Scenario: Given custom 5h threshold when checking current then it uses configured value" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 15;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 88.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given stricter weekly threshold when checking current then default trigger can be suppressed" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_weekly_percent = 3;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 96.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given threshold overrides when applying config then unspecified values stay unchanged" {
+    var cfg = registry.defaultAutoSwitchConfig();
+    cfg.threshold_5h_percent = 11;
+    cfg.threshold_weekly_percent = 7;
+
+    auto.applyThresholdConfig(&cfg, .{
+        .threshold_5h_percent = 13,
+        .threshold_weekly_percent = null,
+    });
+
+    try std.testing.expect(cfg.threshold_5h_percent == 13);
+    try std.testing.expect(cfg.threshold_weekly_percent == 7);
+}
+
 test "Scenario: Given better candidate when auto switch runs then auth and active account move silently" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -161,6 +213,22 @@ test "Scenario: Given auto-switch enabled with stopped or stale service when rec
     try std.testing.expect(!auto.shouldEnsureManagedService(true, .running, true));
 }
 
+test "Scenario: Given automatic switch when writing daemon log then it records source and destination emails" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "from@example.com", "work", null);
+    try bdd.appendAccount(gpa, &reg, "to@example.com", "personal", null);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try auto.writeAutoSwitchLogLine(&aw.writer, &reg.accounts.items[0], &reg.accounts.items[1]);
+
+    const output = aw.written();
+    try std.testing.expect(std.mem.eql(u8, output, "auto-switch: from@example.com -> to@example.com\n"));
+}
+
 test "Scenario: Given windows delete task script when rendering then missing tasks are treated as success" {
     const gpa = std.testing.allocator;
     const script = try auto.windowsDeleteTaskScript(gpa);
@@ -175,6 +243,24 @@ test "Scenario: Given windows task state output when parsing then localized text
     try std.testing.expect(auto.parseWindowsTaskStateOutput("4\r\n") == .running);
     try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .stopped);
     try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
+}
+
+test "Scenario: Given auto status when rendering then configured thresholds are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try auto.writeStatus(&aw.writer, .{
+        .enabled = true,
+        .runtime = .running,
+        .threshold_5h_percent = 12,
+        .threshold_weekly_percent = 8,
+    });
+
+    const output = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
 }
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {

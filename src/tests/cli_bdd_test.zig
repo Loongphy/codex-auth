@@ -1,5 +1,6 @@
 const std = @import("std");
 const cli = @import("../cli.zig");
+const registry = @import("../registry.zig");
 
 fn isHelp(cmd: cli.Command) bool {
     return switch (cmd) {
@@ -94,16 +95,21 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
+    var auto_cfg = registry.defaultAutoSwitchConfig();
+    auto_cfg.enabled = true;
+    auto_cfg.threshold_5h_percent = 12;
+    auto_cfg.threshold_weekly_percent = 8;
 
-    try cli.writeHelp(&aw.writer, false, true);
+    try cli.writeHelp(&aw.writer, false, &auto_cfg);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login [--skip]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "backup") == null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto enable|disable|status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`add` is accepted as a deprecated alias for `login`.") != null);
 }
@@ -115,7 +121,113 @@ test "Scenario: Given auto status when parsing then auto command is preserved" {
     defer cli.freeCommand(gpa, &cmd);
 
     switch (cmd) {
-        .auto_switch => |opts| try std.testing.expect(opts.action == .status),
+        .auto_switch => |opts| switch (opts) {
+            .action => |action| try std.testing.expect(action == .status),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given auto 5h threshold when parsing then threshold configuration is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--5h", "12" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .auto_switch => |opts| switch (opts) {
+            .configure => |cfg| {
+                try std.testing.expect(cfg.threshold_5h_percent != null);
+                try std.testing.expect(cfg.threshold_5h_percent.? == 12);
+                try std.testing.expect(cfg.threshold_weekly_percent == null);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given auto thresholds together when parsing then both window thresholds are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--5h", "12", "--weekly", "8" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .auto_switch => |opts| switch (opts) {
+            .configure => |cfg| {
+                try std.testing.expect(cfg.threshold_5h_percent != null);
+                try std.testing.expect(cfg.threshold_5h_percent.? == 12);
+                try std.testing.expect(cfg.threshold_weekly_percent != null);
+                try std.testing.expect(cfg.threshold_weekly_percent.? == 8);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given auto action mixed with threshold flags when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "enable", "--5h", "12" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given auto threshold percent out of range when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--weekly", "0" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given auto repeated threshold flag when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--5h", "12", "--5h", "15" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given auto threshold without value when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--weekly" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given auto threshold command without flags when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given auto threshold with weekly only when parsing then single-window config is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "auto", "--weekly", "9" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .auto_switch => |opts| switch (opts) {
+            .configure => |cfg| {
+                try std.testing.expect(cfg.threshold_5h_percent == null);
+                try std.testing.expect(cfg.threshold_weekly_percent != null);
+                try std.testing.expect(cfg.threshold_weekly_percent.? == 9);
+            },
+            else => return error.TestExpectedEqual,
+        },
         else => return error.TestExpectedEqual,
     }
 }

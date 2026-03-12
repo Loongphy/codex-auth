@@ -95,6 +95,8 @@ test "registry save/load" {
     defer gpa.free(active_account_id);
     try registry.setActiveAccount(gpa, &reg, active_account_id);
     try registry.setTrackedRolloutSignature(gpa, &reg.auto_switch, "/tmp/rollout.jsonl", 42);
+    reg.auto_switch.threshold_5h_percent = 12;
+    reg.auto_switch.threshold_weekly_percent = 8;
 
     try registry.saveRegistry(gpa, codex_home, &reg);
 
@@ -105,6 +107,41 @@ test "registry save/load" {
     try std.testing.expect(std.mem.eql(u8, loaded.auto_switch.last_rollout.path.?, "/tmp/rollout.jsonl"));
     try std.testing.expect(loaded.auto_switch.last_rollout.mtime != null);
     try std.testing.expect(loaded.auto_switch.last_rollout.mtime.? == 42);
+    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
+    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
+}
+
+test "registry load defaults missing auto threshold fields" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "version": 3,
+        \\  "active_account_id": null,
+        \\  "auto_switch": {
+        \\    "enabled": true,
+        \\    "last_rollout": {
+        \\      "path": "/tmp/rollout.jsonl",
+        \\      "mtime": 42
+        \\    }
+        \\  },
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
+    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
 }
 
 test "auth backup only on change" {

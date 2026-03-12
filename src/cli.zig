@@ -40,7 +40,14 @@ pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable, status };
-pub const AutoOptions = struct { action: AutoAction };
+pub const AutoThresholdOptions = struct {
+    threshold_5h_percent: ?u8,
+    threshold_weekly_percent: ?u8,
+};
+pub const AutoOptions = union(enum) {
+    action: AutoAction,
+    configure: AutoThresholdOptions,
+};
 pub const DaemonOptions = struct { watch: bool };
 
 pub const Command = union(enum) {
@@ -144,12 +151,38 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
     }
 
     if (std.mem.eql(u8, cmd, "auto")) {
-        if (args.len != 3) return Command{ .help = {} };
-        const action = std.mem.sliceTo(args[2], 0);
-        if (std.mem.eql(u8, action, "enable")) return Command{ .auto_switch = .{ .action = .enable } };
-        if (std.mem.eql(u8, action, "disable")) return Command{ .auto_switch = .{ .action = .disable } };
-        if (std.mem.eql(u8, action, "status")) return Command{ .auto_switch = .{ .action = .status } };
-        return Command{ .help = {} };
+        if (args.len == 2) return Command{ .help = {} };
+        if (args.len == 3) {
+            const action = std.mem.sliceTo(args[2], 0);
+            if (std.mem.eql(u8, action, "enable")) return Command{ .auto_switch = .{ .action = .enable } };
+            if (std.mem.eql(u8, action, "disable")) return Command{ .auto_switch = .{ .action = .disable } };
+            if (std.mem.eql(u8, action, "status")) return Command{ .auto_switch = .{ .action = .status } };
+        }
+
+        var threshold_5h_percent: ?u8 = null;
+        var threshold_weekly_percent: ?u8 = null;
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.eql(u8, arg, "--5h") and i + 1 < args.len) {
+                if (threshold_5h_percent != null) return Command{ .help = {} };
+                threshold_5h_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                i += 1;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--weekly") and i + 1 < args.len) {
+                if (threshold_weekly_percent != null) return Command{ .help = {} };
+                threshold_weekly_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                i += 1;
+                continue;
+            }
+            return Command{ .help = {} };
+        }
+        if (threshold_5h_percent == null and threshold_weekly_percent == null) return Command{ .help = {} };
+        return Command{ .auto_switch = .{ .configure = .{
+            .threshold_5h_percent = threshold_5h_percent,
+            .threshold_weekly_percent = threshold_weekly_percent,
+        } } };
     }
 
     if (std.mem.eql(u8, cmd, "daemon")) {
@@ -175,16 +208,16 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
     }
 }
 
-pub fn printHelp(auto_enabled: bool) !void {
+pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     const use_color = colorEnabled();
-    try writeHelp(out, use_color, auto_enabled);
+    try writeHelp(out, use_color, auto_cfg);
     try out.flush();
 }
 
-pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void {
+pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_cfg: *const registry.AutoSwitchConfig) !void {
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("codex-auth");
     if (use_color) try out.writeAll(ansi.reset);
@@ -197,7 +230,10 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Auto Switch:");
     if (use_color) try out.writeAll(ansi.reset);
-    try out.print(" {s}\n\n", .{if (auto_enabled) "ON" else "OFF"});
+    try out.print(
+        " {s} (5h<{d}%, weekly<{d}%)\n\n",
+        .{ if (auto_cfg.enabled) "ON" else "OFF", auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
+    );
 
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");
@@ -211,7 +247,7 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void
     try writeHelpCommand(out, use_color, "switch [<query>]", "Switch the active account");
     try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
     try writeHelpCommand(out, use_color, "clean", "Delete backup and stale files under accounts/");
-    try writeHelpCommand(out, use_color, "auto enable|disable|status", "Manage background auto-switching");
+    try writeHelpCommand(out, use_color, "auto ...", "Manage background auto-switching and thresholds");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);
@@ -220,6 +256,13 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_enabled: bool) !void
     try out.writeAll("\n\n");
     try out.writeAll("  `add` is accepted as a deprecated alias for `login`.\n");
     try out.writeAll("  Use `--skip` to read the current auth without running `codex login`.\n");
+    try out.writeAll("  Use `auto --5h <percent> [--weekly <percent>]` to configure thresholds.\n");
+}
+
+fn parsePercentArg(raw: []const u8) ?u8 {
+    const value = std.fmt.parseInt(u8, raw, 10) catch return null;
+    if (value < 1 or value > 100) return null;
+    return value;
 }
 
 fn writeHelpCommand(out: *std.Io.Writer, use_color: bool, name: []const u8, description: []const u8) !void {

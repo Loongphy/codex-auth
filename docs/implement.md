@@ -152,18 +152,28 @@ When switching:
 - `codex-auth auto enable`
 - `codex-auth auto disable`
 - `codex-auth auto status`
+- `codex-auth auto [--5h <percent>] [--weekly <percent>]`
 
 The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
-`help` prints the current `Auto Switch: ON/OFF` state.
+`help` prints the current `Auto Switch: ON/OFF` state plus the configured thresholds.
+
+The threshold configuration is also persisted in `registry.json`:
+
+- `auto_switch.threshold_5h_percent` (default `10`)
+- `auto_switch.threshold_weekly_percent` (default `5`)
+
+The configuration command can update either threshold independently or both in one command.
+If the daemon is already running, threshold changes do not require reinstalling or restarting the managed service; the daemon reads the updated registry on its next poll cycle.
 
 When enabled:
 
 1. A background daemon runs continuously.
 2. It refreshes usage from the newest rollout file and assigns that snapshot to the current active account.
    The daemon also remembers the last attributed rollout `(path, mtime)` and will not reassign an unchanged rollout after an automatic switch.
-3. If active-account remaining quota is below either threshold, it silently switches to the best alternative account:
-   - `5h` remaining `< 10%`
-   - `weekly` remaining `< 5%`
+3. If active-account remaining quota is below either threshold, it switches to the best alternative account without foreground CLI output:
+   - `5h` remaining `< auto_switch.threshold_5h_percent` (default `10%`)
+   - `weekly` remaining `< auto_switch.threshold_weekly_percent` (default `5%`)
+   - on Linux/WSL, the daemon writes a user-service journal line with the source and destination emails when an automatic switch happens
 4. Candidate scoring is reset-aware:
    - if `resets_at <= now`, that window is treated as fully reset (`100%`)
    - if both 5h and weekly are known, the candidate score is the lower remaining value
@@ -194,15 +204,16 @@ The generated service definition also stamps the current `codex-auth` version. A
 
 ## Usage and Rate Limits
 
-Usage data is read from the newest `~/.codex/sessions/**/rollout-*.jsonl` file that still contains a parseable rate-limit snapshot.
+Usage data is read from the newest `~/.codex/sessions/**/rollout-*.jsonl` file by file `mtime`.
 
 - The scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
-- If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), that file is skipped and the scanner falls back to the most recent rollout that does contain a parseable snapshot.
+- The scanner reads only that newest rollout file. Within the file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
+- If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), usage is treated as unavailable until a newer valid rollout snapshot is written.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a snapshot was observed.
-- `list`, `switch`, and the auto-switch daemon scan the newest rollout file with a parseable snapshot and write that snapshot to the current active account.
-- The auto-switch daemon persists the last attributed rollout signature so that the same unchanged rollout is not reassigned immediately after an automatic account switch.
+- `list`, `switch`, and the auto-switch daemon all use the same tracked-rollout refresh path: they scan the newest rollout file and write its latest parseable snapshot to the current active account only when the rollout `(path, mtime)` is newer than the persisted `auto_switch.last_rollout` signature.
+- Because that rollout signature is persisted in `registry.json`, foreground `list`/`switch` also honor it. After an automatic switch, the same unchanged rollout is intentionally not reassigned to the newly active account until a new rollout file is written or the existing rollout file gets a newer `mtime`.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond the active-account + last-attributed-rollout guard.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):

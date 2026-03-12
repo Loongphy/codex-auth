@@ -3,6 +3,8 @@ const std = @import("std");
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 3;
+pub const default_auto_switch_threshold_5h_percent: u8 = 10;
+pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -39,6 +41,8 @@ pub const RolloutSignature = struct {
 pub const AutoSwitchConfig = struct {
     enabled: bool = false,
     last_rollout: RolloutSignature = .{},
+    threshold_5h_percent: u8 = default_auto_switch_threshold_5h_percent,
+    threshold_weekly_percent: u8 = default_auto_switch_threshold_weekly_percent,
 };
 
 pub const AccountRecord = struct {
@@ -1369,6 +1373,16 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
     if (obj.get("last_rollout")) |last_rollout| {
         parseRolloutSignature(allocator, &cfg.last_rollout, last_rollout);
     }
+    if (obj.get("threshold_5h_percent")) |threshold| {
+        if (parseThresholdPercent(threshold)) |value| {
+            cfg.threshold_5h_percent = value;
+        }
+    }
+    if (obj.get("threshold_weekly_percent")) |threshold| {
+        if (parseThresholdPercent(threshold)) |value| {
+            cfg.threshold_weekly_percent = value;
+        }
+    }
 }
 
 fn parseRolloutSignature(allocator: std.mem.Allocator, sig: *RolloutSignature, v: std.json.Value) void {
@@ -1436,6 +1450,15 @@ fn readInt(v: ?std.json.Value) ?i64 {
         .integer => |i| return i,
         else => return null,
     }
+}
+
+fn parseThresholdPercent(v: std.json.Value) ?u8 {
+    const raw = switch (v) {
+        .integer => |i| i,
+        else => return null,
+    };
+    if (raw < 1 or raw > 100) return null;
+    return @as(u8, @intCast(raw));
 }
 
 pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
