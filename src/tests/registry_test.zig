@@ -77,6 +77,31 @@ fn countBackups(dir: std.fs.Dir, prefix: []const u8) !usize {
     return count;
 }
 
+fn expectBackupNameFormat(name: []const u8, prefix: []const u8) !void {
+    const marker = ".bak.";
+    try std.testing.expect(std.mem.startsWith(u8, name, prefix));
+    const idx = std.mem.indexOf(u8, name, marker) orelse return error.TestExpectedEqual;
+    const suffix = name[idx + marker.len ..];
+
+    var stamp = suffix;
+    if (std.mem.lastIndexOfScalar(u8, suffix, '.')) |dot_idx| {
+        const maybe_counter = suffix[dot_idx + 1 ..];
+        if (maybe_counter.len > 0) {
+            for (maybe_counter) |ch| {
+                if (!std.ascii.isDigit(ch)) return error.TestExpectedEqual;
+            }
+            stamp = suffix[0..dot_idx];
+        }
+    }
+
+    try std.testing.expect(stamp.len == 15);
+    try std.testing.expect(stamp[8] == '-');
+    for (stamp, 0..) |ch, i| {
+        if (i == 8) continue;
+        try std.testing.expect(std.ascii.isDigit(ch));
+    }
+}
+
 test "registry save/load" {
     var gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -174,6 +199,15 @@ test "auth backup only on change" {
     defer accounts.close();
     const count1 = try countBackups(accounts, "auth.json");
     try std.testing.expect(count1 == 1);
+    var verify_accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
+    defer verify_accounts.close();
+    var it = verify_accounts.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.startsWith(u8, entry.name, "auth.json") and std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) {
+            try expectBackupNameFormat(entry.name, "auth.json");
+        }
+    }
 
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = "two" });
     try registry.backupAuthIfChanged(gpa, codex_home, current, new_auth);
@@ -283,6 +317,15 @@ test "registry backup only on change" {
     try registry.saveRegistry(gpa, codex_home, &reg);
     const count1 = try countBackups(accounts, "registry.json");
     try std.testing.expect(count1 == 1);
+    var verify_accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
+    defer verify_accounts.close();
+    var it = verify_accounts.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.startsWith(u8, entry.name, "registry.json") and std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) {
+            try expectBackupNameFormat(entry.name, "registry.json");
+        }
+    }
 
     try registry.saveRegistry(gpa, codex_home, &reg);
     const count2 = try countBackups(accounts, "registry.json");

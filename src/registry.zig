@@ -1,4 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const c_time = @cImport({
+    @cInclude("time.h");
+});
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
@@ -259,9 +263,56 @@ fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
 }
 
+fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
+    if (comptime builtin.os.tag == .windows) {
+        if (comptime @hasDecl(c_time, "_localtime64_s") and @hasDecl(c_time, "__time64_t")) {
+            var t64 = std.math.cast(c_time.__time64_t, ts) orelse return false;
+            return c_time._localtime64_s(out_tm, &t64) == 0;
+        }
+        return false;
+    }
+
+    var t = std.math.cast(c_time.time_t, ts) orelse return false;
+    if (comptime @hasDecl(c_time, "localtime_r")) {
+        return c_time.localtime_r(&t, out_tm) != null;
+    }
+
+    if (comptime @hasDecl(c_time, "localtime")) {
+        const tm_ptr = c_time.localtime(&t);
+        if (tm_ptr == null) return false;
+        out_tm.* = tm_ptr.*;
+        return true;
+    }
+
+    return false;
+}
+
+fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
+    var tm: c_time.struct_tm = undefined;
+    if (!localtimeCompat(ts, &tm)) {
+        return std.fmt.allocPrint(allocator, "{d}", .{ts});
+    }
+
+    const year: i32 = tm.tm_year + 1900;
+    const month: u32 = @intCast(tm.tm_mon + 1);
+    const day: u32 = @intCast(tm.tm_mday);
+    const hour: u32 = @intCast(tm.tm_hour);
+    const minute: u32 = @intCast(tm.tm_min);
+    const second: u32 = @intCast(tm.tm_sec);
+    return std.fmt.allocPrint(allocator, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    });
+}
+
 fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) ![]u8 {
-    const ts_ms = std.time.milliTimestamp();
-    const base = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ base_name, ts_ms });
+    const timestamp = try formatBackupTimestamp(allocator, std.time.timestamp());
+    defer allocator.free(timestamp);
+    const base = try std.fmt.allocPrint(allocator, "{s}.bak.{s}", .{ base_name, timestamp });
     defer allocator.free(base);
 
     var attempt: usize = 0;
