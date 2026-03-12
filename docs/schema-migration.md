@@ -1,6 +1,6 @@
 # Schema Migration
 
-This document defines the `codex-auth` schema versions, migration rules, migration command behavior, and the recommended local workflow for testing schema upgrades.
+This document defines the `codex-auth` schema versions, migration rules, runtime migration behavior, and the recommended local workflow for testing schema upgrades.
 
 ## Core Rule
 
@@ -46,7 +46,8 @@ Current latest schema version:
   - `active_account_id`
   - `accounts[].account_id`
 - auth snapshot files
-  - `accounts/<account_id>.auth.json`
+  - `accounts/<account file key>.auth.json`
+  - the file key keeps raw `account_id` only when it is filename-safe; otherwise it uses base64url(`account_id`)
 
 ## Migration Entry Points
 
@@ -58,20 +59,17 @@ The following foreground commands automatically check and migrate the schema bef
 - `switch`
 - `remove`
 - `clean`
-- `auto enable`
-- `auto disable`
-- `auto status`
-
-Explicit migration command:
-
-- `codex-auth migrate`
 
 Commands that do not trigger migration:
 
 - `help`
 - `version`
+- `auto enable`
+- `auto disable`
+- `auto status`
+- `daemon`
 
-`daemon` also does not trigger migration by itself. It assumes the data directory has already been migrated by a foreground command or by an explicit `migrate`. This avoids a daemon process stopping the service it is currently running under.
+`daemon` does not trigger migration by itself. It assumes the data directory has already been migrated by a foreground command. This avoids a daemon process stopping the service it is currently running under.
 
 ## Migration Output
 
@@ -82,14 +80,8 @@ Example:
 ```text
 Migrating schema: v2 -> v3
 Running migration v2 -> v3...
-Backing up current data to: ~/.codex/backups/v2/20260312-063235
+Backing up current data to: ~/.codex/accounts/backups/v2/20260312-063235
 Migration complete. Current schema: v3
-```
-
-If `codex-auth migrate` is run when the local schema is already current, it prints:
-
-```text
-Already on the latest schema: v3
 ```
 
 Note: the implementation currently prints Chinese runtime messages. This document describes the intended command semantics rather than enforcing a specific display language.
@@ -114,7 +106,7 @@ To:
 
 - `active_account_id`
 - `accounts[].account_id`
-- `accounts/<account_id>.auth.json`
+- `accounts/<account file key>.auth.json`
 
 ### Two-Phase Execution Model
 
@@ -126,17 +118,18 @@ Execution order:
 2. Scan legacy snapshots in `accounts/<base64(email)>.auth.json`
 3. Parse the real `account_id` from each legacy auth file
 4. Back up the whole `accounts/` directory to:
-   - `~/.codex/backups/v2/<timestamp>`
+   - `~/.codex/accounts/backups/v2/<timestamp>`
 5. If `auto_switch.enabled = true` before migration:
    - stop the managed auto-switch service first
 6. Copy legacy snapshots to their new names:
-   - `accounts/<account_id>.auth.json`
+   - `accounts/<account file key>.auth.json`
    - old files are not deleted yet
 7. Save the new `v3 registry.json`
 8. Delete the old legacy files only after the new registry has been written successfully:
    - `accounts/<base64(email)>.auth.json`
 9. If auto-switch was enabled before migration:
    - reinstall and re-enable the service using the current binary
+10. If one legacy snapshot is malformed, report it, skip just that account, and keep migrating the other valid accounts. Recovery remains possible from the `accounts/backups/v2/<timestamp>` directory.
 
 ### Why Two Phases
 
@@ -157,13 +150,13 @@ and not:
 - old files are already deleted
 - the new registry was never written
 
-Under the two-phase model, rerunning `codex-auth migrate` or any foreground command can complete the remaining work.
+Under the two-phase model, rerunning any foreground command can complete the remaining work.
 
 ## Backup Policy
 
 Schema migration creates a whole-directory backup at:
 
-- `~/.codex/backups/v2/<timestamp>`
+- `~/.codex/accounts/backups/v2/<timestamp>`
 
 Here `v2` means “this backup was taken before migrating from `v2`”.
 
@@ -191,7 +184,7 @@ Behavior:
 - keeps:
   - `registry.json`
   - `auto-switch.lock`
-  - `accounts/<account_id>.auth.json` when that file is referenced by the current `registry.json`
+  - `accounts/<account file key>.auth.json` when that file is referenced by the current `registry.json`
 - removes every other entry under `~/.codex/accounts/`
   - including stale snapshot files from older schemas
   - including all `auth.json.bak.*`
@@ -202,7 +195,7 @@ It does not delete:
 
 - anything outside `~/.codex/accounts/`
 
-So `clean` keeps only the live files required by the current schema and removes all other stale entries under `accounts/`. Migration backups under `~/.codex/backups/` are intentionally left untouched.
+So `clean` keeps only the live files required by the current schema and removes all other stale entries under `accounts/`. Migration backups under `~/.codex/accounts/backups/` are intentionally left untouched.
 
 ## Local Development: Testing `v2 -> v3`
 
@@ -232,13 +225,7 @@ export CODEX_HOME=/tmp/codex-v2-fixture
   - `accounts[].email`
 - `accounts/<base64(email)>.auth.json`
 
-3. Run either:
-
-```bash
-zig build run -- migrate
-```
-
-or:
+3. Run:
 
 ```bash
 zig build run -- list
@@ -247,9 +234,9 @@ zig build run -- list
 4. Inspect the migrated fixture:
 
 - `registry.json` should now be `version: 3`
-- auth snapshots should now be `accounts/<account_id>.auth.json`
+- auth snapshots should now be `accounts/<account file key>.auth.json`
 - a migration backup should exist under:
-  - `backups/v2/<timestamp>/...`
+  - `accounts/backups/v2/<timestamp>/...`
 
 ### Repeatable Testing
 
@@ -259,7 +246,7 @@ A better workflow is:
 
 - keep one pristine `v2` fixture
 - copy it before each migration test run
-- run `migrate` or `list` against the copied fixture
+- run `list` against the copied fixture
 
 ### Development-Only Intermediate States
 

@@ -75,7 +75,7 @@ pub fn ensureMigratedWithWriter(
         switch (current) {
             2 => {
                 try out.writeAll("迁移 v2 -> v3 中……\n");
-                const backup_path = try migrateV2ToV3(allocator, codex_home);
+                const backup_path = try migrateV2ToV3(allocator, codex_home, out);
                 defer allocator.free(backup_path);
                 try out.print("备份当前数据到：{s}\n", .{backup_path});
                 current = 3;
@@ -116,8 +116,8 @@ fn detectSchemaVersion(allocator: std.mem.Allocator, codex_home: []const u8) !u3
     return latest_schema_version;
 }
 
-fn migrateV2ToV3(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    var plan = try buildV2ToV3Plan(allocator, codex_home);
+fn migrateV2ToV3(allocator: std.mem.Allocator, codex_home: []const u8, out: *std.Io.Writer) ![]u8 {
+    var plan = try buildV2ToV3Plan(allocator, codex_home, out);
     defer plan.deinit(allocator);
 
     if (plan.auto_enabled) {
@@ -137,7 +137,7 @@ fn migrateV2ToV3(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try allocator.dupe(u8, plan.backup_path);
 }
 
-fn buildV2ToV3Plan(allocator: std.mem.Allocator, codex_home: []const u8) !MigrationPlan {
+fn buildV2ToV3Plan(allocator: std.mem.Allocator, codex_home: []const u8, out: *std.Io.Writer) !MigrationPlan {
     const registry_path = try registry.registryPath(allocator, codex_home);
     defer allocator.free(registry_path);
 
@@ -173,7 +173,7 @@ fn buildV2ToV3Plan(allocator: std.mem.Allocator, codex_home: []const u8) !Migrat
     }
     const auto_enabled = reg.auto_switch.enabled;
 
-    const backup_path = try createMigrationBackup(allocator, codex_home, 2);
+    const backup_path = try backupSchemaData(allocator, codex_home, 2);
     errdefer allocator.free(backup_path);
 
     const active_email = if (root_obj.get("active_email")) |v| switch (v) {
@@ -187,41 +187,26 @@ fn buildV2ToV3Plan(allocator: std.mem.Allocator, codex_home: []const u8) !Migrat
             for (arr.items) |item| {
                 const obj = switch (item) {
                     .object => |o| o,
-                    else => continue,
+                    else => {
+                        try reportSkippedLegacyAccount(out, "<unknown>", error.InvalidRegistryJson);
+                        continue;
+                    },
                 };
-                var legacy = try parseLegacyAccountRecord(allocator, obj);
+                const legacy_label = legacyAccountLabel(obj);
+                var legacy = parseLegacyAccountRecord(allocator, obj) catch |err| {
+                    try reportSkippedLegacyAccount(out, legacy_label, err);
+                    continue;
+                };
                 defer freeLegacyAccountRecord(allocator, &legacy);
-
-                const old_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
-                errdefer allocator.free(old_path);
-                const info = try auth.parseAuthInfo(allocator, old_path);
-                defer info.deinit(allocator);
-
-                const email = info.email orelse return error.MissingEmail;
-                const account_id = info.account_id orelse return error.MissingAccountId;
-                if (!std.mem.eql(u8, email, legacy.email)) return error.EmailMismatch;
-
-                const rec = registry.AccountRecord{
-                    .account_id = try allocator.dupe(u8, account_id),
-                    .email = try allocator.dupe(u8, legacy.email),
-                    .alias = try allocator.dupe(u8, legacy.alias),
-                    .plan = info.plan orelse legacy.plan,
-                    .auth_mode = info.auth_mode,
-                    .created_at = legacy.created_at,
-                    .last_used_at = legacy.last_used_at,
-                    .last_usage = legacy.last_usage,
-                    .last_usage_at = legacy.last_usage_at,
-                };
-                legacy.last_usage = null;
-
-                registry.upsertAccount(allocator, &reg, rec);
-                try old_files.append(allocator, old_path);
-
-                if (active_email) |expected| {
-                    if (reg.active_account_id == null and std.mem.eql(u8, expected, legacy.email)) {
-                        try registry.setActiveAccount(allocator, &reg, account_id);
-                    }
-                }
+                _ = try appendMigratedLegacyAccount(
+                    allocator,
+                    codex_home,
+                    &reg,
+                    &old_files,
+                    active_email,
+                    &legacy,
+                    out,
+                );
             }
         },
         else => {},
@@ -233,6 +218,73 @@ fn buildV2ToV3Plan(allocator: std.mem.Allocator, codex_home: []const u8) !Migrat
         .backup_path = backup_path,
         .auto_enabled = auto_enabled,
     };
+}
+
+fn appendMigratedLegacyAccount(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    old_files: *std.ArrayList([]u8),
+    active_email: ?[]const u8,
+    legacy: *LegacyAccountRecord,
+    out: *std.Io.Writer,
+) !bool {
+    const old_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
+    errdefer allocator.free(old_path);
+
+    const info = auth.parseAuthInfo(allocator, old_path) catch |err| {
+        try reportSkippedLegacyAccount(out, legacy.email, err);
+        return false;
+    };
+    defer info.deinit(allocator);
+
+    const email = info.email orelse {
+        try reportSkippedLegacyAccount(out, legacy.email, error.MissingEmail);
+        return false;
+    };
+    const account_id = info.account_id orelse {
+        try reportSkippedLegacyAccount(out, legacy.email, error.MissingAccountId);
+        return false;
+    };
+    if (!std.mem.eql(u8, email, legacy.email)) {
+        try reportSkippedLegacyAccount(out, legacy.email, error.EmailMismatch);
+        return false;
+    }
+
+    const rec = registry.AccountRecord{
+        .account_id = try allocator.dupe(u8, account_id),
+        .email = try allocator.dupe(u8, legacy.email),
+        .alias = try allocator.dupe(u8, legacy.alias),
+        .plan = info.plan orelse legacy.plan,
+        .auth_mode = info.auth_mode,
+        .created_at = legacy.created_at,
+        .last_used_at = legacy.last_used_at,
+        .last_usage = legacy.last_usage,
+        .last_usage_at = legacy.last_usage_at,
+    };
+    legacy.last_usage = null;
+
+    registry.upsertAccount(allocator, reg, rec);
+    try old_files.append(allocator, old_path);
+
+    if (active_email) |expected| {
+        if (reg.active_account_id == null and std.mem.eql(u8, expected, legacy.email)) {
+            try registry.setActiveAccount(allocator, reg, account_id);
+        }
+    }
+    return true;
+}
+
+fn legacyAccountLabel(obj: std.json.ObjectMap) []const u8 {
+    if (obj.get("email")) |v| switch (v) {
+        .string => |s| return s,
+        else => {},
+    };
+    return "<unknown>";
+}
+
+fn reportSkippedLegacyAccount(out: *std.Io.Writer, label: []const u8, err: anyerror) !void {
+    try out.print("跳过损坏的旧账号 {s}: {s}\n", .{ label, @errorName(err) });
 }
 
 fn writeNewAccountFiles(
@@ -270,20 +322,29 @@ fn cleanupOldLegacyFiles(plan: *MigrationPlan) void {
     }
 }
 
-fn createMigrationBackup(
+fn backupSchemaData(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
-    from_version: u32,
+    schema_version: u32,
+) ![]u8 {
+    const label = try std.fmt.allocPrint(allocator, "v{d}", .{schema_version});
+    defer allocator.free(label);
+    return createAccountsBackupWithLabel(allocator, codex_home, label);
+}
+
+fn createAccountsBackupWithLabel(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    label: []const u8,
 ) ![]u8 {
     const timestamp = try formatBackupTimestampAlloc(allocator, std.time.timestamp());
     defer allocator.free(timestamp);
-    const version_dir_name = try std.fmt.allocPrint(allocator, "v{d}", .{from_version});
-    defer allocator.free(version_dir_name);
 
     const backup_path = try std.fs.path.join(allocator, &[_][]const u8{
         codex_home,
+        "accounts",
         "backups",
-        version_dir_name,
+        label,
         timestamp,
     });
     errdefer allocator.free(backup_path);
@@ -291,13 +352,21 @@ fn createMigrationBackup(
     const version_dir = std.fs.path.dirname(backup_path).?;
     try std.fs.cwd().makePath(version_dir);
 
+    try registry.ensureAccountsDir(allocator, codex_home);
     const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
-    try copyDirRecursive(allocator, accounts_dir, backup_path);
+    try copyDirRecursiveExcludingBackups(allocator, accounts_dir, backup_path);
     return backup_path;
 }
 
-fn copyDirRecursive(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
+fn isBackupsEntryPath(entry_path: []const u8) bool {
+    if (std.mem.eql(u8, entry_path, "backups")) return true;
+    return entry_path.len > "backups".len and
+        std.mem.startsWith(u8, entry_path, "backups") and
+        entry_path["backups".len] == std.fs.path.sep;
+}
+
+fn copyDirRecursiveExcludingBackups(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
     var src_dir = try std.fs.cwd().openDir(src_path, .{ .iterate = true });
     defer src_dir.close();
 
@@ -307,6 +376,8 @@ fn copyDirRecursive(allocator: std.mem.Allocator, src_path: []const u8, dest_pat
     defer walker.deinit();
 
     while (try walker.next()) |entry| {
+        if (isBackupsEntryPath(entry.path)) continue;
+
         const dest_entry_path = try std.fs.path.join(allocator, &[_][]const u8{ dest_path, entry.path });
         defer allocator.free(dest_entry_path);
 

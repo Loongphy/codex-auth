@@ -173,8 +173,48 @@ fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     return buf;
 }
 
-pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
+fn accountIdNeedsFilenameEncoding(account_id: []const u8) bool {
+    if (account_id.len == 0) return true;
+    if (std.mem.eql(u8, account_id, ".") or std.mem.eql(u8, account_id, "..")) return true;
+    for (account_id) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => {},
+            else => return true,
+        }
+    }
+    return false;
+}
+
+fn canUseLegacyRawAccountFilename(account_id: []const u8) bool {
+    if (account_id.len == 0) return false;
+    if (std.mem.eql(u8, account_id, ".") or std.mem.eql(u8, account_id, "..")) return false;
+    for (account_id) |ch| {
+        if (ch == '/' or ch == '\\' or ch == 0) return false;
+    }
+    return true;
+}
+
+fn accountFileKey(allocator: std.mem.Allocator, account_id: []const u8) ![]u8 {
+    if (accountIdNeedsFilenameEncoding(account_id)) {
+        return encodedFileKey(allocator, account_id);
+    }
+    return allocator.dupe(u8, account_id);
+}
+
+fn accountSnapshotFileName(allocator: std.mem.Allocator, account_id: []const u8) ![]u8 {
+    const key = try accountFileKey(allocator, account_id);
+    defer allocator.free(key);
+    return try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
+}
+
+fn legacyRawAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
     const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ account_id, ".auth.json" });
+    defer allocator.free(filename);
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+}
+
+pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
+    const filename = try accountSnapshotFileName(allocator, account_id);
     defer allocator.free(filename);
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
@@ -318,12 +358,52 @@ fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_na
     return count;
 }
 
+fn pathExists(path: []const u8) bool {
+    if (std.fs.cwd().openFile(path, .{})) |file| {
+        file.close();
+        return true;
+    } else |_| {
+        return false;
+    }
+}
+
+fn resolveExistingAccountAuthPath(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    account_id: []const u8,
+) ![]u8 {
+    const preferred = try accountAuthPath(allocator, codex_home, account_id);
+    if (pathExists(preferred)) return preferred;
+
+    if (!canUseLegacyRawAccountFilename(account_id)) {
+        return preferred;
+    }
+
+    const legacy = try legacyRawAccountAuthPath(allocator, codex_home, account_id);
+    if (pathExists(legacy)) {
+        allocator.free(preferred);
+        return legacy;
+    }
+
+    allocator.free(legacy);
+    return preferred;
+}
+
 fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
     for (reg.accounts.items) |rec| {
-        if (entry_name.len == rec.account_id.len + ".auth.json".len and
-            std.mem.startsWith(u8, entry_name, rec.account_id) and
-            std.mem.endsWith(u8, entry_name, ".auth.json"))
-        {
+        const expected_name = accountSnapshotFileName(std.heap.page_allocator, rec.account_id) catch continue;
+        defer std.heap.page_allocator.free(expected_name);
+        if (std.mem.eql(u8, entry_name, expected_name)) {
+            return true;
+        }
+
+        if (!canUseLegacyRawAccountFilename(rec.account_id)) continue;
+        const legacy_name = std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{
+            rec.account_id,
+            ".auth.json",
+        }) catch continue;
+        defer std.heap.page_allocator.free(legacy_name);
+        if (std.mem.eql(u8, entry_name, legacy_name)) {
             return true;
         }
     }
@@ -333,6 +413,7 @@ fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
 fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
     if (std.mem.eql(u8, entry_name, "registry.json")) return true;
     if (std.mem.eql(u8, entry_name, "auto-switch.lock")) return true;
+    if (std.mem.eql(u8, entry_name, "backups")) return true;
     return isAllowedCurrentSnapshot(reg, entry_name);
 }
 
@@ -664,9 +745,16 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
     var write_idx: usize = 0;
     for (reg.accounts.items, 0..) |*rec, i| {
         if (removed[i]) {
-            const path = try accountAuthPath(allocator, codex_home, rec.account_id);
-            defer allocator.free(path);
-            std.fs.cwd().deleteFile(path) catch {};
+            const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_id);
+            defer allocator.free(preferred_path);
+            std.fs.cwd().deleteFile(preferred_path) catch {};
+            if (canUseLegacyRawAccountFilename(rec.account_id)) {
+                const legacy_path = try legacyRawAccountAuthPath(allocator, codex_home, rec.account_id);
+                defer allocator.free(legacy_path);
+                if (!std.mem.eql(u8, legacy_path, preferred_path)) {
+                    std.fs.cwd().deleteFile(legacy_path) catch {};
+                }
+            }
             freeAccountRecord(allocator, rec);
             continue;
         }
@@ -738,7 +826,7 @@ pub fn activateAccountById(
     reg: *Registry,
     account_id: []const u8,
 ) !void {
-    const src = try accountAuthPath(allocator, codex_home, account_id);
+    const src = try resolveExistingAccountAuthPath(allocator, codex_home, account_id);
     defer allocator.free(src);
 
     const dest = try activeAuthPath(allocator, codex_home);
@@ -1352,7 +1440,7 @@ fn readInt(v: ?std.json.Value) ?i64 {
 
 pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
     for (reg.accounts.items) |*rec| {
-        const path = try accountAuthPath(allocator, codex_home, rec.account_id);
+        const path = try resolveExistingAccountAuthPath(allocator, codex_home, rec.account_id);
         defer allocator.free(path);
         if (std.fs.cwd().openFile(path, .{})) |file| {
             file.close();

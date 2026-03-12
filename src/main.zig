@@ -23,11 +23,12 @@ pub fn main() !void {
     switch (cmd) {
         .version => try cli.printVersion(),
         .help => try handleHelp(allocator, codex_home),
-        .migrate => {
-            _ = try migration.ensureMigrated(allocator, codex_home, .explicit);
-            try auto.reconcileManagedService(allocator, codex_home);
-        },
         .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
+        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
+            .enable => .enable,
+            .disable => .disable,
+            .status => .status,
+        }),
         else => {
             _ = try migration.ensureMigrated(allocator, codex_home, .automatic);
             switch (cmd) {
@@ -37,11 +38,6 @@ pub fn main() !void {
                 .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
                 .remove_account => |_| try handleRemove(allocator, codex_home),
                 .clean => |_| try handleClean(allocator, codex_home),
-                .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, switch (opts.action) {
-                    .enable => .enable,
-                    .disable => .disable,
-                    .status => .status,
-                }),
                 else => unreachable,
             }
             try auto.reconcileManagedService(allocator, codex_home);

@@ -27,10 +27,10 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `~/.codex/auth.json`
 - `~/.codex/accounts/registry.json`
-- `~/.codex/accounts/<account_id>.auth.json`
+- `~/.codex/accounts/<account file key>.auth.json`
 - `~/.codex/accounts/auth.json.bak.<timestamp>`
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
-- `~/.codex/backups/v2/<timestamp>/...`
+- `~/.codex/accounts/backups/<backup label>/<timestamp>/...`
 - `~/.codex/sessions/...`
 
 `codex-auth` resolves `codex_home` in this order:
@@ -50,7 +50,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## First Run and Empty Registry
 
-- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account_id>.auth.json`.
+- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account file key>.auth.json`.
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
 - `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
@@ -65,7 +65,6 @@ That file is the canonical reference for:
 - formal schema definitions (`v2`, `v3`, ...)
 - adjacent migrator chain rules (`vN -> vN+1`)
 - automatic migration entry points and output
-- `codex-auth migrate`
 - local development workflow for testing `v2 -> v3`
 
 ## Account Identity
@@ -74,7 +73,9 @@ That file is the canonical reference for:
 
 - `account_id` is read from `tokens.account_id`.
 - The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must also exist and match `tokens.account_id`.
-- The auth snapshot file name is the raw `account_id`, stored as `accounts/<account_id>.auth.json`.
+- The auth snapshot file key is derived from `account_id`:
+  - filename-safe IDs keep the raw `account_id`
+  - other IDs are base64url-encoded before writing `accounts/<account file key>.auth.json`
 - Email is still normalized to lowercase, but it is now a display/grouping field instead of the unique key.
 - Older email-key registries are migrated by re-reading legacy auth snapshots and extracting `account_id`.
 
@@ -112,10 +113,10 @@ The sync flow is:
 3. If an `account_id` match is found:
    - Set that account as active.
    - Update the stored email/plan/auth mode from the current auth.
-   - Overwrite `accounts/<account_id>.auth.json` with the current `auth.json` if content differs.
+   - Overwrite `accounts/<account file key>.auth.json` with the current `auth.json` if content differs.
 4. If no `account_id` match is found:
    - Create a **new** account record for that auth snapshot.
-   - Import the current `auth.json` into `accounts/<account_id>.auth.json`.
+   - Import the current `auth.json` into `accounts/<account file key>.auth.json`.
 
 If `auth.json` has no email or `account_id`, sync fails.
 
@@ -141,7 +142,7 @@ If multiple accounts match, interactive selection is shown.
 When switching:
 
 1. `auth.json` is backed up if its contents would change.
-2. The selected account’s `accounts/<account_id>.auth.json` is copied to `~/.codex/auth.json`.
+2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_id` is updated.
 
 ## Background Auto Switch
@@ -187,7 +188,7 @@ The generated service definition also stamps the current `codex-auth` version. A
 - `auth.json` backups are created only when the contents change.
 - `registry.json` backups are created only when the contents change.
 - Both are stored under `~/.codex/accounts/` and capped at the most recent 5 files.
-- Schema migration adds a separate whole-directory backup under `~/.codex/backups/v2/<timestamp>`.
+- Schema migration uses the same whole-directory backup mechanism before rewriting files, so a `v2 -> v3` migration first creates `~/.codex/accounts/backups/v2/<timestamp>`.
 - `codex-auth clean` is whitelist-based for the current schema and only affects `~/.codex/accounts/`: it keeps only live snapshot files referenced by the registry and deletes other stale entries under `accounts/`.
 
 
