@@ -154,11 +154,11 @@ pub fn refreshTrackedActiveUsage(allocator: std.mem.Allocator, codex_home: []con
             registry.freeRateLimitSnapshot(allocator, &latest.snapshot);
         }
     }
-    if (registry.hasTrackedRolloutSignature(&reg.auto_switch, latest.path, latest.mtime)) {
+    if (registry.hasTrackedRolloutSignature(&reg.auto_switch, latest.event_timestamp_ms)) {
         return false;
     }
     const account_id = reg.active_account_id orelse return false;
-    try registry.setTrackedRolloutSignature(allocator, &reg.auto_switch, latest.path, latest.mtime);
+    try registry.setTrackedRolloutSignature(allocator, &reg.auto_switch, latest.path, latest.mtime, latest.event_timestamp_ms);
     registry.updateUsage(allocator, reg, account_id, latest.snapshot);
     snapshot_consumed = true;
     return true;

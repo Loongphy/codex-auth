@@ -36,6 +36,7 @@ pub const RateLimitSnapshot = struct {
 pub const RolloutSignature = struct {
     path: ?[]u8 = null,
     mtime: ?i64 = null,
+    event_timestamp_ms: ?i64 = null,
 };
 
 pub const AutoSwitchConfig = struct {
@@ -102,11 +103,9 @@ pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const Rate
     }
 }
 
-pub fn hasTrackedRolloutSignature(cfg: *const AutoSwitchConfig, path: []const u8, mtime: i64) bool {
-    return cfg.last_rollout.path != null and
-        cfg.last_rollout.mtime != null and
-        cfg.last_rollout.mtime.? == mtime and
-        std.mem.eql(u8, cfg.last_rollout.path.?, path);
+pub fn hasTrackedRolloutSignature(cfg: *const AutoSwitchConfig, event_timestamp_ms: i64) bool {
+    return cfg.last_rollout.event_timestamp_ms != null and
+        cfg.last_rollout.event_timestamp_ms.? == event_timestamp_ms;
 }
 
 pub fn setTrackedRolloutSignature(
@@ -114,10 +113,12 @@ pub fn setTrackedRolloutSignature(
     cfg: *AutoSwitchConfig,
     path: []const u8,
     mtime: i64,
+    event_timestamp_ms: i64,
 ) !void {
     if (cfg.last_rollout.path) |existing| allocator.free(existing);
     cfg.last_rollout.path = try allocator.dupe(u8, path);
     cfg.last_rollout.mtime = mtime;
+    cfg.last_rollout.event_timestamp_ms = event_timestamp_ms;
 }
 
 fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
@@ -1178,6 +1179,7 @@ fn parseRolloutSignature(allocator: std.mem.Allocator, sig: *RolloutSignature, v
         }
     }
     sig.mtime = readInt(obj.get("mtime"));
+    sig.event_timestamp_ms = readInt(obj.get("event_timestamp_ms"));
 }
 
 fn parseWindow(v: std.json.Value) ?RateLimitWindow {

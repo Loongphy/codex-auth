@@ -94,7 +94,7 @@ test "registry save/load" {
     const active_account_id = try accountIdForEmailAlloc(gpa, "a@b.com");
     defer gpa.free(active_account_id);
     try registry.setActiveAccount(gpa, &reg, active_account_id);
-    try registry.setTrackedRolloutSignature(gpa, &reg.auto_switch, "/tmp/rollout.jsonl", 42);
+    try registry.setTrackedRolloutSignature(gpa, &reg.auto_switch, "/tmp/rollout.jsonl", 42, 1234);
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
 
@@ -107,6 +107,8 @@ test "registry save/load" {
     try std.testing.expect(std.mem.eql(u8, loaded.auto_switch.last_rollout.path.?, "/tmp/rollout.jsonl"));
     try std.testing.expect(loaded.auto_switch.last_rollout.mtime != null);
     try std.testing.expect(loaded.auto_switch.last_rollout.mtime.? == 42);
+    try std.testing.expect(loaded.auto_switch.last_rollout.event_timestamp_ms != null);
+    try std.testing.expect(loaded.auto_switch.last_rollout.event_timestamp_ms.? == 1234);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
 }

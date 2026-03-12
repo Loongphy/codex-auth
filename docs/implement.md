@@ -203,16 +203,17 @@ The generated service definition also stamps the current `codex-auth` version. A
 
 ## Usage and Rate Limits
 
-Usage data is read from the newest `~/.codex/sessions/**/rollout-*.jsonl` file by file `mtime`.
+Usage data is read from the three newest `~/.codex/sessions/**/rollout-*.jsonl` files by file `mtime`.
 
 - The scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
-- The scanner reads only that newest rollout file. Within the file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
-- If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), usage is treated as unavailable until a newer valid rollout snapshot is written.
+- The scanner reads only those three newest rollout files. Within each file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
+- If multiple of the three files contain usable snapshots, the chosen snapshot is the one whose event `timestamp` is newest; ties are broken by rollout file `mtime`.
+- If all three newest rollout files have no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a snapshot was observed.
-- `list`, `switch`, and the auto-switch daemon all use the same tracked-rollout refresh path: they scan the newest rollout file and write its latest parseable snapshot to the current active account only when the rollout `(path, mtime)` is newer than the persisted `auto_switch.last_rollout` signature.
-- Because that rollout signature is persisted in `registry.json`, foreground `list`/`switch` also honor it. After an automatic switch, the same unchanged rollout is intentionally not reassigned to the newly active account until a new rollout file is written or the existing rollout file gets a newer `mtime`.
+- `list`, `switch`, and the auto-switch daemon all use the same tracked-rollout refresh path: they scan the three newest rollout files and write the selected snapshot to the current active account only when its event `timestamp` is newer than the persisted `auto_switch.last_rollout.event_timestamp_ms` signature.
+- Because that tracked event timestamp is persisted in `registry.json`, foreground `list`/`switch` also honor it. After an automatic switch, the same unchanged usage event is intentionally not reassigned to the newly active account even if it is later observed from a different rollout file.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond the active-account + last-attributed-rollout guard.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):

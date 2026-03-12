@@ -313,3 +313,58 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
     try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
 }
+
+test "Scenario: Given recent rollout files without usable rate limits when refreshing usage then stored usage is preserved" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 41.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 12.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .team,
+    }, 777);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-b.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-c.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-d.jsonl", .data = rollout_line ++ "\n" });
+
+    const base_time = @as(i128, std.time.nanoTimestamp());
+    {
+        var file = try tmp.dir.openFile("sessions/run-1/rollout-d.jsonl", .{ .mode = .read_write });
+        defer file.close();
+        try file.updateTimes(base_time, base_time);
+    }
+    {
+        var file = try tmp.dir.openFile("sessions/run-1/rollout-c.jsonl", .{ .mode = .read_write });
+        defer file.close();
+        try file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
+    }
+    {
+        var file = try tmp.dir.openFile("sessions/run-1/rollout-b.jsonl", .{ .mode = .read_write });
+        defer file.close();
+        try file.updateTimes(base_time + (2 * std.time.ns_per_s), base_time + (2 * std.time.ns_per_s));
+    }
+    {
+        var file = try tmp.dir.openFile("sessions/run-1/rollout-a.jsonl", .{ .mode = .read_write });
+        defer file.close();
+        try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
+    }
+
+    try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 41.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
+}
