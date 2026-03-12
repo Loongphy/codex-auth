@@ -167,7 +167,7 @@ alias cx-personal="codex-auth switch personal"
 
 1. **自动备份**当前的 `auth.json`（仅在内容发生变化时才备份，避免重复）
 2. 将目标账号的认证文件复制到 `~/.codex/auth.json`
-3. 更新注册表的 `active_email` 字段
+3. 更新注册表的 `active_account_id` 字段
 
 备份文件保存在 `~/.codex/accounts/` 目录下，格式为 `auth.json.bak.<timestamp>`，最多保留最近 5 份。即使误操作，也能轻松恢复。
 

@@ -49,6 +49,7 @@ codex-auth list # list all accounts
 codex-auth login [--skip] # login and add current account (runs `codex login` by default)
 codex-auth switch [<email>] # switch active account (interactive or partial/fragment match)
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
+codex-auth import --purge [<path>] # rebuild registry.json from auth files for the current version
 codex-auth remove # remove accounts (interactive multi-select)
 codex-auth auto enable|disable|status # manage background auto-switching
 codex-auth auto [--5h <percent>] [--weekly <percent>] # configure auto-switch thresholds
@@ -80,6 +81,13 @@ Batch import from a folder:
 
 ```shell
 codex-auth import /path/to/auth-exports
+```
+
+Rebuild `registry.json` from imported auth files:
+
+```shell
+codex-auth import --purge /path/to/auth-exports
+codex-auth import --purge                  # rebuild from ~/.codex/accounts/*.auth.json
 ```
 
 Switch accounts (interactive list shows email, 5h, weekly, last activity):

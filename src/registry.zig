@@ -189,15 +189,6 @@ fn accountIdNeedsFilenameEncoding(account_id: []const u8) bool {
     return false;
 }
 
-fn canUseLegacyRawAccountFilename(account_id: []const u8) bool {
-    if (account_id.len == 0) return false;
-    if (std.mem.eql(u8, account_id, ".") or std.mem.eql(u8, account_id, "..")) return false;
-    for (account_id) |ch| {
-        if (ch == '/' or ch == '\\' or ch == 0) return false;
-    }
-    return true;
-}
-
 fn accountFileKey(allocator: std.mem.Allocator, account_id: []const u8) ![]u8 {
     if (accountIdNeedsFilenameEncoding(account_id)) {
         return encodedFileKey(allocator, account_id);
@@ -211,22 +202,8 @@ fn accountSnapshotFileName(allocator: std.mem.Allocator, account_id: []const u8)
     return try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
 }
 
-fn legacyRawAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
-    const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ account_id, ".auth.json" });
-    defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
-}
-
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
     const filename = try accountSnapshotFileName(allocator, account_id);
-    defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
-}
-
-fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8) ![]u8 {
-    const key = try encodedFileKey(allocator, email);
-    defer allocator.free(key);
-    const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
     defer allocator.free(filename);
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
@@ -362,35 +339,12 @@ fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_na
     return count;
 }
 
-fn pathExists(path: []const u8) bool {
-    if (std.fs.cwd().openFile(path, .{})) |file| {
-        file.close();
-        return true;
-    } else |_| {
-        return false;
-    }
-}
-
 fn resolveExistingAccountAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     account_id: []const u8,
 ) ![]u8 {
-    const preferred = try accountAuthPath(allocator, codex_home, account_id);
-    if (pathExists(preferred)) return preferred;
-
-    if (!canUseLegacyRawAccountFilename(account_id)) {
-        return preferred;
-    }
-
-    const legacy = try legacyRawAccountAuthPath(allocator, codex_home, account_id);
-    if (pathExists(legacy)) {
-        allocator.free(preferred);
-        return legacy;
-    }
-
-    allocator.free(legacy);
-    return preferred;
+    return accountAuthPath(allocator, codex_home, account_id);
 }
 
 fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
@@ -398,16 +352,6 @@ fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
         const expected_name = accountSnapshotFileName(std.heap.page_allocator, rec.account_id) catch continue;
         defer std.heap.page_allocator.free(expected_name);
         if (std.mem.eql(u8, entry_name, expected_name)) {
-            return true;
-        }
-
-        if (!canUseLegacyRawAccountFilename(rec.account_id)) continue;
-        const legacy_name = std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{
-            rec.account_id,
-            ".auth.json",
-        }) catch continue;
-        defer std.heap.page_allocator.free(legacy_name);
-        if (std.mem.eql(u8, entry_name, legacy_name)) {
             return true;
         }
     }
@@ -525,6 +469,32 @@ pub const ImportSummary = struct {
     skipped: usize = 0,
 };
 
+pub fn purgeRegistryFromImportSource(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    auth_path: ?[]const u8,
+    explicit_alias: ?[]const u8,
+) !ImportSummary {
+    if (auth_path == null and explicit_alias != null) {
+        std.log.warn("--alias is ignored when purging from {s}", .{"~/.codex/accounts"});
+    }
+
+    var reg = defaultRegistry();
+    defer reg.deinit(allocator);
+
+    var summary = if (auth_path) |path|
+        try importAuthPath(allocator, codex_home, &reg, path, explicit_alias)
+    else
+        try importAccountsSnapshotDirectory(allocator, codex_home, &reg);
+
+    if (try syncCurrentAuthBestEffort(allocator, codex_home, &reg)) {
+        summary.imported += 1;
+    }
+
+    try saveRegistry(allocator, codex_home, &reg);
+    return summary;
+}
+
 pub fn importAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -606,12 +576,99 @@ fn importAuthDirectory(
     return summary;
 }
 
+fn importAccountsSnapshotDirectory(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+) !ImportSummary {
+    const dir_path = try backupDir(allocator, codex_home);
+    defer allocator.free(dir_path);
+
+    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    defer dir.close();
+
+    var names = std.ArrayList([]u8).empty;
+    defer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+        if (!isAccountSnapshotFile(entry.name)) continue;
+        try names.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+
+    std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
+
+    var summary = ImportSummary{};
+    for (names.items) |name| {
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        defer allocator.free(file_path);
+        importAuthFile(allocator, codex_home, reg, file_path, null) catch |err| {
+            summary.skipped += 1;
+            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(err) });
+            continue;
+        };
+        summary.imported += 1;
+    }
+    return summary;
+}
+
 fn isImportConfigFile(name: []const u8) bool {
     return std.mem.endsWith(u8, name, ".json");
 }
 
+fn isAccountSnapshotFile(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".auth.json") and
+        !std.mem.startsWith(u8, name, "auth.json.bak.");
+}
+
 fn importFileNameLessThan(_: void, a: []u8, b: []u8) bool {
     return std.mem.lessThan(u8, a, b);
+}
+
+fn syncCurrentAuthBestEffort(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+) !bool {
+    const auth_path = try activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    if (std.fs.cwd().openFile(auth_path, .{})) |file| {
+        file.close();
+    } else |_| {
+        return false;
+    }
+
+    const info = @import("auth.zig").parseAuthInfo(allocator, auth_path) catch return false;
+    defer info.deinit(allocator);
+    _ = info.email orelse return false;
+    const account_id = info.account_id orelse return false;
+
+    const existing_idx = findAccountIndexByAccountId(reg, account_id);
+    const dest = try accountAuthPath(allocator, codex_home, account_id);
+    defer allocator.free(dest);
+    try ensureAccountsDir(allocator, codex_home);
+    try copyFile(auth_path, dest);
+
+    if (existing_idx) |idx| {
+        const email = info.email.?;
+        if (!std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
+            allocator.free(reg.accounts.items[idx].email);
+            reg.accounts.items[idx].email = try allocator.dupe(u8, email);
+        }
+        reg.accounts.items[idx].plan = info.plan;
+        reg.accounts.items[idx].auth_mode = info.auth_mode;
+    } else {
+        const record = try accountFromAuth(allocator, "", &info);
+        upsertAccount(allocator, reg, record);
+    }
+
+    try setActiveAccount(allocator, reg, account_id);
+    return true;
 }
 
 pub fn findAccountIndexByAccountId(reg: *Registry, account_id: []const u8) ?usize {
@@ -752,13 +809,6 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
             const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_id);
             defer allocator.free(preferred_path);
             std.fs.cwd().deleteFile(preferred_path) catch {};
-            if (canUseLegacyRawAccountFilename(rec.account_id)) {
-                const legacy_path = try legacyRawAccountAuthPath(allocator, codex_home, rec.account_id);
-                defer allocator.free(legacy_path);
-                if (!std.mem.eql(u8, legacy_path, preferred_path)) {
-                    std.fs.cwd().deleteFile(legacy_path) catch {};
-                }
-            }
             freeAccountRecord(allocator, rec);
             continue;
         }
@@ -898,23 +948,6 @@ pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: Accou
     reg.accounts.append(allocator, record) catch {};
 }
 
-const LegacyAccountRecord = struct {
-    email: []u8,
-    alias: []u8,
-    plan: ?PlanType,
-    auth_mode: ?AuthMode,
-    created_at: i64,
-    last_used_at: ?i64,
-    last_usage: ?RateLimitSnapshot,
-    last_usage_at: ?i64,
-};
-
-fn freeLegacyAccountRecord(allocator: std.mem.Allocator, rec: *LegacyAccountRecord) void {
-    allocator.free(rec.email);
-    allocator.free(rec.alias);
-    if (rec.last_usage) |*u| freeRateLimitSnapshot(allocator, u);
-}
-
 fn defaultRegistry() Registry {
     return Registry{
         .version = current_schema_version,
@@ -922,47 +955,6 @@ fn defaultRegistry() Registry {
         .auto_switch = defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
     };
-}
-
-fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !LegacyAccountRecord {
-    const email_val = obj.get("email") orelse return error.MissingEmail;
-    const alias_val = obj.get("alias") orelse return error.MissingAlias;
-    const email = switch (email_val) {
-        .string => |s| s,
-        else => return error.MissingEmail,
-    };
-    const alias = switch (alias_val) {
-        .string => |s| s,
-        else => return error.MissingAlias,
-    };
-    var rec = LegacyAccountRecord{
-        .email = try normalizeEmailAlloc(allocator, email),
-        .alias = try allocator.dupe(u8, alias),
-        .plan = null,
-        .auth_mode = null,
-        .created_at = readInt(obj.get("created_at")) orelse std.time.timestamp(),
-        .last_used_at = readInt(obj.get("last_used_at")),
-        .last_usage = null,
-        .last_usage_at = readInt(obj.get("last_usage_at")),
-    };
-    errdefer freeLegacyAccountRecord(allocator, &rec);
-
-    if (obj.get("plan")) |p| {
-        switch (p) {
-            .string => |s| rec.plan = parsePlanType(s),
-            else => {},
-        }
-    }
-    if (obj.get("auth_mode")) |m| {
-        switch (m) {
-            .string => |s| rec.auth_mode = parseAuthMode(s),
-            else => {},
-        }
-    }
-    if (obj.get("last_usage")) |u| {
-        rec.last_usage = parseUsage(allocator, u);
-    }
-    return rec;
 }
 
 fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !AccountRecord {
@@ -1012,218 +1004,10 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
     return rec;
 }
 
-fn maybeCopyFile(src: []const u8, dest: []const u8) !void {
-    if (std.mem.eql(u8, src, dest)) return;
-    try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{});
-}
-
-fn resolveLegacySnapshotPathForEmail(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    email: []const u8,
-) ![]u8 {
-    const legacy_path = try legacyAccountAuthPath(allocator, codex_home, email);
-    if (std.fs.cwd().openFile(legacy_path, .{})) |file| {
-        file.close();
-        return legacy_path;
-    } else |_| {
-        allocator.free(legacy_path);
-    }
-
-    const accounts_dir = try backupDir(allocator, codex_home);
-    defer allocator.free(accounts_dir);
-    var dir = std.fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        else => return err,
-    };
-    defer dir.close();
-
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".auth.json")) continue;
-        if (std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
-
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
-        errdefer allocator.free(path);
-        const info = @import("auth.zig").parseAuthInfo(allocator, path) catch {
-            allocator.free(path);
-            continue;
-        };
-        defer info.deinit(allocator);
-        if (info.email != null and std.mem.eql(u8, info.email.?, email)) {
-            return path;
-        }
-        allocator.free(path);
-    }
-
-    const active_path = try activeAuthPath(allocator, codex_home);
-    errdefer allocator.free(active_path);
-    const active_info = @import("auth.zig").parseAuthInfo(allocator, active_path) catch {
-        allocator.free(active_path);
-        return error.FileNotFound;
-    };
-    defer active_info.deinit(allocator);
-    if (active_info.email != null and std.mem.eql(u8, active_info.email.?, email)) {
-        return active_path;
-    }
-    allocator.free(active_path);
-    return error.FileNotFound;
-}
-
-fn migrateLegacyRecord(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *Registry,
-    legacy_active_email: ?[]const u8,
-    legacy: *LegacyAccountRecord,
-) !void {
-    const legacy_path = try resolveLegacySnapshotPathForEmail(allocator, codex_home, legacy.email);
-    defer allocator.free(legacy_path);
-
-    const info = try @import("auth.zig").parseAuthInfo(allocator, legacy_path);
-    defer info.deinit(allocator);
-    const email = info.email orelse return error.MissingEmail;
-    const account_id = info.account_id orelse return error.MissingAccountId;
-    if (!std.mem.eql(u8, email, legacy.email)) return error.EmailMismatch;
-
-    var rec = AccountRecord{
-        .account_id = try allocator.dupe(u8, account_id),
-        .email = try allocator.dupe(u8, legacy.email),
-        .alias = try allocator.dupe(u8, legacy.alias),
-        .plan = info.plan orelse legacy.plan,
-        .auth_mode = info.auth_mode,
-        .created_at = legacy.created_at,
-        .last_used_at = legacy.last_used_at,
-        .last_usage = legacy.last_usage,
-        .last_usage_at = legacy.last_usage_at,
-    };
-    legacy.last_usage = null;
-    errdefer freeAccountRecord(allocator, &rec);
-
-    const new_path = try accountAuthPath(allocator, codex_home, account_id);
-    defer allocator.free(new_path);
-    try ensureAccountsDir(allocator, codex_home);
-    if (!(try filesEqual(allocator, legacy_path, new_path))) {
-        try maybeCopyFile(legacy_path, new_path);
-    }
-    const old_legacy_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
-    defer allocator.free(old_legacy_path);
-    if (std.mem.eql(u8, legacy_path, old_legacy_path)) {
-        std.fs.cwd().deleteFile(old_legacy_path) catch {};
-    }
-
-    upsertAccount(allocator, reg, rec);
-    if (legacy_active_email) |active_email| {
-        if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
-            try setActiveAccount(allocator, reg, account_id);
-        }
-    }
-}
-
-fn migrateLegacyBackups(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
-    const accounts_dir = try backupDir(allocator, codex_home);
-    defer allocator.free(accounts_dir);
-    var dir = std.fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    defer dir.close();
-
-    var names = std.ArrayList([]u8).empty;
-    defer {
-        for (names.items) |name| allocator.free(name);
-        names.deinit(allocator);
-    }
-
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
-        try names.append(allocator, try allocator.dupe(u8, entry.name));
-    }
-    std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
-
-    for (names.items) |name| {
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, name });
-        defer allocator.free(path);
-        const src_bytes = try readFileIfExists(allocator, path) orelse continue;
-        defer allocator.free(src_bytes);
-        const info = try @import("auth.zig").parseAuthInfo(allocator, path);
-        defer info.deinit(allocator);
-        const account_id = info.account_id orelse return error.MissingAccountId;
-
-        const dest = try accountAuthPath(allocator, codex_home, account_id);
-        defer allocator.free(dest);
-        try ensureAccountsDir(allocator, codex_home);
-        if (!(try fileEqualsBytes(allocator, dest, src_bytes))) {
-            try maybeCopyFile(path, dest);
-        }
-
-        const record = try accountFromAuth(allocator, "", &info);
-        upsertAccount(allocator, reg, record);
-    }
-}
-
-fn loadRegistryV2(allocator: std.mem.Allocator, codex_home: []const u8, root_obj: std.json.ObjectMap) !Registry {
-    var reg = defaultRegistry();
-    errdefer reg.deinit(allocator);
-    var legacy_active_email: ?[]u8 = null;
-    var legacy_accounts = std.ArrayList(LegacyAccountRecord).empty;
-    defer {
-        for (legacy_accounts.items) |*rec| freeLegacyAccountRecord(allocator, rec);
-        legacy_accounts.deinit(allocator);
-        if (legacy_active_email) |v| allocator.free(v);
-    }
-
-    if (root_obj.get("active_account_id")) |v| {
-        switch (v) {
-            .string => |s| reg.active_account_id = try allocator.dupe(u8, s),
-            else => {},
-        }
-    }
-    if (root_obj.get("active_email")) |v| {
-        switch (v) {
-            .string => |s| legacy_active_email = try normalizeEmailAlloc(allocator, s),
-            else => {},
-        }
-    }
-
-    if (root_obj.get("accounts")) |v| {
-        switch (v) {
-            .array => |arr| {
-                for (arr.items) |item| {
-                    const obj = switch (item) {
-                        .object => |o| o,
-                        else => continue,
-                    };
-                    if (obj.get("account_id") != null) {
-                        const rec = try parseAccountRecord(allocator, obj);
-                        upsertAccount(allocator, &reg, rec);
-                    } else {
-                        try legacy_accounts.append(allocator, try parseLegacyAccountRecord(allocator, obj));
-                    }
-                }
-            },
-            else => {},
-        }
-    }
-
-    if (root_obj.get("auto_switch")) |v| {
-        parseAutoSwitch(allocator, &reg.auto_switch, v);
-    }
-
-    for (legacy_accounts.items) |*legacy| {
-        try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
-    }
-    if (legacy_accounts.items.len > 0 or legacy_active_email != null) {
-        try migrateLegacyBackups(allocator, codex_home, &reg);
-    }
-
-    return reg;
-}
 
 fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !Registry {
+    if (root_obj.get("active_email") != null) return error.UnsupportedRegistryLayout;
+
     var reg = defaultRegistry();
     errdefer reg.deinit(allocator);
 
@@ -1281,9 +1065,6 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         .object => |o| o,
         else => return defaultRegistry(),
     };
-    const version = readInt(root_obj.get("version")) orelse current_schema_version;
-    if (version < current_schema_version) return error.RegistryMigrationRequired;
-    if (version > current_schema_version) return error.UnsupportedSchemaVersion;
     return loadCurrentRegistry(allocator, root_obj);
 }
 

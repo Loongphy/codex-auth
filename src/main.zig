@@ -4,7 +4,6 @@ const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
-const migration = @import("migration.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -26,7 +25,6 @@ pub fn main() !void {
         .daemon => |opts| if (opts.watch) try auto.runDaemon(allocator, codex_home),
         .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, opts),
         else => {
-            _ = try migration.ensureMigrated(allocator, codex_home, .automatic);
             switch (cmd) {
                 .list => |opts| try handleList(allocator, codex_home, opts),
                 .login => |opts| try handleLogin(allocator, codex_home, opts),
@@ -94,9 +92,14 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 }
 
 fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ImportOptions) !void {
+    if (opts.purge) {
+        _ = try registry.purgeRegistryFromImportSource(allocator, codex_home, opts.auth_path, opts.alias);
+        return;
+    }
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    const summary = try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path, opts.alias);
+    const summary = try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path.?, opts.alias);
     if (summary.imported > 0) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
@@ -178,13 +181,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
-        error.RegistryMigrationRequired, error.UnsupportedSchemaVersion => {
-            const auto_cfg = registry.defaultAutoSwitchConfig();
-            try cli.printHelp(&auto_cfg);
-            return;
-        },
-        else => return err,
+    var reg = registry.loadRegistry(allocator, codex_home) catch {
+        const auto_cfg = registry.defaultAutoSwitchConfig();
+        try cli.printHelp(&auto_cfg);
+        return;
     };
     defer reg.deinit(allocator);
     try cli.printHelp(&reg.auto_switch);
@@ -216,5 +216,5 @@ test {
     _ = @import("tests/cli_bdd_test.zig");
     _ = @import("tests/display_rows_test.zig");
     _ = @import("tests/main_test.zig");
-    _ = @import("tests/migration_test.zig");
+    _ = @import("tests/purge_test.zig");
 }

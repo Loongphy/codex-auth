@@ -292,16 +292,6 @@ fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opt
     try printStatus(allocator, codex_home);
 }
 
-pub fn stopServiceForMigration(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    try uninstallService(allocator, codex_home);
-}
-
-pub fn startServiceForMigration(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const self_exe = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(self_exe);
-    try installService(allocator, codex_home, self_exe);
-}
-
 fn candidateScore(rec: *const registry.AccountRecord, now: i64) CandidateScore {
     const usage_score = registry.usageScoreAt(rec.last_usage, now) orelse 100;
     return .{

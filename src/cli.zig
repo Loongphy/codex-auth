@@ -35,7 +35,11 @@ pub const LoginOptions = struct {
     launch_codex_login: bool,
     invocation: LoginInvocation,
 };
-pub const ImportOptions = struct { auth_path: []u8, alias: ?[]u8 };
+pub const ImportOptions = struct {
+    auth_path: ?[]u8,
+    alias: ?[]u8,
+    purge: bool,
+};
 pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
 pub const CleanOptions = struct {};
@@ -98,6 +102,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
     if (std.mem.eql(u8, cmd, "import")) {
         var auth_path: ?[]u8 = null;
         var alias: ?[]u8 = null;
+        var purge = false;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
@@ -105,6 +110,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                 if (alias) |a| allocator.free(a);
                 alias = try allocator.dupe(u8, std.mem.sliceTo(args[i + 1], 0));
                 i += 1;
+            } else if (std.mem.eql(u8, arg, "--purge")) {
+                purge = true;
             } else if (std.mem.startsWith(u8, arg, "-")) {
                 if (auth_path) |p| allocator.free(p);
                 if (alias) |a| allocator.free(a);
@@ -118,8 +125,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                 auth_path = try allocator.dupe(u8, arg);
             }
         }
-        if (auth_path == null) return Command{ .help = {} };
-        return Command{ .import_auth = .{ .auth_path = auth_path.?, .alias = alias } };
+        if (auth_path == null and !purge) return Command{ .help = {} };
+        return Command{ .import_auth = .{
+            .auth_path = auth_path,
+            .alias = alias,
+            .purge = purge,
+        } };
     }
 
     if (std.mem.eql(u8, cmd, "switch")) {
@@ -198,7 +209,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
 pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
     switch (cmd.*) {
         .import_auth => |*opts| {
-            allocator.free(opts.auth_path);
+            if (opts.auth_path) |path| allocator.free(path);
             if (opts.alias) |a| allocator.free(a);
         },
         .switch_account => |*opts| {
@@ -243,7 +254,7 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_cfg: *const registry
     try writeHelpCommand(out, use_color, "--version, -V", "Show version");
     try writeHelpCommand(out, use_color, "list", "List available accounts");
     try writeHelpCommand(out, use_color, "login [--skip]", "Login and add the current account");
-    try writeHelpCommand(out, use_color, "import <path> [--alias <alias>]", "Import one auth file or a directory");
+    try writeHelpCommand(out, use_color, "import <path> [--alias <alias>] [--purge]", "Import auth files or rebuild registry");
     try writeHelpCommand(out, use_color, "switch [<query>]", "Switch the active account");
     try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
     try writeHelpCommand(out, use_color, "clean", "Delete backup and stale files under accounts/");
@@ -256,6 +267,7 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_cfg: *const registry
     try out.writeAll("\n\n");
     try out.writeAll("  `add` is accepted as a deprecated alias for `login`.\n");
     try out.writeAll("  Use `--skip` to read the current auth without running `codex login`.\n");
+    try out.writeAll("  Use `import --purge [<path>]` to rebuild `registry.json` from auth files.\n");
     try out.writeAll("  Use `auto --5h <percent> [--weekly <percent>]` to configure thresholds.\n");
 }
 

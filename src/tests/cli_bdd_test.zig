@@ -47,12 +47,39 @@ test "Scenario: Given import path and alias when parsing then import options are
 
     switch (cmd) {
         .import_auth => |opts| {
-            try std.testing.expect(std.mem.eql(u8, opts.auth_path, "/tmp/auth.json"));
+            try std.testing.expect(opts.auth_path != null);
+            try std.testing.expect(std.mem.eql(u8, opts.auth_path.?, "/tmp/auth.json"));
             try std.testing.expect(opts.alias != null);
             try std.testing.expect(std.mem.eql(u8, opts.alias.?, "personal"));
+            try std.testing.expect(!opts.purge);
         },
         else => return error.TestExpectedEqual,
     }
+}
+
+test "Scenario: Given import purge without path when parsing then purge mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "--purge" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .import_auth => |opts| {
+            try std.testing.expect(opts.auth_path == null);
+            try std.testing.expect(opts.alias == null);
+            try std.testing.expect(opts.purge);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given import unknown short purge flag when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "-P", "/tmp/auth.json" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
 }
 
 test "Scenario: Given list with extra args when parsing then help command is returned" {
@@ -111,6 +138,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "import --purge [<path>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`add` is accepted as a deprecated alias for `login`.") != null);
 }
 

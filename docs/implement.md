@@ -54,18 +54,15 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
 - `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
-## Schema Migration
+## Registry Compatibility
 
-Schema versioning, migration history, command behavior, and local migration testing are maintained in the dedicated Chinese document:
-
-- [`docs/schema-migration.md`](./schema-migration.md)
-
-That file is the canonical reference for:
-
-- formal schema definitions (`v2`, `v3`, ...)
-- adjacent migrator chain rules (`vN -> vN+1`)
-- automatic migration entry points and output
-- local development workflow for testing `v2 -> v3`
+- `registry.json.version` is an on-disk marker, not a migration gate.
+- The current binary loads any parseable registry that already matches the current layout, even when `version` is lower or higher than the current schema version.
+- Saving always rewrites `registry.json` into the current field set with `version = 3`.
+- Unknown extra fields are ignored on load and dropped on save.
+- Legacy layouts are no longer supported. In particular:
+  - `active_email` is rejected.
+  - email-key snapshot discovery/migration is not performed.
 
 ## Account Identity
 
@@ -77,7 +74,6 @@ That file is the canonical reference for:
   - filename-safe IDs keep the raw `account_id`
   - other IDs are base64url-encoded before writing `accounts/<account file key>.auth.json`
 - Email is still normalized to lowercase, but it is now a display/grouping field instead of the unique key.
-- Older email-key registries are migrated by re-reading legacy auth snapshots and extracting `account_id`.
 
 ## Auth Parsing
 
@@ -97,9 +93,13 @@ That file is the canonical reference for:
 - `codex-auth import <path>` auto-detects the path type:
   - file path: imports one auth/config file.
   - directory path: batch imports config files from that directory.
+- `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
+- When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
+- `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
+- `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
 - Directory import scans only direct child files with a `.json` suffix (non-recursive), imports valid auth files, and skips invalid/malformed entries.
 - Only `import` can set account `alias` (via `--alias` on single-file import).
-- For directory import, `--alias` is ignored.
+- For directory import or `--purge` without an explicit file path, `--alias` is ignored.
 - Non-import flows (`login`, auto-import on empty registry, and sync-created accounts) leave `alias` empty.
 
 ## Sync Behavior (Token Refresh Safety)
@@ -198,7 +198,6 @@ The generated service definition also stamps the current `codex-auth` version. A
 - `auth.json` backups are created only when the contents change.
 - `registry.json` backups are created only when the contents change.
 - Both are stored under `~/.codex/accounts/` and capped at the most recent 5 files.
-- Schema migration uses the same whole-directory backup mechanism before rewriting files, so a `v2 -> v3` migration first creates `~/.codex/accounts/backups/v2/<timestamp>`.
 - `codex-auth clean` is whitelist-based for the current schema and only affects `~/.codex/accounts/`: it keeps only live snapshot files referenced by the registry and deletes other stale entries under `accounts/`.
 
 
