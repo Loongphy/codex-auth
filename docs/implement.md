@@ -1,6 +1,6 @@
 # Implementation Details (Local-Only)
 
-This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool never calls external APIs; it reads only local files under `~/.codex` (or `CODEX_HOME`).
+This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool reads and writes local files under `~/.codex` (or `CODEX_HOME`), and for ChatGPT-auth usage refresh it can call the ChatGPT usage endpoint for the current active account.
 
 ## Packaging and Release
 
@@ -56,13 +56,16 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## Registry Compatibility
 
-- `registry.json.version` is an on-disk marker, not a migration gate.
-- The current binary loads any parseable registry that already matches the current layout, even when `version` is lower or higher than the current schema version.
-- Saving always rewrites `registry.json` into the current field set with `version = 3`.
-- Unknown extra fields are ignored on load and dropped on save.
-- Legacy layouts are no longer supported. In particular:
-  - `active_email` is rejected.
-  - email-key snapshot discovery/migration is not performed.
+- `registry.json.schema_version` is the on-disk migration gate.
+- The current binary supports all released schemas:
+  - `schema_version = 3` is the current account-id layout.
+  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
+- During the transition from the old field name, the current binary also accepts current-layout files that still use the legacy top-level key `version = 3`; it rewrites them once to `schema_version = 3`.
+- Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
+- Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
+- Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
+- Unknown extra fields are still ignored on load and dropped on save, so additive compatibility is only guaranteed for schemas explicitly supported by the current binary.
+- See `docs/schema-migration.md` for the versioning policy and migration rules.
 
 ## Account Identity
 
@@ -81,6 +84,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - If `OPENAI_API_KEY` is present, the account is treated as API-key auth (`auth_mode = apikey`).
 - Otherwise it requires:
+  - `tokens.access_token` for ChatGPT usage API refresh
   - `tokens.account_id`
   - `tokens.id_token`
   - JWT `https://api.openai.com/auth.chatgpt_account_id`
@@ -97,6 +101,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
 - `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
+- `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
 - Directory import scans only direct child files with a `.json` suffix (non-recursive), imports valid auth files, and skips invalid/malformed entries.
 - Only `import` can set account `alias` (via `--alias` on single-file import).
 - For directory import or `--purge` without an explicit file path, `--alias` is ignored.
@@ -203,18 +208,23 @@ The generated service definition also stamps the current `codex-auth` version. A
 
 ## Usage and Rate Limits
 
-Usage data is read from the three newest `~/.codex/sessions/**/rollout-*.jsonl` files by file `mtime`.
+Usage refresh is active-account-only and uses this order:
 
-- The scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
-- The scanner reads only those three newest rollout files. Within each file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
-- If multiple of the three files contain usable snapshots, the chosen snapshot is the one whose event `timestamp` is newest; ties are broken by rollout file `mtime`.
-- If all three newest rollout files have no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
+1. Try the ChatGPT usage API with the current active `~/.codex/auth.json`.
+2. If API refresh fails or is unavailable, fall back to the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
+
+- ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <tokens.account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
+- API refresh only updates the current active account. Other accounts keep their stored historical snapshots until they become active.
+- API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
+- The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
+- The rollout scanner reads only the newest rollout file. Within that file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
+- If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
-- `last_usage_at` stores the last time a snapshot was observed.
-- `list`, `switch`, and the auto-switch background worker all use the same tracked-rollout refresh path: they scan the three newest rollout files and write the selected snapshot to the current active account only when its event `timestamp` is newer than the persisted `auto_switch.last_rollout.event_timestamp_ms` signature.
-- Because that tracked event timestamp is persisted in `registry.json`, foreground `list`/`switch` also honor it. After an automatic switch, the same unchanged usage event is intentionally not reassigned to the newly active account even if it is later observed from a different rollout file.
-- The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond the active-account + last-attributed-rollout guard.
+- `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
+- `list`, `switch`, and the auto-switch background worker all use the same active-account refresh path: API first, then single-rollout fallback.
+- The rollout fallback no longer tracks or deduplicates a previously attributed rollout event. If the current active account changes, the newest local rollout snapshot is attributed to the new active account on the next refresh.
+- The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):
 

@@ -35,9 +35,17 @@ fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8
     return std.fmt.allocPrint(allocator, "acc:{s}", .{email});
 }
 
+fn legacySnapshotRelPath(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    const key = try b64url(allocator, email);
+    defer allocator.free(key);
+    const filename = try std.fmt.allocPrint(allocator, "{s}.auth.json", .{key});
+    defer allocator.free(filename);
+    return try std.fs.path.join(allocator, &[_][]const u8{ "accounts", filename });
+}
+
 fn makeEmptyRegistry() registry.Registry {
     return .{
-        .version = 3,
+        .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
@@ -119,7 +127,6 @@ test "registry save/load" {
     const active_account_id = try accountIdForEmailAlloc(gpa, "a@b.com");
     defer gpa.free(active_account_id);
     try registry.setActiveAccount(gpa, &reg, active_account_id);
-    try registry.setTrackedRolloutSignature(gpa, &reg.auto_switch, "/tmp/rollout.jsonl", 42, 1234);
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
 
@@ -128,12 +135,6 @@ test "registry save/load" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
-    try std.testing.expect(loaded.auto_switch.last_rollout.path != null);
-    try std.testing.expect(std.mem.eql(u8, loaded.auto_switch.last_rollout.path.?, "/tmp/rollout.jsonl"));
-    try std.testing.expect(loaded.auto_switch.last_rollout.mtime != null);
-    try std.testing.expect(loaded.auto_switch.last_rollout.mtime.? == 42);
-    try std.testing.expect(loaded.auto_switch.last_rollout.event_timestamp_ms != null);
-    try std.testing.expect(loaded.auto_switch.last_rollout.event_timestamp_ms.? == 1234);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
 }
@@ -150,14 +151,10 @@ test "registry load defaults missing auto threshold fields" {
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "version": 3,
+        \\  "schema_version": 3,
         \\  "active_account_id": null,
         \\  "auto_switch": {
-        \\    "enabled": true,
-        \\    "last_rollout": {
-        \\      "path": "/tmp/rollout.jsonl",
-        \\      "mtime": 42
-        \\    }
+        \\    "enabled": true
         \\  },
         \\  "accounts": []
         \\}
@@ -169,6 +166,127 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
+}
+
+test "legacy current-layout registry version field rewrites to schema_version" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "version": 3,
+        \\  "active_account_id": null,
+        \\  "auto_switch": {
+        \\    "enabled": true
+        \\  },
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.schema_version == registry.current_schema_version);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
+}
+
+test "too-new schema version is rejected without rewriting registry" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 999,
+        \\  "active_account_id": null,
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    try std.testing.expectError(error.UnsupportedRegistryVersion, registry.loadRegistry(gpa, codex_home));
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 999") != null);
+}
+
+test "v2 registry migrates active email records to current schema" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const legacy_auth = try authJsonWithEmailPlan(gpa, "legacy@example.com", "team");
+    defer gpa.free(legacy_auth);
+    const legacy_snapshot_rel = try legacySnapshotRelPath(gpa, "legacy@example.com");
+    defer gpa.free(legacy_snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = legacy_snapshot_rel, .data = legacy_auth });
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "version": 2,
+        \\  "active_email": "legacy@example.com",
+        \\  "accounts": [
+        \\    {
+        \\      "email": "legacy@example.com",
+        \\      "alias": "work",
+        \\      "plan": "team",
+        \\      "auth_mode": "chatgpt",
+        \\      "created_at": 1,
+        \\      "last_used_at": null,
+        \\      "last_usage_at": null
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.schema_version == registry.current_schema_version);
+    try std.testing.expect(loaded.accounts.items.len == 1);
+
+    const expected_account_id = try accountIdForEmailAlloc(gpa, "legacy@example.com");
+    defer gpa.free(expected_account_id);
+    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, expected_account_id));
+
+    const migrated_snapshot_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
+    defer gpa.free(migrated_snapshot_path);
+    var migrated_snapshot = try std.fs.cwd().openFile(migrated_snapshot_path, .{});
+    migrated_snapshot.close();
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 
 test "auth backup only on change" {

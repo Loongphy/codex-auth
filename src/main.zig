@@ -60,7 +60,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         try registry.refreshAccountsFromAuth(allocator, codex_home, &reg);
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try auto.refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
+    if (try auto.refreshActiveUsage(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try format.printAccounts(allocator, &reg, .table);
@@ -114,7 +114,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try auto.refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
+    if (try auto.refreshActiveUsage(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
@@ -184,10 +184,13 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var reg = registry.loadRegistry(allocator, codex_home) catch {
-        const auto_cfg = registry.defaultAutoSwitchConfig();
-        try cli.printHelp(&auto_cfg);
-        return;
+    var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
+        error.UnsupportedRegistryVersion => return err,
+        else => {
+            const auto_cfg = registry.defaultAutoSwitchConfig();
+            try cli.printHelp(&auto_cfg);
+            return;
+        },
     };
     defer reg.deinit(allocator);
     try cli.printHelp(&reg.auto_switch);
@@ -213,6 +216,7 @@ fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 test {
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");
+    _ = @import("tests/usage_api_test.zig");
     _ = @import("tests/auto_test.zig");
     _ = @import("tests/registry_test.zig");
     _ = @import("tests/registry_bdd_test.zig");

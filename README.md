@@ -2,10 +2,10 @@
 
 ![command list](https://github.com/user-attachments/assets/7bbd463b-c5ed-4b90-b1f6-8dfbf21a8944)
 
-`codex-auth` is a local-only command-line tool for switching Codex accounts.
+`codex-auth` is a command-line tool for switching Codex accounts.
 
-- It never calls OpenAI APIs; all operations happen locally on your machine.
 - It reads and updates local Codex files under `~/.codex` (including `sessions/` and auth files).
+- For ChatGPT-auth accounts, it refreshes the active account's usage from the ChatGPT usage API first, then falls back to local rollout files when API refresh is unavailable.
 
 ## Install
 
@@ -131,7 +131,7 @@ codex-auth auto --5h 12
 codex-auth auto --5h 12 --weekly 8
 ```
 
-When auto-switching is enabled, a background worker checks the active account's latest rollout usage and silently switches accounts when:
+When auto-switching is enabled, a background worker refreshes the active account's usage (API first, local rollout fallback) and silently switches accounts when:
 
 - 5h remaining drops below the configured 5h threshold (default `10%`), or
 - weekly remaining drops below the configured weekly threshold (default `5%`)

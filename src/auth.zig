@@ -4,12 +4,14 @@ const registry = @import("registry.zig");
 pub const AuthInfo = struct {
     email: ?[]u8,
     account_id: ?[]u8,
+    access_token: ?[]u8,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
 
     pub fn deinit(self: *const AuthInfo, allocator: std.mem.Allocator) void {
         if (self.email) |e| allocator.free(e);
         if (self.account_id) |id| allocator.free(id);
+        if (self.access_token) |token| allocator.free(token);
     }
 };
 
@@ -36,7 +38,7 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
         if (obj.get("OPENAI_API_KEY")) |key_val| {
             switch (key_val) {
                 .string => |s| {
-                    if (s.len > 0) return AuthInfo{ .email = null, .account_id = null, .plan = null, .auth_mode = .apikey };
+                    if (s.len > 0) return AuthInfo{ .email = null, .account_id = null, .access_token = null, .plan = null, .auth_mode = .apikey };
                 },
                 else => {},
             }
@@ -45,6 +47,11 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
         if (obj.get("tokens")) |tokens_val| {
             switch (tokens_val) {
                 .object => |tobj| {
+                    const access_token = if (tobj.get("access_token")) |access_token_val| switch (access_token_val) {
+                        .string => |s| if (s.len > 0) try allocator.dupe(u8, s) else null,
+                        else => null,
+                    } else null;
+                    errdefer if (access_token) |token| allocator.free(token);
                     const token_account_id = if (tobj.get("account_id")) |account_id_val| switch (account_id_val) {
                         .string => |s| if (s.len > 0) try allocator.dupe(u8, s) else null,
                         else => null,
@@ -104,6 +111,7 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
                                         return AuthInfo{
                                             .email = email,
                                             .account_id = account_id,
+                                            .access_token = access_token,
                                             .plan = plan,
                                             .auth_mode = .chatgpt,
                                         };
@@ -122,7 +130,7 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
         else => {},
     }
 
-    return AuthInfo{ .email = null, .account_id = null, .plan = null, .auth_mode = .chatgpt };
+    return AuthInfo{ .email = null, .account_id = null, .access_token = null, .plan = null, .auth_mode = .chatgpt };
 }
 
 pub fn decodeJwtPayload(allocator: std.mem.Allocator, jwt: []const u8) ![]u8 {

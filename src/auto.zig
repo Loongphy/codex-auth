@@ -4,6 +4,7 @@ const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
+const usage_api = @import("usage_api.zig");
 const version = @import("version.zig");
 
 const linux_service_name = "codex-auth-autoswitch.service";
@@ -220,7 +221,47 @@ pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void
     _ = try daemonCycle(allocator, codex_home);
 }
 
-pub fn refreshTrackedActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
+pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
+    return refreshActiveUsageWithApiFetcher(allocator, codex_home, reg, usage_api.fetchActiveUsage);
+}
+
+pub fn refreshActiveUsageWithApiFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    api_fetcher: anytype,
+) !bool {
+    if (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) return true;
+    return refreshActiveUsageFromSessions(allocator, codex_home, reg);
+}
+
+fn refreshActiveUsageFromApi(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    api_fetcher: anytype,
+) !bool {
+    const latest_usage = api_fetcher(allocator, codex_home) catch return false;
+    if (latest_usage == null) return false;
+
+    var latest = latest_usage.?;
+    var snapshot_consumed = false;
+    defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
+
+    const account_id = reg.active_account_id orelse return false;
+    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return false;
+
+    registry.updateUsage(allocator, reg, account_id, latest);
+    snapshot_consumed = true;
+    return true;
+}
+
+fn refreshActiveUsageFromSessions(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !bool {
     const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
@@ -234,11 +275,7 @@ pub fn refreshTrackedActiveUsage(allocator: std.mem.Allocator, codex_home: []con
             registry.freeRateLimitSnapshot(allocator, &latest.snapshot);
         }
     }
-    if (registry.hasTrackedRolloutSignature(&reg.auto_switch, latest.event_timestamp_ms)) {
-        return false;
-    }
     const account_id = reg.active_account_id orelse return false;
-    try registry.setTrackedRolloutSignature(allocator, &reg.auto_switch, latest.path, latest.mtime, latest.event_timestamp_ms);
     registry.updateUsage(allocator, reg, account_id, latest.snapshot);
     snapshot_consumed = true;
     return true;
@@ -307,7 +344,7 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
         changed = true;
     }
 
-    if (try refreshTrackedActiveUsage(allocator, codex_home, &reg)) {
+    if (try refreshActiveUsage(allocator, codex_home, &reg)) {
         changed = true;
     }
     const active_idx_before = if (reg.active_account_id) |account_id|

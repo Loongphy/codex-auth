@@ -27,6 +27,8 @@ pub fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) !
 pub fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
     const account_id = try accountIdForEmailAlloc(allocator, email);
     defer allocator.free(account_id);
+    const access_token = try std.fmt.allocPrint(allocator, "access-{s}", .{email});
+    defer allocator.free(access_token);
     const payload = try std.fmt.allocPrint(
         allocator,
         "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
@@ -35,7 +37,11 @@ pub fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, pl
     defer allocator.free(payload);
     const auth = try authJsonFromPayload(allocator, payload);
     defer allocator.free(auth);
-    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ account_id, extractToken(auth) });
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ access_token, account_id, extractToken(auth) },
+    );
 }
 
 pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
@@ -43,12 +49,16 @@ pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
     const payload = "{\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acc:missing-email\",\"chatgpt_plan_type\":\"pro\"},\"sub\":\"missing-email\"}";
     const auth = try authJsonFromPayload(allocator, payload);
     defer allocator.free(auth);
-    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ account_id, extractToken(auth) });
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"access-missing-email\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ account_id, extractToken(auth) },
+    );
 }
 
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
-        .version = 3,
+        .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,

@@ -31,7 +31,7 @@ test "parse token_count usage" {
     try std.testing.expect(snap.secondary != null);
 }
 
-test "scan latest usage chooses newest valid event from the most recent three rollout files" {
+test "scan latest usage chooses newest valid event from the most recent rollout file" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -72,8 +72,8 @@ test "scan latest usage chooses newest valid event from the most recent three ro
     try std.fs.cwd().writeFile(.{ .sub_path = paths[5], .data = null_rate_limits_line ++ "\n" });
     try std.fs.cwd().writeFile(.{ .sub_path = paths[6], .data = null_rate_limits_line ++ "\n" });
     try std.fs.cwd().writeFile(.{ .sub_path = paths[7], .data = null_rate_limits_line ++ "\n" });
-    try std.fs.cwd().writeFile(.{ .sub_path = paths[8], .data = newer_valid });
-    try std.fs.cwd().writeFile(.{ .sub_path = paths[9], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[8], .data = null_rate_limits_line ++ "\n" });
+    try std.fs.cwd().writeFile(.{ .sub_path = paths[9], .data = newer_valid });
 
     const base_time = @as(i128, std.time.nanoTimestamp());
     for (paths, 0..) |path, idx| {
@@ -84,13 +84,13 @@ test "scan latest usage chooses newest valid event from the most recent three ro
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings(paths[8], latest.path);
+    try std.testing.expectEqualStrings(paths[9], latest.path);
     try std.testing.expectEqual(@as(i64, 1735689609000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 90.0), latest.snapshot.primary.?.used_percent);
 }
 
-test "scan latest usage ignores rollout files beyond the most recent three" {
+test "scan latest usage ignores rollout files beyond the most recent file" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

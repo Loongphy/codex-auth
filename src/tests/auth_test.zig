@@ -24,7 +24,7 @@ test "parse auth info from jwt" {
     defer gpa.free(jwt);
 
     const json = try std.fmt.allocPrint(gpa,
-        "{{\"tokens\":{{\"account_id\":\"acc:user@example.com\",\"id_token\":\"{s}\"}}}}",
+        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"acc:user@example.com\",\"id_token\":\"{s}\"}}}}",
         .{jwt},
     );
     defer gpa.free(json);
@@ -43,6 +43,8 @@ test "parse auth info from jwt" {
     try std.testing.expect(std.mem.eql(u8, info.email.?, "user@example.com"));
     try std.testing.expect(info.account_id != null);
     try std.testing.expect(std.mem.eql(u8, info.account_id.?, "acc:user@example.com"));
+    try std.testing.expect(info.access_token != null);
+    try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-user@example.com"));
 }
 
 test "api key auth" {

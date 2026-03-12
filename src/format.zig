@@ -168,7 +168,7 @@ fn printAccountsJson(reg: *registry.Registry) !void {
     stdout.init();
     const out = stdout.out();
     const dump = RegistryOut{
-        .version = reg.version,
+        .schema_version = reg.schema_version,
         .active_account_id = reg.active_account_id,
         .auto_switch = reg.auto_switch,
         .accounts = reg.accounts.items,
@@ -230,7 +230,7 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
 
 
 const RegistryOut = struct {
-    version: u32,
+    schema_version: u32,
     active_account_id: ?[]const u8,
     auto_switch: registry.AutoSwitchConfig,
     accounts: []const registry.AccountRecord,

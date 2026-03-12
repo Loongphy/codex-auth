@@ -23,7 +23,7 @@ const ParsedUsageEvent = struct {
     snapshot: registry.RateLimitSnapshot,
 };
 
-const max_recent_rollout_files: usize = 3;
+const max_recent_rollout_files: usize = 1;
 
 pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
     const latest = try scanLatestUsageWithSource(allocator, codex_home);

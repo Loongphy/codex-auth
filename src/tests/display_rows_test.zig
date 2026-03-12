@@ -4,7 +4,7 @@ const registry = @import("../registry.zig");
 
 fn makeRegistry() registry.Registry {
     return .{
-        .version = 3,
+        .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,

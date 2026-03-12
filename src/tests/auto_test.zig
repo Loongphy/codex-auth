@@ -21,6 +21,23 @@ fn appendAccountWithUsage(
     reg.accounts.items[idx].last_usage_at = last_usage_at;
 }
 
+fn apiSnapshot() registry.RateLimitSnapshot {
+    return .{
+        .primary = .{ .used_percent = 15.0, .window_minutes = 300, .resets_at = 1000 },
+        .secondary = .{ .used_percent = 4.0, .window_minutes = 10080, .resets_at = 2000 },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
+fn fetchApiSnapshot(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapshot {
+    return apiSnapshot();
+}
+
+fn fetchApiError(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapshot {
+    return error.TestApiUnavailable;
+}
+
 test "Scenario: Given no-snapshot account when selecting auto candidate then it is treated as fresh quota" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -292,12 +309,54 @@ test "Scenario: Given missing sessions dir when refreshing active usage then it 
     defer gpa.free(active_account_id);
     try registry.setActiveAccount(gpa, &reg, active_account_id);
 
-    try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
+    try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
 }
 
-test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is not reassigned" {
+test "Scenario: Given api usage for active account when refreshing usage then it updates without rollout files" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 15.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(registry.PlanType.pro, reg.accounts.items[idx].last_usage.?.plan_type.?);
+    try std.testing.expect(reg.accounts.items[idx].last_usage_at != null);
+}
+
+test "Scenario: Given unchanged api usage when refreshing usage then registry is not rewritten" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", apiSnapshot(), 777);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot)));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
+}
+
+test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is reassigned to the new active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -316,7 +375,7 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
-    try std.testing.expect(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg));
+    try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
     const a_idx = bdd.findAccountIndexByEmail(&reg, "a@example.com") orelse return error.TestExpectedEqual;
     const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[a_idx].last_usage != null);
@@ -324,11 +383,35 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
     try registry.setActiveAccount(gpa, &reg, account_id_b);
-    try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
-    try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
+    try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
+    try std.testing.expect(reg.accounts.items[b_idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 92.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
-test "Scenario: Given recent rollout files without usable rate limits when refreshing usage then stored usage is preserved" {
+test "Scenario: Given api failure when refreshing usage then latest rollout fallback is still used" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
+
+    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 92.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+}
+
+test "Scenario: Given latest rollout file without usable rate limits when refreshing usage then stored usage is preserved" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -376,7 +459,7 @@ test "Scenario: Given recent rollout files without usable rate limits when refre
         try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
     }
 
-    try std.testing.expect(!(try auto.refreshTrackedActiveUsage(gpa, codex_home, &reg)));
+    try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage != null);
     try std.testing.expectEqual(@as(f64, 41.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);

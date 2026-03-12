@@ -9,6 +9,12 @@ fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return buf;
 }
 
+fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    const key = try b64url(allocator, email);
+    defer allocator.free(key);
+    return std.fmt.allocPrint(allocator, "{s}.auth.json", .{key});
+}
+
 fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "acc:{s}", .{email});
 }
@@ -38,7 +44,7 @@ fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: 
     );
 }
 
-test "Scenario: Given current-layout registry versions when loading then version mismatches are accepted and save rewrites current version" {
+test "Scenario: Given legacy version key current-layout registry when loading then it rewrites to schema_version" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -50,7 +56,7 @@ test "Scenario: Given current-layout registry versions when loading then version
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "version": 999,
+        \\  "version": 3,
         \\  "active_account_id": null,
         \\  "auto_switch": {
         \\    "enabled": true
@@ -63,17 +69,17 @@ test "Scenario: Given current-layout registry versions when loading then version
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.auto_switch.enabled);
-
-    try registry.saveRegistry(gpa, codex_home, &loaded);
+    try std.testing.expect(loaded.schema_version == registry.current_schema_version);
 
     var file = try tmp.dir.openFile("accounts/registry.json", .{});
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") == null);
 }
 
-test "Scenario: Given legacy active_email registry when loading then current layout rejects it" {
+test "Scenario: Given newer schema version when loading then it is rejected" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -85,14 +91,78 @@ test "Scenario: Given legacy active_email registry when loading then current lay
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "version": 2,
-        \\  "active_email": "legacy@example.com",
+        \\  "schema_version": 999,
         \\  "accounts": []
         \\}
         ,
     });
 
-    try std.testing.expectError(error.UnsupportedRegistryLayout, registry.loadRegistry(gpa, codex_home));
+    try std.testing.expectError(error.UnsupportedRegistryVersion, registry.loadRegistry(gpa, codex_home));
+}
+
+test "Scenario: Given v2 registry when loading then it migrates to account-id layout and rewrites schema_version" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const email = "legacy@example.com";
+    const auth_json = try authJsonWithEmailPlan(gpa, email, "team");
+    defer gpa.free(auth_json);
+    const legacy_name = try legacySnapshotNameForEmail(gpa, email);
+    defer gpa.free(legacy_name);
+    const legacy_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", legacy_name });
+    defer gpa.free(legacy_rel);
+    try tmp.dir.writeFile(.{ .sub_path = legacy_rel, .data = auth_json });
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "version": 2,
+        \\  "active_email": "legacy@example.com",
+        \\  "accounts": [
+        \\    {
+        \\      "email": "legacy@example.com",
+        \\      "alias": "legacy",
+        \\      "plan": "pro",
+        \\      "auth_mode": "chatgpt",
+        \\      "created_at": 1,
+        \\      "last_used_at": 2,
+        \\      "last_usage_at": 3
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.schema_version == registry.current_schema_version);
+    try std.testing.expect(loaded.accounts.items.len == 1);
+    try std.testing.expect(loaded.active_account_id != null);
+
+    const account_id = try accountIdForEmailAlloc(gpa, email);
+    defer gpa.free(account_id);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "legacy"));
+
+    const migrated_path = try registry.accountAuthPath(gpa, codex_home, account_id);
+    defer gpa.free(migrated_path);
+    var migrated = try std.fs.cwd().openFile(migrated_path, .{});
+    migrated.close();
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(legacy_rel, .{}));
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 
 test "Scenario: Given purge import with file when rebuilding then current auth is imported as active and old registry entries are discarded" {
@@ -117,7 +187,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "version": 3,
+        \\  "schema_version": 3,
         \\  "active_account_id": "acc:stale@example.com",
         \\  "auto_switch": {
         \\    "enabled": true
