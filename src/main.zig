@@ -47,6 +47,28 @@ pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     };
 }
 
+pub const ForegroundUsageRefreshTarget = enum {
+    list,
+    switch_account,
+    remove_account,
+};
+
+pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
+    return target == .list;
+}
+
+fn maybeRefreshForegroundUsage(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+) !void {
+    if (!shouldRefreshForegroundUsage(target)) return;
+    if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
+        try registry.saveRegistry(allocator, codex_home, reg);
+    }
+}
+
 fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
     _ = opts;
     var reg = try registry.loadRegistry(allocator, codex_home);
@@ -65,9 +87,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         try registry.refreshAccountsFromAuth(allocator, codex_home, &reg);
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try auto.refreshActiveUsage(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
-    }
+    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
     try format.printAccounts(allocator, &reg, .table);
 }
 
@@ -119,9 +139,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    if (try auto.refreshActiveUsage(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
-    }
+    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .switch_account);
 
     var selected_account_id: ?[]const u8 = null;
     if (opts.query) |query| {
@@ -172,6 +190,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .remove_account);
 
     const selected = try cli.selectAccountsToRemove(allocator, &reg);
     if (selected == null) return;

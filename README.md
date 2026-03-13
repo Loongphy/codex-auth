@@ -5,7 +5,7 @@
 `codex-auth` is a command-line tool for switching Codex accounts.
 
 - It reads and updates local Codex files under `~/.codex` (including `sessions/` and auth files).
-- For ChatGPT-auth accounts, it refreshes the active account's usage from the ChatGPT usage API first, then falls back to local rollout files when API refresh is unavailable.
+- `codex-auth list` and the background auto-switch worker refresh the active account's usage from the ChatGPT usage API first, then fall back to local rollout files when API refresh is unavailable.
 
 > [!IMPORTANT]
 > After switching accounts, you must fully exit `codex` and start it again for the new account to take effect.
@@ -99,6 +99,8 @@ Switch accounts (interactive list shows email, 5h, weekly, last activity):
 ```shell
 codex-auth switch               # arrow + number input
 ```
+
+The switch picker uses the stored usage snapshot; it does not refresh usage before switching.
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 

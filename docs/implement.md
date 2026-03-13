@@ -150,6 +150,8 @@ When switching:
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_id` is updated.
 
+The switch command uses the stored usage snapshot already present in the registry when rendering account choices; it does not refresh usage before switching.
+
 ## Background Auto Switch
 
 `auto` supports three user-facing commands:
@@ -222,7 +224,7 @@ Usage refresh is active-account-only and uses this order:
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
-- `list`, `switch`, and the auto-switch background worker all use the same active-account refresh path: API first, then single-rollout fallback.
+- `list` and the auto-switch background worker use the same active-account refresh path: API first, then single-rollout fallback.
 - The rollout fallback persists the last attributed rollout event signature `(path, event_timestamp_ms)` in `registry.json` and skips that same event if the active account changes before a newer `token_count` event is written.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
 
