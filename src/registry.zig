@@ -38,6 +38,11 @@ pub const RateLimitSnapshot = struct {
     plan_type: ?PlanType,
 };
 
+pub const RolloutSignature = struct {
+    path: []u8,
+    event_timestamp_ms: i64,
+};
+
 pub const AutoSwitchConfig = struct {
     enabled: bool = false,
     threshold_5h_percent: u8 = default_auto_switch_threshold_5h_percent,
@@ -66,6 +71,7 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_id: ?[]u8,
     auto_switch: AutoSwitchConfig,
+    last_attributed_rollout: ?RolloutSignature,
     accounts: std.ArrayList(AccountRecord),
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
@@ -73,6 +79,7 @@ pub const Registry = struct {
             freeAccountRecord(allocator, rec);
         }
         if (self.active_account_id) |k| allocator.free(k);
+        if (self.last_attributed_rollout) |*sig| freeRolloutSignature(allocator, sig);
         self.accounts.deinit(allocator);
     }
 };
@@ -94,6 +101,45 @@ pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const Rate
     if (snapshot.credits) |*c| {
         if (c.balance) |b| allocator.free(b);
     }
+}
+
+pub fn freeRolloutSignature(allocator: std.mem.Allocator, signature: *const RolloutSignature) void {
+    allocator.free(signature.path);
+}
+
+pub fn rolloutSignaturesEqual(a: ?RolloutSignature, b: ?RolloutSignature) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return a.?.event_timestamp_ms == b.?.event_timestamp_ms and std.mem.eql(u8, a.?.path, b.?.path);
+}
+
+pub fn cloneRolloutSignature(allocator: std.mem.Allocator, signature: RolloutSignature) !RolloutSignature {
+    return .{
+        .path = try allocator.dupe(u8, signature.path),
+        .event_timestamp_ms = signature.event_timestamp_ms,
+    };
+}
+
+pub fn setLastAttributedRollout(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    path: []const u8,
+    event_timestamp_ms: i64,
+) !void {
+    if (reg.last_attributed_rollout) |*sig| {
+        if (sig.event_timestamp_ms == event_timestamp_ms and std.mem.eql(u8, sig.path, path)) {
+            return;
+        }
+    }
+    const new_path = try allocator.dupe(u8, path);
+    errdefer allocator.free(new_path);
+    if (reg.last_attributed_rollout) |*sig| {
+        allocator.free(sig.path);
+    }
+    reg.last_attributed_rollout = .{
+        .path = new_path,
+        .event_timestamp_ms = event_timestamp_ms,
+    };
 }
 
 pub fn rateLimitSnapshotsEqual(a: ?RateLimitSnapshot, b: ?RateLimitSnapshot) bool {
@@ -550,6 +596,9 @@ pub fn purgeRegistryFromImportSource(
 
     var reg = defaultRegistry();
     reg.auto_switch = existing.auto_switch;
+    if (existing.last_attributed_rollout) |sig| {
+        reg.last_attributed_rollout = try cloneRolloutSignature(allocator, sig);
+    }
     defer reg.deinit(allocator);
 
     var summary = if (auth_path) |path|
@@ -1040,6 +1089,7 @@ fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_id = null,
         .auto_switch = defaultAutoSwitchConfig(),
+        .last_attributed_rollout = null,
         .accounts = std.ArrayList(AccountRecord).empty,
     };
 }
@@ -1315,6 +1365,10 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
         }
     }
 
+    if (root_obj.get("last_attributed_rollout")) |v| {
+        reg.last_attributed_rollout = parseRolloutSignature(allocator, v);
+    }
+
     if (root_obj.get("accounts")) |v| {
         switch (v) {
             .array => |arr| {
@@ -1435,6 +1489,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_id = reg.active_account_id,
         .auto_switch = reg.auto_switch,
+        .last_attributed_rollout = reg.last_attributed_rollout,
         .accounts = reg.accounts.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -1455,6 +1510,7 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_id: ?[]const u8,
     auto_switch: AutoSwitchConfig,
+    last_attributed_rollout: ?RolloutSignature,
     accounts: []const AccountRecord,
 };
 
@@ -1516,6 +1572,22 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
             cfg.threshold_weekly_percent = value;
         }
     }
+}
+
+fn parseRolloutSignature(allocator: std.mem.Allocator, v: std.json.Value) ?RolloutSignature {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return null,
+    };
+    const path = switch (obj.get("path") orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    const event_timestamp_ms = readInt(obj.get("event_timestamp_ms")) orelse return null;
+    return .{
+        .path = allocator.dupe(u8, path) catch return null,
+        .event_timestamp_ms = event_timestamp_ms,
+    };
 }
 
 fn parseWindow(v: std.json.Value) ?RateLimitWindow {

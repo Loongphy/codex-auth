@@ -48,6 +48,7 @@ fn makeEmptyRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
+        .last_attributed_rollout = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
 }
@@ -129,6 +130,7 @@ test "registry save/load" {
     try registry.setActiveAccount(gpa, &reg, active_account_id);
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
+    try registry.setLastAttributedRollout(gpa, &reg, "/tmp/sessions/run-1/rollout-a.jsonl", 1735689600000);
 
     try registry.saveRegistry(gpa, codex_home, &reg);
 
@@ -137,6 +139,9 @@ test "registry save/load" {
     try std.testing.expect(loaded.accounts.items.len == 1);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
+    try std.testing.expect(loaded.last_attributed_rollout != null);
+    try std.testing.expectEqual(@as(i64, 1735689600000), loaded.last_attributed_rollout.?.event_timestamp_ms);
+    try std.testing.expect(std.mem.eql(u8, loaded.last_attributed_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
 }
 
 test "registry load defaults missing auto threshold fields" {
@@ -166,6 +171,7 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
+    try std.testing.expect(loaded.last_attributed_rollout == null);
 }
 
 test "legacy current-layout registry version field rewrites to schema_version" {

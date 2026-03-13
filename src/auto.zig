@@ -11,6 +11,7 @@ const linux_service_name = "codex-auth-autoswitch.service";
 const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
+const windows_wrapper_name = "codex-auth-autoswitch.cmd";
 const lock_file_name = "auto-switch.lock";
 const poll_interval_ns = 60 * std.time.ns_per_s;
 pub const RuntimeState = enum { running, stopped, unknown };
@@ -280,8 +281,14 @@ fn refreshActiveUsageFromSessions(
             registry.freeRateLimitSnapshot(allocator, &latest.snapshot);
         }
     }
+    const signature: registry.RolloutSignature = .{
+        .path = latest.path,
+        .event_timestamp_ms = latest.event_timestamp_ms,
+    };
+    if (registry.rolloutSignaturesEqual(reg.last_attributed_rollout, signature)) return false;
     const account_id = reg.active_account_id orelse return false;
     registry.updateUsage(allocator, reg, account_id, latest.snapshot);
+    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
     snapshot_consumed = true;
     return true;
 }
@@ -516,7 +523,15 @@ fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !vo
 }
 
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    const action = try windowsTaskAction(allocator, self_exe, codex_home);
+    const wrapper_path = try windowsWrapperPath(allocator);
+    defer allocator.free(wrapper_path);
+    const wrapper_text = try windowsWrapperText(allocator, self_exe, codex_home);
+    defer allocator.free(wrapper_text);
+    const wrapper_dir = std.fs.path.dirname(wrapper_path).?;
+    try std.fs.cwd().makePath(wrapper_dir);
+    try std.fs.cwd().writeFile(.{ .sub_path = wrapper_path, .data = wrapper_text });
+
+    const action = try windowsTaskAction(allocator, wrapper_path);
     defer allocator.free(action);
     const end_script = try windowsEndTaskScript(allocator);
     defer allocator.free(end_script);
@@ -558,6 +573,9 @@ fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
         "-Command",
         script,
     });
+    const wrapper_path = try windowsWrapperPath(allocator);
+    defer allocator.free(wrapper_path);
+    std.fs.cwd().deleteFile(wrapper_path) catch {};
 }
 
 fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
@@ -641,16 +659,20 @@ pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_ho
     );
 }
 
-pub fn windowsTaskAction(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
-    const escaped_exe = try escapePowerShellSingleQuoted(allocator, self_exe);
+pub fn windowsTaskAction(allocator: std.mem.Allocator, wrapper_path: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "cmd.exe /D /C \"\"{s}\"\"", .{wrapper_path});
+}
+
+pub fn windowsWrapperText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
+    const escaped_exe = try escapeBatchValue(allocator, self_exe);
     defer allocator.free(escaped_exe);
-    const escaped_home = try escapePowerShellSingleQuoted(allocator, codex_home);
+    const escaped_home = try escapeBatchValue(allocator, codex_home);
     defer allocator.free(escaped_home);
-    const escaped_version = try escapePowerShellSingleQuoted(allocator, version.app_version);
+    const escaped_version = try escapeBatchValue(allocator, version.app_version);
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command \"$env:CODEX_HOME = '{s}'; $env:{s} = '{s}'; & '{s}' daemon --once\"",
+        "@echo off\r\nsetlocal\r\nset \"CODEX_HOME={s}\"\r\nset \"{s}={s}\"\r\n\"{s}\" daemon --once\r\n",
         .{ escaped_home, service_version_env_name, escaped_version, escaped_exe },
     );
 }
@@ -724,8 +746,13 @@ fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_ex
 }
 
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    const expected = try windowsTaskAction(allocator, self_exe, codex_home);
-    defer allocator.free(expected);
+    const wrapper_path = try windowsWrapperPath(allocator);
+    defer allocator.free(wrapper_path);
+    const expected_action = try windowsTaskAction(allocator, wrapper_path);
+    defer allocator.free(expected_action);
+    const expected_wrapper = try windowsWrapperText(allocator, self_exe, codex_home);
+    defer allocator.free(expected_wrapper);
+    if (!(try fileEqualsBytes(allocator, wrapper_path, expected_wrapper))) return false;
     const script = try std.fmt.allocPrint(
         allocator,
         "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; Write-Output ($action.Execute + ' ' + $action.Arguments)",
@@ -744,9 +771,15 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected),
+        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_action),
         else => false,
     };
+}
+
+fn windowsWrapperPath(allocator: std.mem.Allocator) ![]u8 {
+    const home = try registry.resolveUserHome(allocator);
+    defer allocator.free(home);
+    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex", windows_wrapper_name });
 }
 
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
@@ -832,14 +865,14 @@ fn escapeSystemdValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return try out.toOwnedSlice(allocator);
 }
 
-fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+fn escapeBatchValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(allocator);
     for (raw) |ch| {
-        if (ch == '\'') {
-            try out.appendSlice(allocator, "''");
-        } else {
-            try out.append(allocator, ch);
+        switch (ch) {
+            '%' => try out.appendSlice(allocator, "%%"),
+            '\r', '\n' => {},
+            else => try out.append(allocator, ch),
         }
     }
     return try out.toOwnedSlice(allocator);

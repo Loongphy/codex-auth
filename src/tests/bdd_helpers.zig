@@ -61,6 +61,7 @@ pub fn makeEmptyRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
+        .last_attributed_rollout = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
 }

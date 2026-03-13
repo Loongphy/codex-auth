@@ -221,15 +221,25 @@ test "Scenario: Given mac plist when rendering then CODEX_HOME environment is pr
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>daemon</string>") != null);
 }
 
-test "Scenario: Given windows task action when rendering then it preserves CODEX_HOME and launches via powershell" {
+test "Scenario: Given windows task action when rendering then it uses a short cmd wrapper invocation" {
     const gpa = std.testing.allocator;
-    const action = try auto.windowsTaskAction(gpa, "C:\\Program Files\\codex-auth.exe", "D:\\Codex Home");
+    const action = try auto.windowsTaskAction(gpa, "C:\\Users\\Example\\.codex\\codex-auth-autoswitch.cmd");
     defer gpa.free(action);
 
-    try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -Command") != null);
-    try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_HOME = 'D:\\Codex Home'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, action, "$env:CODEX_AUTH_VERSION = '") != null);
-    try std.testing.expect(std.mem.indexOf(u8, action, "& 'C:\\Program Files\\codex-auth.exe' daemon --once") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "cmd.exe /D /C") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "C:\\Users\\Example\\.codex\\codex-auth-autoswitch.cmd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe") == null);
+    try std.testing.expect(action.len < 262);
+}
+
+test "Scenario: Given windows wrapper text when rendering then it preserves CODEX_HOME and launches the daemon" {
+    const gpa = std.testing.allocator;
+    const wrapper = try auto.windowsWrapperText(gpa, "C:\\Program Files\\codex-auth.exe", "D:\\Codex Home");
+    defer gpa.free(wrapper);
+
+    try std.testing.expect(std.mem.indexOf(u8, wrapper, "set \"CODEX_HOME=D:\\Codex Home\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapper, "set \"CODEX_AUTH_VERSION=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, wrapper, "\"C:\\Program Files\\codex-auth.exe\" daemon --once") != null);
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -359,7 +369,7 @@ test "Scenario: Given unchanged api usage when refreshing usage then rollout fal
     try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
 }
 
-test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is reassigned to the new active account" {
+test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is not reassigned to the new active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -386,9 +396,47 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
     try registry.setActiveAccount(gpa, &reg, account_id_b);
+    try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
+    try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
+}
+
+test "Scenario: Given new rollout event in the same file after switching accounts when refreshing usage then it is assigned to the new active account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
+    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    defer gpa.free(account_id_a);
+    try registry.setActiveAccount(gpa, &reg, account_id_a);
+
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
+
+    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    defer gpa.free(account_id_b);
+    try registry.setActiveAccount(gpa, &reg, account_id_b);
+
+    const next_rollout_line = "{" ++
+        "\"timestamp\":\"2025-01-01T00:01:00Z\"," ++
+        "\"type\":\"event_msg\"," ++
+        "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":48.0,\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":12.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}";
+    try tmp.dir.writeFile(.{
+        .sub_path = "sessions/run-1/rollout-a.jsonl",
+        .data = rollout_line ++ "\n" ++ next_rollout_line ++ "\n",
+    });
+
+    try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
+    const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[b_idx].last_usage != null);
-    try std.testing.expectEqual(@as(f64, 92.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 48.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
 test "Scenario: Given api failure when refreshing usage then latest rollout fallback is still used" {

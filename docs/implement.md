@@ -174,7 +174,7 @@ When enabled:
 
 1. A background worker checks usage continuously or on a fixed schedule, depending on platform.
 2. It refreshes usage from the newest rollout file and assigns that snapshot to the current active account.
-   The worker also remembers the last attributed rollout `(path, mtime)` and will not reassign an unchanged rollout after an automatic switch.
+   The worker remembers the last attributed rollout event signature `(path, event_timestamp_ms)` and will not reassign the same rollout event after an automatic switch.
 3. If active-account remaining quota is below either threshold, it switches to the best alternative account without foreground CLI output:
    - `5h` remaining `< auto_switch.threshold_5h_percent` (default `10%`)
    - `weekly` remaining `< auto_switch.threshold_weekly_percent` (default `5%`)
@@ -189,7 +189,7 @@ Service bootstrap is platform-specific:
 
 - Linux/WSL: `systemd --user` oneshot service plus timer, running once per minute
 - macOS: `LaunchAgent`
-- Windows: user scheduled task running once per minute
+- Windows: user scheduled task running once per minute via a short `cmd.exe` task action that launches a wrapper script under the real user home
 
 Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
 The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth auto enable` was run.
@@ -223,7 +223,7 @@ Usage refresh is active-account-only and uses this order:
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
 - `list`, `switch`, and the auto-switch background worker all use the same active-account refresh path: API first, then single-rollout fallback.
-- The rollout fallback no longer tracks or deduplicates a previously attributed rollout event. If the current active account changes, the newest local rollout snapshot is attributed to the new active account on the next refresh.
+- The rollout fallback persists the last attributed rollout event signature `(path, event_timestamp_ms)` in `registry.json` and skips that same event if the active account changes before a newer `token_count` event is written.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):
