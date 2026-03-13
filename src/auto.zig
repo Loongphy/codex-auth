@@ -214,6 +214,8 @@ pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const
         return;
     }
 
+    if (builtin.os.tag == .linux and !linuxUserSystemdAvailable(allocator)) return;
+
     const runtime = queryRuntimeState(allocator);
     const self_exe = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
@@ -541,6 +543,18 @@ fn removeLinuxUnit(allocator: std.mem.Allocator, service_name: []const u8) !void
     runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "disable", "--now", service_name });
     std.fs.cwd().deleteFile(unit_path) catch {};
     runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
+}
+
+fn linuxUserSystemdAvailable(allocator: std.mem.Allocator) bool {
+    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "show-environment" }) catch return false;
+    defer {
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
+    }
+    return switch (result.term) {
+        .Exited => |code| code == 0,
+        else => false,
+    };
 }
 
 fn installMacService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {

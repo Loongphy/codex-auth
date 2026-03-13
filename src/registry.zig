@@ -894,14 +894,14 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         reg.accounts.items[idx].email = try allocator.dupe(u8, email);
         changed = true;
     }
-    if (info.plan != null and reg.accounts.items[idx].plan != info.plan) {
-        reg.accounts.items[idx].plan = info.plan;
+    if (reg.accounts.items[idx].plan != info.plan) {
         changed = true;
     }
+    reg.accounts.items[idx].plan = info.plan;
     if (reg.accounts.items[idx].auth_mode != info.auth_mode) {
-        reg.accounts.items[idx].auth_mode = info.auth_mode;
         changed = true;
     }
+    reg.accounts.items[idx].auth_mode = info.auth_mode;
 
     const dest = try accountAuthPath(allocator, codex_home, rec_account_id);
     defer allocator.free(dest);

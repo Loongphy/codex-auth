@@ -206,7 +206,7 @@ Service bootstrap is platform-specific:
 
 Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
 The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth config auto enable` was run.
-The generated service definition also stamps the current `codex-auth` version. On Linux, macOS, and Windows, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms skip this reconciliation entirely:
+The generated service definition also stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:
 
 - if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
 - if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
