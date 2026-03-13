@@ -75,7 +75,7 @@ test "Scenario: Given legacy version key current-layout registry when loading th
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") == null);
 }
 
@@ -174,7 +174,7 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 
@@ -211,6 +211,9 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\    "threshold_5h_percent": 12,
         \\    "threshold_weekly_percent": 7
         \\  },
+        \\  "api": {
+        \\    "usage": true
+        \\  },
         \\  "accounts": [
         \\    {
         \\      "account_id": "acc:stale@example.com",
@@ -245,6 +248,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expectEqual(@as(u8, 12), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 7), loaded.auto_switch.threshold_weekly_percent);
+    try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.last_attributed_rollout == null);
 
     const active_account_id = try accountIdForEmailAlloc(gpa, "active@example.com");

@@ -56,11 +56,28 @@ pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
     );
 }
 
+pub fn authJsonWithoutAccountId(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"acc:{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, email, plan },
+    );
+    defer allocator.free(payload);
+    const auth = try authJsonFromPayload(allocator, payload);
+    defer allocator.free(auth);
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"access-{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ email, extractToken(auth) },
+    );
+}
+
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
         .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
         .last_attributed_rollout = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };

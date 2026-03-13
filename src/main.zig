@@ -22,11 +22,12 @@ pub fn main() !void {
     switch (cmd) {
         .version => try cli.printVersion(),
         .help => try handleHelp(allocator, codex_home),
+        .status => try auto.printStatus(allocator, codex_home),
         .daemon => |opts| switch (opts.mode) {
             .watch => try auto.runDaemon(allocator, codex_home),
             .once => try auto.runDaemonOnce(allocator, codex_home),
         },
-        .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, opts),
+        .config => |opts| try handleConfig(allocator, codex_home, opts),
         .list => |opts| try handleList(allocator, codex_home, opts),
         .login => |opts| try handleLogin(allocator, codex_home, opts),
         .import_auth => |opts| try handleImport(allocator, codex_home, opts),
@@ -42,7 +43,7 @@ pub fn main() !void {
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     return switch (cmd) {
-        .help, .version, .daemon => false,
+        .help, .version, .status, .daemon => false,
         else => true,
     };
 }
@@ -168,6 +169,13 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
+fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ConfigOptions) !void {
+    switch (opts) {
+        .auto_switch => |auto_opts| try auto.handleAutoCommand(allocator, codex_home, auto_opts),
+        .api_usage => |action| try auto.handleApiUsageCommand(allocator, codex_home, action),
+    }
+}
+
 pub fn findMatchingAccounts(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -212,12 +220,13 @@ fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         error.UnsupportedRegistryVersion => return err,
         else => {
             const auto_cfg = registry.defaultAutoSwitchConfig();
-            try cli.printHelp(&auto_cfg);
+            const api_cfg = registry.defaultApiConfig();
+            try cli.printHelp(&auto_cfg, &api_cfg);
             return;
         },
     };
     defer reg.deinit(allocator);
-    try cli.printHelp(&reg.auto_switch);
+    try cli.printHelp(&reg.auto_switch, &reg.api);
 }
 
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {

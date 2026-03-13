@@ -87,7 +87,7 @@ test "Scenario: Given empty registry when syncing auth then auto import and acti
     try ctx.thenAccountAuthShouldMatchActive("auto@example.com");
 }
 
-test "Scenario: Given auth without account id when syncing then sync fails" {
+test "Scenario: Given auth without email when syncing then sync is skipped" {
     const gpa = std.testing.allocator;
     var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
     defer ctx.deinit();
@@ -101,7 +101,49 @@ test "Scenario: Given auth without account id when syncing then sync fails" {
     defer gpa.free(invalid_auth);
     try ctx.givenActiveAuthJson(invalid_auth);
 
-    try std.testing.expectError(error.MissingAccountId, ctx.whenSyncActiveAccountFromAuth());
+    const changed = try ctx.whenSyncActiveAccountFromAuth();
+
+    try std.testing.expect(!changed);
+    try ctx.thenAccountCountShouldBe(1);
+    try ctx.thenActiveEmailShouldBe("keep@example.com");
+}
+
+test "Scenario: Given auth without account id when syncing then sync is skipped" {
+    const gpa = std.testing.allocator;
+    var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
+    defer ctx.deinit();
+
+    try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
+    const keep_account_id = try bdd.accountIdForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccount(gpa, &ctx.reg, keep_account_id);
+
+    const invalid_auth = try bdd.authJsonWithoutAccountId(gpa, "legacy@example.com", "pro");
+    defer gpa.free(invalid_auth);
+    try ctx.givenActiveAuthJson(invalid_auth);
+
+    const changed = try ctx.whenSyncActiveAccountFromAuth();
+
+    try std.testing.expect(!changed);
+    try ctx.thenAccountCountShouldBe(1);
+    try ctx.thenActiveEmailShouldBe("keep@example.com");
+}
+
+test "Scenario: Given malformed auth json when syncing then sync is skipped" {
+    const gpa = std.testing.allocator;
+    var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
+    defer ctx.deinit();
+
+    try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
+    const keep_account_id = try bdd.accountIdForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccount(gpa, &ctx.reg, keep_account_id);
+
+    try ctx.givenActiveAuthJson("{");
+
+    const changed = try ctx.whenSyncActiveAccountFromAuth();
+
+    try std.testing.expect(!changed);
     try ctx.thenAccountCountShouldBe(1);
     try ctx.thenActiveEmailShouldBe("keep@example.com");
 }

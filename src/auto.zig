@@ -31,6 +31,7 @@ pub const Status = struct {
     runtime: RuntimeState,
     threshold_5h_percent: u8,
     threshold_weekly_percent: u8,
+    api_usage_enabled: bool,
 };
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
@@ -112,6 +113,7 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
         .runtime = queryRuntimeState(allocator),
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
+        .api_usage_enabled = reg.api.usage,
     };
 }
 
@@ -147,6 +149,13 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
     );
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n");
+
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("usage: ");
+    if (use_color) try out.writeAll(ansi.yellow);
+    try out.writeAll(if (status.api_usage_enabled) "api" else "local");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
     try out.flush();
 }
 
@@ -165,15 +174,21 @@ fn emitAutoSwitchLog(from: *const registry.AccountRecord, to: *const registry.Ac
     writeAutoSwitchLogLine(&writer.interface, from, to) catch {};
 }
 
-pub fn handleCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: cli.AutoOptions) !void {
+pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: cli.AutoOptions) !void {
     switch (cmd) {
         .action => |action| switch (action) {
             .enable => try enable(allocator, codex_home),
             .disable => try disable(allocator, codex_home),
-            .status => try printStatus(allocator, codex_home),
         },
         .configure => |opts| try configureThresholds(allocator, codex_home, opts),
     }
+}
+
+pub fn handleApiUsageCommand(allocator: std.mem.Allocator, codex_home: []const u8, action: cli.ApiUsageAction) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    reg.api.usage = action == .enable;
+    try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
 pub fn shouldEnsureManagedService(enabled: bool, runtime: RuntimeState, definition_matches: bool) bool {
@@ -181,7 +196,16 @@ pub fn shouldEnsureManagedService(enabled: bool, runtime: RuntimeState, definiti
     return runtime != .running or !definition_matches;
 }
 
+pub fn supportsManagedServiceOnPlatform(os_tag: std.Target.Os.Tag) bool {
+    return switch (os_tag) {
+        .linux, .macos, .windows => true,
+        else => false,
+    };
+}
+
 pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    if (!supportsManagedServiceOnPlatform(builtin.os.tag)) return;
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
@@ -232,11 +256,13 @@ pub fn refreshActiveUsageWithApiFetcher(
     reg: *registry.Registry,
     api_fetcher: anytype,
 ) !bool {
-    return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
-        .updated => true,
-        .unchanged => false,
-        .unavailable => refreshActiveUsageFromSessions(allocator, codex_home, reg),
-    };
+    if (reg.api.usage) {
+        return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
+            .updated => true,
+            .unchanged, .unavailable => false,
+        };
+    }
+    return refreshActiveUsageFromSessions(allocator, codex_home, reg);
 }
 
 const ApiRefreshResult = enum { unavailable, unchanged, updated };

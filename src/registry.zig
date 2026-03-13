@@ -6,7 +6,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 3;
+pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
@@ -49,6 +49,10 @@ pub const AutoSwitchConfig = struct {
     threshold_weekly_percent: u8 = default_auto_switch_threshold_weekly_percent,
 };
 
+pub const ApiConfig = struct {
+    usage: bool = false,
+};
+
 pub const AccountRecord = struct {
     account_id: []u8,
     email: []u8,
@@ -71,6 +75,7 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_id: ?[]u8,
     auto_switch: AutoSwitchConfig,
+    api: ApiConfig,
     last_attributed_rollout: ?RolloutSignature,
     accounts: std.ArrayList(AccountRecord),
 
@@ -85,6 +90,10 @@ pub const Registry = struct {
 };
 
 pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
+    return .{};
+}
+
+pub fn defaultApiConfig() ApiConfig {
     return .{};
 }
 
@@ -596,6 +605,7 @@ pub fn purgeRegistryFromImportSource(
 
     var reg = defaultRegistry();
     reg.auto_switch = existing.auto_switch;
+    reg.api = existing.api;
     defer reg.deinit(allocator);
 
     var summary = if (auth_path) |path|
@@ -790,7 +800,7 @@ fn syncCurrentAuthBestEffort(
 pub fn findAccountIndexByAccountId(reg: *Registry, account_id: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
         if (std.mem.eql(u8, rec.account_id, account_id)) return i;
-        }
+    }
     return null;
 }
 
@@ -838,14 +848,23 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
     const auth_bytes = auth_bytes_opt.?;
     defer allocator.free(auth_bytes);
 
-    const info = try @import("auth.zig").parseAuthInfo(allocator, auth_path);
+    const info = @import("auth.zig").parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            std.log.warn("auth.json sync skipped: {s}", .{@errorName(err)});
+            return false;
+        },
+    };
     defer info.deinit(allocator);
 
     const email = info.email orelse {
         std.log.warn("auth.json missing email; skipping sync", .{});
         return false;
     };
-    const account_id = info.account_id orelse return error.MissingAccountId;
+    const account_id = info.account_id orelse {
+        std.log.warn("auth.json missing account_id; skipping sync", .{});
+        return false;
+    };
 
     const matched_index = findAccountIndexByAccountId(reg, account_id);
     if (matched_index == null) {
@@ -1086,6 +1105,7 @@ fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_id = null,
         .auto_switch = defaultAutoSwitchConfig(),
+        .api = defaultApiConfig(),
         .last_attributed_rollout = null,
         .accounts = std.ArrayList(AccountRecord).empty,
     };
@@ -1341,6 +1361,9 @@ fn loadLegacyRegistryV2(
     if (root_obj.get("auto_switch")) |v| {
         parseAutoSwitch(allocator, &reg.auto_switch, v);
     }
+    if (root_obj.get("api")) |v| {
+        parseApiConfig(&reg.api, v);
+    }
 
     for (legacy_accounts.items) |*legacy| {
         try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
@@ -1384,6 +1407,9 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
 
     if (root_obj.get("auto_switch")) |v| {
         parseAutoSwitch(allocator, &reg.auto_switch, v);
+    }
+    if (root_obj.get("api")) |v| {
+        parseApiConfig(&reg.api, v);
     }
 
     return reg;
@@ -1450,7 +1476,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const needs_rewrite = schema_version < current_schema_version or usesLegacyVersionField(root_obj);
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        current_schema_version => try loadCurrentRegistry(allocator, root_obj),
+        3, current_schema_version => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",
@@ -1486,6 +1512,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_id = reg.active_account_id,
         .auto_switch = reg.auto_switch,
+        .api = reg.api,
         .last_attributed_rollout = reg.last_attributed_rollout,
         .accounts = reg.accounts.items,
     };
@@ -1507,6 +1534,7 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_id: ?[]const u8,
     auto_switch: AutoSwitchConfig,
+    api: ApiConfig,
     last_attributed_rollout: ?RolloutSignature,
     accounts: []const AccountRecord,
 };
@@ -1567,6 +1595,19 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
     if (obj.get("threshold_weekly_percent")) |threshold| {
         if (parseThresholdPercent(threshold)) |value| {
             cfg.threshold_weekly_percent = value;
+        }
+    }
+}
+
+fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return,
+    };
+    if (obj.get("usage")) |usage| {
+        switch (usage) {
+            .bool => |flag| cfg.usage = flag,
+            else => {},
         }
     }
 }

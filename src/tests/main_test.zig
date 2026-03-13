@@ -7,6 +7,7 @@ fn makeRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_id = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
         .last_attributed_rollout = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -64,14 +65,16 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     try std.testing.expect(matches.items.len == 0);
 }
 
-test "Scenario: Given foreground commands when checking reconcile policy then auto subcommands also self-heal services" {
+test "Scenario: Given foreground commands when checking reconcile policy then config commands self-heal services but status does not" {
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .list = .{} }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .auto_switch = .{ .action = .status } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .auto_switch = .{ .configure = .{
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .action = .enable } } }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .configure = .{
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = null,
-    } } }));
+    } } } }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api_usage = .enable } }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = {} }));
+    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
 }

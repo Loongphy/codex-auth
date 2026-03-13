@@ -10,11 +10,12 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 ## Current Policy
 
-- `codex-auth` keeps a single `registry.json`; feature state such as `auto_switch` stays in that file.
+- `codex-auth` keeps a single `registry.json`; feature state such as `auto_switch` and `api` stays in that file.
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
-  - current `schema_version = 3`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3` and rewrites them once to `schema_version = 3`.
+  - `schema_version = 3`
+  - current `schema_version = 4`
+- The current binary also accepts current-layout files that still use the old top-level key `version = 3` and rewrites them once to `schema_version = 4`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
@@ -34,6 +35,11 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Account-id-based account snapshots
   - `active_account_id`
   - Current `auto_switch` block
+- `schema_version = 4`
+  - Account-id-based account snapshots
+  - `active_account_id`
+  - Current `auto_switch` block
+  - Current top-level `api` block
 
 ## When To Bump `schema_version`
 

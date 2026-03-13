@@ -253,6 +253,13 @@ test "Scenario: Given auto-switch enabled with stopped or stale service when rec
     try std.testing.expect(!auto.shouldEnsureManagedService(true, .running, true));
 }
 
+test "Scenario: Given supported and unsupported OS tags when checking service support then only managed-service platforms reconcile" {
+    try std.testing.expect(auto.supportsManagedServiceOnPlatform(.linux));
+    try std.testing.expect(auto.supportsManagedServiceOnPlatform(.macos));
+    try std.testing.expect(auto.supportsManagedServiceOnPlatform(.windows));
+    try std.testing.expect(!auto.supportsManagedServiceOnPlatform(.freebsd));
+}
+
 test "Scenario: Given automatic switch when writing daemon log then it records source and destination emails" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -286,7 +293,7 @@ test "Scenario: Given windows task state output when parsing then localized text
     try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
 }
 
-test "Scenario: Given auto status when rendering then configured thresholds are shown" {
+test "Scenario: Given status when rendering then auto and usage api settings are shown" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -296,12 +303,14 @@ test "Scenario: Given auto status when rendering then configured thresholds are 
         .runtime = .running,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
+        .api_usage_enabled = false,
     });
 
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
 }
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {
@@ -324,6 +333,26 @@ test "Scenario: Given missing sessions dir when refreshing active usage then it 
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
 }
 
+test "Scenario: Given local-only mode when refreshing usage then api fetcher is never used" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccount(gpa, &reg, active_account_id);
+
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage == null);
+}
+
 test "Scenario: Given api usage for active account when refreshing usage then it updates without rollout files" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -334,6 +363,7 @@ test "Scenario: Given api usage for active account when refreshing usage then it
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
     const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
@@ -357,6 +387,7 @@ test "Scenario: Given unchanged api usage when refreshing usage then rollout fal
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = true;
     try appendAccountWithUsage(gpa, &reg, "active@example.com", apiSnapshot(), 777);
     const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
@@ -380,6 +411,7 @@ test "Scenario: Given api-backed switch with stale rollout when api later fails 
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
     const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
@@ -469,7 +501,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     try std.testing.expectEqual(@as(f64, 48.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
-test "Scenario: Given api failure when refreshing usage then latest rollout fallback is still used" {
+test "Scenario: Given api-only mode and api failure when refreshing usage then local rollout fallback is skipped" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -480,6 +512,7 @@ test "Scenario: Given api failure when refreshing usage then latest rollout fall
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
     const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
@@ -487,9 +520,9 @@ test "Scenario: Given api failure when refreshing usage then latest rollout fall
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
-    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(f64, 92.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expect(reg.accounts.items[idx].last_usage == null);
 }
 
 test "Scenario: Given latest rollout file without usable rate limits when refreshing usage then stored usage is preserved" {

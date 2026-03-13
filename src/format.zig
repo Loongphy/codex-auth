@@ -171,6 +171,7 @@ fn printAccountsJson(reg: *registry.Registry) !void {
         .schema_version = reg.schema_version,
         .active_account_id = reg.active_account_id,
         .auto_switch = reg.auto_switch,
+        .api = reg.api,
         .accounts = reg.accounts.items,
     };
     try std.json.Stringify.value(dump, .{ .whitespace = .indent_2 }, out);
@@ -233,6 +234,7 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_id: ?[]const u8,
     auto_switch: registry.AutoSwitchConfig,
+    api: registry.ApiConfig,
     accounts: []const registry.AccountRecord,
 };
 

@@ -43,7 +43,7 @@ pub const ImportOptions = struct {
 pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
 pub const CleanOptions = struct {};
-pub const AutoAction = enum { enable, disable, status };
+pub const AutoAction = enum { enable, disable };
 pub const AutoThresholdOptions = struct {
     threshold_5h_percent: ?u8,
     threshold_weekly_percent: ?u8,
@@ -51,6 +51,11 @@ pub const AutoThresholdOptions = struct {
 pub const AutoOptions = union(enum) {
     action: AutoAction,
     configure: AutoThresholdOptions,
+};
+pub const ApiUsageAction = enum { enable, disable };
+pub const ConfigOptions = union(enum) {
+    auto_switch: AutoOptions,
+    api_usage: ApiUsageAction,
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
@@ -62,7 +67,8 @@ pub const Command = union(enum) {
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
     clean: CleanOptions,
-    auto_switch: AutoOptions,
+    config: ConfigOptions,
+    status: void,
     daemon: DaemonOptions,
     version: void,
     help: void,
@@ -162,39 +168,56 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         return Command{ .clean = .{} };
     }
 
-    if (std.mem.eql(u8, cmd, "auto")) {
-        if (args.len == 2) return Command{ .help = {} };
-        if (args.len == 3) {
-            const action = std.mem.sliceTo(args[2], 0);
-            if (std.mem.eql(u8, action, "enable")) return Command{ .auto_switch = .{ .action = .enable } };
-            if (std.mem.eql(u8, action, "disable")) return Command{ .auto_switch = .{ .action = .disable } };
-            if (std.mem.eql(u8, action, "status")) return Command{ .auto_switch = .{ .action = .status } };
+    if (std.mem.eql(u8, cmd, "status")) {
+        if (args.len > 2) return Command{ .help = {} };
+        return Command{ .status = {} };
+    }
+
+    if (std.mem.eql(u8, cmd, "config")) {
+        if (args.len < 3) return Command{ .help = {} };
+        const scope = std.mem.sliceTo(args[2], 0);
+
+        if (std.mem.eql(u8, scope, "auto")) {
+            if (args.len == 4) {
+                const action = std.mem.sliceTo(args[3], 0);
+                if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .auto_switch = .{ .action = .enable } } };
+                if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .auto_switch = .{ .action = .disable } } };
+            }
+
+            var threshold_5h_percent: ?u8 = null;
+            var threshold_weekly_percent: ?u8 = null;
+            var i: usize = 3;
+            while (i < args.len) : (i += 1) {
+                const arg = std.mem.sliceTo(args[i], 0);
+                if (std.mem.eql(u8, arg, "--5h") and i + 1 < args.len) {
+                    if (threshold_5h_percent != null) return Command{ .help = {} };
+                    threshold_5h_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                    i += 1;
+                    continue;
+                }
+                if (std.mem.eql(u8, arg, "--weekly") and i + 1 < args.len) {
+                    if (threshold_weekly_percent != null) return Command{ .help = {} };
+                    threshold_weekly_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                    i += 1;
+                    continue;
+                }
+                return Command{ .help = {} };
+            }
+            if (threshold_5h_percent == null and threshold_weekly_percent == null) return Command{ .help = {} };
+            return Command{ .config = .{ .auto_switch = .{ .configure = .{
+                .threshold_5h_percent = threshold_5h_percent,
+                .threshold_weekly_percent = threshold_weekly_percent,
+            } } } };
         }
 
-        var threshold_5h_percent: ?u8 = null;
-        var threshold_weekly_percent: ?u8 = null;
-        var i: usize = 2;
-        while (i < args.len) : (i += 1) {
-            const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--5h") and i + 1 < args.len) {
-                if (threshold_5h_percent != null) return Command{ .help = {} };
-                threshold_5h_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
-                i += 1;
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--weekly") and i + 1 < args.len) {
-                if (threshold_weekly_percent != null) return Command{ .help = {} };
-                threshold_weekly_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
-                i += 1;
-                continue;
-            }
-            return Command{ .help = {} };
+        if (std.mem.eql(u8, scope, "api")) {
+            if (args.len != 4) return Command{ .help = {} };
+            const action = std.mem.sliceTo(args[3], 0);
+            if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .api_usage = .enable } };
+            if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .api_usage = .disable } };
         }
-        if (threshold_5h_percent == null and threshold_weekly_percent == null) return Command{ .help = {} };
-        return Command{ .auto_switch = .{ .configure = .{
-            .threshold_5h_percent = threshold_5h_percent,
-            .threshold_weekly_percent = threshold_weekly_percent,
-        } } };
+
+        return Command{ .help = {} };
     }
 
     if (std.mem.eql(u8, cmd, "daemon")) {
@@ -223,16 +246,21 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
     }
 }
 
-pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig) !void {
+pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const registry.ApiConfig) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     const use_color = colorEnabled();
-    try writeHelp(out, use_color, auto_cfg);
+    try writeHelp(out, use_color, auto_cfg, api_cfg);
     try out.flush();
 }
 
-pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_cfg: *const registry.AutoSwitchConfig) !void {
+pub fn writeHelp(
+    out: *std.Io.Writer,
+    use_color: bool,
+    auto_cfg: *const registry.AutoSwitchConfig,
+    api_cfg: *const registry.ApiConfig,
+) !void {
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("codex-auth");
     if (use_color) try out.writeAll(ansi.reset);
@@ -251,28 +279,77 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool, auto_cfg: *const registry
     );
 
     if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("Usage API:");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.print(
+        " {s} ({s})\n\n",
+        .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api-only" else "local-sessions-only" },
+    );
+
+    if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
 
-    try writeHelpCommand(out, use_color, "--version, -V", "Show version");
-    try writeHelpCommand(out, use_color, "list", "List available accounts");
-    try writeHelpCommand(out, use_color, "login [--skip]", "Login and add the current account");
-    try writeHelpCommand(out, use_color, "import <path> [--alias <alias>] [--purge]", "Import auth files or rebuild registry");
-    try writeHelpCommand(out, use_color, "switch [<query>]", "Switch the active account");
-    try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
-    try writeHelpCommand(out, use_color, "clean", "Delete backup and stale files under accounts/");
-    try writeHelpCommand(out, use_color, "auto ...", "Manage background auto-switching and thresholds");
+    const commands = [_]HelpEntry{
+        .{ .name = "--version, -V", .description = "Show version" },
+        .{ .name = "list", .description = "List available accounts" },
+        .{ .name = "status", .description = "Show auto-switch and usage API status" },
+        .{ .name = "login", .description = "Login and add the current account" },
+        .{ .name = "import", .description = "Import auth files or rebuild registry" },
+        .{ .name = "switch [<query>]", .description = "Switch the active account" },
+        .{ .name = "remove", .description = "Remove one or more accounts" },
+        .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
+        .{ .name = "config", .description = "Manage configuration" },
+    };
+    const login_details = [_]HelpEntry{
+        .{ .name = "[--skip]", .description = "Read the currently logged-in account" },
+    };
+    const import_details = [_]HelpEntry{
+        .{ .name = "<path>", .description = "Import one file or batch import a directory" },
+        .{ .name = "--alias <alias>", .description = "Set alias for single-file import" },
+        .{ .name = "--purge [<path>]", .description = "Rebuild `registry.json` from auth files" },
+    };
+    const config_details = [_]HelpEntry{
+        .{ .name = "auto enable", .description = "Enable background auto-switching" },
+        .{ .name = "auto disable", .description = "Disable background auto-switching" },
+        .{ .name = "auto --5h <percent> [--weekly <percent>]", .description = "Configure auto-switch thresholds" },
+        .{ .name = "api enable", .description = "Use usage API only" },
+        .{ .name = "api disable", .description = "Use local sessions only" },
+    };
+    const parent_indent: usize = 2;
+    const child_indent: usize = parent_indent + 4;
+    const child_description_extra: usize = 4;
+    const command_col = helpTargetColumn(&commands, parent_indent);
+    const login_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&login_details, child_indent));
+    const import_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&import_details, child_indent));
+    const config_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&config_details, child_indent));
+
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[0].name, commands[0].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[1].name, commands[1].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[2].name, commands[2].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[3].name, commands[3].description);
+    try writeHelpEntry(out, use_color, child_indent, login_detail_col, login_details[0].name, login_details[0].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[4].name, commands[4].description);
+    try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[0].name, import_details[0].description);
+    try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[1].name, import_details[1].description);
+    try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[2].name, import_details[2].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[5].name, commands[5].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[6].name, commands[6].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[7].name, commands[7].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[8].name, commands[8].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[0].name, config_details[0].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[1].name, config_details[1].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[2].name, config_details[2].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[3].name, config_details[3].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[4].name, config_details[4].description);
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Notes:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
-    try out.writeAll("  `add` is accepted as a deprecated alias for `login`.\n");
-    try out.writeAll("  Use `--skip` to read the current auth without running `codex login`.\n");
-    try out.writeAll("  Use `import --purge [<path>]` to rebuild `registry.json` from auth files.\n");
-    try out.writeAll("  Use `auto --5h <percent> [--weekly <percent>]` to configure thresholds.\n");
+    try out.writeAll("  `add` is accepted as a deprecated alias for `login` and will be removed in the next release.\n");
 }
 
 fn parsePercentArg(raw: []const u8) ?u8 {
@@ -281,15 +358,38 @@ fn parsePercentArg(raw: []const u8) ?u8 {
     return value;
 }
 
-fn writeHelpCommand(out: *std.Io.Writer, use_color: bool, name: []const u8, description: []const u8) !void {
+const HelpEntry = struct {
+    name: []const u8,
+    description: []const u8,
+};
+
+fn helpTargetColumn(entries: []const HelpEntry, indent: usize) usize {
+    var max_visible_len: usize = 0;
+    for (entries) |entry| {
+        max_visible_len = @max(max_visible_len, indent + entry.name.len);
+    }
+    return max_visible_len + 2;
+}
+
+fn writeHelpEntry(
+    out: *std.Io.Writer,
+    use_color: bool,
+    indent: usize,
+    target_col: usize,
+    name: []const u8,
+    description: []const u8,
+) !void {
     if (use_color) try out.writeAll(ansi.bold_green);
-    try out.print("  {s}", .{name});
+    var i: usize = 0;
+    while (i < indent) : (i += 1) {
+        try out.writeAll(" ");
+    }
+    try out.print("{s}", .{name});
     if (use_color) try out.writeAll(ansi.reset);
 
-    const target_col: usize = 16;
-    const visible_len = 2 + name.len;
+    const visible_len = indent + name.len;
     const spaces = if (visible_len >= target_col) 2 else target_col - visible_len;
-    var i: usize = 0;
+    i = 0;
     while (i < spaces) : (i += 1) {
         try out.writeAll(" ");
     }

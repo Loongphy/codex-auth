@@ -89,7 +89,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - `tokens.id_token`
   - JWT `https://api.openai.com/auth.chatgpt_account_id`
 - The CLI decodes the JWT and reads `email`, `chatgpt_account_id`, and `chatgpt_plan_type`.
-- If `account_id` is missing or mismatched between token fields and JWT claims, import/login/sync fails.
+- If `account_id` is missing or mismatched between token fields and JWT claims, import/login fails. Existing-registry foreground/background sync treats that auth as unsyncable and skips it.
 - If plan is missing, it remains blank in the registry. If email is missing, the account is not imported/synced.
 
 ## Import Behavior
@@ -98,7 +98,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - file path: imports one auth/config file.
   - directory path: batch imports config files from that directory.
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
-- During `--purge`, only `auto_switch` configuration is carried forward from an existing `registry.json`; account snapshots, stored usage, and `last_attributed_rollout` are cleared and rebuilt from auth files.
+- During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, and `last_attributed_rollout` are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
 - `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
@@ -124,7 +124,7 @@ The sync flow is:
    - Create a **new** account record for that auth snapshot.
    - Import the current `auth.json` into `accounts/<account file key>.auth.json`.
 
-If `auth.json` has no email or `account_id`, sync fails.
+If `auth.json` has no email, no `account_id`, or cannot be parsed, existing-registry sync is skipped and the foreground command/daemon continues using the registry state already on disk. The empty-registry auto-import path still requires a parseable auth file.
 
 Important limits:
 
@@ -155,15 +155,25 @@ The switch command uses the stored usage snapshot already present in the registr
 
 ## Background Auto Switch
 
-`auto` supports three user-facing commands:
+`config auto` supports the user-facing commands:
 
-- `codex-auth auto enable`
-- `codex-auth auto disable`
-- `codex-auth auto status`
-- `codex-auth auto [--5h <percent>] [--weekly <percent>]`
+- `codex-auth config auto enable`
+- `codex-auth config auto disable`
+- `codex-auth config auto [--5h <percent>] [--weekly <percent>]`
 
 The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
+`status` prints the current `Auto Switch: ON/OFF` state, service runtime, thresholds, and whether usage API calls are enabled.
 `help` prints the current `Auto Switch: ON/OFF` state plus the configured thresholds.
+
+Usage API refresh mode is persisted separately under a top-level `api` block:
+
+- `api.usage = false` (default): local-only mode, read `~/.codex/sessions/**/rollout-*.jsonl` only, make no usage API calls
+- `api.usage = true`: API-only mode, call the ChatGPT usage API only and do not fall back to local rollout files
+
+The related configuration command is:
+
+- `codex-auth config api enable`
+- `codex-auth config api disable`
 
 The threshold configuration is also persisted in `registry.json`:
 
@@ -195,8 +205,8 @@ Service bootstrap is platform-specific:
 - Windows: user scheduled task running once per minute via a short `cmd.exe` task action that launches a wrapper script under the real user home
 
 Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
-The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth auto enable` was run.
-The generated service definition also stamps the current `codex-auth` version. Any successful foreground `codex-auth` command except `help`, `version`, and `daemon` reconciles the managed service after command execution:
+The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth config auto enable` was run.
+The generated service definition also stamps the current `codex-auth` version. On Linux, macOS, and Windows, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms skip this reconciliation entirely:
 
 - if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
 - if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
@@ -211,21 +221,22 @@ The generated service definition also stamps the current `codex-auth` version. A
 
 ## Usage and Rate Limits
 
-Usage refresh is active-account-only and uses this order:
+Usage refresh is active-account-only and depends on `api.usage`:
 
-1. Try the ChatGPT usage API with the current active `~/.codex/auth.json`.
-2. If API refresh fails or is unavailable, fall back to the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
+1. If `api.usage = true`, try only the ChatGPT usage API with the current active `~/.codex/auth.json`.
+2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
 
 - ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <tokens.account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
 - API refresh only updates the current active account. Other accounts keep their stored historical snapshots until they become active.
 - API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
+- In API-only mode, API failures do not overwrite the stored usage snapshot and do not fall back to local rollout files.
 - The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
 - The rollout scanner reads only the newest rollout file. Within that file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
 - If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
-- `list`, `switch`, and the auto-switch background worker all use the same active-account refresh path: API first, then single-rollout fallback.
+- `list` and the auto-switch background worker use the same active-account refresh path. `switch` does not refresh usage before switching.
 - A successful API refresh also records the newest visible rollout event signature, when one exists, so an older local rollout line cannot be reassigned to a different account after a switch.
 - The rollout fallback persists the last attributed rollout event signature `(path, event_timestamp_ms)` in `registry.json` and skips that same event if the active account changes before a newer `token_count` event is written.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
