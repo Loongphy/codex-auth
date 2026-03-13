@@ -369,6 +369,36 @@ test "Scenario: Given unchanged api usage when refreshing usage then rollout fal
     try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
 }
 
+test "Scenario: Given api-backed switch with stale rollout when api later fails then the stale rollout is not assigned to the new active account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
+    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    defer gpa.free(account_id_a);
+    try registry.setActiveAccount(gpa, &reg, account_id_a);
+
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
+    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
+    try std.testing.expect(reg.last_attributed_rollout != null);
+
+    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    defer gpa.free(account_id_b);
+    try registry.setActiveAccount(gpa, &reg, account_id_b);
+
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
+    const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
+}
+
 test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is not reassigned to the new active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
