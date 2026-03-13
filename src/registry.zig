@@ -545,7 +545,11 @@ pub fn purgeRegistryFromImportSource(
         std.log.warn("--alias is ignored when purging from {s}", .{"~/.codex/accounts"});
     }
 
+    var existing = loadRegistry(allocator, codex_home) catch defaultRegistry();
+    defer existing.deinit(allocator);
+
     var reg = defaultRegistry();
+    reg.auto_switch = existing.auto_switch;
     defer reg.deinit(allocator);
 
     var summary = if (auth_path) |path|
@@ -1239,51 +1243,6 @@ fn migrateLegacyRecord(
     }
 }
 
-fn migrateLegacyBackups(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
-    const accounts_dir = try backupDir(allocator, codex_home);
-    defer allocator.free(accounts_dir);
-    var dir = std.fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return,
-        else => return err,
-    };
-    defer dir.close();
-
-    var names = std.ArrayList([]u8).empty;
-    defer {
-        for (names.items) |name| allocator.free(name);
-        names.deinit(allocator);
-    }
-
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
-        try names.append(allocator, try allocator.dupe(u8, entry.name));
-    }
-    std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
-
-    for (names.items) |name| {
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, name });
-        defer allocator.free(path);
-        const src_bytes = try readFileIfExists(allocator, path) orelse continue;
-        defer allocator.free(src_bytes);
-        const info = @import("auth.zig").parseAuthInfo(allocator, path) catch continue;
-        defer info.deinit(allocator);
-        const account_id = info.account_id orelse return error.MissingAccountId;
-
-        const dest = try accountAuthPath(allocator, codex_home, account_id);
-        defer allocator.free(dest);
-        try ensureAccountsDir(allocator, codex_home);
-        if (!(try fileEqualsBytes(allocator, dest, src_bytes))) {
-            try maybeCopyFile(path, dest);
-        }
-
-        const record = try accountFromAuth(allocator, "", &info);
-        upsertAccount(allocator, reg, record);
-    }
-}
-
-
 fn loadLegacyRegistryV2(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -1338,9 +1297,6 @@ fn loadLegacyRegistryV2(
 
     for (legacy_accounts.items) |*legacy| {
         try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
-    }
-    if (legacy_accounts.items.len > 0 or legacy_active_email != null) {
-        try migrateLegacyBackups(allocator, codex_home, &reg);
     }
 
     return reg;

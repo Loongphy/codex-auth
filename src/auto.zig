@@ -231,30 +231,35 @@ pub fn refreshActiveUsageWithApiFetcher(
     reg: *registry.Registry,
     api_fetcher: anytype,
 ) !bool {
-    if (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) return true;
-    return refreshActiveUsageFromSessions(allocator, codex_home, reg);
+    return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
+        .updated => true,
+        .unchanged => false,
+        .unavailable => refreshActiveUsageFromSessions(allocator, codex_home, reg),
+    };
 }
+
+const ApiRefreshResult = enum { unavailable, unchanged, updated };
 
 fn refreshActiveUsageFromApi(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     api_fetcher: anytype,
-) !bool {
-    const latest_usage = api_fetcher(allocator, codex_home) catch return false;
-    if (latest_usage == null) return false;
+) !ApiRefreshResult {
+    const latest_usage = api_fetcher(allocator, codex_home) catch return .unavailable;
+    if (latest_usage == null) return .unavailable;
 
     var latest = latest_usage.?;
     var snapshot_consumed = false;
     defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
 
-    const account_id = reg.active_account_id orelse return false;
-    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
-    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return false;
+    const account_id = reg.active_account_id orelse return .unchanged;
+    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return .unchanged;
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return .unchanged;
 
     registry.updateUsage(allocator, reg, account_id, latest);
     snapshot_consumed = true;
-    return true;
+    return .updated;
 }
 
 fn refreshActiveUsageFromSessions(

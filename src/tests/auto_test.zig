@@ -336,13 +336,14 @@ test "Scenario: Given api usage for active account when refreshing usage then it
     try std.testing.expect(reg.accounts.items[idx].last_usage_at != null);
 }
 
-test "Scenario: Given unchanged api usage when refreshing usage then registry is not rewritten" {
+test "Scenario: Given unchanged api usage when refreshing usage then rollout fallback is skipped" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
@@ -350,9 +351,11 @@ test "Scenario: Given unchanged api usage when refreshing usage then registry is
     const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
     try registry.setActiveAccount(gpa, &reg, active_account_id);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 15.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
 }
 

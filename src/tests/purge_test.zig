@@ -117,6 +117,7 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     const legacy_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", legacy_name });
     defer gpa.free(legacy_rel);
     try tmp.dir.writeFile(.{ .sub_path = legacy_rel, .data = auth_json });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260312-000000", .data = auth_json });
 
     try tmp.dir.writeFile(.{
         .sub_path = "accounts/registry.json",
@@ -132,7 +133,15 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
         \\      "auth_mode": "chatgpt",
         \\      "created_at": 1,
         \\      "last_used_at": 2,
-        \\      "last_usage_at": 3
+        \\      "last_usage_at": 3,
+        \\      "last_usage": {
+        \\        "primary": {
+        \\          "used_percent": 25,
+        \\          "window_minutes": 300,
+        \\          "resets_at": 123
+        \\        },
+        \\        "plan_type": "team"
+        \\      }
         \\    }
         \\  ]
         \\}
@@ -150,6 +159,10 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "legacy"));
+    try std.testing.expectEqual(@as(i64, 2), loaded.accounts.items[0].last_used_at.?);
+    try std.testing.expectEqual(@as(i64, 3), loaded.accounts.items[0].last_usage_at.?);
+    try std.testing.expectEqual(@as(f64, 25.0), loaded.accounts.items[0].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(registry.PlanType.team, loaded.accounts.items[0].last_usage.?.plan_type.?);
 
     const migrated_path = try registry.accountAuthPath(gpa, codex_home, account_id);
     defer gpa.free(migrated_path);
@@ -190,7 +203,9 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\  "schema_version": 3,
         \\  "active_account_id": "acc:stale@example.com",
         \\  "auto_switch": {
-        \\    "enabled": true
+        \\    "enabled": true,
+        \\    "threshold_5h_percent": 12,
+        \\    "threshold_weekly_percent": 7
         \\  },
         \\  "accounts": [
         \\    {
@@ -216,6 +231,9 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 2);
+    try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expectEqual(@as(u8, 12), loaded.auto_switch.threshold_5h_percent);
+    try std.testing.expectEqual(@as(u8, 7), loaded.auto_switch.threshold_weekly_percent);
 
     const active_account_id = try accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
