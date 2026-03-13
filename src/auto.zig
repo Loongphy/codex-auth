@@ -241,6 +241,18 @@ pub fn refreshActiveUsageWithApiFetcher(
 
 const ApiRefreshResult = enum { unavailable, unchanged, updated };
 
+fn rememberLatestRolloutSignature(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !void {
+    const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    if (latest_usage == null) return;
+
+    var latest = latest_usage.?;
+    defer latest.deinit(allocator);
+    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
+}
+
 fn refreshActiveUsageFromApi(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -256,9 +268,13 @@ fn refreshActiveUsageFromApi(
 
     const account_id = reg.active_account_id orelse return .unchanged;
     const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return .unchanged;
-    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return .unchanged;
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) {
+        try rememberLatestRolloutSignature(allocator, codex_home, reg);
+        return .unchanged;
+    }
 
     registry.updateUsage(allocator, reg, account_id, latest);
+    try rememberLatestRolloutSignature(allocator, codex_home, reg);
     snapshot_consumed = true;
     return .updated;
 }

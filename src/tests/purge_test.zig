@@ -202,6 +202,10 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\{
         \\  "schema_version": 3,
         \\  "active_account_id": "acc:stale@example.com",
+        \\  "last_attributed_rollout": {
+        \\    "path": "/tmp/sessions/run-1/rollout-a.jsonl",
+        \\    "event_timestamp_ms": 1735689600000
+        \\  },
         \\  "auto_switch": {
         \\    "enabled": true,
         \\    "threshold_5h_percent": 12,
@@ -216,7 +220,14 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\      "auth_mode": "chatgpt",
         \\      "created_at": 1,
         \\      "last_used_at": null,
-        \\      "last_usage_at": null
+        \\      "last_usage_at": 9,
+        \\      "last_usage": {
+        \\        "primary": {
+        \\          "used_percent": 99,
+        \\          "window_minutes": 300,
+        \\          "resets_at": 123
+        \\        }
+        \\      }
         \\    }
         \\  ]
         \\}
@@ -234,6 +245,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expectEqual(@as(u8, 12), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 7), loaded.auto_switch.threshold_weekly_percent);
+    try std.testing.expect(loaded.last_attributed_rollout == null);
 
     const active_account_id = try accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
@@ -247,6 +259,12 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     defer gpa.free(imported_account_id);
     const imported_idx = registry.findAccountIndexByAccountId(&loaded, imported_account_id) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[imported_idx].alias, "personal"));
+    try std.testing.expect(loaded.accounts.items[imported_idx].last_usage == null);
+    try std.testing.expect(loaded.accounts.items[imported_idx].last_usage_at == null);
+
+    const active_idx = registry.findAccountIndexByAccountId(&loaded, active_account_id) orelse return error.TestExpectedEqual;
+    try std.testing.expect(loaded.accounts.items[active_idx].last_usage == null);
+    try std.testing.expect(loaded.accounts.items[active_idx].last_usage_at == null);
 }
 
 test "Scenario: Given purge without path when rebuilding then it scans account snapshots and ignores registry metadata files" {

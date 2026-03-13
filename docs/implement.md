@@ -98,6 +98,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - file path: imports one auth/config file.
   - directory path: batch imports config files from that directory.
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
+- During `--purge`, only `auto_switch` configuration is carried forward from an existing `registry.json`; account snapshots, stored usage, and `last_attributed_rollout` are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
 - `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
@@ -223,6 +224,7 @@ Usage refresh is active-account-only and uses this order:
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
 - `list`, `switch`, and the auto-switch background worker all use the same active-account refresh path: API first, then single-rollout fallback.
+- A successful API refresh also records the newest visible rollout event signature, when one exists, so an older local rollout line cannot be reassigned to a different account after a switch.
 - The rollout fallback persists the last attributed rollout event signature `(path, event_timestamp_ms)` in `registry.json` and skips that same event if the active account changes before a newer `token_count` event is written.
 - The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
 

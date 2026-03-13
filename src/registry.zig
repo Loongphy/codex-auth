@@ -596,9 +596,6 @@ pub fn purgeRegistryFromImportSource(
 
     var reg = defaultRegistry();
     reg.auto_switch = existing.auto_switch;
-    if (existing.last_attributed_rollout) |sig| {
-        reg.last_attributed_rollout = try cloneRolloutSignature(allocator, sig);
-    }
     defer reg.deinit(allocator);
 
     var summary = if (auth_path) |path|
