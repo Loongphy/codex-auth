@@ -63,3 +63,15 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     defer matches.deinit(gpa);
     try std.testing.expect(matches.items.len == 0);
 }
+
+test "Scenario: Given foreground commands when checking reconcile policy then auto subcommands also self-heal services" {
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .list = .{} }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .auto_switch = .{ .action = .status } }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .auto_switch = .{ .configure = .{
+        .threshold_5h_percent = 12,
+        .threshold_weekly_percent = null,
+    } } }));
+    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = {} }));
+    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
+    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
+}

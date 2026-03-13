@@ -27,19 +27,24 @@ pub fn main() !void {
             .once => try auto.runDaemonOnce(allocator, codex_home),
         },
         .auto_switch => |opts| try auto.handleCommand(allocator, codex_home, opts),
-        else => {
-            switch (cmd) {
-                .list => |opts| try handleList(allocator, codex_home, opts),
-                .login => |opts| try handleLogin(allocator, codex_home, opts),
-                .import_auth => |opts| try handleImport(allocator, codex_home, opts),
-                .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
-                .remove_account => |_| try handleRemove(allocator, codex_home),
-                .clean => |_| try handleClean(allocator, codex_home),
-                else => unreachable,
-            }
-            try auto.reconcileManagedService(allocator, codex_home);
-        },
+        .list => |opts| try handleList(allocator, codex_home, opts),
+        .login => |opts| try handleLogin(allocator, codex_home, opts),
+        .import_auth => |opts| try handleImport(allocator, codex_home, opts),
+        .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
+        .remove_account => |_| try handleRemove(allocator, codex_home),
+        .clean => |_| try handleClean(allocator, codex_home),
     }
+
+    if (shouldReconcileManagedService(cmd)) {
+        try auto.reconcileManagedService(allocator, codex_home);
+    }
+}
+
+pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
+    return switch (cmd) {
+        .help, .version, .daemon => false,
+        else => true,
+    };
 }
 
 fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
