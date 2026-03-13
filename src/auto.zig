@@ -269,16 +269,21 @@ pub fn refreshActiveUsageWithApiFetcher(
 
 const ApiRefreshResult = enum { unavailable, unchanged, updated };
 
-fn rememberLatestRolloutSignature(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !void {
+fn rememberLatestRolloutSignature(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
     const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
-        error.FileNotFound => return,
+        error.FileNotFound => return false,
         else => return err,
     };
-    if (latest_usage == null) return;
+    if (latest_usage == null) return false;
 
     var latest = latest_usage.?;
     defer latest.deinit(allocator);
+    const changed = !registry.rolloutSignaturesEqual(reg.last_attributed_rollout, .{
+        .path = latest.path,
+        .event_timestamp_ms = latest.event_timestamp_ms,
+    });
     try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
+    return changed;
 }
 
 fn refreshActiveUsageFromApi(
@@ -297,13 +302,15 @@ fn refreshActiveUsageFromApi(
     const account_id = reg.active_account_id orelse return .unchanged;
     const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return .unchanged;
     if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) {
-        try rememberLatestRolloutSignature(allocator, codex_home, reg);
+        if (try rememberLatestRolloutSignature(allocator, codex_home, reg)) {
+            return .updated;
+        }
         return .unchanged;
     }
 
     registry.updateUsage(allocator, reg, account_id, latest);
-    try rememberLatestRolloutSignature(allocator, codex_home, reg);
     snapshot_consumed = true;
+    _ = try rememberLatestRolloutSignature(allocator, codex_home, reg);
     return .updated;
 }
 
@@ -332,8 +339,8 @@ fn refreshActiveUsageFromSessions(
     if (registry.rolloutSignaturesEqual(reg.last_attributed_rollout, signature)) return false;
     const account_id = reg.active_account_id orelse return false;
     registry.updateUsage(allocator, reg, account_id, latest.snapshot);
-    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
     snapshot_consumed = true;
+    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
     return true;
 }
 
