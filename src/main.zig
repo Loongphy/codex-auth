@@ -136,6 +136,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     registry.upsertAccount(allocator, &reg, record);
+    try registry.setActiveAccount(allocator, &reg, account_id);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
