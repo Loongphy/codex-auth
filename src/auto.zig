@@ -270,46 +270,14 @@ pub fn refreshActiveUsageWithApiFetcher(
 
 const ApiRefreshResult = enum { unavailable, unchanged, updated };
 
-fn rememberLatestRolloutSignature(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
-    const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => return err,
-    };
-    if (latest_usage == null) return false;
-
-    var latest = latest_usage.?;
-    defer latest.deinit(allocator);
-    const changed = !registry.rolloutSignaturesEqual(reg.last_attributed_rollout, .{
-        .path = latest.path,
-        .event_timestamp_ms = latest.event_timestamp_ms,
-    });
-    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
-    return changed;
-}
-
-fn rememberLatestRolloutSignatureIfActive(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
-    if (reg.active_account_id == null) return false;
-    return rememberLatestRolloutSignature(allocator, codex_home, reg);
-}
-
 fn refreshActiveUsageFromApi(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     api_fetcher: anytype,
 ) !ApiRefreshResult {
-    const latest_usage = api_fetcher(allocator, codex_home) catch {
-        if (try rememberLatestRolloutSignatureIfActive(allocator, codex_home, reg)) {
-            return .updated;
-        }
-        return .unavailable;
-    };
-    if (latest_usage == null) {
-        if (try rememberLatestRolloutSignatureIfActive(allocator, codex_home, reg)) {
-            return .updated;
-        }
-        return .unavailable;
-    }
+    const latest_usage = api_fetcher(allocator, codex_home) catch return .unavailable;
+    if (latest_usage == null) return .unavailable;
 
     var latest = latest_usage.?;
     var snapshot_consumed = false;
@@ -317,16 +285,10 @@ fn refreshActiveUsageFromApi(
 
     const account_id = reg.active_account_id orelse return .unchanged;
     const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return .unchanged;
-    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) {
-        if (try rememberLatestRolloutSignature(allocator, codex_home, reg)) {
-            return .updated;
-        }
-        return .unchanged;
-    }
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return .unchanged;
 
     registry.updateUsage(allocator, reg, account_id, latest);
     snapshot_consumed = true;
-    _ = try rememberLatestRolloutSignature(allocator, codex_home, reg);
     return .updated;
 }
 
@@ -352,11 +314,14 @@ fn refreshActiveUsageFromSessions(
         .path = latest.path,
         .event_timestamp_ms = latest.event_timestamp_ms,
     };
-    if (registry.rolloutSignaturesEqual(reg.last_attributed_rollout, signature)) return false;
     const account_id = reg.active_account_id orelse return false;
+    const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
+    if (latest.event_timestamp_ms < activated_at_ms) return false;
+    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return false;
     registry.updateUsage(allocator, reg, account_id, latest.snapshot);
     snapshot_consumed = true;
-    try registry.setLastAttributedRollout(allocator, reg, latest.path, latest.event_timestamp_ms);
+    try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest.path, latest.event_timestamp_ms);
     return true;
 }
 

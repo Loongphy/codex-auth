@@ -484,7 +484,6 @@ test "Scenario: Given api-backed switch with stale rollout when api later fails 
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
-    try std.testing.expect(reg.last_attributed_rollout != null);
 
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
@@ -565,7 +564,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     try std.testing.expectEqual(@as(f64, 48.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
-test "Scenario: Given api-only mode and api failure when refreshing usage then local usage stays untouched while rollout attribution advances" {
+test "Scenario: Given api-only mode and api failure when refreshing usage then local usage stays untouched and local rollout state is unchanged" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -584,15 +583,13 @@ test "Scenario: Given api-only mode and api failure when refreshing usage then l
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
-    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
-    try std.testing.expect(reg.last_attributed_rollout != null);
-    try std.testing.expectEqual(@as(i64, 1735689600000), reg.last_attributed_rollout.?.event_timestamp_ms);
-    try std.testing.expect(std.mem.endsWith(u8, reg.last_attributed_rollout.?.path, "sessions/run-1/rollout-a.jsonl"));
+    try std.testing.expect(reg.accounts.items[idx].last_local_rollout == null);
 }
 
-test "Scenario: Given api failure after recording rollout attribution when returning to local refresh then the stale rollout is not assigned to the new active account" {
+test "Scenario: Given api failure when returning to local refresh after switching accounts then the pre-switch rollout is not assigned to the new active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -612,8 +609,7 @@ test "Scenario: Given api failure after recording rollout attribution when retur
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
-    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
-    try std.testing.expect(reg.last_attributed_rollout != null);
+    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
 
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);

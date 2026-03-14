@@ -57,12 +57,13 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - The current binary supports all released schemas:
-  - `schema_version = 3` is the current account-id layout.
-  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
-- During the transition from the old field name, the current binary also accepts current-layout files that still use the legacy top-level key `version = 3`; it rewrites them once to `schema_version = 3`.
+  - `schema_version = 4` is the current account-id layout with active-account activation timestamps and per-account local rollout dedupe.
+  - `schema_version = 3` current-layout registries using the old global `last_attributed_rollout` field are auto-migrated to schema `4`.
+  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `4`.
+- During the transition from the old field name, the current binary also accepts current-layout files that still use the legacy top-level key `version = 3`; it rewrites them once to `schema_version = 4`.
 - Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
-- Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
+- Saving always rewrites `registry.json` into the current field set with `schema_version = 4`.
 - Unknown extra fields are still ignored on load and dropped on save, so additive compatibility is only guaranteed for schemas explicitly supported by the current binary.
 - See `docs/schema-migration.md` for the versioning policy and migration rules.
 
@@ -97,7 +98,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - file path: imports one auth/config file.
   - directory path: batch imports config files from that directory.
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
-- During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, and `last_attributed_rollout` are cleared and rebuilt from auth files.
+- During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, active-account activation time, and per-account local rollout dedupe state are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
 - If `~/.codex/accounts/` is missing during `--purge`, it is treated as an empty snapshot set and the command still attempts to import the current `~/.codex/auth.json`.
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
@@ -186,8 +187,10 @@ If background auto-switching is already active, threshold changes do not require
 When enabled:
 
 1. A background worker checks usage continuously or on a fixed schedule, depending on platform.
-2. It refreshes usage from the newest rollout file and assigns that snapshot to the current active account.
-   The worker remembers the last attributed rollout event signature `(path, event_timestamp_ms)` and will not reassign the same rollout event after an automatic switch.
+2. It refreshes usage for the current active account:
+   - in API mode, only from the ChatGPT usage API
+   - in local-only mode, only from the newest rollout file
+   In local-only mode, a rollout event is attributed only if its `event_timestamp_ms` is at or after the current active account's activation time. Each account also remembers its own last consumed local rollout signature so repeated `list`/daemon runs do not reconsume the same local event.
 3. If active-account remaining quota is below either threshold, it switches to the best alternative account without foreground CLI output:
    - `5h` remaining `< auto_switch.threshold_5h_percent` (default `10%`)
    - `weekly` remaining `< auto_switch.threshold_weekly_percent` (default `5%`)
@@ -232,13 +235,14 @@ Usage refresh is active-account-only and depends on `api.usage`:
 - The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
 - The rollout scanner reads only the newest rollout file. Within that file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
 - If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
+- Local-session refresh never uses a global rollout watermark. Instead it compares the rollout event timestamp against the current active account's activation time; rollout events older than that activation point are treated as stale and are not reassigned to the new active account.
+- Each account stores its own last consumed local rollout signature `(path, event_timestamp_ms)`, so repeated local refreshes for the same account do not reapply the same rollout event.
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
 - `list` and the auto-switch background worker use the same active-account refresh path. `switch` does not refresh usage before switching.
-- A successful API refresh also records the newest visible rollout event signature, when one exists, so an older local rollout line cannot be reassigned to a different account after a switch.
-- The rollout fallback persists the last attributed rollout event signature `(path, event_timestamp_ms)` in `registry.json` and skips that same event if the active account changes before a newer `token_count` event is written.
-- The rollout files do not expose a stable account identity, so `codex-auth` still cannot infer account ownership beyond attributing the newest local snapshot to the current active account.
+- API refresh does not mutate any local rollout attribution state.
+- The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):
 

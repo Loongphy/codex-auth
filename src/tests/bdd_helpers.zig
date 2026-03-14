@@ -76,9 +76,9 @@ pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
         .schema_version = registry.current_schema_version,
         .active_account_id = null,
+        .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
-        .last_attributed_rollout = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
 }
@@ -102,6 +102,7 @@ pub fn appendAccount(
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
+        .last_local_rollout = null,
     };
     try reg.accounts.append(allocator, rec);
 }

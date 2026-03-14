@@ -6,7 +6,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 3;
+pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
@@ -63,6 +63,7 @@ pub const AccountRecord = struct {
     last_used_at: ?i64,
     last_usage: ?RateLimitSnapshot,
     last_usage_at: ?i64,
+    last_local_rollout: ?RolloutSignature,
 };
 
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
@@ -74,9 +75,9 @@ pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
 pub const Registry = struct {
     schema_version: u32,
     active_account_id: ?[]u8,
+    active_account_activated_at_ms: ?i64,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
-    last_attributed_rollout: ?RolloutSignature,
     accounts: std.ArrayList(AccountRecord),
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
@@ -84,7 +85,6 @@ pub const Registry = struct {
             freeAccountRecord(allocator, rec);
         }
         if (self.active_account_id) |k| allocator.free(k);
-        if (self.last_attributed_rollout) |*sig| freeRolloutSignature(allocator, sig);
         self.accounts.deinit(allocator);
     }
 };
@@ -101,6 +101,7 @@ fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) vo
     allocator.free(rec.account_id);
     allocator.free(rec.email);
     allocator.free(rec.alias);
+    if (rec.last_local_rollout) |*sig| freeRolloutSignature(allocator, sig);
     if (rec.last_usage) |*u| {
         freeRateLimitSnapshot(allocator, u);
     }
@@ -129,26 +130,35 @@ pub fn cloneRolloutSignature(allocator: std.mem.Allocator, signature: RolloutSig
     };
 }
 
-pub fn setLastAttributedRollout(
+fn setRolloutSignature(
     allocator: std.mem.Allocator,
-    reg: *Registry,
+    target: *?RolloutSignature,
     path: []const u8,
     event_timestamp_ms: i64,
 ) !void {
-    if (reg.last_attributed_rollout) |*sig| {
+    if (target.*) |*sig| {
         if (sig.event_timestamp_ms == event_timestamp_ms and std.mem.eql(u8, sig.path, path)) {
             return;
         }
     }
     const new_path = try allocator.dupe(u8, path);
     errdefer allocator.free(new_path);
-    if (reg.last_attributed_rollout) |*sig| {
+    if (target.*) |*sig| {
         allocator.free(sig.path);
     }
-    reg.last_attributed_rollout = .{
+    target.* = .{
         .path = new_path,
         .event_timestamp_ms = event_timestamp_ms,
     };
+}
+
+pub fn setAccountLastLocalRollout(
+    allocator: std.mem.Allocator,
+    rec: *AccountRecord,
+    path: []const u8,
+    event_timestamp_ms: i64,
+) !void {
+    try setRolloutSignature(allocator, &rec.last_local_rollout, path, event_timestamp_ms);
 }
 
 pub fn rateLimitSnapshotsEqual(a: ?RateLimitSnapshot, b: ?RateLimitSnapshot) bool {
@@ -936,6 +946,7 @@ pub fn setActiveAccount(allocator: std.mem.Allocator, reg: *Registry, account_id
         allocator.free(k);
     }
     reg.active_account_id = try allocator.dupe(u8, account_id);
+    reg.active_account_activated_at_ms = std.time.milliTimestamp();
     const now = std.time.timestamp();
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_id, account_id)) {
@@ -1061,6 +1072,7 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         if (active_removed) {
             allocator.free(key);
             reg.active_account_id = null;
+            reg.active_account_activated_at_ms = null;
         }
     }
 
@@ -1169,6 +1181,7 @@ pub fn accountFromAuth(
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
+        .last_local_rollout = null,
     };
 }
 
@@ -1230,9 +1243,9 @@ fn defaultRegistry() Registry {
     return Registry{
         .schema_version = current_schema_version,
         .active_account_id = null,
+        .active_account_activated_at_ms = null,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
-        .last_attributed_rollout = null,
         .accounts = std.ArrayList(AccountRecord).empty,
     };
 }
@@ -1304,6 +1317,7 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         .last_used_at = readInt(obj.get("last_used_at")),
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
+        .last_local_rollout = null,
     };
     errdefer freeAccountRecord(allocator, &rec);
 
@@ -1321,6 +1335,9 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
     }
     if (obj.get("last_usage")) |u| {
         rec.last_usage = parseUsage(allocator, u);
+    }
+    if (obj.get("last_local_rollout")) |v| {
+        rec.last_local_rollout = parseRolloutSignature(allocator, v);
     }
     return rec;
 }
@@ -1411,6 +1428,7 @@ fn migrateLegacyRecord(
         .last_used_at = legacy.last_used_at,
         .last_usage = legacy.last_usage,
         .last_usage_at = legacy.last_usage_at,
+        .last_local_rollout = null,
     };
     legacy.last_usage = null;
     errdefer freeAccountRecord(allocator, &rec);
@@ -1456,6 +1474,9 @@ fn loadLegacyRegistryV2(
             .string => |s| reg.active_account_id = try allocator.dupe(u8, s),
             else => {},
         }
+    }
+    if (reg.active_account_id != null) {
+        reg.active_account_activated_at_ms = 0;
     }
     if (root_obj.get("active_email")) |v| {
         switch (v) {
@@ -1510,9 +1531,10 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
             else => {},
         }
     }
-
-    if (root_obj.get("last_attributed_rollout")) |v| {
-        reg.last_attributed_rollout = parseRolloutSignature(allocator, v);
+    if (root_obj.get("active_account_activated_at_ms")) |v| {
+        reg.active_account_activated_at_ms = readInt(v);
+    } else if (reg.active_account_id != null) {
+        reg.active_account_activated_at_ms = 0;
     }
 
     if (root_obj.get("accounts")) |v| {
@@ -1602,7 +1624,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const needs_rewrite = schema_version < current_schema_version or usesLegacyVersionField(root_obj);
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",
@@ -1637,9 +1659,9 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
     const out = RegistryOut{
         .schema_version = current_schema_version,
         .active_account_id = reg.active_account_id,
+        .active_account_activated_at_ms = reg.active_account_activated_at_ms,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
-        .last_attributed_rollout = reg.last_attributed_rollout,
         .accounts = reg.accounts.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -1659,9 +1681,9 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 const RegistryOut = struct {
     schema_version: u32,
     active_account_id: ?[]const u8,
+    active_account_activated_at_ms: ?i64,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
-    last_attributed_rollout: ?RolloutSignature,
     accounts: []const AccountRecord,
 };
 

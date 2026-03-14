@@ -200,12 +200,9 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "schema_version": 3,
+        \\  "schema_version": 4,
         \\  "active_account_id": "acc:stale@example.com",
-        \\  "last_attributed_rollout": {
-        \\    "path": "/tmp/sessions/run-1/rollout-a.jsonl",
-        \\    "event_timestamp_ms": 1735689600000
-        \\  },
+        \\  "active_account_activated_at_ms": 1735689600000,
         \\  "auto_switch": {
         \\    "enabled": true,
         \\    "threshold_5h_percent": 12,
@@ -249,7 +246,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expectEqual(@as(u8, 12), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 7), loaded.auto_switch.threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);
-    try std.testing.expect(loaded.last_attributed_rollout == null);
+    try std.testing.expect(loaded.active_account_activated_at_ms != null);
 
     const active_account_id = try accountIdForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_id);
@@ -265,10 +262,12 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[imported_idx].alias, "personal"));
     try std.testing.expect(loaded.accounts.items[imported_idx].last_usage == null);
     try std.testing.expect(loaded.accounts.items[imported_idx].last_usage_at == null);
+    try std.testing.expect(loaded.accounts.items[imported_idx].last_local_rollout == null);
 
     const active_idx = registry.findAccountIndexByAccountId(&loaded, active_account_id) orelse return error.TestExpectedEqual;
     try std.testing.expect(loaded.accounts.items[active_idx].last_usage == null);
     try std.testing.expect(loaded.accounts.items[active_idx].last_usage_at == null);
+    try std.testing.expect(loaded.accounts.items[active_idx].last_local_rollout == null);
 }
 
 test "Scenario: Given purge with newer schema registry when rebuilding then auto and api config are preserved" {
