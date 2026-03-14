@@ -1,6 +1,6 @@
 # Implementation Details (Local-Only)
 
-This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool reads and writes local files under `~/.codex` (or `CODEX_HOME`), and for ChatGPT-auth usage refresh it can call the ChatGPT usage endpoint for the current active account.
+This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool reads and writes local files under `~/.codex`, and for ChatGPT-auth usage refresh it can call the ChatGPT usage endpoint for the current active account.
 
 ## Packaging and Release
 
@@ -33,12 +33,11 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `~/.codex/accounts/backups/<backup label>/<timestamp>/...`
 - `~/.codex/sessions/...`
 
-`codex-auth` resolves `codex_home` in this order:
+`codex-auth` resolves `codex_home` from the real user home directory:
 
-1. `CODEX_HOME` (when set and non-empty)
-2. `HOME/.codex`
-3. `USERPROFILE/.codex` (Windows fallback)
-4. `HOMEDRIVE + HOMEPATH + "/.codex"` (Windows fallback)
+1. `HOME/.codex`
+2. `USERPROFILE/.codex` (Windows fallback)
+3. `HOMEDRIVE + HOMEPATH + "/.codex"` (Windows fallback)
 
 ## Testing Conventions (BDD Style on std.testing)
 
@@ -100,6 +99,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
 - During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, and `last_attributed_rollout` are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
+- If `~/.codex/accounts/` is missing during `--purge`, it is treated as an empty snapshot set and the command still attempts to import the current `~/.codex/auth.json`.
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
 - `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
 - `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
@@ -204,8 +204,7 @@ Service bootstrap is platform-specific:
 - macOS: `LaunchAgent`
 - Windows: user scheduled task running once per minute via a short `cmd.exe` task action that launches a wrapper script under the real user home
 
-Service install paths are resolved from the real user home directory, not from `CODEX_HOME`.
-The generated service definition also preserves the `CODEX_HOME` value that was active when `codex-auth config auto enable` was run.
+Service install paths are resolved from the real user home directory.
 The generated service definition also stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:
 
 - if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement

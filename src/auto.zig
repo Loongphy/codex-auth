@@ -12,6 +12,7 @@ const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const windows_wrapper_name = "codex-auth-autoswitch.cmd";
+const windows_task_trigger_interval = "PT1M";
 const lock_file_name = "auto-switch.lock";
 const poll_interval_ns = 60 * std.time.ns_per_s;
 pub const RuntimeState = enum { running, stopped, unknown };
@@ -286,14 +287,29 @@ fn rememberLatestRolloutSignature(allocator: std.mem.Allocator, codex_home: []co
     return changed;
 }
 
+fn rememberLatestRolloutSignatureIfActive(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
+    if (reg.active_account_id == null) return false;
+    return rememberLatestRolloutSignature(allocator, codex_home, reg);
+}
+
 fn refreshActiveUsageFromApi(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     api_fetcher: anytype,
 ) !ApiRefreshResult {
-    const latest_usage = api_fetcher(allocator, codex_home) catch return .unavailable;
-    if (latest_usage == null) return .unavailable;
+    const latest_usage = api_fetcher(allocator, codex_home) catch {
+        if (try rememberLatestRolloutSignatureIfActive(allocator, codex_home, reg)) {
+            return .updated;
+        }
+        return .unavailable;
+    };
+    if (latest_usage == null) {
+        if (try rememberLatestRolloutSignatureIfActive(allocator, codex_home, reg)) {
+            return .updated;
+        }
+        return .unavailable;
+    }
 
     var latest = latest_usage.?;
     var snapshot_consumed = false;
@@ -432,6 +448,18 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
 }
 
 fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+    try enableWithServiceHooks(allocator, codex_home, self_exe, installService, uninstallService);
+}
+
+pub fn enableWithServiceHooks(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    installer: anytype,
+    uninstaller: anytype,
+) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
@@ -441,10 +469,10 @@ fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         reg.auto_switch.enabled = false;
         registry.saveRegistry(allocator, codex_home, &reg) catch {};
     }
-
-    const self_exe = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(self_exe);
-    try installService(allocator, codex_home, self_exe);
+    // Service installation can partially succeed on some platforms, so clean up
+    // any managed artifacts before persisting the disabled rollback state.
+    errdefer uninstaller(allocator, codex_home) catch {};
+    try installer(allocator, codex_home, self_exe);
 }
 
 fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -687,16 +715,15 @@ fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
 }
 
 pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
+    _ = codex_home;
     const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --once", .{self_exe});
     defer allocator.free(exec);
-    const escaped_home = try escapeSystemdValue(allocator, codex_home);
-    defer allocator.free(escaped_home);
     const escaped_version = try escapeSystemdValue(allocator, version.app_version);
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch check\n\n[Service]\nType=oneshot\nEnvironment=\"CODEX_HOME={s}\"\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
-        .{ escaped_home, service_version_env_name, escaped_version, exec },
+        "[Unit]\nDescription=codex-auth auto-switch check\n\n[Service]\nType=oneshot\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
+        .{ service_version_env_name, escaped_version, exec },
     );
 }
 
@@ -709,16 +736,15 @@ pub fn linuxTimerText(allocator: std.mem.Allocator) ![]u8 {
 }
 
 pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
+    _ = codex_home;
     const exe = try escapeXml(allocator, self_exe);
     defer allocator.free(exe);
-    const home = try escapeXml(allocator, codex_home);
-    defer allocator.free(home);
     const current_version = try escapeXml(allocator, version.app_version);
     defer allocator.free(current_version);
     return try std.fmt.allocPrint(
         allocator,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>CODEX_HOME</key>\n    <string>{s}</string>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
-        .{ mac_label, exe, home, service_version_env_name, current_version },
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
+        .{ mac_label, exe, service_version_env_name, current_version },
     );
 }
 
@@ -727,16 +753,23 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, wrapper_path: []const u8)
 }
 
 pub fn windowsWrapperText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
+    _ = codex_home;
     const escaped_exe = try escapeBatchValue(allocator, self_exe);
     defer allocator.free(escaped_exe);
-    const escaped_home = try escapeBatchValue(allocator, codex_home);
-    defer allocator.free(escaped_home);
     const escaped_version = try escapeBatchValue(allocator, version.app_version);
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "@echo off\r\nsetlocal\r\nset \"CODEX_HOME={s}\"\r\nset \"{s}={s}\"\r\n\"{s}\" daemon --once\r\n",
-        .{ escaped_home, service_version_env_name, escaped_version, escaped_exe },
+        "@echo off\r\nsetlocal\r\nset \"{s}={s}\"\r\n\"{s}\" daemon --once\r\n",
+        .{ service_version_env_name, escaped_version, escaped_exe },
+    );
+}
+
+pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; Write-Output ($action.Execute + ' ' + $action.Arguments + '|TRIGGER:' + $interval)",
+        .{ windows_task_name, windows_task_name },
     );
 }
 
@@ -813,14 +846,16 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     defer allocator.free(wrapper_path);
     const expected_action = try windowsTaskAction(allocator, wrapper_path);
     defer allocator.free(expected_action);
+    const expected_fingerprint = try std.fmt.allocPrint(
+        allocator,
+        "{s}|TRIGGER:{s}",
+        .{ expected_action, windows_task_trigger_interval },
+    );
+    defer allocator.free(expected_fingerprint);
     const expected_wrapper = try windowsWrapperText(allocator, self_exe, codex_home);
     defer allocator.free(expected_wrapper);
     if (!(try fileEqualsBytes(allocator, wrapper_path, expected_wrapper))) return false;
-    const script = try std.fmt.allocPrint(
-        allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; Write-Output ($action.Execute + ' ' + $action.Arguments)",
-        .{windows_task_name},
-    );
+    const script = try windowsTaskMatchScript(allocator);
     defer allocator.free(script);
     const result = runCapture(allocator, &[_][]const u8{
         "powershell.exe",
@@ -834,7 +869,7 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_action),
+        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
         else => false,
     };
 }

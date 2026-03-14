@@ -38,6 +38,30 @@ fn fetchApiError(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapsh
     return error.TestApiUnavailable;
 }
 
+fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "partial-service-artifact" });
+}
+
+fn installServiceWithPartialArtifact(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    _: []const u8,
+) !void {
+    const artifact_path = try partialServiceArtifactPath(allocator, codex_home);
+    defer allocator.free(artifact_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = artifact_path, .data = "partial" });
+    return error.TestInstallFailed;
+}
+
+fn uninstallPartialServiceArtifact(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const artifact_path = try partialServiceArtifactPath(allocator, codex_home);
+    defer allocator.free(artifact_path);
+    std.fs.cwd().deleteFile(artifact_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
 test "Scenario: Given no-snapshot account when selecting auto candidate then it is treated as fresh quota" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -192,7 +216,6 @@ test "Scenario: Given linux service unit when rendering then oneshot daemon comm
 
     try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch check") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Type=oneshot") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_HOME=/tmp/custom-codex-home\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --once") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") == null);
@@ -210,13 +233,11 @@ test "Scenario: Given linux timer unit when rendering then it schedules the ones
     try std.testing.expect(std.mem.indexOf(u8, timer, "WantedBy=timers.target") != null);
 }
 
-test "Scenario: Given mac plist when rendering then CODEX_HOME environment is preserved" {
+test "Scenario: Given mac plist when rendering then it includes version metadata and daemon args" {
     const gpa = std.testing.allocator;
     const plist = try auto.macPlistText(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home");
     defer gpa.free(plist);
 
-    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_HOME</key>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>/tmp/custom-codex-home</string>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_AUTH_VERSION</key>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>daemon</string>") != null);
 }
@@ -232,14 +253,24 @@ test "Scenario: Given windows task action when rendering then it uses a short cm
     try std.testing.expect(action.len < 262);
 }
 
-test "Scenario: Given windows wrapper text when rendering then it preserves CODEX_HOME and launches the daemon" {
+test "Scenario: Given windows wrapper text when rendering then it launches the daemon with version metadata" {
     const gpa = std.testing.allocator;
     const wrapper = try auto.windowsWrapperText(gpa, "C:\\Program Files\\codex-auth.exe", "D:\\Codex Home");
     defer gpa.free(wrapper);
 
-    try std.testing.expect(std.mem.indexOf(u8, wrapper, "set \"CODEX_HOME=D:\\Codex Home\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "set \"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, wrapper, "\"C:\\Program Files\\codex-auth.exe\" daemon --once") != null);
+}
+
+test "Scenario: Given windows task match script when rendering then it validates both action and one-minute trigger" {
+    const gpa = std.testing.allocator;
+    const script = try auto.windowsTaskMatchScript(gpa);
+    defer gpa.free(script);
+
+    try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Repetition.Interval") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -251,6 +282,39 @@ test "Scenario: Given auto-switch enabled with stopped or stale service when rec
     try std.testing.expect(auto.shouldEnsureManagedService(true, .stopped, true));
     try std.testing.expect(auto.shouldEnsureManagedService(true, .running, false));
     try std.testing.expect(!auto.shouldEnsureManagedService(true, .running, true));
+}
+
+test "Scenario: Given partial service install failure when enabling auto-switch then registry and artifacts roll back" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    try std.testing.expectError(
+        error.TestInstallFailed,
+        auto.enableWithServiceHooks(
+            gpa,
+            codex_home,
+            "/tmp/codex-auth",
+            installServiceWithPartialArtifact,
+            uninstallPartialServiceArtifact,
+        ),
+    );
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(!loaded.auto_switch.enabled);
+
+    const artifact_path = try partialServiceArtifactPath(gpa, codex_home);
+    defer gpa.free(artifact_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(artifact_path, .{}));
 }
 
 test "Scenario: Given supported and unsupported OS tags when checking service support then only managed-service platforms reconcile" {
@@ -501,7 +565,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     try std.testing.expectEqual(@as(f64, 48.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
-test "Scenario: Given api-only mode and api failure when refreshing usage then local rollout fallback is skipped" {
+test "Scenario: Given api-only mode and api failure when refreshing usage then local usage stays untouched while rollout attribution advances" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -520,9 +584,45 @@ test "Scenario: Given api-only mode and api failure when refreshing usage then l
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
-    try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
+    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
+    try std.testing.expect(reg.last_attributed_rollout != null);
+    try std.testing.expectEqual(@as(i64, 1735689600000), reg.last_attributed_rollout.?.event_timestamp_ms);
+    try std.testing.expect(std.mem.endsWith(u8, reg.last_attributed_rollout.?.path, "sessions/run-1/rollout-a.jsonl"));
+}
+
+test "Scenario: Given api failure after recording rollout attribution when returning to local refresh then the stale rollout is not assigned to the new active account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+    try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
+    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    defer gpa.free(account_id_a);
+    try registry.setActiveAccount(gpa, &reg, account_id_a);
+
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
+
+    try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError));
+    try std.testing.expect(reg.last_attributed_rollout != null);
+
+    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    defer gpa.free(account_id_b);
+    try registry.setActiveAccount(gpa, &reg, account_id_b);
+    reg.api.usage = false;
+
+    try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
+    const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
 }
 
 test "Scenario: Given latest rollout file without usable rate limits when refreshing usage then stored usage is preserved" {

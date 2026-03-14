@@ -389,3 +389,24 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
     try std.testing.expect(loaded.accounts.items.len == 1);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "snap@example.com"));
 }
+
+test "Scenario: Given purge without accounts directory when rebuilding then current auth still restores the active account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const active_auth = try authJsonWithEmailPlan(gpa, "active@example.com", "team");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.accounts.items.len == 1);
+    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "active@example.com"));
+}

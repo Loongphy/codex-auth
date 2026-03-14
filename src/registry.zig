@@ -199,8 +199,6 @@ fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8
 }
 
 pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
-    if (try getNonEmptyEnvVarOwned(allocator, "CODEX_HOME")) |val| return val;
-
     const home = try resolveUserHome(allocator);
     defer allocator.free(home);
     return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
@@ -835,7 +833,10 @@ fn importAccountsSnapshotDirectory(
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return ImportSummary{},
+        else => return err,
+    };
     defer dir.close();
 
     var names = std.ArrayList([]u8).empty;
