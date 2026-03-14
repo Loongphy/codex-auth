@@ -84,3 +84,34 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
 }
+
+test "Scenario: Given newer registry schema when loading help config then default help settings are used" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 999,
+        \\  "auto_switch": {
+        \\    "enabled": true,
+        \\    "threshold_5h_percent": 1,
+        \\    "threshold_weekly_percent": 1
+        \\  },
+        \\  "api": {
+        \\    "usage": true
+        \\  },
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    const help_cfg = main_mod.loadHelpConfig(gpa, codex_home);
+    try std.testing.expectEqual(registry.defaultAutoSwitchConfig(), help_cfg.auto_switch);
+    try std.testing.expectEqual(registry.defaultApiConfig(), help_cfg.api);
+}

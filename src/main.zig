@@ -58,6 +58,25 @@ pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list;
 }
 
+pub const HelpConfig = struct {
+    auto_switch: registry.AutoSwitchConfig,
+    api: registry.ApiConfig,
+};
+
+pub fn loadHelpConfig(allocator: std.mem.Allocator, codex_home: []const u8) HelpConfig {
+    var reg = registry.loadRegistry(allocator, codex_home) catch {
+        return .{
+            .auto_switch = registry.defaultAutoSwitchConfig(),
+            .api = registry.defaultApiConfig(),
+        };
+    };
+    defer reg.deinit(allocator);
+    return .{
+        .auto_switch = reg.auto_switch,
+        .api = reg.api,
+    };
+}
+
 fn maybeRefreshForegroundUsage(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -216,17 +235,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
-        error.UnsupportedRegistryVersion => return err,
-        else => {
-            const auto_cfg = registry.defaultAutoSwitchConfig();
-            const api_cfg = registry.defaultApiConfig();
-            try cli.printHelp(&auto_cfg, &api_cfg);
-            return;
-        },
-    };
-    defer reg.deinit(allocator);
-    try cli.printHelp(&reg.auto_switch, &reg.api);
+    const help_cfg = loadHelpConfig(allocator, codex_home);
+    try cli.printHelp(&help_cfg.auto_switch, &help_cfg.api);
 }
 
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
