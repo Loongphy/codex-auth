@@ -47,16 +47,18 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
         if (obj.get("tokens")) |tokens_val| {
             switch (tokens_val) {
                 .object => |tobj| {
-                    const access_token = if (tobj.get("access_token")) |access_token_val| switch (access_token_val) {
+                    var access_token: ?[]u8 = null;
+                    defer if (access_token) |token| allocator.free(token);
+                    access_token = if (tobj.get("access_token")) |access_token_val| switch (access_token_val) {
                         .string => |s| if (s.len > 0) try allocator.dupe(u8, s) else null,
                         else => null,
                     } else null;
-                    errdefer if (access_token) |token| allocator.free(token);
-                    const token_account_id = if (tobj.get("account_id")) |account_id_val| switch (account_id_val) {
+                    var token_account_id: ?[]u8 = null;
+                    defer if (token_account_id) |id| allocator.free(id);
+                    token_account_id = if (tobj.get("account_id")) |account_id_val| switch (account_id_val) {
                         .string => |s| if (s.len > 0) try allocator.dupe(u8, s) else null,
                         else => null,
                     } else null;
-                    errdefer if (token_account_id) |id| allocator.free(id);
                     if (tobj.get("id_token")) |id_tok| {
                         switch (id_tok) {
                             .string => |jwt| {
@@ -66,10 +68,12 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
                                 defer payload_json.deinit();
                                 const claims = payload_json.value;
 
-                                var email: ?[]u8 = null;
                                 var jwt_account_id: ?[]u8 = null;
+                                defer if (jwt_account_id) |id| allocator.free(id);
                                 switch (claims) {
                                     .object => |cobj| {
+                                        var email: ?[]u8 = null;
+                                        defer if (email) |e| allocator.free(e);
                                         if (cobj.get("email")) |e| {
                                             switch (e) {
                                                 .string => |s| email = try normalizeEmailAlloc(allocator, s),
@@ -102,19 +106,23 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
                                             }
                                         }
 
-                                        errdefer if (jwt_account_id) |id| allocator.free(id);
                                         const account_id = token_account_id orelse return error.MissingAccountId;
                                         if (jwt_account_id == null) return error.MissingAccountId;
                                         if (!std.mem.eql(u8, account_id, jwt_account_id.?)) return error.AccountIdMismatch;
                                         allocator.free(jwt_account_id.?);
+                                        jwt_account_id = null;
 
-                                        return AuthInfo{
+                                        const info = AuthInfo{
                                             .email = email,
                                             .account_id = account_id,
                                             .access_token = access_token,
                                             .plan = plan,
                                             .auth_mode = .chatgpt,
                                         };
+                                        email = null;
+                                        token_account_id = null;
+                                        access_token = null;
+                                        return info;
                                     },
                                     else => {},
                                 }

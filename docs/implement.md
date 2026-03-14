@@ -57,12 +57,12 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - The current binary supports all released schemas:
-  - `schema_version = 4` is the current account-id layout.
-  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `4`.
-- During the transition from the old field name, the current binary also accepts current-layout files that still use the legacy top-level key `version = 3`; it rewrites them once to `schema_version = 4`.
+  - `schema_version = 3` is the current account-id layout.
+  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
+- During the transition from the old field name, the current binary also accepts current-layout files that still use the legacy top-level key `version = 3`; it rewrites them once to `schema_version = 3`.
 - Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
-- Saving always rewrites `registry.json` into the current field set with `schema_version = 4`.
+- Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
 - Unknown extra fields are still ignored on load and dropped on save, so additive compatibility is only guaranteed for schemas explicitly supported by the current binary.
 - See `docs/schema-migration.md` for the versioning policy and migration rules.
 
