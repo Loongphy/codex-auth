@@ -271,6 +271,95 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.accounts.items[active_idx].last_usage_at == null);
 }
 
+test "Scenario: Given purge with newer schema registry when rebuilding then auto and api config are preserved" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.makePath("imports");
+
+    const imported_auth = try authJsonWithEmailPlan(gpa, "personal@example.com", "plus");
+    defer gpa.free(imported_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/personal.json", .data = imported_auth });
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 999,
+        \\  "auto_switch": {
+        \\    "enabled": true,
+        \\    "threshold_5h_percent": 18,
+        \\    "threshold_weekly_percent": 6
+        \\  },
+        \\  "api": {
+        \\    "usage": true
+        \\  },
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
+    defer gpa.free(import_path);
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expectEqual(@as(u8, 18), loaded.auto_switch.threshold_5h_percent);
+    try std.testing.expectEqual(@as(u8, 6), loaded.auto_switch.threshold_weekly_percent);
+    try std.testing.expect(loaded.api.usage);
+}
+
+test "Scenario: Given purge with malformed registry when rebuilding then auto and api config are recovered best effort" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.makePath("imports");
+
+    const imported_auth = try authJsonWithEmailPlan(gpa, "personal@example.com", "plus");
+    defer gpa.free(imported_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/personal.json", .data = imported_auth });
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "auto_switch": {
+        \\    "enabled": true,
+        \\    "threshold_5h_percent": 13,
+        \\    "threshold_weekly_percent": 4
+        \\  },
+        \\  "api": {
+        \\    "usage": true
+        \\  },
+        \\  "accounts": [oops]
+        \\}
+        ,
+    });
+
+    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
+    defer gpa.free(import_path);
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expectEqual(@as(u8, 13), loaded.auto_switch.threshold_5h_percent);
+    try std.testing.expectEqual(@as(u8, 4), loaded.auto_switch.threshold_weekly_percent);
+    try std.testing.expect(loaded.api.usage);
+}
+
 test "Scenario: Given purge without path when rebuilding then it scans account snapshots and ignores registry metadata files" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
