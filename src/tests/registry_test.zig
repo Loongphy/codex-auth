@@ -105,10 +105,16 @@ fn expectBackupNameFormat(name: []const u8, prefix: []const u8) !void {
         }
     }
 
-    try std.testing.expect(stamp.len == 15);
-    try std.testing.expect(stamp[8] == '-');
-    for (stamp, 0..) |ch, i| {
-        if (i == 8) continue;
+    if (stamp.len == 15 and stamp[8] == '-') {
+        for (stamp, 0..) |ch, i| {
+            if (i == 8) continue;
+            try std.testing.expect(std.ascii.isDigit(ch));
+        }
+        return;
+    }
+
+    try std.testing.expect(stamp.len > 0);
+    for (stamp) |ch| {
         try std.testing.expect(std.ascii.isDigit(ch));
     }
 }

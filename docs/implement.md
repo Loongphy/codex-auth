@@ -30,7 +30,6 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `~/.codex/accounts/<account file key>.auth.json`
 - `~/.codex/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
 - `~/.codex/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
-- `~/.codex/accounts/backups/<backup label>/<timestamp>/...`
 - `~/.codex/sessions/...`
 
 `codex-auth` resolves `codex_home` from the real user home directory:
@@ -220,6 +219,7 @@ The generated service definition also stamps the current `codex-auth` version. O
 - `auth.json` backups are created only when the contents change.
 - `registry.json` backups are created only when the contents change.
 - Both are stored under `~/.codex/accounts/` using the local-time filename format `*.bak.YYYYMMDD-hhmmss` (with `.N` added only on same-second collisions) and capped at the most recent 5 files.
+- If local-time conversion is unavailable, backup filenames fall back to `*.bak.<unix-seconds>`.
 - `codex-auth clean` is whitelist-based for the current schema and only affects `~/.codex/accounts/`: it keeps only live snapshot files referenced by the registry and deletes other stale entries under `accounts/`.
 
 

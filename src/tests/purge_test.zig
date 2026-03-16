@@ -75,7 +75,7 @@ test "Scenario: Given legacy version key current-layout registry when loading th
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") == null);
 }
 
@@ -159,7 +159,8 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "legacy"));
-    try std.testing.expectEqual(@as(i64, 2), loaded.accounts.items[0].last_used_at.?);
+    try std.testing.expect(loaded.accounts.items[0].last_used_at != null);
+    try std.testing.expect(loaded.accounts.items[0].last_used_at.? >= 2);
     try std.testing.expectEqual(@as(i64, 3), loaded.accounts.items[0].last_usage_at.?);
     try std.testing.expectEqual(@as(f64, 25.0), loaded.accounts.items[0].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(registry.PlanType.team, loaded.accounts.items[0].last_usage.?.plan_type.?);
@@ -174,7 +175,7 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 

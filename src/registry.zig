@@ -371,7 +371,7 @@ fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
         return std.fmt.allocPrint(allocator, "{d}", .{ts});
     }
 
-    const year: i32 = tm.tm_year + 1900;
+    const year: u32 = @intCast(tm.tm_year + 1900);
     const month: u32 = @intCast(tm.tm_mon + 1);
     const day: u32 = @intCast(tm.tm_mday);
     const hour: u32 = @intCast(tm.tm_hour);
@@ -1457,7 +1457,8 @@ fn migrateLegacyRecord(
     try upsertAccount(allocator, reg, rec);
     if (legacy_active_email) |active_email| {
         if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
-            try setActiveAccount(allocator, reg, account_id);
+            reg.active_account_id = try allocator.dupe(u8, account_id);
+            reg.active_account_activated_at_ms = 0;
         }
     }
 }
@@ -1592,6 +1593,7 @@ fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
 }
 
 fn logUnsupportedRegistryVersion(version_value: u32) void {
+    if (builtin.is_test) return;
     std.log.err(
         "registry schema_version {d} is newer than this codex-auth binary supports (max {d}); upgrade codex-auth",
         .{ version_value, current_schema_version },

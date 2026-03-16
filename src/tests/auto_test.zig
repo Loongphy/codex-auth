@@ -481,6 +481,8 @@ test "Scenario: Given api-backed switch with stale rollout when api later fails 
     const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
     try registry.setActiveAccount(gpa, &reg, account_id_a);
+    reg.active_account_activated_at_ms = 0;
+    reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
@@ -510,6 +512,7 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
     try registry.setActiveAccount(gpa, &reg, account_id_a);
+    reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
@@ -521,6 +524,8 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
     try registry.setActiveAccount(gpa, &reg, account_id_b);
+    reg.active_account_activated_at_ms = 1735689600001;
+    reg.active_account_activated_at_ms = 1735689630000;
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
     try std.testing.expect(reg.accounts.items[b_idx].last_usage == null);
 }
@@ -541,6 +546,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
     try registry.setActiveAccount(gpa, &reg, account_id_a);
+    reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
@@ -548,6 +554,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
     try registry.setActiveAccount(gpa, &reg, account_id_b);
+    reg.active_account_activated_at_ms = 1735689630000;
 
     const next_rollout_line = "{" ++
         "\"timestamp\":\"2025-01-01T00:01:00Z\"," ++
