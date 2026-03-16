@@ -113,9 +113,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
     cli.warnDeprecatedLoginAlias(opts);
-    if (opts.launch_codex_login) {
-        try cli.runCodexLogin(allocator);
-    }
+    try cli.runCodexLogin(allocator);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 

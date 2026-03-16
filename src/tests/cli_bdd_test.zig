@@ -9,30 +9,14 @@ fn isHelp(cmd: cli.Command) bool {
     };
 }
 
-test "Scenario: Given login with skip when parsing then embedded login is disabled" {
+test "Scenario: Given add alias when parsing then legacy invocation is preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "login", "--skip" };
+    const args = [_][:0]const u8{ "codex-auth", "add" };
     var cmd = try cli.parseArgs(gpa, &args);
     defer cli.freeCommand(gpa, &cmd);
 
     switch (cmd) {
         .login => |opts| {
-            try std.testing.expect(!opts.launch_codex_login);
-            try std.testing.expect(opts.invocation == .login);
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given add alias with skip when parsing then legacy invocation is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "add", "--skip" };
-    var cmd = try cli.parseArgs(gpa, &args);
-    defer cli.freeCommand(gpa, &cmd);
-
-    switch (cmd) {
-        .login => |opts| {
-            try std.testing.expect(!opts.launch_codex_login);
             try std.testing.expect(opts.invocation == .add_alias);
         },
         else => return error.TestExpectedEqual,
@@ -135,7 +119,6 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "[--skip]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
@@ -406,6 +389,18 @@ test "Scenario: Given deprecated add alias warning when rendering then colorized
     try std.testing.expect(std.mem.indexOf(u8, warning, "\x1b[1;31mwarning:\x1b[0m") != null);
     try std.testing.expect(std.mem.indexOf(u8, warning, "\x1b[1m`add`\x1b[0m") != null);
     try std.testing.expect(std.mem.indexOf(u8, warning, "\x1b[1;32m`codex-auth login`\x1b[0m") != null);
+}
+
+test "Scenario: Given codex login launch failure when rendering then manual retry hint is included" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeCodexLoginLaunchFailureHintTo(&aw.writer, "AccessDenied", false);
+
+    const hint = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, hint, "failed to start embedded `codex login` (AccessDenied).") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Run `codex login` manually, then run `codex-auth list`.") != null);
 }
 
 test "Scenario: Given switch with positional query when parsing then non-interactive target is preserved" {

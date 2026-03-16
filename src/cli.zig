@@ -31,10 +31,7 @@ pub const OutputFormat = enum { table, json, csv, compact };
 
 pub const ListOptions = struct {};
 pub const LoginInvocation = enum { login, add_alias };
-pub const LoginOptions = struct {
-    launch_codex_login: bool,
-    invocation: LoginInvocation,
-};
+pub const LoginOptions = struct { invocation: LoginInvocation };
 pub const ImportOptions = struct {
     auth_path: ?[]u8,
     alias: ?[]u8,
@@ -89,21 +86,9 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
     }
 
     if (std.mem.eql(u8, cmd, "login") or std.mem.eql(u8, cmd, "add")) {
+        if (args.len > 2) return Command{ .help = {} };
         const invocation: LoginInvocation = if (std.mem.eql(u8, cmd, "add")) .add_alias else .login;
-        var launch_codex_login = true;
-        var i: usize = 2;
-        while (i < args.len) : (i += 1) {
-            const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--skip")) {
-                launch_codex_login = false;
-            } else {
-                return Command{ .help = {} };
-            }
-        }
-        return Command{ .login = .{
-            .launch_codex_login = launch_codex_login,
-            .invocation = invocation,
-        } };
+        return Command{ .login = .{ .invocation = invocation } };
     }
 
     if (std.mem.eql(u8, cmd, "import")) {
@@ -302,9 +287,6 @@ pub fn writeHelp(
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
-    const login_details = [_]HelpEntry{
-        .{ .name = "[--skip]", .description = "Read the currently logged-in account" },
-    };
     const import_details = [_]HelpEntry{
         .{ .name = "<path>", .description = "Import one file or batch import a directory" },
         .{ .name = "--alias <alias>", .description = "Set alias for single-file import" },
@@ -321,7 +303,6 @@ pub fn writeHelp(
     const child_indent: usize = parent_indent + 4;
     const child_description_extra: usize = 4;
     const command_col = helpTargetColumn(&commands, parent_indent);
-    const login_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&login_details, child_indent));
     const import_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&import_details, child_indent));
     const config_detail_col = @max(command_col + child_description_extra, helpTargetColumn(&config_details, child_indent));
 
@@ -329,7 +310,6 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[1].name, commands[1].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[2].name, commands[2].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[3].name, commands[3].description);
-    try writeHelpEntry(out, use_color, child_indent, login_detail_col, login_details[0].name, login_details[0].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[4].name, commands[4].description);
     try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[0].name, import_details[0].description);
     try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[1].name, import_details[1].description);
@@ -408,8 +388,7 @@ pub fn printVersion() !void {
 
 pub fn warnDeprecatedLoginAlias(opts: LoginOptions) void {
     if (opts.invocation != .add_alias) return;
-    const replacement = if (opts.launch_codex_login) "codex-auth login" else "codex-auth login --skip";
-    writeDeprecatedLoginAliasWarning(replacement, stderrColorEnabled()) catch {};
+    writeDeprecatedLoginAliasWarning("codex-auth login", stderrColorEnabled()) catch {};
 }
 
 fn writeDeprecatedLoginAliasWarning(replacement: []const u8, use_color: bool) !void {
@@ -435,13 +414,32 @@ pub fn writeDeprecatedLoginAliasWarningTo(out: *std.Io.Writer, replacement: []co
     try out.writeAll("\n");
 }
 
+fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    try writeCodexLoginLaunchFailureHintTo(out, err_name, use_color);
+    try out.flush();
+}
+
+pub fn writeCodexLoginLaunchFailureHintTo(out: *std.Io.Writer, err_name: []const u8, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.bold_red);
+    try out.writeAll("error:");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.print(" failed to start embedded `codex login` ({s}).\n", .{err_name});
+    try out.writeAll("Run `codex login` manually, then run `codex-auth list`.\n");
+}
+
 pub fn runCodexLogin(allocator: std.mem.Allocator) !void {
     _ = allocator;
     var child = std.process.Child.init(&[_][]const u8{ "codex", "login" }, std.heap.page_allocator);
     child.stdin_behavior = .Inherit;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    _ = try child.spawnAndWait();
+    _ = child.spawnAndWait() catch |err| {
+        writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
+        return err;
+    };
 }
 
 pub fn selectAccount(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {

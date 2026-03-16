@@ -1,5 +1,13 @@
 # Codex Auth
 
+> [!IMPORTANT]
+> Usage refresh can now read from the ChatGPT usage API with `codex-auth config api enable`.
+> This was added because local rollout/session files now often contain empty `rate_limits`, which makes local-only refresh unreliable.
+> The API mode is still off by default in the current release for a safer rollout, but it is planned to become the default in `v0.3`.
+>
+> Current default: `codex-auth config api disable`
+> Planned `v0.3` default: `codex-auth config api enable`
+
 ![command list](https://github.com/user-attachments/assets/7bbd463b-c5ed-4b90-b1f6-8dfbf21a8944)
 
 `codex-auth` is a command-line tool for switching Codex accounts.
@@ -50,7 +58,7 @@ irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.p
 
 ```shell
 codex-auth list # list all accounts
-codex-auth login [--skip] # login and add current account (runs `codex login` by default)
+codex-auth login # run `codex login`, then add the current account
 codex-auth switch [<email>] # switch active account (interactive or partial/fragment match)
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
 codex-auth import --purge [<path>] # rebuild registry.json from auth files for the current version
@@ -61,7 +69,7 @@ codex-auth config auto --5h <percent> [--weekly <percent>] # configure auto-swit
 codex-auth config api enable|disable # choose API-only or local-sessions-only usage refresh
 ```
 
-Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`. The old `--no-login` flag has been replaced by `--skip`.
+Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
 ### Examples
 
