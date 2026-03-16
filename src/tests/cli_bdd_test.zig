@@ -66,6 +66,15 @@ test "Scenario: Given import unknown short purge flag when parsing then help com
     try std.testing.expect(isHelp(cmd));
 }
 
+test "Scenario: Given import alias without path when parsing then help command is returned without leaks" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "--alias", "personal" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
 test "Scenario: Given list with extra args when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "list", "unexpected" };

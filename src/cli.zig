@@ -117,7 +117,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                 auth_path = try allocator.dupe(u8, arg);
             }
         }
-        if (auth_path == null and !purge) return Command{ .help = {} };
+        if (auth_path == null and !purge) {
+            if (alias) |a| allocator.free(a);
+            return Command{ .help = {} };
+        }
         return Command{ .import_auth = .{
             .auth_path = auth_path,
             .alias = alias,
