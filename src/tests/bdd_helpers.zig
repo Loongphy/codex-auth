@@ -92,10 +92,14 @@ pub fn appendAccount(
 ) !void {
     const account_id = try accountIdForEmailAlloc(allocator, email);
     errdefer allocator.free(account_id);
+    const owned_email = try allocator.dupe(u8, email);
+    errdefer allocator.free(owned_email);
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
     const rec = registry.AccountRecord{
         .account_id = account_id,
-        .email = try allocator.dupe(u8, email),
-        .alias = try allocator.dupe(u8, alias),
+        .email = owned_email,
+        .alias = owned_alias,
         .plan = plan,
         .auth_mode = .chatgpt,
         .created_at = std.time.timestamp(),

@@ -88,8 +88,13 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
             registry.freeRateLimitSnapshot(allocator, &prev.snapshot);
         }
 
+        const path = allocator.dupe(u8, candidate.path) catch |err| {
+            var failed = parsed;
+            registry.freeRateLimitSnapshot(allocator, &failed.snapshot);
+            return err;
+        };
         best = .{
-            .path = try allocator.dupe(u8, candidate.path),
+            .path = path,
             .mtime = candidate.mtime,
             .event_timestamp_ms = parsed.event_timestamp_ms,
             .snapshot = parsed.snapshot,

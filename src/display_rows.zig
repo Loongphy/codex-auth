@@ -41,6 +41,7 @@ pub fn buildDisplayRows(
     std.sort.insertion(usize, ordered, SortContext{ .reg = reg }, lessThanByDisplayOrder);
 
     var row_list = std.ArrayList(DisplayRow).empty;
+    errdefer for (row_list.items) |*row| row.deinit(allocator);
     defer row_list.deinit(allocator);
     var selectable = std.ArrayList(usize).empty;
     defer selectable.deinit(allocator);
@@ -56,6 +57,7 @@ pub fn buildDisplayRows(
             const account_idx = group_indices[0];
             const rec = &reg.accounts.items[account_idx];
             const cell = try singletonAccountCellAlloc(allocator, rec);
+            errdefer allocator.free(cell);
             try row_list.append(allocator, .{
                 .account_index = account_idx,
                 .account_cell = cell,
@@ -66,15 +68,18 @@ pub fn buildDisplayRows(
             continue;
         }
 
+        const header_cell = try allocator.dupe(u8, email);
+        errdefer allocator.free(header_cell);
         try row_list.append(allocator, .{
             .account_index = null,
-            .account_cell = try allocator.dupe(u8, email),
+            .account_cell = header_cell,
             .depth = 0,
             .is_active = false,
         });
 
         for (group_indices) |account_idx| {
             const cell = try groupedAccountCellAlloc(allocator, reg, group_indices, account_idx);
+            errdefer allocator.free(cell);
             try row_list.append(allocator, .{
                 .account_index = account_idx,
                 .account_cell = cell,
@@ -85,8 +90,14 @@ pub fn buildDisplayRows(
         }
     }
 
+    const rows = try row_list.toOwnedSlice(allocator);
+    errdefer {
+        for (rows) |*row| row.deinit(allocator);
+        allocator.free(rows);
+    }
+
     return .{
-        .rows = try row_list.toOwnedSlice(allocator),
+        .rows = rows,
         .selectable_row_indices = try selectable.toOwnedSlice(allocator),
     };
 }

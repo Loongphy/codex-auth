@@ -345,7 +345,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 

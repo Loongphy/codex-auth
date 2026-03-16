@@ -53,10 +53,12 @@ test "scan latest usage chooses newest valid event from the most recent rollout 
         "rollout-j.jsonl",
     };
     var paths: [names.len][]u8 = undefined;
-    defer for (paths) |path| gpa.free(path);
+    var initialized: usize = 0;
+    defer for (paths[0..initialized]) |path| gpa.free(path);
 
     for (names, 0..) |name, idx| {
         paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+        initialized = idx + 1;
     }
 
     const newer_valid = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
@@ -113,10 +115,12 @@ test "scan latest usage ignores rollout files beyond the most recent file" {
         "rollout-k.jsonl",
     };
     var paths: [names.len][]u8 = undefined;
-    defer for (paths) |path| gpa.free(path);
+    var initialized: usize = 0;
+    defer for (paths[0..initialized]) |path| gpa.free(path);
 
     for (names, 0..) |name, idx| {
         paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+        initialized = idx + 1;
     }
 
     const older_valid = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);

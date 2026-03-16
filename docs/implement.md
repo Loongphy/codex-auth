@@ -41,7 +41,9 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## Testing Conventions (BDD Style on std.testing)
 
-- The project keeps using Zig native tests (`zig build test`) for CI and local checks.
+- The project keeps using Zig native tests rooted at `src/main.zig`.
+- The current `zig build test` step compiles the test binary but does not execute it.
+- To run the tests locally, use `zig test src/main.zig -lc`.
 - BDD scenarios are expressed in Zig `test` blocks with descriptive names like:
   - `Scenario: Given ... when ... then ...`
 - Reusable Given/When/Then setup logic should live in test-only helper/context code under `src/tests/` (for example `*_bdd_test.zig` plus helper modules).

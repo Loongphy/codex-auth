@@ -225,9 +225,10 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
     errdefer if (home_path) |v| allocator.free(v);
 
     if (home_drive != null and home_path != null) {
-        defer allocator.free(home_drive.?);
-        defer allocator.free(home_path.?);
-        return try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
+        const joined = try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
+        allocator.free(home_drive.?);
+        allocator.free(home_path.?);
+        return joined;
     }
 
     return error.EnvironmentVariableNotFound;
@@ -794,7 +795,7 @@ fn importAuthFile(
     try copyFile(auth_file, dest);
 
     const record = try accountFromAuth(allocator, alias, &info);
-    upsertAccount(allocator, reg, record);
+    try upsertAccount(allocator, reg, record);
 }
 
 fn importAuthDirectory(
@@ -926,7 +927,7 @@ fn syncCurrentAuthBestEffort(
         reg.accounts.items[idx].auth_mode = info.auth_mode;
     } else {
         const record = try accountFromAuth(allocator, "", &info);
-        upsertAccount(allocator, reg, record);
+        try upsertAccount(allocator, reg, record);
     }
 
     try setActiveAccount(allocator, reg, account_id);
@@ -1012,7 +1013,7 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         try copyFile(auth_path, dest);
 
         const record = try accountFromAuth(allocator, "", &info);
-        upsertAccount(allocator, reg, record);
+        try upsertAccount(allocator, reg, record);
         try setActiveAccount(allocator, reg, account_id);
         return true;
     }
@@ -1027,8 +1028,9 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
     }
 
     if (!std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
+        const new_email = try allocator.dupe(u8, email);
         allocator.free(reg.accounts.items[idx].email);
-        reg.accounts.items[idx].email = try allocator.dupe(u8, email);
+        reg.accounts.items[idx].email = new_email;
         changed = true;
     }
     if (reg.accounts.items[idx].plan != info.plan) {
@@ -1171,10 +1173,16 @@ pub fn accountFromAuth(
 ) !AccountRecord {
     const email = info.email orelse return error.MissingEmail;
     const account_id = info.account_id orelse return error.MissingAccountId;
+    const owned_account_id = try allocator.dupe(u8, account_id);
+    errdefer allocator.free(owned_account_id);
+    const owned_email = try allocator.dupe(u8, email);
+    errdefer allocator.free(owned_email);
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
     return AccountRecord{
-        .account_id = try allocator.dupe(u8, account_id),
-        .email = try allocator.dupe(u8, email),
-        .alias = try allocator.dupe(u8, alias),
+        .account_id = owned_account_id,
+        .email = owned_email,
+        .alias = owned_alias,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
         .created_at = std.time.timestamp(),
@@ -1212,14 +1220,14 @@ fn mergeAccountRecord(allocator: std.mem.Allocator, dest: *AccountRecord, incomi
     freeAccountRecord(allocator, &incoming);
 }
 
-pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: AccountRecord) void {
+pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: AccountRecord) !void {
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_id, record.account_id)) {
             mergeAccountRecord(allocator, rec, record);
             return;
         }
     }
-    reg.accounts.append(allocator, record) catch {};
+    try reg.accounts.append(allocator, record);
 }
 
 const LegacyAccountRecord = struct {
@@ -1446,7 +1454,7 @@ fn migrateLegacyRecord(
         std.fs.cwd().deleteFile(old_legacy_path) catch {};
     }
 
-    upsertAccount(allocator, reg, rec);
+    try upsertAccount(allocator, reg, rec);
     if (legacy_active_email) |active_email| {
         if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
             try setActiveAccount(allocator, reg, account_id);
@@ -1495,7 +1503,7 @@ fn loadLegacyRegistryV2(
                     };
                     if (obj.get("account_id") != null) {
                         const rec = try parseAccountRecord(allocator, obj);
-                        upsertAccount(allocator, &reg, rec);
+                        try upsertAccount(allocator, &reg, rec);
                     } else {
                         try legacy_accounts.append(allocator, try parseLegacyAccountRecord(allocator, obj));
                     }
@@ -1546,7 +1554,7 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
                         else => continue,
                     };
                     const rec = try parseAccountRecord(allocator, obj);
-                    upsertAccount(allocator, &reg, rec);
+                    try upsertAccount(allocator, &reg, rec);
                 }
             },
             else => {},
@@ -1897,7 +1905,7 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
     try copyFile(auth_path, dest);
 
     const record = try accountFromAuth(allocator, "", &info);
-    upsertAccount(allocator, reg, record);
+    try upsertAccount(allocator, reg, record);
     try setActiveAccount(allocator, reg, account_id);
     return true;
 }

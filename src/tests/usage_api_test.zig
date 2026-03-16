@@ -44,7 +44,6 @@ test "parse usage api response maps live usage windows and plan" {
         \\    "balance": null,
         \\    "approx_local_messages": null,
         \\    "approx_cloud_messages": null
-        \\    }
         \\  },
         \\  "promo": null
         \\}
