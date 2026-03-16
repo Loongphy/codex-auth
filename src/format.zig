@@ -54,7 +54,8 @@ fn printAccountsTable(reg: *registry.Registry) !void {
     defer display.deinit(std.heap.page_allocator);
 
     for (display.rows) |row| {
-        widths[0] = @max(widths[0], row.account_cell.len);
+        const indent: usize = @as(usize, row.depth) * 2;
+        widths[0] = @max(widths[0], row.account_cell.len + indent);
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = planDisplay(&rec, "-");
@@ -120,7 +121,9 @@ fn printAccountsTable(reg: *registry.Registry) !void {
             defer std.heap.page_allocator.free(rate_week_str);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last);
-            const account_cell = try truncateAlloc(row.account_cell, widths[0]);
+            const indent: usize = @as(usize, row.depth) * 2;
+            const indent_to_print: usize = @min(indent, widths[0]);
+            const account_cell = try truncateAlloc(row.account_cell, widths[0] - indent_to_print);
             defer std.heap.page_allocator.free(account_cell);
             const plan_cell = try truncateAlloc(plan, widths[1]);
             defer std.heap.page_allocator.free(plan_cell);
@@ -138,7 +141,8 @@ fn printAccountsTable(reg: *registry.Registry) !void {
                 }
             }
             try out.writeAll(if (row.is_active) "* " else "  ");
-            try writePadded(out, account_cell, widths[0]);
+            try writeRepeat(out, ' ', indent_to_print);
+            try writePadded(out, account_cell, widths[0] - indent_to_print);
             try out.writeAll("  ");
             try writePadded(out, plan_cell, widths[1]);
             try out.writeAll("  ");
