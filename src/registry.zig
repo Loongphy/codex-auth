@@ -920,13 +920,15 @@ fn syncCurrentAuthBestEffort(
     if (existing_idx) |idx| {
         const email = info.email.?;
         if (!std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
+            const new_email = try allocator.dupe(u8, email);
             allocator.free(reg.accounts.items[idx].email);
-            reg.accounts.items[idx].email = try allocator.dupe(u8, email);
+            reg.accounts.items[idx].email = new_email;
         }
         reg.accounts.items[idx].plan = info.plan;
         reg.accounts.items[idx].auth_mode = info.auth_mode;
     } else {
-        const record = try accountFromAuth(allocator, "", &info);
+        var record = try accountFromAuth(allocator, "", &info);
+        errdefer freeAccountRecord(allocator, &record);
         try upsertAccount(allocator, reg, record);
     }
 

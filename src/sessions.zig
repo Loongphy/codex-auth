@@ -53,8 +53,10 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
         if (entry.kind != .file) continue;
         if (!isRolloutFile(entry.path)) continue;
         const stat = try dir.statFile(entry.path);
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
+        errdefer allocator.free(path);
         try candidates.append(allocator, .{
-            .path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path }),
+            .path = path,
             .mtime = @intCast(stat.mtime),
         });
     }
