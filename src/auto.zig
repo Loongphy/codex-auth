@@ -428,6 +428,13 @@ fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try enableWithServiceHooks(allocator, codex_home, self_exe, installService, uninstallService);
 }
 
+fn ensureAutoSwitchCanEnable(allocator: std.mem.Allocator) !void {
+    if (builtin.os.tag == .linux and !linuxUserSystemdAvailable(allocator)) {
+        std.log.err("cannot enable auto-switch: systemd --user is unavailable", .{});
+        return error.CommandFailed;
+    }
+}
+
 pub fn enableWithServiceHooks(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -435,6 +442,26 @@ pub fn enableWithServiceHooks(
     installer: anytype,
     uninstaller: anytype,
 ) !void {
+    try enableWithServiceHooksAndPreflight(
+        allocator,
+        codex_home,
+        self_exe,
+        installer,
+        uninstaller,
+        ensureAutoSwitchCanEnable,
+    );
+}
+
+pub fn enableWithServiceHooksAndPreflight(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    installer: anytype,
+    uninstaller: anytype,
+    preflight: anytype,
+) !void {
+    try preflight(allocator);
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 

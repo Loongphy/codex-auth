@@ -62,6 +62,12 @@ fn uninstallPartialServiceArtifact(allocator: std.mem.Allocator, codex_home: []c
     };
 }
 
+fn preflightFailure(_: std.mem.Allocator) !void {
+    return error.TestPreflightFailed;
+}
+
+fn preflightSuccess(_: std.mem.Allocator) !void {}
+
 test "Scenario: Given no-snapshot account when selecting auto candidate then it is treated as fresh quota" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -291,12 +297,47 @@ test "Scenario: Given partial service install failure when enabling auto-switch 
 
     try std.testing.expectError(
         error.TestInstallFailed,
-        auto.enableWithServiceHooks(
+        auto.enableWithServiceHooksAndPreflight(
             gpa,
             codex_home,
             "/tmp/codex-auth",
             installServiceWithPartialArtifact,
             uninstallPartialServiceArtifact,
+            preflightSuccess,
+        ),
+    );
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(!loaded.auto_switch.enabled);
+
+    const artifact_path = try partialServiceArtifactPath(gpa, codex_home);
+    defer gpa.free(artifact_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(artifact_path, .{}));
+}
+
+test "Scenario: Given preflight failure when enabling auto-switch then registry is unchanged and installer is skipped" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    try std.testing.expectError(
+        error.TestPreflightFailed,
+        auto.enableWithServiceHooksAndPreflight(
+            gpa,
+            codex_home,
+            "/tmp/codex-auth",
+            installServiceWithPartialArtifact,
+            uninstallPartialServiceArtifact,
+            preflightFailure,
         ),
     );
 

@@ -299,6 +299,14 @@ pub const CleanSummary = struct {
     stale_snapshot_files_removed: usize = 0,
 };
 
+fn fileExists(path: []const u8) !bool {
+    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
+}
+
 fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
     const cwd = std.fs.cwd();
     var file = cwd.openFile(path, .{}) catch |err| {
@@ -497,6 +505,8 @@ fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
 pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8) !CleanSummary {
     const dir = try backupDir(allocator, codex_home);
     defer allocator.free(dir);
+    const reg_path = try registryPath(allocator, codex_home);
+    defer allocator.free(reg_path);
 
     var cwd = std.fs.cwd();
     var dir_handle = cwd.openDir(dir, .{}) catch |err| switch (err) {
@@ -514,10 +524,15 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     const auth_after = try countBackupsByBaseName(allocator, dir, "auth.json");
     const registry_after = try countBackupsByBaseName(allocator, dir, "registry.json");
 
-    var reg = loadRegistry(allocator, codex_home) catch |err| switch (err) {
-        error.FileNotFound => defaultRegistry(),
-        else => return err,
-    };
+    if (!(try fileExists(reg_path))) {
+        return .{
+            .auth_backups_removed = if (auth_before >= auth_after) auth_before - auth_after else 0,
+            .registry_backups_removed = if (registry_before >= registry_after) registry_before - registry_after else 0,
+            .stale_snapshot_files_removed = 0,
+        };
+    }
+
+    var reg = try loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
     var stale_snapshot_files_removed: usize = 0;

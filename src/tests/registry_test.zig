@@ -613,6 +613,52 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     preserved_backup.close();
 }
 
+test "clean preserves account snapshots when registry is missing" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    const keep_record = try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 1);
+    try reg.accounts.append(gpa, keep_record);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const keep_account_key = try accountKeyForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_key);
+    const keep_abs_path = try registry.accountAuthPath(gpa, codex_home, keep_account_key);
+    defer gpa.free(keep_abs_path);
+    const keep_rel_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", std.fs.path.basename(keep_abs_path) });
+    defer gpa.free(keep_rel_path);
+
+    const recover_account_key = try accountKeyForEmailAlloc(gpa, "recover@example.com");
+    defer gpa.free(recover_account_key);
+    const recover_abs_path = try registry.accountAuthPath(gpa, codex_home, recover_account_key);
+    defer gpa.free(recover_abs_path);
+    const recover_rel_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", std.fs.path.basename(recover_abs_path) });
+    defer gpa.free(recover_rel_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = keep_rel_path, .data = "keep" });
+    try tmp.dir.writeFile(.{ .sub_path = recover_rel_path, .data = "recover" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.1", .data = "a1" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.1", .data = "r1" });
+    try tmp.dir.deleteFile("accounts/registry.json");
+
+    const summary = try registry.cleanAccountsBackups(gpa, codex_home);
+    try std.testing.expect(summary.auth_backups_removed == 1);
+    try std.testing.expect(summary.registry_backups_removed == 1);
+    try std.testing.expect(summary.stale_snapshot_files_removed == 0);
+
+    var keep_file = try tmp.dir.openFile(keep_rel_path, .{});
+    keep_file.close();
+    var recover_file = try tmp.dir.openFile(recover_rel_path, .{});
+    recover_file.close();
+}
+
 test "import auth path with single file keeps explicit alias" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

@@ -226,6 +226,7 @@ The generated Linux/macOS service definition stamps the current `codex-auth` ver
 
 - if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
 - if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
+- On Linux/WSL, `config auto enable` also requires a working `systemd --user` session; if it is unavailable, the command fails before changing `registry.json`.
 
 ## Backups
 
@@ -234,6 +235,7 @@ The generated Linux/macOS service definition stamps the current `codex-auth` ver
 - Both are stored under `~/.codex/accounts/` using the local-time filename format `*.bak.YYYYMMDD-hhmmss` (with `.N` added only on same-second collisions) and capped at the most recent 5 files.
 - If local-time conversion is unavailable, backup filenames fall back to `*.bak.<unix-seconds>`.
 - `codex-auth clean` is whitelist-based for the current schema and only affects `~/.codex/accounts/`: it keeps only live snapshot files referenced by the registry and deletes other stale entries under `accounts/`.
+- If `accounts/registry.json` is missing, `codex-auth clean` still prunes backup files but skips stale snapshot deletion so recovery snapshots remain available for `import --purge` or manual repair.
 
 
 ## Usage and Rate Limits
