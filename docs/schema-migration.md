@@ -31,12 +31,13 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - `active_email`
   - Email-based account identity
 - `schema_version = 3`
-  - Account-id-based account snapshots
+  - Record-key-based account snapshots
   - `active_account_id`
   - `active_account_activated_at_ms`
   - Per-account `last_local_rollout`
   - Current `auto_switch` block
   - Current top-level `api` block
+  - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
 
 ## When To Bump `schema_version`
 

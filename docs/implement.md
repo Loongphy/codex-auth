@@ -63,9 +63,9 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - The current binary supports all released schemas:
-  - `schema_version = 3` is the current account-id layout with active-account activation timestamps and per-account local rollout dedupe.
+  - `schema_version = 3` is the current layout with record-keyed snapshots, active-account activation timestamps, and per-account local rollout dedupe.
   - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
-- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or that still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized `schema_version = 3` format.
+- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized `schema_version = 3` format.
 - Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
 - Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
@@ -74,14 +74,17 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## Account Identity
 
-`account_id` is the unique key for a ChatGPT account snapshot.
+`codex-auth` now separates the user identity from the ChatGPT workspace/account context.
 
-- `account_id` is read from `tokens.account_id`.
-- The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must also exist and match `tokens.account_id`.
-- The auth snapshot file key is derived from `account_id`:
-  - filename-safe IDs keep the raw `account_id`
+- `tokens.account_id` is the raw ChatGPT workspace/account context ID used for API calls. In the registry it is stored as `chatgpt_account_id`.
+- The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must exist and match `tokens.account_id`.
+- `chatgpt_user_id` is read from the JWT auth claims (`chatgpt_user_id`, falling back to `user_id`).
+- The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`.
+- The registry field still named `account_id` stores this local `record_key`, not the raw ChatGPT workspace/account ID.
+- The auth snapshot file key is derived from `record_key`:
+  - filename-safe IDs keep the raw `record_key`
   - other IDs are base64url-encoded before writing `accounts/<account file key>.auth.json`
-- Email is still normalized to lowercase, but it is now a display/grouping field instead of the unique key.
+- Email is normalized to lowercase, but it is only a display/grouping field instead of the unique key.
 
 ## Auth Parsing
 
@@ -93,8 +96,9 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - `tokens.account_id`
   - `tokens.id_token`
   - JWT `https://api.openai.com/auth.chatgpt_account_id`
-- The CLI decodes the JWT and reads `email`, `chatgpt_account_id`, and `chatgpt_plan_type`.
+- The CLI decodes the JWT and reads `email`, `chatgpt_account_id`, `chatgpt_user_id` (or fallback `user_id`), and `chatgpt_plan_type`.
 - If `account_id` is missing or mismatched between token fields and JWT claims, import/login fails. Existing-registry foreground/background sync treats that auth as unsyncable and skips it.
+- If `chatgpt_user_id` is missing, import/login fails. Existing-registry foreground/background sync treats that auth as unsyncable and skips it.
 - If plan is missing, it remains blank in the registry. If email is missing, the account is not imported/synced.
 
 ## Import Behavior
@@ -104,10 +108,11 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
   - directory path: batch imports config files from that directory.
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
 - During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, active-account activation time, and per-account local rollout dedupe state are cleared and rebuilt from auth files.
-- When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans only direct child account snapshot files (`*.auth.json`).
+- When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans direct child auth files from that directory: current account snapshots (`*.auth.json`) plus `auth.json.bak.*` backups.
 - If `~/.codex/accounts/` is missing during `--purge`, it is treated as an empty snapshot set and the command still attempts to import the current `~/.codex/auth.json`.
-- `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account becomes `active_account_id`.
-- `--purge` only rewrites `registry.json`; it does not delete old snapshot files or backups.
+- `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account's `record_key` becomes `active_account_id`.
+- `--purge` rebuilds `registry.json` and rewrites imported snapshots into the current `accounts/<account file key>.auth.json` naming/layout for each auth file it can parse successfully.
+- `--purge` does not delete old snapshot files or backups, so stale pre-migration snapshot filenames may still remain until cleaned up separately.
 - `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
 - Directory import scans only direct child files with a `.json` suffix (non-recursive), imports valid auth files, and skips invalid/malformed entries.
 - Only `import` can set account `alias` (via `--alias` on single-file import).
@@ -121,20 +126,21 @@ Each command (`list`, `switch`, `remove`) runs `syncActiveAccountFromAuth` befor
 The sync flow is:
 
 1. Read `~/.codex/auth.json` and parse email/plan/auth mode.
-2. Match by **account_id** against the registry.
-3. If an `account_id` match is found:
+2. Match by **record_key** (`chatgpt_user_id + "::" + chatgpt_account_id`) against the registry.
+3. If a `record_key` match is found:
    - Set that account as active.
    - Update the stored email/plan/auth mode from the current auth.
+   - Update the stored `chatgpt_account_id` and `chatgpt_user_id` fields from the current auth.
    - Overwrite `accounts/<account file key>.auth.json` with the current `auth.json` if content differs.
-4. If no `account_id` match is found:
+4. If no `record_key` match is found:
    - Create a **new** account record for that auth snapshot.
    - Import the current `auth.json` into `accounts/<account file key>.auth.json`.
 
-If `auth.json` has no email, no `account_id`, or cannot be parsed, existing-registry sync is skipped and the foreground command/daemon continues using the registry state already on disk. The empty-registry auto-import path still requires a parseable auth file.
+If `auth.json` has no email, no `tokens.account_id`, no `chatgpt_user_id`, or cannot be parsed, existing-registry sync is skipped and the foreground command/daemon continues using the registry state already on disk. The empty-registry auto-import path still requires a parseable auth file.
 
 Important limits:
 
-- Foreground commands sync `auth.json` strictly by `account_id`; there is no alternate key or “active” heuristic.
+- Foreground commands sync `auth.json` strictly by `record_key`; there is no alternate key or “active” heuristic.
 - When background auto-switching is enabled, a background worker keeps checking rollout usage and can switch accounts without a foreground `codex-auth` command.
 
 ## Switching Accounts
@@ -155,7 +161,7 @@ When switching:
 
 1. `auth.json` is backed up if its contents would change.
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
-3. The registry’s `active_account_id` is updated.
+3. The registry’s `active_account_id` is updated to that account’s `record_key`.
 
 The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
@@ -234,7 +240,7 @@ Usage refresh is active-account-only and depends on `api.usage`:
 1. If `api.usage = true`, try only the ChatGPT usage API with the current active `~/.codex/auth.json`.
 2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
 
-- ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <tokens.account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
+- ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <chatgpt_account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
 - API refresh only updates the current active account. Other accounts keep their stored historical snapshots until they become active.
 - API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
 - In API-only mode, API failures do not overwrite the stored usage snapshot and do not fall back to local rollout files.
@@ -250,6 +256,12 @@ Usage refresh is active-account-only and depends on `api.usage`:
 - `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.
+
+Current registry/account field roles:
+
+- `account_id`: local `record_key`, used for registry identity, snapshot filenames, switching, and `active_account_id`
+- `chatgpt_account_id`: raw ChatGPT workspace/account context ID from `tokens.account_id`, used for usage API requests
+- `chatgpt_user_id`: user identity component from the JWT, used to build `record_key`
 
 Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_count` line):
 

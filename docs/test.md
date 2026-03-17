@@ -18,7 +18,7 @@ All examples below assume:
 - Always copy the fixture into a dedicated test root such as `D:\test\case-1` or `D:\test\case-2`.
 - For isolated tests, set both `HOME` and `USERPROFILE` to the test root.
 - Set `CODEX_AUTH_SKIP_SERVICE_RECONCILE=1` during manual foreground tests so extra service reconciliation does not add noise.
-- Do not hardcode the shape of `account_id`. It may be a UUID or a value such as `acc:user@example.com`. The code preserves whatever is in `tokens.account_id` when it is valid.
+- Do not hardcode the shape of `account_id`. In real auth files it is typically a UUID-like ChatGPT workspace/account ID. The code preserves whatever is in `tokens.account_id` when it is valid.
 
 Recommended session setup:
 
@@ -80,9 +80,9 @@ This scenario is accepted when all of the following are true:
 
 - `list` exits with code `0`.
 - `list` creates `accounts/registry.json`.
-- `list` creates exactly one `accounts/*.auth.json` snapshot keyed by the imported `account_id`.
+- `list` creates exactly one `accounts/*.auth.json` snapshot keyed by the imported `record_key`.
 - `registry.json` is written in the current layout with `schema_version = 3`.
-- `active_account_id` matches the `tokens.account_id` from `auth.json`.
+- `active_account_id` matches the imported `record_key` from `auth.json`.
 - `switch <email-fragment>` exits with code `0`.
 - `config api enable` exits with code `0`, and `status` shows `usage: api`.
 - `config api disable` exits with code `0`, and `status` shows `usage: local`.

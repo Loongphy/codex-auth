@@ -15,9 +15,9 @@ pub fn fetchActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?
 
     if (info.auth_mode != .chatgpt) return null;
     const access_token = info.access_token orelse return null;
-    const account_id = info.account_id orelse return null;
+    const chatgpt_account_id = info.chatgpt_account_id orelse return null;
 
-    return try fetchUsageForToken(allocator, default_usage_endpoint, access_token, account_id);
+    return try fetchUsageForToken(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
 }
 
 pub fn fetchUsageForToken(

@@ -11,9 +11,11 @@ fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 test "parse auth info from jwt" {
     const gpa = std.testing.allocator;
+    const chatgpt_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
+    const chatgpt_user_id = "user-ESYgcy2QkOGZc0NoxSlFCeVT";
 
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acc:user@example.com\",\"chatgpt_plan_type\":\"pro\"}}";
+    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\",\"chatgpt_user_id\":\"user-ESYgcy2QkOGZc0NoxSlFCeVT\",\"user_id\":\"user-ESYgcy2QkOGZc0NoxSlFCeVT\",\"chatgpt_plan_type\":\"pro\"}}";
 
     const h64 = try b64url(gpa, header);
     defer gpa.free(h64);
@@ -24,8 +26,8 @@ test "parse auth info from jwt" {
     defer gpa.free(jwt);
 
     const json = try std.fmt.allocPrint(gpa,
-        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"acc:user@example.com\",\"id_token\":\"{s}\"}}}}",
-        .{jwt},
+        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ chatgpt_account_id, jwt },
     );
     defer gpa.free(json);
 
@@ -41,8 +43,14 @@ test "parse auth info from jwt" {
     defer info.deinit(gpa);
     try std.testing.expect(info.email != null);
     try std.testing.expect(std.mem.eql(u8, info.email.?, "user@example.com"));
-    try std.testing.expect(info.account_id != null);
-    try std.testing.expect(std.mem.eql(u8, info.account_id.?, "acc:user@example.com"));
+    try std.testing.expect(info.chatgpt_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.chatgpt_account_id.?, chatgpt_account_id));
+    try std.testing.expect(info.chatgpt_user_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.chatgpt_user_id.?, chatgpt_user_id));
+    try std.testing.expect(info.record_key != null);
+    const expected_record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    defer gpa.free(expected_record_key);
+    try std.testing.expect(std.mem.eql(u8, info.record_key.?, expected_record_key));
     try std.testing.expect(info.access_token != null);
     try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-user@example.com"));
 }
@@ -67,7 +75,7 @@ test "parse auth info does not leak duplicated tokens when id token is missing" 
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{
         .sub_path = "auth.json",
-        .data = "{\"tokens\":{\"access_token\":\"access-user@example.com\",\"account_id\":\"acc:user@example.com\"}}",
+        .data = "{\"tokens\":{\"access_token\":\"access-user@example.com\",\"account_id\":\"67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\"}}",
     });
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
@@ -77,16 +85,17 @@ test "parse auth info does not leak duplicated tokens when id token is missing" 
     const info = try auth.parseAuthInfo(gpa, auth_path);
     defer info.deinit(gpa);
     try std.testing.expect(info.email == null);
-    try std.testing.expect(info.account_id == null);
+    try std.testing.expect(info.chatgpt_account_id == null);
     try std.testing.expect(info.access_token == null);
     try std.testing.expect(info.auth_mode == .chatgpt);
 }
 
 test "parse auth info frees allocations on account mismatch" {
     const gpa = std.testing.allocator;
+    const token_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
 
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"acc:other@example.com\",\"chatgpt_plan_type\":\"pro\"}}";
+    const payload = "{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{\"chatgpt_account_id\":\"518a44d9-ba75-4bad-87e5-ae9377042960\",\"chatgpt_user_id\":\"user-ESYgcy2QkOGZc0NoxSlFCeVT\",\"user_id\":\"user-ESYgcy2QkOGZc0NoxSlFCeVT\",\"chatgpt_plan_type\":\"pro\"}}";
 
     const h64 = try b64url(gpa, header);
     defer gpa.free(h64);
@@ -97,8 +106,8 @@ test "parse auth info frees allocations on account mismatch" {
     defer gpa.free(jwt);
 
     const json = try std.fmt.allocPrint(gpa,
-        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"acc:user@example.com\",\"id_token\":\"{s}\"}}}}",
-        .{jwt},
+        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ token_account_id, jwt },
     );
     defer gpa.free(json);
 

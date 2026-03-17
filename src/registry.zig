@@ -55,6 +55,8 @@ pub const ApiConfig = struct {
 
 pub const AccountRecord = struct {
     account_id: []u8,
+    chatgpt_account_id: []u8,
+    chatgpt_user_id: []u8,
     email: []u8,
     alias: []u8,
     plan: ?PlanType,
@@ -99,6 +101,8 @@ pub fn defaultApiConfig() ApiConfig {
 
 fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) void {
     allocator.free(rec.account_id);
+    allocator.free(rec.chatgpt_account_id);
+    allocator.free(rec.chatgpt_user_id);
     allocator.free(rec.email);
     allocator.free(rec.alias);
     if (rec.last_local_rollout) |*sig| freeRolloutSignature(allocator, sig);
@@ -240,10 +244,10 @@ fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     return buf;
 }
 
-fn accountIdNeedsFilenameEncoding(account_id: []const u8) bool {
-    if (account_id.len == 0) return true;
-    if (std.mem.eql(u8, account_id, ".") or std.mem.eql(u8, account_id, "..")) return true;
-    for (account_id) |ch| {
+fn keyNeedsFilenameEncoding(key: []const u8) bool {
+    if (key.len == 0) return true;
+    if (std.mem.eql(u8, key, ".") or std.mem.eql(u8, key, "..")) return true;
+    for (key) |ch| {
         switch (ch) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => {},
             else => return true,
@@ -252,21 +256,21 @@ fn accountIdNeedsFilenameEncoding(account_id: []const u8) bool {
     return false;
 }
 
-fn accountFileKey(allocator: std.mem.Allocator, account_id: []const u8) ![]u8 {
-    if (accountIdNeedsFilenameEncoding(account_id)) {
-        return encodedFileKey(allocator, account_id);
+fn accountFileKey(allocator: std.mem.Allocator, account_key: []const u8) ![]u8 {
+    if (keyNeedsFilenameEncoding(account_key)) {
+        return encodedFileKey(allocator, account_key);
     }
-    return allocator.dupe(u8, account_id);
+    return allocator.dupe(u8, account_key);
 }
 
-fn accountSnapshotFileName(allocator: std.mem.Allocator, account_id: []const u8) ![]u8 {
-    const key = try accountFileKey(allocator, account_id);
+fn accountSnapshotFileName(allocator: std.mem.Allocator, account_key: []const u8) ![]u8 {
+    const key = try accountFileKey(allocator, account_key);
     defer allocator.free(key);
     return try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
 }
 
-pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_id: []const u8) ![]u8 {
-    const filename = try accountSnapshotFileName(allocator, account_id);
+pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
+    const filename = try accountSnapshotFileName(allocator, account_key);
     defer allocator.free(filename);
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
@@ -457,12 +461,19 @@ fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_na
     return count;
 }
 
-fn resolveExistingAccountAuthPath(
+fn resolveStrictAccountAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     account_id: []const u8,
 ) ![]u8 {
-    return accountAuthPath(allocator, codex_home, account_id);
+    const path = try accountAuthPath(allocator, codex_home, account_id);
+    if (std.fs.cwd().openFile(path, .{})) |file| {
+        file.close();
+        return path;
+    } else |err| {
+        allocator.free(path);
+        return err;
+    }
 }
 
 fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
@@ -780,11 +791,11 @@ fn importAuthFile(
     const info = try @import("auth.zig").parseAuthInfo(allocator, auth_file);
     defer info.deinit(allocator);
     _ = info.email orelse return error.MissingEmail;
-    const account_id = info.account_id orelse return error.MissingAccountId;
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
     const alias = explicit_alias orelse "";
 
-    const dest = try accountAuthPath(allocator, codex_home, account_id);
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
     try ensureAccountsDir(allocator, codex_home);
@@ -855,7 +866,7 @@ fn importAccountsSnapshotDirectory(
     var it = dir.iterate();
     while (try it.next()) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
-        if (!isAccountSnapshotFile(entry.name)) continue;
+        if (!isPurgeImportAuthFile(entry.name)) continue;
         try names.append(allocator, try allocator.dupe(u8, entry.name));
     }
 
@@ -879,9 +890,9 @@ fn isImportConfigFile(name: []const u8) bool {
     return std.mem.endsWith(u8, name, ".json");
 }
 
-fn isAccountSnapshotFile(name: []const u8) bool {
-    return std.mem.endsWith(u8, name, ".auth.json") and
-        !std.mem.startsWith(u8, name, "auth.json.bak.");
+fn isPurgeImportAuthFile(name: []const u8) bool {
+    return std.mem.endsWith(u8, name, ".auth.json") or
+        std.mem.startsWith(u8, name, "auth.json.bak.");
 }
 
 fn importFileNameLessThan(_: void, a: []u8, b: []u8) bool {
@@ -905,10 +916,10 @@ fn syncCurrentAuthBestEffort(
     const info = @import("auth.zig").parseAuthInfo(allocator, auth_path) catch return false;
     defer info.deinit(allocator);
     _ = info.email orelse return false;
-    const account_id = info.account_id orelse return false;
+    const record_key = info.record_key orelse return false;
 
-    const existing_idx = findAccountIndexByAccountId(reg, account_id);
-    const dest = try accountAuthPath(allocator, codex_home, account_id);
+    const existing_idx = findAccountIndexByAccountId(reg, record_key);
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
     try ensureAccountsDir(allocator, codex_home);
     try copyFile(auth_path, dest);
@@ -920,6 +931,20 @@ fn syncCurrentAuthBestEffort(
             allocator.free(reg.accounts.items[idx].email);
             reg.accounts.items[idx].email = new_email;
         }
+        if (info.chatgpt_account_id) |chatgpt_account_id| {
+            if (!std.mem.eql(u8, reg.accounts.items[idx].chatgpt_account_id, chatgpt_account_id)) {
+                const new_chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id);
+                allocator.free(reg.accounts.items[idx].chatgpt_account_id);
+                reg.accounts.items[idx].chatgpt_account_id = new_chatgpt_account_id;
+            }
+        }
+        if (info.chatgpt_user_id) |chatgpt_user_id| {
+            if (!std.mem.eql(u8, reg.accounts.items[idx].chatgpt_user_id, chatgpt_user_id)) {
+                const new_chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id);
+                allocator.free(reg.accounts.items[idx].chatgpt_user_id);
+                reg.accounts.items[idx].chatgpt_user_id = new_chatgpt_user_id;
+            }
+        }
         reg.accounts.items[idx].plan = info.plan;
         reg.accounts.items[idx].auth_mode = info.auth_mode;
     } else {
@@ -928,7 +953,7 @@ fn syncCurrentAuthBestEffort(
         try upsertAccount(allocator, reg, record);
     }
 
-    try setActiveAccount(allocator, reg, account_id);
+    try setActiveAccount(allocator, reg, record_key);
     return true;
 }
 
@@ -997,14 +1022,14 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         std.log.warn("auth.json missing email; skipping sync", .{});
         return false;
     };
-    const account_id = info.account_id orelse {
-        std.log.warn("auth.json missing account_id; skipping sync", .{});
+    const record_key = info.record_key orelse {
+        std.log.warn("auth.json missing record_key; skipping sync", .{});
         return false;
     };
 
-    const matched_index = findAccountIndexByAccountId(reg, account_id);
+    const matched_index = findAccountIndexByAccountId(reg, record_key);
     if (matched_index == null) {
-        const dest = try accountAuthPath(allocator, codex_home, account_id);
+        const dest = try accountAuthPath(allocator, codex_home, record_key);
         defer allocator.free(dest);
 
         try ensureAccountsDir(allocator, codex_home);
@@ -1012,7 +1037,7 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
 
         const record = try accountFromAuth(allocator, "", &info);
         try upsertAccount(allocator, reg, record);
-        try setActiveAccount(allocator, reg, account_id);
+        try setActiveAccount(allocator, reg, record_key);
         return true;
     }
 
@@ -1153,7 +1178,8 @@ pub fn activateAccountById(
     reg: *Registry,
     account_id: []const u8,
 ) !void {
-    const src = try resolveExistingAccountAuthPath(allocator, codex_home, account_id);
+    _ = findAccountIndexByAccountId(reg, account_id) orelse return error.AccountNotFound;
+    const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_id);
     defer allocator.free(src);
 
     const dest = try activeAuthPath(allocator, codex_home);
@@ -1170,15 +1196,23 @@ pub fn accountFromAuth(
     info: *const @import("auth.zig").AuthInfo,
 ) !AccountRecord {
     const email = info.email orelse return error.MissingEmail;
-    const account_id = info.account_id orelse return error.MissingAccountId;
-    const owned_account_id = try allocator.dupe(u8, account_id);
-    errdefer allocator.free(owned_account_id);
+    const chatgpt_account_id = info.chatgpt_account_id orelse return error.MissingAccountId;
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
+    const chatgpt_user_id = info.chatgpt_user_id orelse return error.MissingChatgptUserId;
+    const owned_record_key = try allocator.dupe(u8, record_key);
+    errdefer allocator.free(owned_record_key);
+    const owned_chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id);
+    errdefer allocator.free(owned_chatgpt_account_id);
+    const owned_chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id);
+    errdefer allocator.free(owned_chatgpt_user_id);
     const owned_email = try allocator.dupe(u8, email);
     errdefer allocator.free(owned_email);
     const owned_alias = try allocator.dupe(u8, alias);
     errdefer allocator.free(owned_alias);
     return AccountRecord{
-        .account_id = owned_account_id,
+        .account_id = owned_record_key,
+        .chatgpt_account_id = owned_chatgpt_account_id,
+        .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,
         .alias = owned_alias,
         .plan = info.plan,
@@ -1315,6 +1349,14 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
     };
     var rec = AccountRecord{
         .account_id = try allocator.dupe(u8, account_id),
+        .chatgpt_account_id = switch (obj.get("chatgpt_account_id") orelse return error.MissingChatgptAccountId) {
+            .string => |s| try allocator.dupe(u8, s),
+            else => return error.MissingChatgptAccountId,
+        },
+        .chatgpt_user_id = switch (obj.get("chatgpt_user_id") orelse return error.MissingChatgptUserId) {
+            .string => |s| try allocator.dupe(u8, s),
+            else => return error.MissingChatgptUserId,
+        },
         .email = try normalizeEmailAlloc(allocator, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = null,
@@ -1421,11 +1463,13 @@ fn migrateLegacyRecord(
     const info = try @import("auth.zig").parseAuthInfo(allocator, legacy_path);
     defer info.deinit(allocator);
     const email = info.email orelse return error.MissingEmail;
-    const account_id = info.account_id orelse return error.MissingAccountId;
+    const chatgpt_account_id = info.chatgpt_account_id orelse return error.MissingAccountId;
     if (!std.mem.eql(u8, email, legacy.email)) return error.EmailMismatch;
 
     var rec = AccountRecord{
-        .account_id = try allocator.dupe(u8, account_id),
+        .account_id = try allocator.dupe(u8, info.record_key orelse return error.MissingChatgptUserId),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, info.chatgpt_user_id orelse return error.MissingChatgptUserId),
         .email = try allocator.dupe(u8, legacy.email),
         .alias = try allocator.dupe(u8, legacy.alias),
         .plan = info.plan orelse legacy.plan,
@@ -1439,7 +1483,7 @@ fn migrateLegacyRecord(
     legacy.last_usage = null;
     errdefer freeAccountRecord(allocator, &rec);
 
-    const new_path = try accountAuthPath(allocator, codex_home, account_id);
+    const new_path = try accountAuthPath(allocator, codex_home, rec.account_id);
     defer allocator.free(new_path);
     try ensureAccountsDir(allocator, codex_home);
     if (!(try filesEqual(allocator, legacy_path, new_path))) {
@@ -1455,7 +1499,7 @@ fn migrateLegacyRecord(
     try upsertAccount(allocator, reg, rec);
     if (legacy_active_email) |active_email| {
         if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
-            reg.active_account_id = try allocator.dupe(u8, account_id);
+            reg.active_account_id = try allocator.dupe(u8, rec.account_id);
             reg.active_account_activated_at_ms = 0;
         }
     }
@@ -1879,29 +1923,35 @@ fn parseThresholdPercent(v: std.json.Value) ?u8 {
 
 pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
     for (reg.accounts.items) |*rec| {
-        const path = try resolveExistingAccountAuthPath(allocator, codex_home, rec.account_id);
+        const path = resolveStrictAccountAuthPath(allocator, codex_home, rec.account_id) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
         defer allocator.free(path);
-        if (std.fs.cwd().openFile(path, .{})) |file| {
-            file.close();
-        } else |_| {
-            continue;
-        }
         const info = try @import("auth.zig").parseAuthInfo(allocator, path);
         defer info.deinit(allocator);
         const email = info.email orelse {
             std.log.warn("auth file missing email for {s}; skipping refresh", .{rec.email});
             continue;
         };
-        const account_id = info.account_id orelse {
+        const chatgpt_account_id = info.chatgpt_account_id orelse {
             std.log.warn("auth file missing account_id for {s}; skipping refresh", .{rec.email});
+            continue;
+        };
+        const record_key = info.record_key orelse {
+            std.log.warn("auth file missing record key for {s}; skipping refresh", .{rec.email});
             continue;
         };
         if (!std.mem.eql(u8, email, rec.email)) {
             std.log.warn("auth file email mismatch for {s}; skipping refresh", .{rec.email});
             continue;
         }
-        if (!std.mem.eql(u8, account_id, rec.account_id)) {
+        if (!std.mem.eql(u8, chatgpt_account_id, rec.chatgpt_account_id)) {
             std.log.warn("auth file account_id mismatch for {s}; skipping refresh", .{rec.email});
+            continue;
+        }
+        if (!std.mem.eql(u8, record_key, rec.account_id)) {
+            std.log.warn("auth file record_key mismatch for {s}; skipping refresh", .{rec.email});
             continue;
         }
         rec.plan = info.plan;
@@ -1927,9 +1977,9 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
         std.log.warn("auth.json missing email; cannot import", .{});
         return false;
     };
-    const account_id = info.account_id orelse return error.MissingAccountId;
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
-    const dest = try accountAuthPath(allocator, codex_home, account_id);
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
     try ensureAccountsDir(allocator, codex_home);
@@ -1937,6 +1987,6 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
 
     const record = try accountFromAuth(allocator, "", &info);
     try upsertAccount(allocator, reg, record);
-    try setActiveAccount(allocator, reg, account_id);
+    try setActiveAccount(allocator, reg, record_key);
     return true;
 }

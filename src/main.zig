@@ -128,8 +128,8 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     const email = info.email orelse return error.MissingEmail;
     _ = email;
-    const account_id = info.account_id orelse return error.MissingAccountId;
-    const dest = try registry.accountAuthPath(allocator, codex_home, account_id);
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
+    const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
     try registry.ensureAccountsDir(allocator, codex_home);
@@ -137,7 +137,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
-    try registry.setActiveAccount(allocator, &reg, account_id);
+    try registry.setActiveAccount(allocator, &reg, record_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 

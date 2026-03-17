@@ -16,17 +16,53 @@ fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) !
 }
 
 fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "acc:{s}", .{email});
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    return std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+}
+
+fn hashPart(seed: u64, email: []const u8, modulus: u64) u64 {
+    return std.hash.Wyhash.hash(seed, email) % modulus;
+}
+
+fn chatgptAccountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{d:0>8}-{d:0>4}-{d:0>4}-{d:0>4}-{d:0>12}",
+        .{
+            hashPart(1, email, 100_000_000),
+            hashPart(2, email, 10_000),
+            4000 + hashPart(3, email, 1000),
+            8000 + hashPart(4, email, 1000),
+            hashPart(5, email, 1_000_000_000_000),
+        },
+    );
+}
+
+fn chatgptUserIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "user-{x:0>8}{x:0>8}{x:0>6}",
+        .{
+            hashPart(6, email, 0x100000000),
+            hashPart(7, email, 0x100000000),
+            hashPart(8, email, 0x1000000),
+        },
+    );
 }
 
 fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
-    const account_id = try accountIdForEmailAlloc(allocator, email);
-    defer allocator.free(account_id);
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
-        .{ email, account_id, plan },
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
     );
     defer allocator.free(payload);
 
@@ -40,7 +76,36 @@ fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: 
     return try std.fmt.allocPrint(
         allocator,
         "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
-        .{ account_id, jwt },
+        .{ chatgpt_account_id, jwt },
+    );
+}
+
+fn authJsonWithExplicitIds(
+    allocator: std.mem.Allocator,
+    email: []const u8,
+    chatgpt_account_id: []const u8,
+    chatgpt_user_id: []const u8,
+    plan: []const u8,
+) ![]u8 {
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+    );
+    defer allocator.free(payload);
+
+    const h64 = try b64url(allocator, header);
+    defer allocator.free(h64);
+    const p64 = try b64url(allocator, payload);
+    defer allocator.free(p64);
+    const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
+    defer allocator.free(jwt);
+
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ chatgpt_account_id, jwt },
     );
 }
 
@@ -100,7 +165,7 @@ test "Scenario: Given newer schema version when loading then it is rejected" {
     try std.testing.expectError(error.UnsupportedRegistryVersion, registry.loadRegistry(gpa, codex_home));
 }
 
-test "Scenario: Given v2 registry when loading then it migrates to account-id layout and rewrites schema_version" {
+test "Scenario: Given v2 registry when loading then it migrates to record-key layout and rewrites schema_version" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -176,7 +241,9 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
+    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_id\": \"{s}\"", .{account_id});
+    defer gpa.free(active_expect);
+    try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
 
 test "Scenario: Given purge import with file when rebuilding then current auth is imported as active and old registry entries are discarded" {
@@ -202,7 +269,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         .data =
         \\{
         \\  "schema_version": 3,
-        \\  "active_account_id": "acc:stale@example.com",
+        \\  "active_account_id": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\  "active_account_activated_at_ms": 1735689600000,
         \\  "auto_switch": {
         \\    "enabled": true,
@@ -214,7 +281,9 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\  },
         \\  "accounts": [
         \\    {
-        \\      "account_id": "acc:stale@example.com",
+        \\      "account_id": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_user_id": "user-r4g1strystale000001",
         \\      "email": "stale@example.com",
         \\      "alias": "stale",
         \\      "plan": "pro",
@@ -254,7 +323,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.active_account_id != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, active_account_id));
 
-    const stale_idx = registry.findAccountIndexByAccountId(&loaded, "acc:stale@example.com");
+    const stale_idx = registry.findAccountIndexByAccountId(&loaded, "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf");
     try std.testing.expect(stale_idx == null);
 
     const imported_account_id = try accountIdForEmailAlloc(gpa, "personal@example.com");
@@ -388,6 +457,88 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "snap@example.com"));
+}
+
+test "Scenario: Given purge without path and only auth backups when rebuilding then it imports backup auth files too" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const backup_auth = try authJsonWithEmailPlan(gpa, "backup-only@example.com", "team");
+    defer gpa.free(backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-010101", .data = backup_auth });
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "backup-only@example.com"));
+
+    const record_key = try accountIdForEmailAlloc(gpa, "backup-only@example.com");
+    defer gpa.free(record_key);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, record_key));
+
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record_key);
+    defer gpa.free(snapshot_path);
+    var snapshot = try std.fs.cwd().openFile(snapshot_path, .{});
+    snapshot.close();
+}
+
+test "Scenario: Given same team account id across different users when purging then record key keeps both imported accounts" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const shared_chatgpt_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
+
+    const first_auth = try authJsonWithExplicitIds(
+        gpa,
+        "trade5258@bytebit.ggff.net",
+        shared_chatgpt_account_id,
+        "user-VcL6uT0HoEblRE4RSV7NsUDI",
+        "team",
+    );
+    defer gpa.free(first_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-154910", .data = first_auth });
+
+    const second_auth = try authJsonWithExplicitIds(
+        gpa,
+        "cloning5942@bytebit.ggff.net",
+        shared_chatgpt_account_id,
+        "user-ESYgcy2QkOGZc0NoxSlFCeVT",
+        "team",
+    );
+    defer gpa.free(second_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-171806", .data = second_auth });
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+
+    const first_record_key = "user-VcL6uT0HoEblRE4RSV7NsUDI::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
+    const second_record_key = "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
+
+    const first_idx = registry.findAccountIndexByAccountId(&loaded, first_record_key) orelse return error.TestExpectedEqual;
+    const second_idx = registry.findAccountIndexByAccountId(&loaded, second_record_key) orelse return error.TestExpectedEqual;
+
+    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[first_idx].account_id, loaded.accounts.items[second_idx].account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[first_idx].chatgpt_account_id, shared_chatgpt_account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[second_idx].chatgpt_account_id, shared_chatgpt_account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[first_idx].chatgpt_user_id, "user-VcL6uT0HoEblRE4RSV7NsUDI"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[second_idx].chatgpt_user_id, "user-ESYgcy2QkOGZc0NoxSlFCeVT"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[first_idx].email, "trade5258@bytebit.ggff.net"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[second_idx].email, "cloning5942@bytebit.ggff.net"));
 }
 
 test "Scenario: Given purge without accounts directory when rebuilding then current auth still restores the active account" {

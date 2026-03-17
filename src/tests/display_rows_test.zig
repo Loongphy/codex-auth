@@ -16,13 +16,18 @@ fn makeRegistry() registry.Registry {
 fn appendAccount(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
-    account_id: []const u8,
+    record_key: []const u8,
     email: []const u8,
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
+    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const chatgpt_user_id = record_key[0..sep];
+    const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
-        .account_id = try allocator.dupe(u8, account_id),
+        .account_id = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = plan,
@@ -40,10 +45,10 @@ test "Scenario: Given same email with two team accounts and one plus account whe
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "acc-team-2", "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, "acc-team-1", "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, "acc-plus-1", "user@example.com", "", .plus);
-    try registry.setActiveAccount(gpa, &reg, "acc-team-1");
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::a4021fa5-998b-4774-989f-784fa69c367b", "user@example.com", "", .plus);
+    try registry.setActiveAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960");
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);
@@ -63,8 +68,8 @@ test "Scenario: Given grouped accounts with aliases when building display rows t
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "acc-team-2", "user@example.com", "work", .team);
-    try appendAccount(gpa, &reg, "acc-team-1", "user@example.com", "backup", .team);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "backup", .team);
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);

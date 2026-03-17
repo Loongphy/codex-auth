@@ -10,13 +10,15 @@ fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 }
 
 fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
-    const account_id = try accountIdForEmailAlloc(allocator, email);
-    defer allocator.free(account_id);
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
-        .{ email, account_id, plan },
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
     );
     defer allocator.free(payload);
 
@@ -28,11 +30,45 @@ fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: 
     const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer allocator.free(jwt);
 
-    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ account_id, jwt });
+    return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ chatgpt_account_id, jwt });
 }
 
 fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "acc:{s}", .{email});
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    return std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+}
+
+fn hashPart(seed: u64, email: []const u8, modulus: u64) u64 {
+    return std.hash.Wyhash.hash(seed, email) % modulus;
+}
+
+fn chatgptAccountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "{d:0>8}-{d:0>4}-{d:0>4}-{d:0>4}-{d:0>12}",
+        .{
+            hashPart(1, email, 100_000_000),
+            hashPart(2, email, 10_000),
+            4000 + hashPart(3, email, 1000),
+            8000 + hashPart(4, email, 1000),
+            hashPart(5, email, 1_000_000_000_000),
+        },
+    );
+}
+
+fn chatgptUserIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        "user-{x:0>8}{x:0>8}{x:0>6}",
+        .{
+            hashPart(6, email, 0x100000000),
+            hashPart(7, email, 0x100000000),
+            hashPart(8, email, 0x1000000),
+        },
+    );
 }
 
 fn legacySnapshotRelPath(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
@@ -64,6 +100,8 @@ fn makeAccountRecord(
 ) !registry.AccountRecord {
     return .{
         .account_id = try accountIdForEmailAlloc(allocator, email),
+        .chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email),
+        .chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = plan,
@@ -199,14 +237,16 @@ test "schema 3 registry with legacy rollout attribution rewrites to normalized s
         .data =
         \\{
         \\  "schema_version": 3,
-        \\  "active_account_id": "acc:a@b.com",
+        \\  "active_account_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\  "last_attributed_rollout": {
         \\    "path": "/tmp/sessions/run-1/rollout-a.jsonl",
         \\    "event_timestamp_ms": 1735689600000
         \\  },
         \\  "accounts": [
         \\    {
-        \\      "account_id": "acc:a@b.com",
+        \\      "account_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_user_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT",
         \\      "email": "a@b.com",
         \\      "alias": "work",
         \\      "plan": "pro",
@@ -352,7 +392,9 @@ test "v2 registry migrates active email records to current schema" {
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
+    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_id\": \"{s}\"", .{expected_account_id});
+    defer gpa.free(active_expect);
+    try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
 
 test "auth backup only on change" {

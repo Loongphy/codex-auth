@@ -16,13 +16,18 @@ fn makeRegistry() registry.Registry {
 fn appendAccount(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
-    account_id: []const u8,
+    record_key: []const u8,
     email: []const u8,
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
+    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const chatgpt_user_id = record_key[0..sep];
+    const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
-        .account_id = try allocator.dupe(u8, account_id),
+        .account_id = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = plan,
@@ -40,8 +45,8 @@ test "Scenario: Given alias and email queries when finding matching accounts the
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "acc-team-1234", "user@example.com", "work", .team);
-    try appendAccount(gpa, &reg, "acc-plus-9999", "other@example.com", "", .plus);
+    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-Z9Y8X7W6V5U4::518a44d9-ba75-4bad-87e5-ae9377042960", "other@example.com", "", .plus);
 
     var alias_matches = try main_mod.findMatchingAccounts(gpa, &reg, "work");
     defer alias_matches.deinit(gpa);
@@ -59,9 +64,9 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "acc-team-1234", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
 
-    var matches = try main_mod.findMatchingAccounts(gpa, &reg, "acc-team");
+    var matches = try main_mod.findMatchingAccounts(gpa, &reg, "67fe2bbb");
     defer matches.deinit(gpa);
     try std.testing.expect(matches.items.len == 0);
 }

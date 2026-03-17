@@ -187,11 +187,13 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try out.writeAll("active,account_id,email,plan,limit_5h,limit_weekly,last_used\n");
+    try out.writeAll("active,record_key,chatgpt_account_id,chatgpt_user_id,email,plan,limit_5h,limit_weekly,last_used\n");
     for (reg.accounts.items) |rec| {
         const active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
         const email = rec.email;
-        const account_id = rec.account_id;
+        const record_key = rec.account_id;
+        const chatgpt_account_id = rec.chatgpt_account_id;
+        const chatgpt_user_id = rec.chatgpt_user_id;
         const plan = planDisplay(&rec, "");
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
         const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
@@ -202,8 +204,8 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
         const last = if (rec.last_used_at) |t| try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{t}) else "";
         defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
         try out.print(
-            "{s},{s},{s},{s},{s},{s},{s}\n",
-            .{ if (active) "1" else "0", account_id, email, plan, rate_5h_str, rate_week_str, last },
+            "{s},{s},{s},{s},{s},{s},{s},{s},{s}\n",
+            .{ if (active) "1" else "0", record_key, chatgpt_account_id, chatgpt_user_id, email, plan, rate_5h_str, rate_week_str, last },
         );
     }
     try out.flush();
