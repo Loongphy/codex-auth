@@ -166,7 +166,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         defer matches.deinit(allocator);
 
         if (matches.items.len == 0) {
-            std.log.err("account not found: {s}", .{query});
+            try cli.printAccountNotFoundError(query);
             return error.AccountNotFound;
         }
 

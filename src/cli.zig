@@ -16,6 +16,8 @@ const ansi = struct {
     const bold_red = "\x1b[1;31m";
     const green = "\x1b[32m";
     const bold_green = "\x1b[1;32m";
+    const cyan = "\x1b[36m";
+    const bold_cyan = "\x1b[1;36m";
     const bold = "\x1b[1m";
 };
 
@@ -402,6 +404,28 @@ fn writeDeprecatedLoginAliasWarning(replacement: []const u8, use_color: bool) !v
     try out.flush();
 }
 
+pub fn writeErrorPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.bold_red);
+    try out.writeAll("error:");
+    if (use_color) try out.writeAll(ansi.reset);
+}
+
+pub fn writeHintPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.bold_cyan);
+    try out.writeAll("hint:");
+    if (use_color) try out.writeAll(ansi.reset);
+}
+
+pub fn printAccountNotFoundError(query: []const u8) !void {
+    var stderr_file = std.fs.File.stderr();
+    var writer = stderr_file.writer();
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" no account matches '{s}'.\n", .{query});
+    try out.flush();
+}
+
 pub fn writeDeprecatedLoginAliasWarningTo(out: *std.Io.Writer, replacement: []const u8, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.bold_red);
     try out.writeAll("warning:");
@@ -426,11 +450,17 @@ fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void
 }
 
 pub fn writeCodexLoginLaunchFailureHintTo(out: *std.Io.Writer, err_name: []const u8, use_color: bool) !void {
-    if (use_color) try out.writeAll(ansi.bold_red);
-    try out.writeAll("error:");
-    if (use_color) try out.writeAll(ansi.reset);
-    try out.print(" failed to start embedded `codex login` ({s}).\n", .{err_name});
-    try out.writeAll("Run `codex login` manually, then run `codex-auth list`.\n");
+    try writeErrorPrefixTo(out, use_color);
+    if (std.mem.eql(u8, err_name, "FileNotFound")) {
+        try out.writeAll(" the `codex` executable was not found in your PATH.\n\n");
+        try writeHintPrefixTo(out, use_color);
+        try out.writeAll(" Ensure the Codex CLI is installed and available in your environment.\n");
+        try out.writeAll("      Then run `codex login` manually and retry your command.\n");
+    } else {
+        try out.writeAll(" failed to launch the `codex login` process.\n\n");
+        try writeHintPrefixTo(out, use_color);
+        try out.writeAll(" Try running `codex login` manually, then retry your command.\n");
+    }
 }
 
 pub fn runCodexLogin(allocator: std.mem.Allocator) !void {

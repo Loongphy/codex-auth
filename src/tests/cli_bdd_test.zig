@@ -400,7 +400,7 @@ test "Scenario: Given deprecated add alias warning when rendering then colorized
     try std.testing.expect(std.mem.indexOf(u8, warning, "\x1b[1;32m`codex-auth login`\x1b[0m") != null);
 }
 
-test "Scenario: Given codex login launch failure when rendering then manual retry hint is included" {
+test "Scenario: Given codex login access denied when rendering then plain English retry hint is included" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -408,8 +408,21 @@ test "Scenario: Given codex login launch failure when rendering then manual retr
     try cli.writeCodexLoginLaunchFailureHintTo(&aw.writer, "AccessDenied", false);
 
     const hint = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, hint, "failed to start embedded `codex login` (AccessDenied).") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "Run `codex login` manually, then run `codex-auth list`.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "failed to launch the `codex login` process.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Try running `codex login` manually, then retry your command.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "AccessDenied") == null);
+}
+
+test "Scenario: Given codex login client missing when rendering then detection hint is included" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeCodexLoginLaunchFailureHintTo(&aw.writer, "FileNotFound", false);
+
+    const hint = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, hint, "the `codex` executable was not found in your PATH.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Ensure the Codex CLI is installed and available in your environment.") != null);
 }
 
 test "Scenario: Given switch with positional query when parsing then non-interactive target is preserved" {
