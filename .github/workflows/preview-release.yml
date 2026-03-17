@@ -1,0 +1,97 @@
+name: Preview Release
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  release-assets:
+    name: Build Preview Packages (${{ matrix.id }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-x64
+            zig_target: x86_64-linux-gnu
+            binary_name: codex-auth
+          - id: darwin-x64
+            zig_target: x86_64-macos-none
+            binary_name: codex-auth
+          - id: darwin-arm64
+            zig_target: aarch64-macos-none
+            binary_name: codex-auth
+          - id: win32-x64
+            zig_target: x86_64-windows-gnu
+            binary_name: codex-auth.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.1
+
+      - name: Build binary
+        run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSafe
+
+      - name: Stage artifact bundle
+        shell: bash
+        run: |
+          mkdir -p "artifacts/${{ matrix.id }}/binary"
+          cp "zig-out/bin/${{ matrix.binary_name }}" "artifacts/${{ matrix.id }}/binary/${{ matrix.binary_name }}"
+
+      - name: Upload artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.id }}
+          path: artifacts
+
+  publish-preview:
+    name: Publish Preview Packages
+    runs-on: ubuntu-latest
+    needs: release-assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Check versions
+        run: node scripts/npm/check-versions.mjs
+
+      - name: Stage npm packages
+        run: node scripts/npm/stage-packages.mjs --artifacts-dir artifacts --output-dir dist/npm
+
+      - name: Publish preview platform packages
+        run: >
+          npx pkg-pr-new publish
+          --comment=off
+          --json platform-preview.json
+          ./dist/npm/codex-auth-linux-x64
+          ./dist/npm/codex-auth-darwin-x64
+          ./dist/npm/codex-auth-darwin-arm64
+          ./dist/npm/codex-auth-win32-x64
+
+      - name: Rewrite root preview optional dependencies
+        run: >
+          node scripts/npm/rewrite-preview-optional-dependencies.mjs
+          --root-dir ./dist/npm/root
+          --publish-output ./platform-preview.json
+
+      - name: Publish preview root package
+        run: npx pkg-pr-new publish --bin ./dist/npm/root

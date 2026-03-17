@@ -15,9 +15,13 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - The root npm package exposes the `codex-auth` command and depends on platform packages through `optionalDependencies`.
 - Each platform package declares `os` and `cpu`, so npm installs only the matching binary package for the current OS/CPU.
 - Branch and pull request validation runs live in `.github/workflows/ci.yml` and execute the native `build-test` matrix on Ubuntu, macOS, and Windows runners.
+- Pull request preview npm packages live in `.github/workflows/preview-release.yml`. The workflow cross-builds the four platform binaries on Ubuntu, stages the same five npm package directories used by the release pipeline, publishes the four platform packages to `pkg.pr.new` first, rewrites the staged root package `optionalDependencies` to those preview URLs, and then publishes the root package preview so the PR install command keeps the current platform-selective npm install behavior.
+- `.github/workflows/preview-release.yml` uses `actions/setup-node@v6` with `node-version: lts/*` so preview publishing tracks the latest Node LTS line automatically.
+- `pkg.pr.new` preview publishing requires the pkg.pr.new GitHub App to be installed on the repository before the workflow can publish previews or comment on PRs.
 - Tag pushes matching `v*` use `.github/workflows/release.yml` to create GitHub Release assets and publish npm packages automatically.
 - npm publishing uses Trusted Publishing from GitHub Actions, so the publish job in `.github/workflows/release.yml` must run on a GitHub-hosted runner with `id-token: write`.
-- `.github/workflows/release.yml` uses `actions/setup-node@v4` with Node 24 for the npm packaging and publish steps so the bundled npm CLI supports Trusted Publishing.
+- `.github/workflows/release.yml` uses `actions/setup-node@v6` with Node 24 for the npm packaging and publish steps so the bundled npm CLI supports Trusted Publishing.
+- The `setup-node` steps in `.github/workflows/release.yml` explicitly set `package-manager-cache: false` to avoid future automatic npm cache behavior changes in the release pipeline.
 - npm provenance validation requires the package `repository.url` metadata to match the GitHub repository URL exactly (`https://github.com/Loongphy/codex-auth`), including letter case.
 - Stable tags such as `v0.1.3` publish to npm dist-tag `latest`.
 - Prerelease tags such as `v0.2.0-rc.1` publish to npm dist-tag `next`.
