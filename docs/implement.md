@@ -143,7 +143,7 @@ For non-interactive switching, the target account is matched case-insensitively 
 - alias fragment
 - email fragment
 
-If multiple accounts match, interactive selection is shown.
+If multiple accounts match, interactive selection is shown. In the switch picker, `q` quits without switching.
 
 When switching:
 

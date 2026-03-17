@@ -141,7 +141,7 @@ codex-auth import --purge                  # rebuild from ~/.codex/accounts/*.au
 Switch accounts (interactive list shows email, 5h, weekly, last activity):
 
 ```shell
-codex-auth switch               # arrow + number input
+codex-auth switch               # arrow + number input, q to quit
 ```
 
 Before the switch picker opens, `codex-auth switch` refreshes the current active account's usage once so the currently selected row is not stale. It does not refresh the newly selected account after the switch completes.
@@ -154,7 +154,7 @@ Switch account non-interactively (for scripts/other CLIs):
 codex-auth switch user
 ```
 
-If multiple accounts match, interactive selection is shown.
+If multiple accounts match, interactive selection is shown, and you can press `q` to quit without switching.
 
 Remove accounts (interactive multi-select):
 

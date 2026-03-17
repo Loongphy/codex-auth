@@ -498,6 +498,14 @@ pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Regis
     return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);
 }
 
+fn isQuitInput(input: []const u8) bool {
+    return input.len == 1 and (input[0] == 'q' or input[0] == 'Q');
+}
+
+fn isQuitKey(key: u8) bool {
+    return key == 'q' or key == 'Q';
+}
+
 fn activeSelectableIndex(rows: *const SwitchRows) ?usize {
     for (rows.selectable_row_indices, 0..) |row_idx, pos| {
         if (rows.items[row_idx].is_active) return pos;
@@ -530,7 +538,7 @@ fn selectWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
 
     try out.writeAll("Select account to activate:\n\n");
     try renderSwitchList(out, reg, rows.items, idx_width, widths, active_idx, use_color);
-    try out.writeAll("Select account number: ");
+    try out.writeAll("Select account number (or q to quit): ");
     try out.flush();
 
     var buf: [64]u8 = undefined;
@@ -540,6 +548,7 @@ fn selectWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
         if (active_idx) |i| return accountIdForSelectable(&rows, reg, i);
         return null;
     }
+    if (isQuitInput(line)) return null;
     const idx = std.fmt.parseInt(usize, line, 10) catch return null;
     if (idx == 0 or idx > rows.selectable_row_indices.len) return null;
     return accountIdForSelectable(&rows, reg, idx - 1);
@@ -560,7 +569,7 @@ fn selectWithNumbersFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
 
     try out.writeAll("Select account to activate:\n\n");
     try renderSwitchList(out, reg, rows.items, idx_width, widths, active_idx, use_color);
-    try out.writeAll("Select account number: ");
+    try out.writeAll("Select account number (or q to quit): ");
     try out.flush();
 
     var buf: [64]u8 = undefined;
@@ -570,6 +579,7 @@ fn selectWithNumbersFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
         if (active_idx) |i| return accountIdForSelectable(&rows, reg, i);
         return null;
     }
+    if (isQuitInput(line)) return null;
     const idx = std.fmt.parseInt(usize, line, 10) catch return null;
     if (idx == 0 or idx > rows.selectable_row_indices.len) return null;
     return accountIdForSelectable(&rows, reg, idx - 1);
@@ -609,7 +619,7 @@ fn selectInteractiveFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc exit\n");
+        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, q quit, Esc exit\n");
         if (use_color) try out.writeAll(ansi.reset);
         try out.flush();
 
@@ -642,6 +652,7 @@ fn selectInteractiveFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
                 }
                 return accountIdForSelectable(&rows, reg, idx);
             }
+            if (isQuitKey(b[i])) return null;
 
             if (b[i] == 'k' and idx > 0) {
                 idx -= 1;
@@ -774,7 +785,7 @@ fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc exit\n");
+        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, q quit, Esc exit\n");
         if (use_color) try out.writeAll(ansi.reset);
         try out.flush();
 
@@ -807,6 +818,7 @@ fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
                 }
                 return accountIdForSelectable(&rows, reg, idx);
             }
+            if (isQuitKey(b[i])) return null;
             if (b[i] == 'k' and idx > 0) {
                 idx -= 1;
                 number_len = 0;
@@ -1429,4 +1441,15 @@ fn indexWidth(count: usize) usize {
         width += 1;
     }
     return width;
+}
+
+test "Scenario: Given q quit input when checking switch picker helpers then both line and key shortcuts cancel selection" {
+    try std.testing.expect(isQuitInput("q"));
+    try std.testing.expect(isQuitInput("Q"));
+    try std.testing.expect(!isQuitInput(""));
+    try std.testing.expect(!isQuitInput("1"));
+    try std.testing.expect(!isQuitInput("qq"));
+    try std.testing.expect(isQuitKey('q'));
+    try std.testing.expect(isQuitKey('Q'));
+    try std.testing.expect(!isQuitKey('j'));
 }
