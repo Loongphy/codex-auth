@@ -323,7 +323,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, active_account_key));
 
-    const stale_idx = registry.findAccountIndexByAccountKey(&loaded, "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf");
+    const stale_idx = registry.findAccountIndexByAccountKey(&loaded, "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf");
     try std.testing.expect(stale_idx == null);
 
     const imported_account_id = try accountKeyForEmailAlloc(gpa, "personal@example.com");

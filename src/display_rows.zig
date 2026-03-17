@@ -57,35 +57,41 @@ pub fn buildDisplayRows(
             const account_idx = group_indices[0];
             const rec = &reg.accounts.items[account_idx];
             const cell = try singletonAccountCellAlloc(allocator, rec);
-            errdefer allocator.free(cell);
-            try row_list.append(allocator, .{
+            row_list.append(allocator, .{
                 .account_index = account_idx,
                 .account_cell = cell,
                 .depth = 0,
                 .is_active = isActive(reg, account_idx),
-            });
+            }) catch |err| {
+                allocator.free(cell);
+                return err;
+            };
             try selectable.append(allocator, row_list.items.len - 1);
             continue;
         }
 
         const header_cell = try allocator.dupe(u8, email);
-        errdefer allocator.free(header_cell);
-        try row_list.append(allocator, .{
+        row_list.append(allocator, .{
             .account_index = null,
             .account_cell = header_cell,
             .depth = 0,
             .is_active = false,
-        });
+        }) catch |err| {
+            allocator.free(header_cell);
+            return err;
+        };
 
         for (group_indices) |account_idx| {
             const cell = try groupedAccountCellAlloc(allocator, reg, group_indices, account_idx);
-            errdefer allocator.free(cell);
-            try row_list.append(allocator, .{
+            row_list.append(allocator, .{
                 .account_index = account_idx,
                 .account_cell = cell,
                 .depth = 1,
                 .is_active = isActive(reg, account_idx),
-            });
+            }) catch |err| {
+                allocator.free(cell);
+                return err;
+            };
             try selectable.append(allocator, row_list.items.len - 1);
         }
     }

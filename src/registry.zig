@@ -538,8 +538,8 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     }
 
     return .{
-        .auth_backups_removed = auth_before - auth_after,
-        .registry_backups_removed = registry_before - registry_after,
+        .auth_backups_removed = if (auth_before >= auth_after) auth_before - auth_after else 0,
+        .registry_backups_removed = if (registry_before >= registry_after) registry_before - registry_after else 0,
         .stale_snapshot_files_removed = stale_snapshot_files_removed,
     };
 }
@@ -1038,8 +1038,11 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         try ensureAccountsDir(allocator, codex_home);
         try copyFile(auth_path, dest);
 
-        const record = try accountFromAuth(allocator, "", &info);
+        var record = try accountFromAuth(allocator, "", &info);
+        var record_owned = true;
+        errdefer if (record_owned) freeAccountRecord(allocator, &record);
         try upsertAccount(allocator, reg, record);
+        record_owned = false;
         try setActiveAccountKey(allocator, reg, record_key);
         return true;
     }
