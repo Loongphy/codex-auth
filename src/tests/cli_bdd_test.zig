@@ -131,6 +131,17 @@ test "Scenario: Given switch with positional selector when parsing then non-inte
     }
 }
 
+test "Scenario: Given help when rendering then switch selector terminology is shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeHelp(&aw.writer, false);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "switch [<selector>]") != null);
+}
+
 test "Scenario: Given switch with duplicate target when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "a@example.com", "b@example.com" };

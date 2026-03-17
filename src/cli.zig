@@ -174,7 +174,7 @@ pub fn writeHelp(out: *std.Io.Writer, use_color: bool) !void {
     try writeHelpCommand(out, use_color, "list", "List available accounts");
     try writeHelpCommand(out, use_color, "login [--skip]", "Login and add the current account");
     try writeHelpCommand(out, use_color, "import <path> [--alias <alias>]", "Import one auth file or a directory");
-    try writeHelpCommand(out, use_color, "switch [<email-or-email#plan>]", "Switch the active account");
+    try writeHelpCommand(out, use_color, "switch [<selector>]", "Switch the active account");
     try writeHelpCommand(out, use_color, "remove", "Remove one or more accounts");
 
     try out.writeAll("\n");

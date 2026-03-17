@@ -146,9 +146,11 @@ codex-auth switch
 codex-auth switch user@example.com   # 完整邮箱
 codex-auth switch user               # 模糊匹配：邮箱片段
 codex-auth switch exam               # 模糊匹配：任意子串
+codex-auth switch gmail_plus         # alias
+codex-auth switch user@example.com#plus # email + plan
 ```
 
-**支持模糊匹配**——你不需要输入完整的邮箱地址。只要输入邮箱的一部分（前缀、后缀、中间任意片段），工具就能自动找到匹配的账号，大小写不敏感。
+**支持模糊匹配**——你不需要输入完整的邮箱地址。只要输入 alias、邮箱、`邮箱#plan`、account id 或它们的一部分（前缀、后缀、中间任意片段），工具就能自动找到匹配的账号，大小写不敏感。
 
 如果输入的内容只匹配到一个账号，直接切换，无需确认。如果匹配到多个账号，会自动弹出交互式选择界面让你挑选。
 
@@ -220,7 +222,7 @@ codex-auth list                          # 列出所有账号及额度
 codex-auth login                         # 添加当前账号（先登录再导入）
 codex-auth login --skip                  # 添加当前账号（跳过登录）
 codex-auth switch                        # 交互式切换账号
-codex-auth switch <email或片段>            # 非交互式切换（模糊匹配）
+codex-auth switch <selector>              # 非交互式切换（alias / email / email#plan / account id）
 codex-auth import <文件路径>              # 导入单个认证文件
 codex-auth import <文件路径> --alias <别名> # 导入并设置别名
 codex-auth import <文件夹路径>            # 批量导入文件夹中的认证文件

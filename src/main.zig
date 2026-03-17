@@ -145,6 +145,10 @@ fn findMatchingAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, q
             try matches.append(allocator, idx);
             continue;
         }
+        if (rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, normalized) != null) {
+            try matches.append(allocator, idx);
+            continue;
+        }
         if (rec.email.len != 0 and std.ascii.indexOfIgnoreCase(rec.email, normalized) != null) {
             try matches.append(allocator, idx);
             continue;
@@ -215,4 +219,48 @@ test {
     _ = @import("tests/registry_test.zig");
     _ = @import("tests/registry_bdd_test.zig");
     _ = @import("tests/cli_bdd_test.zig");
+}
+
+test "Scenario: Given switch selector matches alias when searching then target account is returned once" {
+    const gpa = std.testing.allocator;
+    var reg = @import("tests/bdd_helpers.zig").makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try @import("tests/bdd_helpers.zig").appendChatgptAccount(gpa, &reg, "user@example.com", "gmail_plus", .plus);
+
+    var matches = try findMatchingAccounts(gpa, &reg, "gmail_plus");
+    defer matches.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), matches.items.len);
+    try std.testing.expectEqual(@as(usize, 0), matches.items[0]);
+}
+
+test "Scenario: Given switch selector matches alias case-insensitively when searching then target account is returned" {
+    const gpa = std.testing.allocator;
+    var reg = @import("tests/bdd_helpers.zig").makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try @import("tests/bdd_helpers.zig").appendChatgptAccount(gpa, &reg, "user@example.com", "gmail_plus", .plus);
+
+    var matches = try findMatchingAccounts(gpa, &reg, "GMAIL_PLUS");
+    defer matches.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), matches.items.len);
+    try std.testing.expectEqual(@as(usize, 0), matches.items[0]);
+}
+
+test "Scenario: Given switch selector matches alias fragment when searching then multiple candidates are preserved" {
+    const gpa = std.testing.allocator;
+    var reg = @import("tests/bdd_helpers.zig").makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try @import("tests/bdd_helpers.zig").appendChatgptAccount(gpa, &reg, "one@example.com", "gmail_plus", .plus);
+    try @import("tests/bdd_helpers.zig").appendChatgptAccount(gpa, &reg, "two@example.com", "gmail_team", .team);
+
+    var matches = try findMatchingAccounts(gpa, &reg, "gmail");
+    defer matches.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 2), matches.items.len);
+    try std.testing.expectEqual(@as(usize, 0), matches.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), matches.items[1]);
 }

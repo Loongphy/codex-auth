@@ -47,7 +47,7 @@ irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.p
 ```shell
 codex-auth list # list all accounts
 codex-auth login [--skip] # login and add current account (runs `codex login` by default)
-codex-auth switch [<email-or-email#plan>] # switch active account (interactive or partial/fragment match)
+codex-auth switch [<selector>] # switch active account (interactive or partial/fragment match)
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
 codex-auth remove # remove accounts (interactive multi-select)
 ```
@@ -92,8 +92,10 @@ Switch account non-interactively (for scripts/other CLIs):
 
 ```shell
 codex-auth switch user@example.com#pro
+codex-auth switch gmail_plus
 ```
 
+`selector` matches alias, email, `email#plan`, account id, and `apikey:<fingerprint>` case-insensitively.
 If multiple accounts match, interactive selection is shown.
 
 Remove accounts (interactive multi-select):

@@ -108,9 +108,9 @@ Important limits:
 `switch` supports two modes:
 
 - Interactive: `codex-auth switch`
-- Non-interactive: `codex-auth switch <email-or-email#plan>`
+- Non-interactive: `codex-auth switch <selector>`
 
-For non-interactive switching, the target account is matched case-insensitively against account id, email, and `email#plan`.
+For non-interactive switching, the target account is matched case-insensitively against alias, account id, email, `email#plan`, and `apikey:<fingerprint>`.
 If multiple accounts match, interactive selection is shown.
 
 When switching:
