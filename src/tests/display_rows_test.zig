@@ -5,7 +5,7 @@ const registry = @import("../registry.zig");
 fn makeRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
-        .active_account_id = null,
+        .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
@@ -25,7 +25,7 @@ fn appendAccount(
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
-        .account_id = try allocator.dupe(u8, record_key),
+        .account_key = try allocator.dupe(u8, record_key),
         .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
         .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
@@ -48,7 +48,7 @@ test "Scenario: Given same email with two team accounts and one plus account whe
     try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "", .team);
     try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "", .team);
     try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::a4021fa5-998b-4774-989f-784fa69c367b", "user@example.com", "", .plus);
-    try registry.setActiveAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960");
+    try registry.setActiveAccountKey(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960");
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);

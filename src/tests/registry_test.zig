@@ -33,7 +33,7 @@ fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: 
     return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}", .{ chatgpt_account_id, jwt });
 }
 
-fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+fn accountKeyForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
     defer allocator.free(chatgpt_user_id);
     const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
@@ -82,7 +82,7 @@ fn legacySnapshotRelPath(allocator: std.mem.Allocator, email: []const u8) ![]u8 
 fn makeEmptyRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
-        .active_account_id = null,
+        .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
@@ -99,7 +99,7 @@ fn makeAccountRecord(
     created_at: i64,
 ) !registry.AccountRecord {
     return .{
-        .account_id = try accountIdForEmailAlloc(allocator, email),
+        .account_key = try accountKeyForEmailAlloc(allocator, email),
         .chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email),
         .chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email),
         .email = try allocator.dupe(u8, email),
@@ -171,9 +171,9 @@ test "registry save/load" {
 
     const rec = try makeAccountRecord(gpa, "a@b.com", "work", .pro, .chatgpt, 1);
     try reg.accounts.append(gpa, rec);
-    const active_account_id = try accountIdForEmailAlloc(gpa, "a@b.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try accountKeyForEmailAlloc(gpa, "a@b.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
     reg.api.usage = true;
@@ -206,7 +206,7 @@ test "registry load defaults missing auto threshold fields" {
         .data =
         \\{
         \\  "schema_version": 3,
-        \\  "active_account_id": null,
+        \\  "active_account_key": null,
         \\  "auto_switch": {
         \\    "enabled": true
         \\  },
@@ -237,14 +237,14 @@ test "schema 3 registry with legacy rollout attribution rewrites to normalized s
         .data =
         \\{
         \\  "schema_version": 3,
-        \\  "active_account_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\  "active_account_key": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\  "last_attributed_rollout": {
         \\    "path": "/tmp/sessions/run-1/rollout-a.jsonl",
         \\    "event_timestamp_ms": 1735689600000
         \\  },
         \\  "accounts": [
         \\    {
-        \\      "account_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "account_key": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\      "chatgpt_account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\      "chatgpt_user_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT",
         \\      "email": "a@b.com",
@@ -287,7 +287,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
         .data =
         \\{
         \\  "version": 3,
-        \\  "active_account_id": null,
+        \\  "active_account_key": null,
         \\  "auto_switch": {
         \\    "enabled": true
         \\  },
@@ -321,7 +321,7 @@ test "too-new schema version is rejected without rewriting registry" {
         .data =
         \\{
         \\  "schema_version": 999,
-        \\  "active_account_id": null,
+        \\  "active_account_key": null,
         \\  "accounts": []
         \\}
         ,
@@ -377,10 +377,10 @@ test "v2 registry migrates active email records to current schema" {
     try std.testing.expect(loaded.schema_version == registry.current_schema_version);
     try std.testing.expect(loaded.accounts.items.len == 1);
 
-    const expected_account_id = try accountIdForEmailAlloc(gpa, "legacy@example.com");
+    const expected_account_id = try accountKeyForEmailAlloc(gpa, "legacy@example.com");
     defer gpa.free(expected_account_id);
-    try std.testing.expect(loaded.active_account_id != null);
-    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, expected_account_id));
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, expected_account_id));
 
     const migrated_snapshot_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
     defer gpa.free(migrated_snapshot_path);
@@ -392,7 +392,7 @@ test "v2 registry migrates active email records to current schema" {
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
-    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_id\": \"{s}\"", .{expected_account_id});
+    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
@@ -407,7 +407,7 @@ test "auth backup only on change" {
 
     const current = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
     defer gpa.free(current);
-    const user_account_id = try accountIdForEmailAlloc(gpa, "user@example.com");
+    const user_account_id = try accountKeyForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
@@ -451,7 +451,7 @@ test "auth backup rotation" {
 
     const current = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
     defer gpa.free(current);
-    const user_account_id = try accountIdForEmailAlloc(gpa, "user@example.com");
+    const user_account_id = try accountKeyForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
@@ -493,7 +493,7 @@ test "sync active auth matches by email and updates account auth" {
 
     const account_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
     defer gpa.free(account_auth);
-    const user_account_id = try accountIdForEmailAlloc(gpa, "user@example.com");
+    const user_account_id = try accountKeyForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
     const account_auth_abs = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(account_auth_abs);
@@ -573,7 +573,7 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try reg.accounts.append(gpa, active_record);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const keep_account_id = try accountIdForEmailAlloc(gpa, "keep@example.com");
+    const keep_account_id = try accountKeyForEmailAlloc(gpa, "keep@example.com");
     defer gpa.free(keep_account_id);
     const keep_abs_path = try registry.accountAuthPath(gpa, codex_home, keep_account_id);
     defer gpa.free(keep_abs_path);
@@ -670,11 +670,11 @@ test "import auth path with directory imports multiple json files and skips bad 
     try std.testing.expect(reg.accounts.items[0].alias.len == 0);
     try std.testing.expect(reg.accounts.items[1].alias.len == 0);
 
-    const account_id_a = try accountIdForEmailAlloc(gpa, "a@example.com");
+    const account_id_a = try accountKeyForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
     const path_a = try registry.accountAuthPath(gpa, codex_home, account_id_a);
     defer gpa.free(path_a);
-    const account_id_b = try accountIdForEmailAlloc(gpa, "b@example.com");
+    const account_id_b = try accountKeyForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
     const path_b = try registry.accountAuthPath(gpa, codex_home, account_id_b);
     defer gpa.free(path_b);

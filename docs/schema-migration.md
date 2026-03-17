@@ -32,11 +32,12 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Email-based account identity
 - `schema_version = 3`
   - Record-key-based account snapshots
-  - `active_account_id`
+  - `active_account_key`
   - `active_account_activated_at_ms`
   - Per-account `last_local_rollout`
   - Current `auto_switch` block
   - Current top-level `api` block
+  - Per-account `account_key`
   - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
 
 ## When To Bump `schema_version`
@@ -45,7 +46,7 @@ Bump the schema version whenever the persisted `registry.json` shape or semantic
 
 - Adding, removing, or renaming a persisted field
 - Changing a field type
-- Changing identity keys such as `active_email` to `active_account_id`
+- Changing identity keys such as `active_email` to `active_account_key`
 - Changing snapshot filename conventions or any other rule needed to find persisted files
 - Reinterpreting an existing field with incompatible semantics
 

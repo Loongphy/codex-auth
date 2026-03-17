@@ -80,7 +80,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - The JWT claim `https://api.openai.com/auth.chatgpt_account_id` must exist and match `tokens.account_id`.
 - `chatgpt_user_id` is read from the JWT auth claims (`chatgpt_user_id`, falling back to `user_id`).
 - The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`.
-- The registry field still named `account_id` stores this local `record_key`, not the raw ChatGPT workspace/account ID.
+- The registry field `account_key` stores this local `record_key`, not the raw ChatGPT workspace/account ID.
 - The auth snapshot file key is derived from `record_key`:
   - filename-safe IDs keep the raw `record_key`
   - other IDs are base64url-encoded before writing `accounts/<account file key>.auth.json`
@@ -110,7 +110,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, active-account activation time, and per-account local rollout dedupe state are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans direct child auth files from that directory: current account snapshots (`*.auth.json`) plus `auth.json.bak.*` backups.
 - If `~/.codex/accounts/` is missing during `--purge`, it is treated as an empty snapshot set and the command still attempts to import the current `~/.codex/auth.json`.
-- `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account's `record_key` becomes `active_account_id`.
+- `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account's `record_key` becomes `active_account_key`.
 - `--purge` rebuilds `registry.json` and rewrites imported snapshots into the current `accounts/<account file key>.auth.json` naming/layout for each auth file it can parse successfully.
 - `--purge` does not delete old snapshot files or backups, so stale pre-migration snapshot filenames may still remain until cleaned up separately.
 - `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
@@ -161,7 +161,7 @@ When switching:
 
 1. `auth.json` is backed up if its contents would change.
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
-3. The registry’s `active_account_id` is updated to that account’s `record_key`.
+3. The registry’s `active_account_key` is updated to that account’s `record_key`.
 
 The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
@@ -259,7 +259,7 @@ Usage refresh is active-account-only and depends on `api.usage`:
 
 Current registry/account field roles:
 
-- `account_id`: local `record_key`, used for registry identity, snapshot filenames, switching, and `active_account_id`
+- `account_key`: local `record_key`, used for registry identity, snapshot filenames, switching, and `active_account_key`
 - `chatgpt_account_id`: raw ChatGPT workspace/account context ID from `tokens.account_id`, used for usage API requests
 - `chatgpt_user_id`: user identity component from the JWT, used to build `record_key`
 

@@ -484,7 +484,7 @@ pub fn selectAccount(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
 
 pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
     if (indices.len == 0) return null;
-    if (indices.len == 1) return reg.accounts.items[indices[0]].account_id;
+    if (indices.len == 1) return reg.accounts.items[indices[0]].account_key;
     return if (comptime builtin.os.tag == .windows)
         selectWithNumbersFromIndices(allocator, reg, indices)
     else
@@ -516,7 +516,7 @@ fn activeSelectableIndex(rows: *const SwitchRows) ?usize {
 fn accountIdForSelectable(rows: *const SwitchRows, reg: *registry.Registry, selectable_idx: usize) []const u8 {
     const row_idx = rows.selectable_row_indices[selectable_idx];
     const account_idx = rows.items[row_idx].account_index.?;
-    return reg.accounts.items[account_idx].account_id;
+    return reg.accounts.items[account_idx].account_key;
 }
 
 fn accountIndexForSelectable(rows: *const SwitchRows, selectable_idx: usize) usize {

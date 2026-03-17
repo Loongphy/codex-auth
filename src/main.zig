@@ -137,7 +137,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
-    try registry.setActiveAccount(allocator, &reg, record_key);
+    try registry.setActiveAccountKey(allocator, &reg, record_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -163,7 +163,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .switch_account);
 
-    var selected_account_id: ?[]const u8 = null;
+    var selected_account_key: ?[]const u8 = null;
     if (opts.query) |query| {
         var matches = try findMatchingAccounts(allocator, &reg, query);
         defer matches.deinit(allocator);
@@ -174,19 +174,19 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         }
 
         if (matches.items.len == 1) {
-            selected_account_id = reg.accounts.items[matches.items[0]].account_id;
+            selected_account_key = reg.accounts.items[matches.items[0]].account_key;
         } else {
-            selected_account_id = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
+            selected_account_key = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
         }
-        if (selected_account_id == null) return;
+        if (selected_account_key == null) return;
     } else {
         const selected = try cli.selectAccount(allocator, &reg);
         if (selected == null) return;
-        selected_account_id = selected.?;
+        selected_account_key = selected.?;
     }
-    const account_id = selected_account_id.?;
+    const account_key = selected_account_key.?;
 
-    try registry.activateAccountById(allocator, codex_home, &reg, account_id);
+    try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -227,11 +227,11 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     if (selected.?.len == 0) return;
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    if (reg.active_account_id == null and reg.accounts.items.len > 0) {
+    if (reg.active_account_key == null and reg.accounts.items.len > 0) {
         const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
-        const account_id = reg.accounts.items[best_idx].account_id;
+        const account_key = reg.accounts.items[best_idx].account_key;
 
-        try registry.activateAccountById(allocator, codex_home, &reg, account_id);
+        try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
 }

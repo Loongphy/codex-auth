@@ -293,11 +293,11 @@ fn refreshActiveUsageFromApi(
     var snapshot_consumed = false;
     defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
 
-    const account_id = reg.active_account_id orelse return .unchanged;
-    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return .unchanged;
+    const account_key = reg.active_account_key orelse return .unchanged;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return .unchanged;
     if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return .unchanged;
 
-    registry.updateUsage(allocator, reg, account_id, latest);
+    registry.updateUsage(allocator, reg, account_key, latest);
     snapshot_consumed = true;
     return .updated;
 }
@@ -324,23 +324,23 @@ fn refreshActiveUsageFromSessions(
         .path = latest.path,
         .event_timestamp_ms = latest.event_timestamp_ms,
     };
-    const account_id = reg.active_account_id orelse return false;
+    const account_key = reg.active_account_key orelse return false;
     const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
     if (latest.event_timestamp_ms < activated_at_ms) return false;
-    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return false;
-    registry.updateUsage(allocator, reg, account_id, latest.snapshot);
+    registry.updateUsage(allocator, reg, account_key, latest.snapshot);
     snapshot_consumed = true;
     try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest.path, latest.event_timestamp_ms);
     return true;
 }
 
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
-    const active = reg.active_account_id orelse return null;
+    const active = reg.active_account_key orelse return null;
     var best_idx: ?usize = null;
     var best: ?CandidateScore = null;
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.mem.eql(u8, rec.account_id, active)) continue;
+        if (std.mem.eql(u8, rec.account_key, active)) continue;
         const score = candidateScore(rec, now);
         if (best == null or candidateBetter(score, best.?)) {
             best = score;
@@ -351,8 +351,8 @@ pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
 }
 
 pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
-    const account_id = reg.active_account_id orelse return false;
-    const idx = registry.findAccountIndexByAccountId(reg, account_id) orelse return false;
+    const account_key = reg.active_account_key orelse return false;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
     const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
@@ -362,17 +362,17 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
     if (!reg.auto_switch.enabled) return false;
-    const active = reg.active_account_id orelse return false;
+    const active = reg.active_account_key orelse return false;
     const now = std.time.timestamp();
     if (!shouldSwitchCurrent(reg, now)) return false;
 
-    const active_idx = registry.findAccountIndexByAccountId(reg, active) orelse return false;
+    const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return false;
     const current = candidateScore(&reg.accounts.items[active_idx], now);
     const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return false;
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
     if (candidate.value <= current.value) return false;
 
-    try registry.activateAccountById(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_id);
+    try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
     return true;
 }
 
@@ -401,15 +401,15 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
     if (try refreshActiveUsage(allocator, codex_home, &reg)) {
         changed = true;
     }
-    const active_idx_before = if (reg.active_account_id) |account_id|
-        registry.findAccountIndexByAccountId(&reg, account_id)
+    const active_idx_before = if (reg.active_account_key) |account_key|
+        registry.findAccountIndexByAccountKey(&reg, account_key)
     else
         null;
     if (try maybeAutoSwitch(allocator, codex_home, &reg)) {
         changed = true;
         if (active_idx_before) |from_idx| {
-            if (reg.active_account_id) |account_id| {
-                if (registry.findAccountIndexByAccountId(&reg, account_id)) |to_idx| {
+            if (reg.active_account_key) |account_key| {
+                if (registry.findAccountIndexByAccountKey(&reg, account_key)) |to_idx| {
                     emitAutoSwitchLog(&reg.accounts.items[from_idx], &reg.accounts.items[to_idx]);
                 }
             }

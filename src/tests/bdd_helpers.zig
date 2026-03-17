@@ -20,7 +20,7 @@ fn authJsonFromPayload(allocator: std.mem.Allocator, payload: []const u8) ![]u8 
     return try std.fmt.allocPrint(allocator, "{{\"tokens\":{{\"id_token\":\"{s}\"}}}}", .{jwt});
 }
 
-pub fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+pub fn accountKeyForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
     defer allocator.free(chatgpt_user_id);
     const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
@@ -116,7 +116,7 @@ pub fn authJsonWithoutAccountId(allocator: std.mem.Allocator, email: []const u8,
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
         .schema_version = registry.current_schema_version,
-        .active_account_id = null,
+        .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
@@ -131,7 +131,7 @@ pub fn appendAccount(
     alias: []const u8,
     plan: ?registry.PlanType,
 ) !void {
-    const account_id = try accountIdForEmailAlloc(allocator, email);
+    const account_id = try accountKeyForEmailAlloc(allocator, email);
     errdefer allocator.free(account_id);
     const owned_email = try allocator.dupe(u8, email);
     errdefer allocator.free(owned_email);
@@ -142,7 +142,7 @@ pub fn appendAccount(
     const owned_chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
     errdefer allocator.free(owned_chatgpt_user_id);
     const rec = registry.AccountRecord{
-        .account_id = account_id,
+        .account_key = account_id,
         .chatgpt_account_id = owned_chatgpt_account_id,
         .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,

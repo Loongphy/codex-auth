@@ -5,7 +5,7 @@ const registry = @import("../registry.zig");
 fn makeRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
-        .active_account_id = null,
+        .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
@@ -25,7 +25,7 @@ fn appendAccount(
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
-        .account_id = try allocator.dupe(u8, record_key),
+        .account_key = try allocator.dupe(u8, record_key),
         .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
         .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),

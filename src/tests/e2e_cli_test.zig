@@ -134,12 +134,12 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, email));
 
-    const expected_account_id = try bdd.accountIdForEmailAlloc(gpa, email);
+    const expected_account_id = try bdd.accountKeyForEmailAlloc(gpa, email);
     defer gpa.free(expected_account_id);
-    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, expected_account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, expected_account_id));
 
     const snapshot_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
     defer gpa.free(snapshot_path);
@@ -214,12 +214,12 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(u32, registry.current_schema_version), loaded.schema_version);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(loaded.active_account_key != null);
 
-    const expected_account_id = try bdd.accountIdForEmailAlloc(gpa, email);
+    const expected_account_id = try bdd.accountKeyForEmailAlloc(gpa, email);
     defer gpa.free(expected_account_id);
-    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, expected_account_id));
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, expected_account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, expected_account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_key, expected_account_id));
 
     const migrated_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
     defer gpa.free(migrated_path);

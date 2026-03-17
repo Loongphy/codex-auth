@@ -80,9 +80,9 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
         .plan_type = null,
     }, 200);
     try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
@@ -99,9 +99,9 @@ test "Scenario: Given weekly remaining below threshold when checking current the
         .credits = null,
         .plan_type = null,
     }, 100);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
@@ -118,9 +118,9 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
         .credits = null,
         .plan_type = null,
     }, 100);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
@@ -137,9 +137,9 @@ test "Scenario: Given stricter weekly threshold when checking current then defau
         .credits = null,
         .plan_type = null,
     }, 100);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
@@ -178,9 +178,9 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
         .plan_type = null,
     }, 100);
     try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
-    const low_account_id = try bdd.accountIdForEmailAlloc(gpa, "low@example.com");
+    const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low@example.com");
     defer gpa.free(low_account_id);
-    try registry.setActiveAccount(gpa, &reg, low_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, low_account_id);
 
     const low_auth = try bdd.authJsonWithEmailPlan(gpa, "low@example.com", "pro");
     defer gpa.free(low_auth);
@@ -189,7 +189,7 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
 
     const low_path = try registry.accountAuthPath(gpa, codex_home, low_account_id);
     defer gpa.free(low_path);
-    const fresh_account_id = try bdd.accountIdForEmailAlloc(gpa, "fresh@example.com");
+    const fresh_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fresh@example.com");
     defer gpa.free(fresh_account_id);
     const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
     defer gpa.free(fresh_path);
@@ -201,8 +201,8 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
 
     try std.testing.expect(try auto.maybeAutoSwitch(gpa, codex_home, &reg));
-    try std.testing.expect(reg.active_account_id != null);
-    try std.testing.expect(std.mem.eql(u8, reg.active_account_id.?, fresh_account_id));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, fresh_account_id));
 
     const active_data = try bdd.readFileAlloc(gpa, active_path);
     defer gpa.free(active_data);
@@ -380,9 +380,9 @@ test "Scenario: Given missing sessions dir when refreshing active usage then it 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
@@ -400,9 +400,9 @@ test "Scenario: Given local-only mode when refreshing usage then api fetcher is 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
@@ -421,9 +421,9 @@ test "Scenario: Given api usage for active account when refreshing usage then it
     defer reg.deinit(gpa);
     reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
@@ -445,9 +445,9 @@ test "Scenario: Given unchanged api usage when refreshing usage then rollout fal
     defer reg.deinit(gpa);
     reg.api.usage = true;
     try appendAccountWithUsage(gpa, &reg, "active@example.com", apiSnapshot(), 777);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot)));
@@ -470,18 +470,18 @@ test "Scenario: Given api-backed switch with stale rollout when api later fails 
     reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
-    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
-    try registry.setActiveAccount(gpa, &reg, account_id_a);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_a);
     reg.active_account_activated_at_ms = 0;
     reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiSnapshot));
 
-    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    const account_id_b = try bdd.accountKeyForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
-    try registry.setActiveAccount(gpa, &reg, account_id_b);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_b);
 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
     const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
@@ -501,9 +501,9 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
-    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
-    try registry.setActiveAccount(gpa, &reg, account_id_a);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_a);
     reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
@@ -513,9 +513,9 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
     const b_idx = bdd.findAccountIndexByEmail(&reg, "b@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[a_idx].last_usage != null);
 
-    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    const account_id_b = try bdd.accountKeyForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
-    try registry.setActiveAccount(gpa, &reg, account_id_b);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_b);
     reg.active_account_activated_at_ms = 1735689600001;
     reg.active_account_activated_at_ms = 1735689630000;
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
@@ -535,17 +535,17 @@ test "Scenario: Given new rollout event in the same file after switching account
     defer reg.deinit(gpa);
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
-    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
-    try registry.setActiveAccount(gpa, &reg, account_id_a);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_a);
     reg.active_account_activated_at_ms = 0;
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
     try std.testing.expect(try auto.refreshActiveUsage(gpa, codex_home, &reg));
 
-    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    const account_id_b = try bdd.accountKeyForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
-    try registry.setActiveAccount(gpa, &reg, account_id_b);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_b);
     reg.active_account_activated_at_ms = 1735689630000;
 
     const next_rollout_line = "{" ++
@@ -576,9 +576,9 @@ test "Scenario: Given api-only mode and api failure when refreshing usage then l
     defer reg.deinit(gpa);
     reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
@@ -602,17 +602,17 @@ test "Scenario: Given api failure when returning to local refresh after switchin
     reg.api.usage = true;
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
-    const account_id_a = try bdd.accountIdForEmailAlloc(gpa, "a@example.com");
+    const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
     defer gpa.free(account_id_a);
-    try registry.setActiveAccount(gpa, &reg, account_id_a);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_a);
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = rollout_line ++ "\n" });
 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
 
-    const account_id_b = try bdd.accountIdForEmailAlloc(gpa, "b@example.com");
+    const account_id_b = try bdd.accountKeyForEmailAlloc(gpa, "b@example.com");
     defer gpa.free(account_id_b);
-    try registry.setActiveAccount(gpa, &reg, account_id_b);
+    try registry.setActiveAccountKey(gpa, &reg, account_id_b);
     reg.api.usage = false;
 
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));
@@ -637,9 +637,9 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
         .credits = null,
         .plan_type = .team,
     }, 777);
-    const active_account_id = try bdd.accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try registry.setActiveAccount(gpa, &reg, active_account_id);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-b.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });

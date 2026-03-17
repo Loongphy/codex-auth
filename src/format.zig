@@ -173,7 +173,7 @@ fn printAccountsJson(reg: *registry.Registry) !void {
     const out = stdout.out();
     const dump = RegistryOut{
         .schema_version = reg.schema_version,
-        .active_account_id = reg.active_account_id,
+        .active_account_key = reg.active_account_key,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
         .accounts = reg.accounts.items,
@@ -187,11 +187,11 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try out.writeAll("active,record_key,chatgpt_account_id,chatgpt_user_id,email,plan,limit_5h,limit_weekly,last_used\n");
+    try out.writeAll("active,account_key,chatgpt_account_id,chatgpt_user_id,email,plan,limit_5h,limit_weekly,last_used\n");
     for (reg.accounts.items) |rec| {
-        const active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
+        const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
         const email = rec.email;
-        const record_key = rec.account_id;
+        const account_key = rec.account_key;
         const chatgpt_account_id = rec.chatgpt_account_id;
         const chatgpt_user_id = rec.chatgpt_user_id;
         const plan = planDisplay(&rec, "");
@@ -205,7 +205,7 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
         defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
         try out.print(
             "{s},{s},{s},{s},{s},{s},{s},{s},{s}\n",
-            .{ if (active) "1" else "0", record_key, chatgpt_account_id, chatgpt_user_id, email, plan, rate_5h_str, rate_week_str, last },
+            .{ if (active) "1" else "0", account_key, chatgpt_account_id, chatgpt_user_id, email, plan, rate_5h_str, rate_week_str, last },
         );
     }
     try out.flush();
@@ -216,7 +216,7 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
     stdout.init();
     const out = stdout.out();
     for (reg.accounts.items) |rec| {
-        const active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
+        const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
         const email = rec.email;
         const plan = planDisplay(&rec, "-");
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
@@ -235,10 +235,9 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
     try out.flush();
 }
 
-
 const RegistryOut = struct {
     schema_version: u32,
-    active_account_id: ?[]const u8,
+    active_account_key: ?[]const u8,
     auto_switch: registry.AutoSwitchConfig,
     api: registry.ApiConfig,
     accounts: []const registry.AccountRecord,
@@ -380,7 +379,7 @@ fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8
 
     const candidates_same = [_][]const u8{
         try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time }),
-        try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{ remaining }),
+        try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining}),
     };
     defer std.heap.page_allocator.free(candidates_same[0]);
     defer std.heap.page_allocator.free(candidates_same[1]);
@@ -396,7 +395,7 @@ fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8
     defer std.heap.page_allocator.free(candidate_date);
     const candidate_time = try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time });
     defer std.heap.page_allocator.free(candidate_time);
-    const candidate_percent = try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{ remaining });
+    const candidate_percent = try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining});
     defer std.heap.page_allocator.free(candidate_percent);
 
     if (width >= candidate_full.len or width == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_full});

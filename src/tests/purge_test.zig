@@ -15,7 +15,7 @@ fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}.auth.json", .{key});
 }
 
-fn accountIdForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
+fn accountKeyForEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
     defer allocator.free(chatgpt_user_id);
     const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
@@ -122,7 +122,7 @@ test "Scenario: Given legacy version key current-layout registry when loading th
         .data =
         \\{
         \\  "version": 3,
-        \\  "active_account_id": null,
+        \\  "active_account_key": null,
         \\  "auto_switch": {
         \\    "enabled": true
         \\  },
@@ -217,12 +217,12 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.schema_version == registry.current_schema_version);
     try std.testing.expect(loaded.accounts.items.len == 1);
-    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(loaded.active_account_key != null);
 
-    const account_id = try accountIdForEmailAlloc(gpa, email);
+    const account_id = try accountKeyForEmailAlloc(gpa, email);
     defer gpa.free(account_id);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, account_id));
-    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_key, account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "legacy"));
     try std.testing.expect(loaded.accounts.items[0].last_used_at != null);
     try std.testing.expect(loaded.accounts.items[0].last_used_at.? >= 2);
@@ -241,7 +241,7 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
-    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_id\": \"{s}\"", .{account_id});
+    const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
@@ -269,7 +269,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         .data =
         \\{
         \\  "schema_version": 3,
-        \\  "active_account_id": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\  "active_account_key": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\  "active_account_activated_at_ms": 1735689600000,
         \\  "auto_switch": {
         \\    "enabled": true,
@@ -281,7 +281,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         \\  },
         \\  "accounts": [
         \\    {
-        \\      "account_id": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "account_key": "user-r4g1strystale000001::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\      "chatgpt_account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\      "chatgpt_user_id": "user-r4g1strystale000001",
         \\      "email": "stale@example.com",
@@ -318,23 +318,23 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
 
-    const active_account_id = try accountIdForEmailAlloc(gpa, "active@example.com");
-    defer gpa.free(active_account_id);
-    try std.testing.expect(loaded.active_account_id != null);
-    try std.testing.expect(std.mem.eql(u8, loaded.active_account_id.?, active_account_id));
+    const active_account_key = try accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, active_account_key));
 
-    const stale_idx = registry.findAccountIndexByAccountId(&loaded, "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf");
+    const stale_idx = registry.findAccountIndexByAccountKey(&loaded, "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf");
     try std.testing.expect(stale_idx == null);
 
-    const imported_account_id = try accountIdForEmailAlloc(gpa, "personal@example.com");
+    const imported_account_id = try accountKeyForEmailAlloc(gpa, "personal@example.com");
     defer gpa.free(imported_account_id);
-    const imported_idx = registry.findAccountIndexByAccountId(&loaded, imported_account_id) orelse return error.TestExpectedEqual;
+    const imported_idx = registry.findAccountIndexByAccountKey(&loaded, imported_account_id) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[imported_idx].alias, "personal"));
     try std.testing.expect(loaded.accounts.items[imported_idx].last_usage == null);
     try std.testing.expect(loaded.accounts.items[imported_idx].last_usage_at == null);
     try std.testing.expect(loaded.accounts.items[imported_idx].last_local_rollout == null);
 
-    const active_idx = registry.findAccountIndexByAccountId(&loaded, active_account_id) orelse return error.TestExpectedEqual;
+    const active_idx = registry.findAccountIndexByAccountKey(&loaded, active_account_key) orelse return error.TestExpectedEqual;
     try std.testing.expect(loaded.accounts.items[active_idx].last_usage == null);
     try std.testing.expect(loaded.accounts.items[active_idx].last_usage_at == null);
     try std.testing.expect(loaded.accounts.items[active_idx].last_local_rollout == null);
@@ -440,7 +440,7 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
 
     const snapshot_auth = try authJsonWithEmailPlan(gpa, "snap@example.com", "pro");
     defer gpa.free(snapshot_auth);
-    const snapshot_account_id = try accountIdForEmailAlloc(gpa, "snap@example.com");
+    const snapshot_account_id = try accountKeyForEmailAlloc(gpa, "snap@example.com");
     defer gpa.free(snapshot_account_id);
     const snapshot_path = try registry.accountAuthPath(gpa, codex_home, snapshot_account_id);
     defer gpa.free(snapshot_path);
@@ -479,9 +479,9 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "backup-only@example.com"));
 
-    const record_key = try accountIdForEmailAlloc(gpa, "backup-only@example.com");
+    const record_key = try accountKeyForEmailAlloc(gpa, "backup-only@example.com");
     defer gpa.free(record_key);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_id, record_key));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_key, record_key));
 
     const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record_key);
     defer gpa.free(snapshot_path);
@@ -529,10 +529,10 @@ test "Scenario: Given same team account id across different users when purging t
     const first_record_key = "user-VcL6uT0HoEblRE4RSV7NsUDI::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
     const second_record_key = "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
 
-    const first_idx = registry.findAccountIndexByAccountId(&loaded, first_record_key) orelse return error.TestExpectedEqual;
-    const second_idx = registry.findAccountIndexByAccountId(&loaded, second_record_key) orelse return error.TestExpectedEqual;
+    const first_idx = registry.findAccountIndexByAccountKey(&loaded, first_record_key) orelse return error.TestExpectedEqual;
+    const second_idx = registry.findAccountIndexByAccountKey(&loaded, second_record_key) orelse return error.TestExpectedEqual;
 
-    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[first_idx].account_id, loaded.accounts.items[second_idx].account_id));
+    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[first_idx].account_key, loaded.accounts.items[second_idx].account_key));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[first_idx].chatgpt_account_id, shared_chatgpt_account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[second_idx].chatgpt_account_id, shared_chatgpt_account_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[first_idx].chatgpt_user_id, "user-VcL6uT0HoEblRE4RSV7NsUDI"));
@@ -582,10 +582,10 @@ test "Scenario: Given same user across team and free workspaces when purging the
     const team_record_key = "user-NuLAf1g5RIAwHDQxfoHfgcPo::d52355a3-bfa6-4d2b-882e-d4a2927f488c";
     const free_record_key = "user-NuLAf1g5RIAwHDQxfoHfgcPo::fe43c186-7b49-4880-8744-e662b796a9d9";
 
-    const team_idx = registry.findAccountIndexByAccountId(&loaded, team_record_key) orelse return error.TestExpectedEqual;
-    const free_idx = registry.findAccountIndexByAccountId(&loaded, free_record_key) orelse return error.TestExpectedEqual;
+    const team_idx = registry.findAccountIndexByAccountKey(&loaded, team_record_key) orelse return error.TestExpectedEqual;
+    const free_idx = registry.findAccountIndexByAccountKey(&loaded, free_record_key) orelse return error.TestExpectedEqual;
 
-    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[team_idx].account_id, loaded.accounts.items[free_idx].account_id));
+    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[team_idx].account_key, loaded.accounts.items[free_idx].account_key));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[team_idx].chatgpt_user_id, shared_chatgpt_user_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[free_idx].chatgpt_user_id, shared_chatgpt_user_id));
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[team_idx].chatgpt_account_id, "d52355a3-bfa6-4d2b-882e-d4a2927f488c"));
@@ -613,6 +613,6 @@ test "Scenario: Given purge without accounts directory when rebuilding then curr
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
-    try std.testing.expect(loaded.active_account_id != null);
+    try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "active@example.com"));
 }

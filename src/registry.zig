@@ -54,7 +54,7 @@ pub const ApiConfig = struct {
 };
 
 pub const AccountRecord = struct {
-    account_id: []u8,
+    account_key: []u8,
     chatgpt_account_id: []u8,
     chatgpt_user_id: []u8,
     email: []u8,
@@ -76,7 +76,7 @@ pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
 
 pub const Registry = struct {
     schema_version: u32,
-    active_account_id: ?[]u8,
+    active_account_key: ?[]u8,
     active_account_activated_at_ms: ?i64,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
@@ -86,7 +86,7 @@ pub const Registry = struct {
         for (self.accounts.items) |*rec| {
             freeAccountRecord(allocator, rec);
         }
-        if (self.active_account_id) |k| allocator.free(k);
+        if (self.active_account_key) |k| allocator.free(k);
         self.accounts.deinit(allocator);
     }
 };
@@ -100,7 +100,7 @@ pub fn defaultApiConfig() ApiConfig {
 }
 
 fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) void {
-    allocator.free(rec.account_id);
+    allocator.free(rec.account_key);
     allocator.free(rec.chatgpt_account_id);
     allocator.free(rec.chatgpt_user_id);
     allocator.free(rec.email);
@@ -464,9 +464,9 @@ fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_na
 fn resolveStrictAccountAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
-    account_id: []const u8,
+    account_key: []const u8,
 ) ![]u8 {
-    const path = try accountAuthPath(allocator, codex_home, account_id);
+    const path = try accountAuthPath(allocator, codex_home, account_key);
     if (std.fs.cwd().openFile(path, .{})) |file| {
         file.close();
         return path;
@@ -478,7 +478,7 @@ fn resolveStrictAccountAuthPath(
 
 fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
     for (reg.accounts.items) |rec| {
-        const expected_name = accountSnapshotFileName(std.heap.page_allocator, rec.account_id) catch continue;
+        const expected_name = accountSnapshotFileName(std.heap.page_allocator, rec.account_key) catch continue;
         defer std.heap.page_allocator.free(expected_name);
         if (std.mem.eql(u8, entry_name, expected_name)) {
             return true;
@@ -918,7 +918,7 @@ fn syncCurrentAuthBestEffort(
     _ = info.email orelse return false;
     const record_key = info.record_key orelse return false;
 
-    const existing_idx = findAccountIndexByAccountId(reg, record_key);
+    const existing_idx = findAccountIndexByAccountKey(reg, record_key);
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
     try ensureAccountsDir(allocator, codex_home);
@@ -953,40 +953,40 @@ fn syncCurrentAuthBestEffort(
         try upsertAccount(allocator, reg, record);
     }
 
-    try setActiveAccount(allocator, reg, record_key);
+    try setActiveAccountKey(allocator, reg, record_key);
     return true;
 }
 
-pub fn findAccountIndexByAccountId(reg: *Registry, account_id: []const u8) ?usize {
+pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
-        if (std.mem.eql(u8, rec.account_id, account_id)) return i;
+        if (std.mem.eql(u8, rec.account_key, account_key)) return i;
     }
     return null;
 }
 
-pub fn setActiveAccount(allocator: std.mem.Allocator, reg: *Registry, account_id: []const u8) !void {
-    if (reg.active_account_id) |k| {
-        if (std.mem.eql(u8, k, account_id)) return;
+pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8) !void {
+    if (reg.active_account_key) |k| {
+        if (std.mem.eql(u8, k, account_key)) return;
     }
-    const new_active_account_id = try allocator.dupe(u8, account_id);
-    if (reg.active_account_id) |k| {
+    const new_active_account_key = try allocator.dupe(u8, account_key);
+    if (reg.active_account_key) |k| {
         allocator.free(k);
     }
-    reg.active_account_id = new_active_account_id;
+    reg.active_account_key = new_active_account_key;
     reg.active_account_activated_at_ms = std.time.milliTimestamp();
     const now = std.time.timestamp();
     for (reg.accounts.items) |*rec| {
-        if (std.mem.eql(u8, rec.account_id, account_id)) {
+        if (std.mem.eql(u8, rec.account_key, account_key)) {
             rec.last_used_at = now;
             break;
         }
     }
 }
 
-pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_id: []const u8, snapshot: RateLimitSnapshot) void {
+pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8, snapshot: RateLimitSnapshot) void {
     const now = std.time.timestamp();
     for (reg.accounts.items) |*rec| {
-        if (std.mem.eql(u8, rec.account_id, account_id)) {
+        if (std.mem.eql(u8, rec.account_key, account_key)) {
             if (rec.last_usage) |*u| {
                 if (u.credits) |*c| {
                     if (c.balance) |b| allocator.free(b);
@@ -1030,7 +1030,7 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         return false;
     };
 
-    const matched_index = findAccountIndexByAccountId(reg, record_key);
+    const matched_index = findAccountIndexByAccountKey(reg, record_key);
     if (matched_index == null) {
         const dest = try accountAuthPath(allocator, codex_home, record_key);
         defer allocator.free(dest);
@@ -1040,15 +1040,15 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
 
         const record = try accountFromAuth(allocator, "", &info);
         try upsertAccount(allocator, reg, record);
-        try setActiveAccount(allocator, reg, record_key);
+        try setActiveAccountKey(allocator, reg, record_key);
         return true;
     }
 
     const idx = matched_index.?;
-    const rec_account_id = reg.accounts.items[idx].account_id;
+    const rec_account_key = reg.accounts.items[idx].account_key;
     var changed = false;
-    if (reg.active_account_id) |k| {
-        if (!std.mem.eql(u8, k, rec_account_id)) changed = true;
+    if (reg.active_account_key) |k| {
+        if (!std.mem.eql(u8, k, rec_account_key)) changed = true;
     } else {
         changed = true;
     }
@@ -1068,14 +1068,14 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
     }
     reg.accounts.items[idx].auth_mode = info.auth_mode;
 
-    const dest = try accountAuthPath(allocator, codex_home, rec_account_id);
+    const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
     defer allocator.free(dest);
     if (!(try fileEqualsBytes(allocator, dest, auth_bytes))) {
         try copyFile(auth_path, dest);
         changed = true;
     }
 
-    try setActiveAccount(allocator, reg, rec_account_id);
+    try setActiveAccountKey(allocator, reg, rec_account_key);
     return changed;
 }
 
@@ -1089,17 +1089,17 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         if (idx < removed.len) removed[idx] = true;
     }
 
-    if (reg.active_account_id) |key| {
+    if (reg.active_account_key) |key| {
         var active_removed = false;
         for (reg.accounts.items, 0..) |rec, i| {
-            if (removed[i] and std.mem.eql(u8, rec.account_id, key)) {
+            if (removed[i] and std.mem.eql(u8, rec.account_key, key)) {
                 active_removed = true;
                 break;
             }
         }
         if (active_removed) {
             allocator.free(key);
-            reg.active_account_id = null;
+            reg.active_account_key = null;
             reg.active_account_activated_at_ms = null;
         }
     }
@@ -1107,7 +1107,7 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
     var write_idx: usize = 0;
     for (reg.accounts.items, 0..) |*rec, i| {
         if (removed[i]) {
-            const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_id);
+            const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_key);
             defer allocator.free(preferred_path);
             std.fs.cwd().deleteFile(preferred_path) catch {};
             freeAccountRecord(allocator, rec);
@@ -1175,14 +1175,14 @@ pub fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_prima
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
 }
 
-pub fn activateAccountById(
+pub fn activateAccountByKey(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *Registry,
-    account_id: []const u8,
+    account_key: []const u8,
 ) !void {
-    _ = findAccountIndexByAccountId(reg, account_id) orelse return error.AccountNotFound;
-    const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_id);
+    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(src);
 
     const dest = try activeAuthPath(allocator, codex_home);
@@ -1190,7 +1190,7 @@ pub fn activateAccountById(
 
     try backupAuthIfChanged(allocator, codex_home, dest, src);
     try copyFile(src, dest);
-    try setActiveAccount(allocator, reg, account_id);
+    try setActiveAccountKey(allocator, reg, account_key);
 }
 
 pub fn accountFromAuth(
@@ -1213,7 +1213,7 @@ pub fn accountFromAuth(
     const owned_alias = try allocator.dupe(u8, alias);
     errdefer allocator.free(owned_alias);
     return AccountRecord{
-        .account_id = owned_record_key,
+        .account_key = owned_record_key,
         .chatgpt_account_id = owned_chatgpt_account_id,
         .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,
@@ -1257,7 +1257,7 @@ fn mergeAccountRecord(allocator: std.mem.Allocator, dest: *AccountRecord, incomi
 
 pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: AccountRecord) !void {
     for (reg.accounts.items) |*rec| {
-        if (std.mem.eql(u8, rec.account_id, record.account_id)) {
+        if (std.mem.eql(u8, rec.account_key, record.account_key)) {
             mergeAccountRecord(allocator, rec, record);
             return;
         }
@@ -1285,7 +1285,7 @@ fn freeLegacyAccountRecord(allocator: std.mem.Allocator, rec: *LegacyAccountReco
 fn defaultRegistry() Registry {
     return Registry{
         .schema_version = current_schema_version,
-        .active_account_id = null,
+        .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
@@ -1335,12 +1335,12 @@ fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMa
 }
 
 fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !AccountRecord {
-    const account_id_val = obj.get("account_id") orelse return error.MissingAccountId;
+    const account_key_val = obj.get("account_key") orelse return error.MissingAccountKey;
     const email_val = obj.get("email") orelse return error.MissingEmail;
     const alias_val = obj.get("alias") orelse return error.MissingAlias;
-    const account_id = switch (account_id_val) {
+    const account_key = switch (account_key_val) {
         .string => |s| s,
-        else => return error.MissingAccountId,
+        else => return error.MissingAccountKey,
     };
     const email = switch (email_val) {
         .string => |s| s,
@@ -1351,7 +1351,7 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         else => return error.MissingAlias,
     };
     var rec = AccountRecord{
-        .account_id = try allocator.dupe(u8, account_id),
+        .account_key = try allocator.dupe(u8, account_key),
         .chatgpt_account_id = switch (obj.get("chatgpt_account_id") orelse return error.MissingChatgptAccountId) {
             .string => |s| try allocator.dupe(u8, s),
             else => return error.MissingChatgptAccountId,
@@ -1470,7 +1470,7 @@ fn migrateLegacyRecord(
     if (!std.mem.eql(u8, email, legacy.email)) return error.EmailMismatch;
 
     var rec = AccountRecord{
-        .account_id = try allocator.dupe(u8, info.record_key orelse return error.MissingChatgptUserId),
+        .account_key = try allocator.dupe(u8, info.record_key orelse return error.MissingChatgptUserId),
         .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
         .chatgpt_user_id = try allocator.dupe(u8, info.chatgpt_user_id orelse return error.MissingChatgptUserId),
         .email = try allocator.dupe(u8, legacy.email),
@@ -1487,7 +1487,7 @@ fn migrateLegacyRecord(
     var rec_owned = true;
     errdefer if (rec_owned) freeAccountRecord(allocator, &rec);
 
-    const new_path = try accountAuthPath(allocator, codex_home, rec.account_id);
+    const new_path = try accountAuthPath(allocator, codex_home, rec.account_key);
     defer allocator.free(new_path);
     try ensureAccountsDir(allocator, codex_home);
     if (!(try filesEqual(allocator, legacy_path, new_path))) {
@@ -1501,16 +1501,16 @@ fn migrateLegacyRecord(
     }
 
     const should_activate = if (legacy_active_email) |active_email|
-        reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)
+        reg.active_account_key == null and std.mem.eql(u8, active_email, legacy.email)
     else
         false;
-    const active_account_id = if (should_activate) try allocator.dupe(u8, rec.account_id) else null;
-    errdefer if (active_account_id) |value| allocator.free(value);
+    const active_account_key = if (should_activate) try allocator.dupe(u8, rec.account_key) else null;
+    errdefer if (active_account_key) |value| allocator.free(value);
 
     try upsertAccount(allocator, reg, rec);
     rec_owned = false;
-    if (active_account_id) |value| {
-        reg.active_account_id = value;
+    if (active_account_key) |value| {
+        reg.active_account_key = value;
         reg.active_account_activated_at_ms = 0;
     }
 }
@@ -1530,13 +1530,13 @@ fn loadLegacyRegistryV2(
         if (legacy_active_email) |value| allocator.free(value);
     }
 
-    if (root_obj.get("active_account_id")) |v| {
+    if (root_obj.get("active_account_key")) |v| {
         switch (v) {
-            .string => |s| reg.active_account_id = try allocator.dupe(u8, s),
+            .string => |s| reg.active_account_key = try allocator.dupe(u8, s),
             else => {},
         }
     }
-    if (reg.active_account_id != null) {
+    if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
     }
     if (root_obj.get("active_email")) |v| {
@@ -1554,7 +1554,7 @@ fn loadLegacyRegistryV2(
                         .object => |o| o,
                         else => continue,
                     };
-                    if (obj.get("account_id") != null) {
+                    if (obj.get("account_key") != null) {
                         const rec = try parseAccountRecord(allocator, obj);
                         try upsertAccount(allocator, &reg, rec);
                     } else {
@@ -1586,15 +1586,15 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     var reg = defaultRegistry();
     errdefer reg.deinit(allocator);
 
-    if (root_obj.get("active_account_id")) |v| {
+    if (root_obj.get("active_account_key")) |v| {
         switch (v) {
-            .string => |s| reg.active_account_id = try allocator.dupe(u8, s),
+            .string => |s| reg.active_account_key = try allocator.dupe(u8, s),
             else => {},
         }
     }
     if (root_obj.get("active_account_activated_at_ms")) |v| {
         reg.active_account_activated_at_ms = readInt(v);
-    } else if (reg.active_account_id != null) {
+    } else if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
     }
 
@@ -1642,7 +1642,7 @@ fn usesLegacyVersionField(root_obj: std.json.ObjectMap) bool {
 
 fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     if (root_obj.get("last_attributed_rollout") != null) return true;
-    return root_obj.get("active_account_id") != null and root_obj.get("active_account_activated_at_ms") == null;
+    return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
 }
 
 fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
@@ -1768,7 +1768,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 
     const out = RegistryOut{
         .schema_version = current_schema_version,
-        .active_account_id = reg.active_account_id,
+        .active_account_key = reg.active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
@@ -1790,7 +1790,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 
 const RegistryOut = struct {
     schema_version: u32,
-    active_account_id: ?[]const u8,
+    active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
@@ -1950,7 +1950,7 @@ fn parseThresholdPercent(v: std.json.Value) ?u8 {
 
 pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
     for (reg.accounts.items) |*rec| {
-        const path = resolveStrictAccountAuthPath(allocator, codex_home, rec.account_id) catch |err| switch (err) {
+        const path = resolveStrictAccountAuthPath(allocator, codex_home, rec.account_key) catch |err| switch (err) {
             error.FileNotFound => continue,
             else => return err,
         };
@@ -1977,7 +1977,7 @@ pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const
             std.log.warn("auth file account_id mismatch for {s}; skipping refresh", .{rec.email});
             continue;
         }
-        if (!std.mem.eql(u8, record_key, rec.account_id)) {
+        if (!std.mem.eql(u8, record_key, rec.account_key)) {
             std.log.warn("auth file record_key mismatch for {s}; skipping refresh", .{rec.email});
             continue;
         }
@@ -2014,6 +2014,6 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
 
     const record = try accountFromAuth(allocator, "", &info);
     try upsertAccount(allocator, reg, record);
-    try setActiveAccount(allocator, reg, record_key);
+    try setActiveAccountKey(allocator, reg, record_key);
     return true;
 }

@@ -127,7 +127,7 @@ fn lessThanByDisplayOrder(ctx: SortContext, lhs: usize, rhs: usize) bool {
     const plan_cmp = std.mem.order(u8, a_plan, b_plan);
     if (plan_cmp != .eq) return plan_cmp == .lt;
 
-    return std.mem.lessThan(u8, a.account_id, b.account_id);
+    return std.mem.lessThan(u8, a.account_key, b.account_key);
 }
 
 fn planSortRank(plan: ?registry.PlanType) u8 {
@@ -143,8 +143,8 @@ fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
 }
 
 fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
-    const active = reg.active_account_id orelse return false;
-    return std.mem.eql(u8, active, reg.accounts.items[account_idx].account_id);
+    const active = reg.active_account_key orelse return false;
+    return std.mem.eql(u8, active, reg.accounts.items[account_idx].account_key);
 }
 
 fn singletonAccountCellAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord) ![]u8 {
@@ -170,7 +170,7 @@ fn groupedAccountCellAlloc(
         if (!std.mem.eql(u8, displayPlan(candidate), base)) continue;
         total_same += 1;
         if (candidate_idx == account_idx) continue;
-        if (std.mem.lessThan(u8, candidate.account_id, rec.account_id)) {
+        if (std.mem.lessThan(u8, candidate.account_key, rec.account_key)) {
             ordinal += 1;
         }
     }
