@@ -186,6 +186,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: release-notes.md
           files: |
             release-assets/*/*.tar.gz

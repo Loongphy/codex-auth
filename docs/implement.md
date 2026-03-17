@@ -26,6 +26,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - npm provenance validation requires the package `repository.url` metadata to match the GitHub repository URL exactly (`https://github.com/Loongphy/codex-auth`), including letter case.
 - Stable tags such as `v0.1.3` publish to npm dist-tag `latest`.
 - Prerelease tags such as `v0.2.0-rc.1` publish to npm dist-tag `next`.
+- Prerelease tags such as `v0.2.0-rc.1` also create GitHub draft releases marked as prereleases.
 - GitHub Release assets and npm packages currently target Linux x64, macOS x64, macOS ARM64, and Windows x64.
 - Windows builds include both `codex-auth.exe` and the background helper `codex-auth-auto.exe`; the helper is used only by the managed auto-switch task.
 
