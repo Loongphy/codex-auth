@@ -417,8 +417,8 @@ pub fn writeHintPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
 }
 
 pub fn printAccountNotFoundError(query: []const u8) !void {
-    var stderr_file = std.fs.File.stderr();
-    var writer = stderr_file.writer();
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
