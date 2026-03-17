@@ -871,11 +871,14 @@ fn importAccountsSnapshotDirectory(
         if (!isPurgeImportAuthFile(entry.name)) continue;
 
         const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        var file_path_owned = true;
+        errdefer if (file_path_owned) allocator.free(file_path);
 
         const stat = try dir.statFile(entry.name);
         var info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
             summary.skipped += 1;
             std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(err) });
+            file_path_owned = false;
             allocator.free(file_path);
             continue;
         };
@@ -884,12 +887,14 @@ fn importAccountsSnapshotDirectory(
         const email = info.email orelse {
             summary.skipped += 1;
             std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingEmail) });
+            file_path_owned = false;
             allocator.free(file_path);
             continue;
         };
         const record_key = info.record_key orelse {
             summary.skipped += 1;
             std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingChatgptUserId) });
+            file_path_owned = false;
             allocator.free(file_path);
             continue;
         };
@@ -911,6 +916,7 @@ fn importAccountsSnapshotDirectory(
                 .legacy_snapshot,
         };
         errdefer candidate.deinit(allocator);
+        file_path_owned = false;
 
         if (findPurgeImportCandidateIndexByRecordKey(candidates.items, candidate.record_key)) |idx| {
             if (purgeImportCandidateIsNewer(&candidates.items[idx], &candidate)) {
