@@ -5,6 +5,8 @@ const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
 
+const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -42,6 +44,7 @@ pub fn main() !void {
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
+    if (std.process.hasNonEmptyEnvVarConstant(skip_service_reconcile_env)) return false;
     return switch (cmd) {
         .help, .version, .status, .daemon => false,
         else => true,
@@ -266,4 +269,5 @@ test {
     _ = @import("tests/display_rows_test.zig");
     _ = @import("tests/main_test.zig");
     _ = @import("tests/purge_test.zig");
+    _ = @import("tests/e2e_cli_test.zig");
 }

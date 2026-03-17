@@ -32,7 +32,4 @@ jobs:
       - name: Zig test
         run: |
           zig version
-          zig build test
-
-      - name: Build native binary
-        run: zig build -Doptimize=ReleaseSafe
+          zig test src/main.zig -lc

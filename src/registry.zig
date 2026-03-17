@@ -1600,15 +1600,17 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     defer allocator.free(path);
 
     const cwd = std.fs.cwd();
-    var file = cwd.openFile(path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            return defaultRegistry();
-        }
-        return err;
-    };
-    defer file.close();
+    const data = blk: {
+        var file = cwd.openFile(path, .{}) catch |err| {
+            if (err == error.FileNotFound) {
+                return defaultRegistry();
+            }
+            return err;
+        };
+        defer file.close();
 
-    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+        break :blk try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    };
     defer allocator.free(data);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
@@ -1649,7 +1651,29 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     return reg;
 }
 
+fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
+    const allocator = std.heap.page_allocator;
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, std.time.nanoTimestamp() });
+    defer allocator.free(temp_path);
+
+    {
+        var file = try std.fs.cwd().createFile(temp_path, .{ .truncate = true });
+        defer file.close();
+        try file.writeAll(data);
+        try file.sync();
+    }
+
+    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    try std.fs.cwd().rename(temp_path, path);
+}
+
 fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
+    if (builtin.os.tag == .windows) {
+        return writeRegistryFileReplace(path, data);
+    }
     var buf: [4096]u8 = undefined;
     var atomic_file = try std.fs.cwd().atomicFile(path, .{ .write_buffer = &buf });
     defer atomic_file.deinit();

@@ -619,7 +619,7 @@ fn selectInteractiveFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, q quit, Esc exit\n");
+        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
         if (use_color) try out.writeAll(ansi.reset);
         try out.flush();
 
@@ -785,7 +785,7 @@ fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, q quit, Esc exit\n");
+        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
         if (use_color) try out.writeAll(ansi.reset);
         try out.flush();
 
