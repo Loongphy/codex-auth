@@ -8,10 +8,30 @@ fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
 }
 
 fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void {
+    const global_cache_dir = try std.fs.path.join(allocator, &[_][]const u8{
+        project_root,
+        ".zig-cache",
+        "e2e-global",
+    });
+    defer allocator.free(global_cache_dir);
+
+    const local_cache_dir = try std.fs.path.join(allocator, &[_][]const u8{
+        project_root,
+        ".zig-cache",
+        "e2e-local",
+    });
+    defer allocator.free(local_cache_dir);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_dir);
+    try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{ "zig", "build" },
         .cwd = project_root,
+        .env_map = &env_map,
         .max_output_bytes = 1024 * 1024,
     });
     defer allocator.free(result.stdout);
