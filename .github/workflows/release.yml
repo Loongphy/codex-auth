@@ -84,10 +84,13 @@ jobs:
         run: |
           mkdir -p "artifacts/${{ matrix.id }}/binary"
           cp "zig-out/bin/${{ matrix.binary_name }}" "artifacts/${{ matrix.id }}/binary/${{ matrix.binary_name }}"
+          if [[ "${{ matrix.id }}" == "win32-x64" ]]; then
+            cp "zig-out/bin/codex-auth-auto.exe" "artifacts/${{ matrix.id }}/binary/codex-auth-auto.exe"
+          fi
           if [[ "${{ matrix.archive_name }}" == *.zip ]]; then
             (
               cd "artifacts/${{ matrix.id }}/binary"
-              zip -q "../${{ matrix.archive_name }}" "${{ matrix.binary_name }}"
+              zip -q "../${{ matrix.archive_name }}" ./*
             )
           else
             tar -czf "artifacts/${{ matrix.id }}/${{ matrix.archive_name }}" -C "artifacts/${{ matrix.id }}/binary" "${{ matrix.binary_name }}"

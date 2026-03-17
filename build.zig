@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const is_windows = target.result.os.tag == .windows;
 
     const main_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -15,6 +16,21 @@ pub fn build(b: *std.Build) void {
         .root_module = main_module,
     });
     b.installArtifact(exe);
+
+    if (is_windows) {
+        const auto_module = b.createModule(.{
+            .root_source_file = b.path("src/windows_auto_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        const auto_exe = b.addExecutable(.{
+            .name = "codex-auth-auto",
+            .root_module = auto_module,
+        });
+        auto_exe.subsystem = .Windows;
+        b.installArtifact(auto_exe);
+    }
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {

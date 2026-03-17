@@ -11,7 +11,7 @@ const linux_service_name = "codex-auth-autoswitch.service";
 const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
-const windows_wrapper_name = "codex-auth-autoswitch.cmd";
+const windows_helper_name = "codex-auth-auto.exe";
 const windows_task_trigger_interval = "PT1M";
 const lock_file_name = "auto-switch.lock";
 const poll_interval_ns = 60 * std.time.ns_per_s;
@@ -589,15 +589,12 @@ fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !vo
 }
 
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    const wrapper_path = try windowsWrapperPath(allocator);
-    defer allocator.free(wrapper_path);
-    const wrapper_text = try windowsWrapperText(allocator, self_exe, codex_home);
-    defer allocator.free(wrapper_text);
-    const wrapper_dir = std.fs.path.dirname(wrapper_path).?;
-    try std.fs.cwd().makePath(wrapper_dir);
-    try std.fs.cwd().writeFile(.{ .sub_path = wrapper_path, .data = wrapper_text });
+    _ = codex_home;
+    const helper_path = try windowsHelperPath(allocator, self_exe);
+    defer allocator.free(helper_path);
+    try std.fs.cwd().access(helper_path, .{});
 
-    const action = try windowsTaskAction(allocator, wrapper_path);
+    const action = try windowsTaskAction(allocator, helper_path);
     defer allocator.free(action);
     const end_script = try windowsEndTaskScript(allocator);
     defer allocator.free(end_script);
@@ -639,9 +636,6 @@ fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
         "-Command",
         script,
     });
-    const wrapper_path = try windowsWrapperPath(allocator);
-    defer allocator.free(wrapper_path);
-    std.fs.cwd().deleteFile(wrapper_path) catch {};
 }
 
 fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
@@ -723,27 +717,14 @@ pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_ho
     );
 }
 
-pub fn windowsTaskAction(allocator: std.mem.Allocator, wrapper_path: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "cmd.exe /D /C \"\"{s}\"\"", .{wrapper_path});
-}
-
-pub fn windowsWrapperText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
-    _ = codex_home;
-    const escaped_exe = try escapeBatchValue(allocator, self_exe);
-    defer allocator.free(escaped_exe);
-    const escaped_version = try escapeBatchValue(allocator, version.app_version);
-    defer allocator.free(escaped_version);
-    return try std.fmt.allocPrint(
-        allocator,
-        "@echo off\r\nsetlocal\r\nset \"{s}={s}\"\r\n\"{s}\" daemon --once\r\n",
-        .{ service_version_env_name, escaped_version, escaped_exe },
-    );
+pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "\"{s}\"", .{helper_path});
 }
 
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; Write-Output ($action.Execute + ' ' + $action.Arguments + '|TRIGGER:' + $interval)",
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $interval)",
         .{ windows_task_name, windows_task_name },
     );
 }
@@ -817,19 +798,15 @@ fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_ex
 }
 
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    const wrapper_path = try windowsWrapperPath(allocator);
-    defer allocator.free(wrapper_path);
-    const expected_action = try windowsTaskAction(allocator, wrapper_path);
-    defer allocator.free(expected_action);
+    _ = codex_home;
+    const helper_path = try windowsHelperPath(allocator, self_exe);
+    defer allocator.free(helper_path);
     const expected_fingerprint = try std.fmt.allocPrint(
         allocator,
         "{s}|TRIGGER:{s}",
-        .{ expected_action, windows_task_trigger_interval },
+        .{ helper_path, windows_task_trigger_interval },
     );
     defer allocator.free(expected_fingerprint);
-    const expected_wrapper = try windowsWrapperText(allocator, self_exe, codex_home);
-    defer allocator.free(expected_wrapper);
-    if (!(try fileEqualsBytes(allocator, wrapper_path, expected_wrapper))) return false;
     const script = try windowsTaskMatchScript(allocator);
     defer allocator.free(script);
     const result = runCapture(allocator, &[_][]const u8{
@@ -849,10 +826,9 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     };
 }
 
-fn windowsWrapperPath(allocator: std.mem.Allocator) ![]u8 {
-    const home = try registry.resolveUserHome(allocator);
-    defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex", windows_wrapper_name });
+fn windowsHelperPath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
+    const dir = std.fs.path.dirname(self_exe) orelse return error.FileNotFound;
+    return try std.fs.path.join(allocator, &[_][]const u8{ dir, windows_helper_name });
 }
 
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
@@ -932,19 +908,6 @@ fn escapeSystemdValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
         switch (ch) {
             '\\' => try out.appendSlice(allocator, "\\\\"),
             '"' => try out.appendSlice(allocator, "\\\""),
-            else => try out.append(allocator, ch),
-        }
-    }
-    return try out.toOwnedSlice(allocator);
-}
-
-fn escapeBatchValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(allocator);
-    for (raw) |ch| {
-        switch (ch) {
-            '%' => try out.appendSlice(allocator, "%%"),
-            '\r', '\n' => {},
             else => try out.append(allocator, ch),
         }
     }

@@ -27,6 +27,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - Stable tags such as `v0.1.3` publish to npm dist-tag `latest`.
 - Prerelease tags such as `v0.2.0-rc.1` publish to npm dist-tag `next`.
 - GitHub Release assets and npm packages currently target Linux x64, macOS x64, macOS ARM64, and Windows x64.
+- Windows builds include both `codex-auth.exe` and the background helper `codex-auth-auto.exe`; the helper is used only by the managed auto-switch task.
 
 ## File Layout
 
@@ -209,10 +210,10 @@ Service bootstrap is platform-specific:
 
 - Linux/WSL: `systemd --user` oneshot service plus timer, running once per minute
 - macOS: `LaunchAgent`
-- Windows: user scheduled task running once per minute via a short `cmd.exe` task action that launches a wrapper script under the real user home
+- Windows: user scheduled task running once per minute and launching `codex-auth-auto.exe` directly with no batch wrapper
 
 Service install paths are resolved from the real user home directory.
-The generated service definition also stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:
+The generated Linux/macOS service definition stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:
 
 - if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
 - if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary

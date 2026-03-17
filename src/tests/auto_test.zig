@@ -242,24 +242,15 @@ test "Scenario: Given mac plist when rendering then it includes version metadata
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>daemon</string>") != null);
 }
 
-test "Scenario: Given windows task action when rendering then it uses a short cmd wrapper invocation" {
+test "Scenario: Given windows task action when rendering then it launches the helper directly without cmd" {
     const gpa = std.testing.allocator;
-    const action = try auto.windowsTaskAction(gpa, "C:\\Users\\Example\\.codex\\codex-auth-autoswitch.cmd");
+    const action = try auto.windowsTaskAction(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
     defer gpa.free(action);
 
-    try std.testing.expect(std.mem.indexOf(u8, action, "cmd.exe /D /C") != null);
-    try std.testing.expect(std.mem.indexOf(u8, action, "C:\\Users\\Example\\.codex\\codex-auth-autoswitch.cmd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "cmd.exe /D /C") == null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "\"C:\\Program Files\\codex-auth\\codex-auth-auto.exe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe") == null);
     try std.testing.expect(action.len < 262);
-}
-
-test "Scenario: Given windows wrapper text when rendering then it launches the daemon with version metadata" {
-    const gpa = std.testing.allocator;
-    const wrapper = try auto.windowsWrapperText(gpa, "C:\\Program Files\\codex-auth.exe", "D:\\Codex Home");
-    defer gpa.free(wrapper);
-
-    try std.testing.expect(std.mem.indexOf(u8, wrapper, "set \"CODEX_AUTH_VERSION=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, wrapper, "\"C:\\Program Files\\codex-auth.exe\" daemon --once") != null);
 }
 
 test "Scenario: Given windows task match script when rendering then it validates both action and one-minute trigger" {
@@ -270,6 +261,7 @@ test "Scenario: Given windows task match script when rendering then it validates
     try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Repetition.Interval") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $interval") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
 }
 
