@@ -137,10 +137,14 @@ pub fn appendAccount(
     errdefer allocator.free(owned_email);
     const owned_alias = try allocator.dupe(u8, alias);
     errdefer allocator.free(owned_alias);
+    const owned_chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    errdefer allocator.free(owned_chatgpt_account_id);
+    const owned_chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    errdefer allocator.free(owned_chatgpt_user_id);
     const rec = registry.AccountRecord{
         .account_id = account_id,
-        .chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email),
-        .chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email),
+        .chatgpt_account_id = owned_chatgpt_account_id,
+        .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,
         .alias = owned_alias,
         .plan = plan,

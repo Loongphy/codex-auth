@@ -967,9 +967,12 @@ pub fn findAccountIndexByAccountId(reg: *Registry, account_id: []const u8) ?usiz
 pub fn setActiveAccount(allocator: std.mem.Allocator, reg: *Registry, account_id: []const u8) !void {
     if (reg.active_account_id) |k| {
         if (std.mem.eql(u8, k, account_id)) return;
+    }
+    const new_active_account_id = try allocator.dupe(u8, account_id);
+    if (reg.active_account_id) |k| {
         allocator.free(k);
     }
-    reg.active_account_id = try allocator.dupe(u8, account_id);
+    reg.active_account_id = new_active_account_id;
     reg.active_account_activated_at_ms = std.time.milliTimestamp();
     const now = std.time.timestamp();
     for (reg.accounts.items) |*rec| {
@@ -1481,7 +1484,8 @@ fn migrateLegacyRecord(
         .last_local_rollout = null,
     };
     legacy.last_usage = null;
-    errdefer freeAccountRecord(allocator, &rec);
+    var rec_owned = true;
+    errdefer if (rec_owned) freeAccountRecord(allocator, &rec);
 
     const new_path = try accountAuthPath(allocator, codex_home, rec.account_id);
     defer allocator.free(new_path);
@@ -1497,6 +1501,7 @@ fn migrateLegacyRecord(
     }
 
     try upsertAccount(allocator, reg, rec);
+    rec_owned = false;
     if (legacy_active_email) |active_email| {
         if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
             reg.active_account_id = try allocator.dupe(u8, rec.account_id);
@@ -1707,6 +1712,8 @@ fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
     const allocator = std.heap.page_allocator;
     const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, std.time.nanoTimestamp() });
     defer allocator.free(temp_path);
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, std.time.nanoTimestamp() });
+    defer allocator.free(backup_path);
 
     {
         var file = try std.fs.cwd().createFile(temp_path, .{ .truncate = true });
@@ -1715,11 +1722,26 @@ fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
         try file.sync();
     }
 
-    std.fs.cwd().deleteFile(path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
+    const had_original = blk: {
+        std.fs.cwd().rename(path, backup_path) catch |err| switch (err) {
+            error.FileNotFound => break :blk false,
+            else => return err,
+        };
+        break :blk true;
     };
+    errdefer {
+        std.fs.cwd().deleteFile(temp_path) catch {};
+        if (had_original) {
+            std.fs.cwd().rename(backup_path, path) catch {};
+        }
+    }
     try std.fs.cwd().rename(temp_path, path);
+    if (had_original) {
+        std.fs.cwd().deleteFile(backup_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
 }
 
 fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {

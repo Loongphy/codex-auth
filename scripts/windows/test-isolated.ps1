@@ -144,7 +144,11 @@ function Write-RolloutLowUsage([string]$PlanType = 'plus') {
     }
   } | ConvertTo-Json -Compress -Depth 8
 
-  Set-Content -Path (Join-Path $sessionDir 'rollout-test.jsonl') -Value $event -Encoding UTF8NoBOM
+  [System.IO.File]::WriteAllText(
+    (Join-Path $sessionDir 'rollout-test.jsonl'),
+    $event,
+    [System.Text.UTF8Encoding]::new($false)
+  )
 }
 
 function Get-TaskSummary {
