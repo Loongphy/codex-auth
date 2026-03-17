@@ -1,7 +1,7 @@
 {
   "name": "@loongphy/codex-auth",
   "version": "0.1.5",
-  "description": "Local-only CLI for switching Codex accounts",
+  "description": "CLI for switching Codex accounts",
   "license": "MIT",
   "repository": {
     "type": "git",

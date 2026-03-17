@@ -1,4 +1,4 @@
-# Implementation Details (Local-Only)
+# Implementation Details
 
 This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool reads and writes local files under `~/.codex`, and for ChatGPT-auth usage refresh it can call the ChatGPT usage endpoint for the current active account.
 

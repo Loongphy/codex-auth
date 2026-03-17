@@ -541,6 +541,61 @@ test "Scenario: Given same team account id across different users when purging t
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[second_idx].email, "cloning5942@bytebit.ggff.net"));
 }
 
+test "Scenario: Given same user across team and free workspaces when purging then record key keeps both workspace records" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const shared_chatgpt_user_id = "user-NuLAf1g5RIAwHDQxfoHfgcPo";
+    const shared_email = "flashback6936@8bits.ggff.net";
+
+    const team_auth = try authJsonWithExplicitIds(
+        gpa,
+        shared_email,
+        "d52355a3-bfa6-4d2b-882e-d4a2927f488c",
+        shared_chatgpt_user_id,
+        "team",
+    );
+    defer gpa.free(team_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-135020", .data = team_auth });
+
+    const free_auth = try authJsonWithExplicitIds(
+        gpa,
+        shared_email,
+        "fe43c186-7b49-4880-8744-e662b796a9d9",
+        shared_chatgpt_user_id,
+        "free",
+    );
+    defer gpa.free(free_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-172239", .data = free_auth });
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+
+    const team_record_key = "user-NuLAf1g5RIAwHDQxfoHfgcPo::d52355a3-bfa6-4d2b-882e-d4a2927f488c";
+    const free_record_key = "user-NuLAf1g5RIAwHDQxfoHfgcPo::fe43c186-7b49-4880-8744-e662b796a9d9";
+
+    const team_idx = registry.findAccountIndexByAccountId(&loaded, team_record_key) orelse return error.TestExpectedEqual;
+    const free_idx = registry.findAccountIndexByAccountId(&loaded, free_record_key) orelse return error.TestExpectedEqual;
+
+    try std.testing.expect(!std.mem.eql(u8, loaded.accounts.items[team_idx].account_id, loaded.accounts.items[free_idx].account_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[team_idx].chatgpt_user_id, shared_chatgpt_user_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[free_idx].chatgpt_user_id, shared_chatgpt_user_id));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[team_idx].chatgpt_account_id, "d52355a3-bfa6-4d2b-882e-d4a2927f488c"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[free_idx].chatgpt_account_id, "fe43c186-7b49-4880-8744-e662b796a9d9"));
+    try std.testing.expectEqual(registry.PlanType.team, loaded.accounts.items[team_idx].plan.?);
+    try std.testing.expectEqual(registry.PlanType.free, loaded.accounts.items[free_idx].plan.?);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[team_idx].email, shared_email));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[free_idx].email, shared_email));
+}
+
 test "Scenario: Given purge without accounts directory when rebuilding then current auth still restores the active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
