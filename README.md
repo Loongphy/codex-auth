@@ -5,7 +5,7 @@
 `codex-auth` is a command-line tool for switching Codex accounts.
 
 - It reads and updates local Codex files under `~/.codex` (including `sessions/` and auth files).
-- `codex-auth list` and the background auto-switch worker refresh the active account's usage using one configured source: API-only when `config api enable` is on, or local rollout files only when `config api disable` is on.
+- `codex-auth list`, `codex-auth switch`, and the background auto-switch worker refresh the active account's usage using one configured source: API-only when `config api enable` is on, or local rollout files only when `config api disable` is on.
 
 > [!IMPORTANT]
 > After switching accounts, you must fully exit `codex` and start it again for the new account to take effect.
@@ -144,7 +144,7 @@ Switch accounts (interactive list shows email, 5h, weekly, last activity):
 codex-auth switch               # arrow + number input
 ```
 
-The switch picker uses the stored usage snapshot; it does not refresh usage before switching.
+Before the switch picker opens, `codex-auth switch` refreshes the current active account's usage once so the currently selected row is not stale. It does not refresh the newly selected account after the switch completes.
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 

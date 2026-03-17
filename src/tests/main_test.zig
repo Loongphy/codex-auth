@@ -80,9 +80,9 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
 }
 
-test "Scenario: Given foreground usage refresh targets when checking refresh policy then only list refreshes" {
+test "Scenario: Given foreground usage refresh targets when checking refresh policy then list and switch refresh but remove does not" {
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
-    try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.switch_account));
+    try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
 }
 

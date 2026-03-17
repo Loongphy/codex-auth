@@ -55,7 +55,7 @@ pub const ForegroundUsageRefreshTarget = enum {
 };
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list;
+    return target == .list or target == .switch_account;
 }
 
 pub const HelpConfig = struct {

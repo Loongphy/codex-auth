@@ -151,7 +151,7 @@ When switching:
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_id` is updated.
 
-The switch command uses the stored usage snapshot already present in the registry when rendering account choices; it does not refresh usage before switching.
+The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
 ## Background Auto Switch
 
@@ -240,7 +240,8 @@ Usage refresh is active-account-only and depends on `api.usage`:
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
-- `list` and the auto-switch background worker use the same active-account refresh path. `switch` does not refresh usage before switching.
+- `list`, `switch`, and the auto-switch background worker use the same active-account refresh path.
+- `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.
 
