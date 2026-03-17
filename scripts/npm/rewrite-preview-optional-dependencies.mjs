@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { platformPackages } from "./metadata.mjs";
 
 function parseArgs(argv) {
   const options = {
     rootDir: "",
-    publishOutput: ""
+    previewOrigin: "https://pkg.pr.new",
+    repository: "",
+    sha: ""
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -12,8 +15,14 @@ function parseArgs(argv) {
     if (arg === "--root-dir") {
       options.rootDir = path.resolve(argv[i + 1]);
       i += 1;
-    } else if (arg === "--publish-output") {
-      options.publishOutput = path.resolve(argv[i + 1]);
+    } else if (arg === "--preview-origin") {
+      options.previewOrigin = argv[i + 1];
+      i += 1;
+    } else if (arg === "--repository") {
+      options.repository = argv[i + 1];
+      i += 1;
+    } else if (arg === "--sha") {
+      options.sha = argv[i + 1];
       i += 1;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -24,8 +33,12 @@ function parseArgs(argv) {
     throw new Error("Missing required argument: --root-dir");
   }
 
-  if (!options.publishOutput) {
-    throw new Error("Missing required argument: --publish-output");
+  if (!options.repository) {
+    throw new Error("Missing required argument: --repository");
+  }
+
+  if (!options.sha) {
+    throw new Error("Missing required argument: --sha");
   }
 
   return options;
@@ -42,9 +55,13 @@ function writeJson(filePath, value) {
 const options = parseArgs(process.argv.slice(2));
 const packageJsonPath = path.join(options.rootDir, "package.json");
 const rootPackage = readJson(packageJsonPath);
-const publishOutput = readJson(options.publishOutput);
+// pkg.pr.new currently abbreviates compact SHA URLs to 7 characters.
+const formattedSha = options.sha.slice(0, 7);
 const previewPackages = new Map(
-  (publishOutput.packages ?? []).map((pkg) => [pkg.name, pkg.url])
+  platformPackages.map((pkg) => [
+    pkg.packageName,
+    new URL(`/${options.repository}/${pkg.packageName}@${formattedSha}`, options.previewOrigin).href
+  ])
 );
 
 const optionalDependencies = rootPackage.optionalDependencies ?? {};

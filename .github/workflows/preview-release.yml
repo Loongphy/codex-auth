@@ -77,21 +77,18 @@ jobs:
       - name: Stage npm packages
         run: node scripts/npm/stage-packages.mjs --artifacts-dir artifacts --output-dir dist/npm
 
-      - name: Publish preview platform packages
-        run: >
-          npx pkg-pr-new publish
-          --comment=off
-          --json platform-preview.json
-          ./dist/npm/codex-auth-linux-x64
-          ./dist/npm/codex-auth-darwin-x64
-          ./dist/npm/codex-auth-darwin-arm64
-          ./dist/npm/codex-auth-win32-x64
-
       - name: Rewrite root preview optional dependencies
         run: >
           node scripts/npm/rewrite-preview-optional-dependencies.mjs
           --root-dir ./dist/npm/root
-          --publish-output ./platform-preview.json
+          --repository ${{ github.repository }}
+          --sha ${{ github.event.pull_request.head.sha }}
 
-      - name: Publish preview root package
-        run: npx pkg-pr-new publish --bin ./dist/npm/root
+      - name: Publish preview packages
+        run: >
+          npx pkg-pr-new publish --bin
+          ./dist/npm/root
+          ./dist/npm/codex-auth-linux-x64
+          ./dist/npm/codex-auth-darwin-x64
+          ./dist/npm/codex-auth-darwin-arm64
+          ./dist/npm/codex-auth-win32-x64
