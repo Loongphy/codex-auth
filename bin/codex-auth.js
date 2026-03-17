@@ -29,6 +29,7 @@ function maybePrintPreviewVersion(argv) {
 
   const previewLabel = rootPackage.codexAuthPreviewLabel;
   if (typeof previewLabel !== "string" || previewLabel.length === 0) return false;
+  if (typeof rootPackage.version !== "string" || rootPackage.version.length === 0) return false;
 
   process.stdout.write(`codex-auth ${rootPackage.version} (preview ${previewLabel})\n`);
   return true;

@@ -37,11 +37,7 @@ jobs:
           version: 0.15.1
 
       - name: Build binary
-        run: >
-          zig build
-          -Dtarget=${{ matrix.zig_target }}
-          -Doptimize=ReleaseSafe
-          -Dpreview-label="pr-${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}"
+        run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSafe
 
       - name: Stage artifact bundle
         shell: bash

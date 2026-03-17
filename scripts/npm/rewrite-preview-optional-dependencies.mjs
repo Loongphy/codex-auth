@@ -2,6 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { platformPackages } from "./metadata.mjs";
 
+function requireArgValue(argv, index, arg) {
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`Missing value for argument: ${arg}`);
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const options = {
     rootDir: "",
@@ -14,19 +22,19 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--root-dir") {
-      options.rootDir = path.resolve(argv[i + 1]);
+      options.rootDir = path.resolve(requireArgValue(argv, i, arg));
       i += 1;
     } else if (arg === "--preview-origin") {
-      options.previewOrigin = argv[i + 1];
+      options.previewOrigin = requireArgValue(argv, i, arg);
       i += 1;
     } else if (arg === "--repository") {
-      options.repository = argv[i + 1];
+      options.repository = requireArgValue(argv, i, arg);
       i += 1;
     } else if (arg === "--pr-number") {
-      options.prNumber = argv[i + 1];
+      options.prNumber = requireArgValue(argv, i, arg);
       i += 1;
     } else if (arg === "--sha") {
-      options.sha = argv[i + 1];
+      options.sha = requireArgValue(argv, i, arg);
       i += 1;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
