@@ -219,18 +219,6 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
 
     if (try getNonEmptyEnvVarOwned(allocator, "USERPROFILE")) |user_profile| return user_profile;
 
-    const home_drive = try getNonEmptyEnvVarOwned(allocator, "HOMEDRIVE");
-    errdefer if (home_drive) |v| allocator.free(v);
-    const home_path = try getNonEmptyEnvVarOwned(allocator, "HOMEPATH");
-    errdefer if (home_path) |v| allocator.free(v);
-
-    if (home_drive != null and home_path != null) {
-        const joined = try std.mem.concat(allocator, u8, &[_][]const u8{ home_drive.?, home_path.? });
-        allocator.free(home_drive.?);
-        allocator.free(home_path.?);
-        return joined;
-    }
-
     return error.EnvironmentVariableNotFound;
 }
 

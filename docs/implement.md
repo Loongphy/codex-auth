@@ -36,7 +36,6 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 1. `HOME/.codex`
 2. `USERPROFILE/.codex` (Windows fallback)
-3. `HOMEDRIVE + HOMEPATH + "/.codex"` (Windows fallback)
 
 ## Testing Conventions (BDD Style on std.testing)
 
