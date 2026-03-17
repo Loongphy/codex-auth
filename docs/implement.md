@@ -111,7 +111,9 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans direct child auth files from that directory: current account snapshots (`*.auth.json`) plus `auth.json.bak.*` backups.
 - If `~/.codex/accounts/` is missing during `--purge`, it is treated as an empty snapshot set and the command still attempts to import the current `~/.codex/auth.json`.
 - `--purge` always tries to import the current `~/.codex/auth.json` last; if it is parseable, that account's `record_key` becomes `active_account_key`.
+- When multiple scanned auth files map to the same `record_key`, `--purge` keeps only the newest snapshot for that account before rebuilding `registry.json`.
 - `--purge` rebuilds `registry.json` and rewrites imported snapshots into the current `accounts/<account file key>.auth.json` naming/layout for each auth file it can parse successfully.
+- Rebuilt `registry.json` account entries are ordered by normalized `email`, then `account_key`.
 - `--purge` does not delete old snapshot files or backups, so stale pre-migration snapshot filenames may still remain until cleaned up separately.
 - `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
 - Directory import scans only direct child files with a `.json` suffix (non-recursive), imports valid auth files, and skips invalid/malformed entries.

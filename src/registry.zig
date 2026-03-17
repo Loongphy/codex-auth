@@ -629,6 +629,7 @@ pub fn purgeRegistryFromImportSource(
         summary.imported += 1;
     }
 
+    sortAccountsByEmail(&reg);
     try saveRegistry(allocator, codex_home, &reg);
     return summary;
 }
@@ -857,33 +858,135 @@ fn importAccountsSnapshotDirectory(
     };
     defer dir.close();
 
-    var names = std.ArrayList([]u8).empty;
+    var candidates = std.ArrayList(PurgeImportCandidate).empty;
     defer {
-        for (names.items) |name| allocator.free(name);
-        names.deinit(allocator);
+        for (candidates.items) |*candidate| candidate.deinit(allocator);
+        candidates.deinit(allocator);
     }
 
+    var summary = ImportSummary{};
     var it = dir.iterate();
     while (try it.next()) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isPurgeImportAuthFile(entry.name)) continue;
-        try names.append(allocator, try allocator.dupe(u8, entry.name));
-    }
 
-    std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
 
-    var summary = ImportSummary{};
-    for (names.items) |name| {
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
-        defer allocator.free(file_path);
-        importAuthFile(allocator, codex_home, reg, file_path, null) catch |err| {
+        const stat = try dir.statFile(entry.name);
+        var info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
             summary.skipped += 1;
             std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(err) });
+            allocator.free(file_path);
+            continue;
+        };
+        defer info.deinit(allocator);
+
+        const email = info.email orelse {
+            summary.skipped += 1;
+            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingEmail) });
+            allocator.free(file_path);
+            continue;
+        };
+        const record_key = info.record_key orelse {
+            summary.skipped += 1;
+            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingChatgptUserId) });
+            allocator.free(file_path);
+            continue;
+        };
+
+        const canonical_name = try accountSnapshotFileName(allocator, record_key);
+        defer allocator.free(canonical_name);
+
+        var candidate = PurgeImportCandidate{
+            .name = try allocator.dupe(u8, entry.name),
+            .path = file_path,
+            .record_key = try allocator.dupe(u8, record_key),
+            .email = try allocator.dupe(u8, email),
+            .mtime = stat.mtime,
+            .kind = if (std.mem.eql(u8, entry.name, canonical_name))
+                .current_snapshot
+            else if (std.mem.startsWith(u8, entry.name, "auth.json.bak."))
+                .backup
+            else
+                .legacy_snapshot,
+        };
+        errdefer candidate.deinit(allocator);
+
+        if (findPurgeImportCandidateIndexByRecordKey(candidates.items, candidate.record_key)) |idx| {
+            if (purgeImportCandidateIsNewer(&candidates.items[idx], &candidate)) {
+                candidates.items[idx].deinit(allocator);
+                candidates.items[idx] = candidate;
+            } else {
+                candidate.deinit(allocator);
+            }
+            continue;
+        }
+
+        try candidates.append(allocator, candidate);
+    }
+
+    std.sort.insertion(PurgeImportCandidate, candidates.items, {}, purgeImportCandidateLessThan);
+
+    for (candidates.items) |candidate| {
+        importAuthFile(allocator, codex_home, reg, candidate.path, null) catch |err| {
+            summary.skipped += 1;
+            std.log.warn("skip purge import {s}: {s}", .{ candidate.path, @errorName(err) });
             continue;
         };
         summary.imported += 1;
     }
     return summary;
+}
+
+const PurgeImportCandidateKind = enum(u8) {
+    legacy_snapshot,
+    backup,
+    current_snapshot,
+};
+
+const PurgeImportCandidate = struct {
+    name: []u8,
+    path: []u8,
+    record_key: []u8,
+    email: []u8,
+    mtime: i128,
+    kind: PurgeImportCandidateKind,
+
+    fn deinit(self: *PurgeImportCandidate, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.path);
+        allocator.free(self.record_key);
+        allocator.free(self.email);
+    }
+};
+
+fn purgeImportCandidateRank(kind: PurgeImportCandidateKind) u8 {
+    return switch (kind) {
+        .legacy_snapshot => 0,
+        .backup => 1,
+        .current_snapshot => 2,
+    };
+}
+
+fn purgeImportCandidateIsNewer(current: *const PurgeImportCandidate, incoming: *const PurgeImportCandidate) bool {
+    if (incoming.mtime != current.mtime) return incoming.mtime > current.mtime;
+
+    const incoming_rank = purgeImportCandidateRank(incoming.kind);
+    const current_rank = purgeImportCandidateRank(current.kind);
+    if (incoming_rank != current_rank) return incoming_rank > current_rank;
+
+    return std.mem.order(u8, incoming.name, current.name) == .gt;
+}
+
+fn findPurgeImportCandidateIndexByRecordKey(candidates: []const PurgeImportCandidate, record_key: []const u8) ?usize {
+    for (candidates, 0..) |candidate, idx| {
+        if (std.mem.eql(u8, candidate.record_key, record_key)) return idx;
+    }
+    return null;
+}
+
+fn purgeImportCandidateLessThan(_: void, a: PurgeImportCandidate, b: PurgeImportCandidate) bool {
+    return accountRecordOrderLessThan(a.email, a.record_key, b.email, b.record_key);
 }
 
 fn isImportConfigFile(name: []const u8) bool {
@@ -897,6 +1000,22 @@ fn isPurgeImportAuthFile(name: []const u8) bool {
 
 fn importFileNameLessThan(_: void, a: []u8, b: []u8) bool {
     return std.mem.lessThan(u8, a, b);
+}
+
+fn accountRecordOrderLessThan(a_email: []const u8, a_account_key: []const u8, b_email: []const u8, b_account_key: []const u8) bool {
+    return switch (std.mem.order(u8, a_email, b_email)) {
+        .lt => true,
+        .gt => false,
+        .eq => std.mem.lessThan(u8, a_account_key, b_account_key),
+    };
+}
+
+fn accountRecordLessThan(_: void, a: AccountRecord, b: AccountRecord) bool {
+    return accountRecordOrderLessThan(a.email, a.account_key, b.email, b.account_key);
+}
+
+fn sortAccountsByEmail(reg: *Registry) void {
+    std.sort.insertion(AccountRecord, reg.accounts.items, {}, accountRecordLessThan);
 }
 
 fn syncCurrentAuthBestEffort(

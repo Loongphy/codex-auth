@@ -489,6 +489,53 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
     snapshot.close();
 }
 
+test "Scenario: Given purge without path and duplicate snapshots when rebuilding then newest snapshot wins and accounts are sorted by email" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const duplicate_record_key = "1::acct1";
+    const old_backup_auth = try authJsonWithExplicitIds(gpa, "zed@example.com", "acct1", "1", "free");
+    defer gpa.free(old_backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-010101", .data = old_backup_auth });
+
+    const current_snapshot_auth = try authJsonWithExplicitIds(gpa, "zed@example.com", "acct1", "1", "team");
+    defer gpa.free(current_snapshot_auth);
+    const current_snapshot_path = try registry.accountAuthPath(gpa, codex_home, duplicate_record_key);
+    defer gpa.free(current_snapshot_path);
+    const current_snapshot_rel = try std.fs.path.relative(gpa, codex_home, current_snapshot_path);
+    defer gpa.free(current_snapshot_rel);
+    try tmp.dir.writeFile(.{
+        .sub_path = current_snapshot_rel,
+        .data = current_snapshot_auth,
+    });
+
+    const alpha_auth = try authJsonWithEmailPlan(gpa, "alpha@example.com", "plus");
+    defer gpa.free(alpha_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-020202", .data = alpha_auth });
+
+    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].email, "zed@example.com"));
+
+    const duplicate_idx = registry.findAccountIndexByAccountKey(&loaded, duplicate_record_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(registry.PlanType.team, loaded.accounts.items[duplicate_idx].plan.?);
+
+    var snapshot = try std.fs.cwd().openFile(current_snapshot_path, .{});
+    defer snapshot.close();
+    const snapshot_contents = try snapshot.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(snapshot_contents);
+    try std.testing.expect(std.mem.eql(u8, snapshot_contents, current_snapshot_auth));
+}
+
 test "Scenario: Given same team account id across different users when purging then record key keeps both imported accounts" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
