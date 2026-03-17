@@ -6,7 +6,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 4;
+pub const current_schema_version: u32 = 3;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
@@ -1590,6 +1590,11 @@ fn usesLegacyVersionField(root_obj: std.json.ObjectMap) bool {
     return root_obj.get("schema_version") == null and root_obj.get("version") != null;
 }
 
+fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
+    if (root_obj.get("last_attributed_rollout") != null) return true;
+    return root_obj.get("active_account_id") != null and root_obj.get("active_account_activated_at_ms") == null;
+}
+
 fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
     return schemaVersionFieldValue(root_obj) orelse if (root_obj.get("active_email") != null) 2 else current_schema_version;
 }
@@ -1633,10 +1638,12 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         return error.UnsupportedRegistryVersion;
     }
 
-    const needs_rewrite = schema_version < current_schema_version or usesLegacyVersionField(root_obj);
+    const needs_rewrite = schema_version < current_schema_version or
+        usesLegacyVersionField(root_obj) or
+        (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3, 4 => try loadCurrentRegistry(allocator, root_obj),
+        3 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",

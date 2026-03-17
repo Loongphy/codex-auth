@@ -14,7 +14,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
   - current `schema_version = 3`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3` and rewrites them once to `schema_version = 3`.
+- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 3`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
@@ -33,6 +33,8 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 - `schema_version = 3`
   - Account-id-based account snapshots
   - `active_account_id`
+  - `active_account_activated_at_ms`
+  - Per-account `last_local_rollout`
   - Current `auto_switch` block
   - Current top-level `api` block
 

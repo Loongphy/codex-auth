@@ -75,7 +75,7 @@ test "Scenario: Given legacy version key current-layout registry when loading th
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") == null);
 }
 
@@ -175,7 +175,7 @@ test "Scenario: Given v2 registry when loading then it migrates to account-id la
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_id\": \"acc:legacy@example.com\"") != null);
 }
 
@@ -201,7 +201,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         .sub_path = "accounts/registry.json",
         .data =
         \\{
-        \\  "schema_version": 4,
+        \\  "schema_version": 3,
         \\  "active_account_id": "acc:stale@example.com",
         \\  "active_account_activated_at_ms": 1735689600000,
         \\  "auto_switch": {
