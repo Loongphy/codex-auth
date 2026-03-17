@@ -7,6 +7,7 @@ function parseArgs(argv) {
     rootDir: "",
     previewOrigin: "https://pkg.pr.new",
     repository: "",
+    prNumber: "",
     sha: ""
   };
 
@@ -20,6 +21,9 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--repository") {
       options.repository = argv[i + 1];
+      i += 1;
+    } else if (arg === "--pr-number") {
+      options.prNumber = argv[i + 1];
       i += 1;
     } else if (arg === "--sha") {
       options.sha = argv[i + 1];
@@ -35,6 +39,10 @@ function parseArgs(argv) {
 
   if (!options.repository) {
     throw new Error("Missing required argument: --repository");
+  }
+
+  if (!options.prNumber) {
+    throw new Error("Missing required argument: --pr-number");
   }
 
   if (!options.sha) {
@@ -76,6 +84,7 @@ for (const depName of Object.keys(optionalDependencies)) {
 }
 
 rootPackage.optionalDependencies = rewrittenOptionalDependencies;
+rootPackage.codexAuthPreviewLabel = `pr-${options.prNumber} ${formattedSha}`;
 writeJson(packageJsonPath, rootPackage);
 
 console.log(`Rewrote preview optionalDependencies in ${packageJsonPath}`);

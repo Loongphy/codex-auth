@@ -3,6 +3,7 @@
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const rootPackageJsonPath = path.join(__dirname, "..", "package.json");
 
 const packageMap = {
   "linux:x64": "@loongphy/codex-auth-linux-x64",
@@ -10,6 +11,32 @@ const packageMap = {
   "darwin:arm64": "@loongphy/codex-auth-darwin-arm64",
   "win32:x64": "@loongphy/codex-auth-win32-x64"
 };
+
+function readRootPackage() {
+  try {
+    return JSON.parse(fs.readFileSync(rootPackageJsonPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function maybePrintPreviewVersion(argv) {
+  if (argv.length !== 1) return false;
+  if (argv[0] !== "--version" && argv[0] !== "-V") return false;
+
+  const rootPackage = readRootPackage();
+  if (!rootPackage) return false;
+
+  const previewLabel = rootPackage.codexAuthPreviewLabel;
+  if (typeof previewLabel !== "string" || previewLabel.length === 0) return false;
+
+  process.stdout.write(`codex-auth ${rootPackage.version} (preview ${previewLabel})\n`);
+  return true;
+}
+
+if (maybePrintPreviewVersion(process.argv.slice(2))) {
+  process.exit(0);
+}
 
 function resolveBinary() {
   const key = `${process.platform}:${process.arch}`;
