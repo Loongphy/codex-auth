@@ -1500,13 +1500,18 @@ fn migrateLegacyRecord(
         std.fs.cwd().deleteFile(old_legacy_path) catch {};
     }
 
+    const should_activate = if (legacy_active_email) |active_email|
+        reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)
+    else
+        false;
+    const active_account_id = if (should_activate) try allocator.dupe(u8, rec.account_id) else null;
+    errdefer if (active_account_id) |value| allocator.free(value);
+
     try upsertAccount(allocator, reg, rec);
     rec_owned = false;
-    if (legacy_active_email) |active_email| {
-        if (reg.active_account_id == null and std.mem.eql(u8, active_email, legacy.email)) {
-            reg.active_account_id = try allocator.dupe(u8, rec.account_id);
-            reg.active_account_activated_at_ms = 0;
-        }
+    if (active_account_id) |value| {
+        reg.active_account_id = value;
+        reg.active_account_activated_at_ms = 0;
     }
 }
 
