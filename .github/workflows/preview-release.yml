@@ -72,7 +72,7 @@ jobs:
           merge-multiple: true
 
       - name: Check versions
-        run: node scripts/npm/check-versions.mjs
+        run: node scripts/npm/check-versions.mjs ""
 
       - name: Stage npm packages
         run: node scripts/npm/stage-packages.mjs --artifacts-dir artifacts --output-dir dist/npm

@@ -750,7 +750,15 @@ pub fn importAuthPath(
     auth_path: []const u8,
     explicit_alias: ?[]const u8,
 ) !ImportSummary {
-    const stat = try std.fs.cwd().statFile(auth_path);
+    const stat = std.fs.cwd().statFile(auth_path) catch |err| switch (err) {
+        error.IsDir => {
+            if (explicit_alias != null) {
+                std.log.warn("--alias is ignored when importing a directory: {s}", .{auth_path});
+            }
+            return try importAuthDirectory(allocator, codex_home, reg, auth_path);
+        },
+        else => return err,
+    };
     if (stat.kind == .directory) {
         if (explicit_alias != null) {
             std.log.warn("--alias is ignored when importing a directory: {s}", .{auth_path});
