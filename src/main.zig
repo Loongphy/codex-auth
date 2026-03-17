@@ -68,14 +68,13 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
-    const email = info.email orelse return error.MissingEmail;
-    const dest = try registry.accountAuthPath(allocator, codex_home, email);
+    const record = try registry.accountFromAuth(allocator, "", &info);
+    const dest = try registry.accountAuthPath(allocator, codex_home, record.account_id);
     defer allocator.free(dest);
 
     try registry.ensureAccountsDir(allocator, codex_home);
     try registry.copyFile(auth_path, dest);
 
-    const record = try registry.accountFromAuth(allocator, "", &info);
     registry.upsertAccount(allocator, &reg, record);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
@@ -99,30 +98,30 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    var selected_email: ?[]const u8 = null;
-    if (opts.email) |target_email| {
-        var matches = try findMatchingAccounts(allocator, &reg, target_email);
+    var selected_account_id: ?[]const u8 = null;
+    if (opts.email) |target| {
+        var matches = try findMatchingAccounts(allocator, &reg, target);
         defer matches.deinit(allocator);
 
         if (matches.items.len == 0) {
-            std.log.err("account not found: {s}", .{target_email});
+            std.log.err("account not found: {s}", .{target});
             return error.AccountNotFound;
         }
 
         if (matches.items.len == 1) {
-            selected_email = reg.accounts.items[matches.items[0]].email;
+            selected_account_id = reg.accounts.items[matches.items[0]].account_id;
         } else {
-            selected_email = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
+            selected_account_id = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
         }
-        if (selected_email == null) return;
+        if (selected_account_id == null) return;
     } else {
         const selected = try cli.selectAccount(allocator, &reg);
         if (selected == null) return;
-        selected_email = selected.?;
+        selected_account_id = selected.?;
     }
-    const email = selected_email.?;
+    const account_id = selected_account_id.?;
 
-    const src = try registry.accountAuthPath(allocator, codex_home, email);
+    const src = try registry.accountAuthPath(allocator, codex_home, account_id);
     defer allocator.free(src);
 
     const dest = try registry.activeAuthPath(allocator, codex_home);
@@ -131,18 +130,40 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     try registry.backupAuthIfChanged(allocator, codex_home, dest, src);
     try registry.copyFile(src, dest);
 
-    try registry.setActiveAccount(allocator, &reg, email);
+    try registry.setActiveAccount(allocator, &reg, account_id);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
-fn findMatchingAccounts(
-    allocator: std.mem.Allocator,
-    reg: *registry.Registry,
-    query: []const u8,
-) !std.ArrayList(usize) {
+fn findMatchingAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, query: []const u8) !std.ArrayList(usize) {
     var matches = std.ArrayList(usize).empty;
+    const normalized = try allocator.dupe(u8, query);
+    defer allocator.free(normalized);
+    for (normalized) |*ch| ch.* = std.ascii.toLower(ch.*);
+
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.ascii.indexOfIgnoreCase(rec.email, query) != null) {
+        if (std.ascii.indexOfIgnoreCase(rec.account_id, normalized) != null) {
+            try matches.append(allocator, idx);
+            continue;
+        }
+        if (rec.email.len != 0 and std.ascii.indexOfIgnoreCase(rec.email, normalized) != null) {
+            try matches.append(allocator, idx);
+            continue;
+        }
+        if (rec.plan) |plan| {
+            const full = try std.fmt.allocPrint(allocator, "{s}#{s}", .{ rec.email, @tagName(plan) });
+            defer allocator.free(full);
+            if (std.ascii.indexOfIgnoreCase(full, normalized) != null) {
+                try matches.append(allocator, idx);
+                continue;
+            }
+        }
+        if (rec.api_key_fingerprint) |fp| {
+            const label = try std.fmt.allocPrint(allocator, "apikey:{s}", .{fp});
+            defer allocator.free(label);
+            if (std.ascii.indexOfIgnoreCase(label, normalized) != null) {
+                try matches.append(allocator, idx);
+            }
+        } else if (std.mem.eql(u8, rec.account_id, normalized)) {
             try matches.append(allocator, idx);
         }
     }
@@ -162,11 +183,11 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     if (selected.?.len == 0) return;
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    if (reg.active_email == null and reg.accounts.items.len > 0) {
+    if (reg.active_account_id == null and reg.accounts.items.len > 0) {
         const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
-        const email = reg.accounts.items[best_idx].email;
+        const account_id = reg.accounts.items[best_idx].account_id;
 
-        const src = try registry.accountAuthPath(allocator, codex_home, email);
+        const src = try registry.accountAuthPath(allocator, codex_home, account_id);
         defer allocator.free(src);
 
         const dest = try registry.activeAuthPath(allocator, codex_home);
@@ -174,7 +195,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 
         try registry.backupAuthIfChanged(allocator, codex_home, dest, src);
         try registry.copyFile(src, dest);
-        try registry.setActiveAccount(allocator, &reg, email);
+        try registry.setActiveAccount(allocator, &reg, account_id);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
@@ -182,8 +203,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 fn refreshActiveUsageFromSessions(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
     const snapshot = sessions.scanLatestUsage(allocator, codex_home) catch return false;
     if (snapshot == null) return false;
-    const email = reg.active_email orelse return false;
-    registry.updateUsage(allocator, reg, email, snapshot.?);
+    const account_id = reg.active_account_id orelse return false;
+    registry.updateUsage(allocator, reg, account_id, snapshot.?);
     return true;
 }
 

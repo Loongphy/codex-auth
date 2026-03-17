@@ -5,9 +5,11 @@ pub const AuthInfo = struct {
     email: ?[]u8,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
+    api_key_fingerprint: ?[]u8,
 
     pub fn deinit(self: *const AuthInfo, allocator: std.mem.Allocator) void {
         if (self.email) |e| allocator.free(e);
+        if (self.api_key_fingerprint) |fp| allocator.free(fp);
     }
 };
 
@@ -17,6 +19,21 @@ fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
         buf[i] = std.ascii.toLower(ch);
     }
     return buf;
+}
+
+pub fn fingerprintApiKeyAlloc(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(key, &digest, .{});
+
+    const alphabet = "0123456789abcdef";
+    var out: [12]u8 = undefined;
+    var i: usize = 0;
+    while (i < 6) : (i += 1) {
+        const byte = digest[i];
+        out[i * 2] = alphabet[byte >> 4];
+        out[i * 2 + 1] = alphabet[byte & 0x0f];
+    }
+    return try allocator.dupe(u8, &out);
 }
 
 pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthInfo {
@@ -31,69 +48,85 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
     const root = parsed.value;
     switch (root) {
         .object => |obj| {
-        if (obj.get("OPENAI_API_KEY")) |key_val| {
-            switch (key_val) {
-                .string => |s| {
-                    if (s.len > 0) return AuthInfo{ .email = null, .plan = null, .auth_mode = .apikey };
-                },
-                else => {},
-            }
-        }
-
-        if (obj.get("tokens")) |tokens_val| {
-            switch (tokens_val) {
-                .object => |tobj| {
-                    if (tobj.get("id_token")) |id_tok| {
-                        switch (id_tok) {
-                            .string => |jwt| {
-                                const payload = try decodeJwtPayload(allocator, jwt);
-                                defer allocator.free(payload);
-                                var payload_json = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
-                                defer payload_json.deinit();
-                                const claims = payload_json.value;
-
-                                var email: ?[]u8 = null;
-                                switch (claims) {
-                                    .object => |cobj| {
-                                        if (cobj.get("email")) |e| {
-                                            switch (e) {
-                                                .string => |s| email = try normalizeEmailAlloc(allocator, s),
-                                                else => {},
-                                            }
-                                        }
-
-                                        var plan: ?registry.PlanType = null;
-                                        if (cobj.get("https://api.openai.com/auth")) |auth_obj| {
-                                            switch (auth_obj) {
-                                                .object => |aobj| {
-                                                    if (aobj.get("chatgpt_plan_type")) |pt| {
-                                                        switch (pt) {
-                                                            .string => |s| plan = parsePlanType(s),
-                                                            else => {},
-                                                        }
-                                                    }
-                                                },
-                                                else => {},
-                                            }
-                                        }
-
-                                        return AuthInfo{ .email = email, .plan = plan, .auth_mode = .chatgpt };
-                                    },
-                                    else => {},
-                                }
-                            },
-                            else => {},
+            if (obj.get("OPENAI_API_KEY")) |key_val| {
+                switch (key_val) {
+                    .string => |s| {
+                        if (s.len > 0) {
+                            return AuthInfo{
+                                .email = null,
+                                .plan = null,
+                                .auth_mode = .apikey,
+                                .api_key_fingerprint = try fingerprintApiKeyAlloc(allocator, s),
+                            };
                         }
-                    }
-                },
-                else => {},
+                    },
+                    else => {},
+                }
             }
-        }
+
+            if (obj.get("tokens")) |tokens_val| {
+                switch (tokens_val) {
+                    .object => |tobj| {
+                        if (tobj.get("id_token")) |id_tok| {
+                            switch (id_tok) {
+                                .string => |jwt| {
+                                    const payload = try decodeJwtPayload(allocator, jwt);
+                                    defer allocator.free(payload);
+                                    var payload_json = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+                                    defer payload_json.deinit();
+                                    const claims = payload_json.value;
+
+                                    switch (claims) {
+                                        .object => |cobj| {
+                                            var email: ?[]u8 = null;
+                                            if (cobj.get("email")) |e| {
+                                                switch (e) {
+                                                    .string => |s| email = try normalizeEmailAlloc(allocator, s),
+                                                    else => {},
+                                                }
+                                            }
+
+                                            var plan: ?registry.PlanType = null;
+                                            if (cobj.get("https://api.openai.com/auth")) |auth_obj| {
+                                                switch (auth_obj) {
+                                                    .object => |aobj| {
+                                                        if (aobj.get("chatgpt_plan_type")) |pt| {
+                                                            switch (pt) {
+                                                                .string => |s| plan = parsePlanType(s),
+                                                                else => {},
+                                                            }
+                                                        }
+                                                    },
+                                                    else => {},
+                                                }
+                                            }
+
+                                            if (email != null and plan == null) {
+                                                @panic("chatgpt auth missing plan");
+                                            }
+
+                                            return AuthInfo{
+                                                .email = email,
+                                                .plan = plan,
+                                                .auth_mode = .chatgpt,
+                                                .api_key_fingerprint = null,
+                                            };
+                                        },
+                                        else => {},
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
         },
         else => {},
     }
 
-    return AuthInfo{ .email = null, .plan = null, .auth_mode = .chatgpt };
+    return AuthInfo{ .email = null, .plan = null, .auth_mode = .chatgpt, .api_key_fingerprint = null };
 }
 
 pub fn decodeJwtPayload(allocator: std.mem.Allocator, jwt: []const u8) ![]u8 {

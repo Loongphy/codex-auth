@@ -34,25 +34,32 @@ pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
     return try authJsonFromPayload(allocator, "{\"sub\":\"missing-email\"}");
 }
 
+pub fn apiKeyAuthJson(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "{{\"OPENAI_API_KEY\":\"{s}\"}}", .{key});
+}
+
 pub fn makeEmptyRegistry() registry.Registry {
     return registry.Registry{
-        .version = 2,
-        .active_email = null,
+        .version = 3,
+        .active_account_id = null,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
 }
 
-pub fn appendAccount(
+pub fn appendChatgptAccount(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
     email: []const u8,
     alias: []const u8,
-    plan: ?registry.PlanType,
+    plan: registry.PlanType,
 ) !void {
+    const account_id = try registry.accountIdFromPartsAlloc(allocator, .chatgpt, email, plan, null);
     const rec = registry.AccountRecord{
+        .account_id = account_id,
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .plan = plan,
+        .api_key_fingerprint = null,
         .auth_mode = .chatgpt,
         .created_at = std.time.timestamp(),
         .last_used_at = null,
@@ -62,9 +69,9 @@ pub fn appendAccount(
     try reg.accounts.append(allocator, rec);
 }
 
-pub fn findAccountIndexByEmail(reg: *registry.Registry, email: []const u8) ?usize {
+pub fn findAccountIndexById(reg: *registry.Registry, account_id: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
-        if (std.mem.eql(u8, rec.email, email)) return i;
+        if (std.mem.eql(u8, rec.account_id, account_id)) return i;
     }
     return null;
 }

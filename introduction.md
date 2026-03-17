@@ -72,7 +72,7 @@ Codex 对每个账号有着严格的速率限制：5 小时窗口期内的使用
 当你在 Codex 中登录一个账号时，Codex 会在 `~/.codex/auth.json` 中保存当前账号的认证信息（包含 JWT Token）。Codex Auth 做的事情就是：
 
 1. **解析 JWT Token**：从 `auth.json` 中读取 `tokens.id_token`，解码 JWT 的 payload 部分，提取出你的邮箱以及订阅计划（Plus / Team / Pro 等）
-2. **为每个账号独立存储**：将每个账号的认证文件以 `base64url(email)` 为文件名，保存在 `~/.codex/accounts/` 目录下
+2. **为每个账号独立存储**：将每个账号的认证文件以账号身份键的 `base64url(account_id)` 为文件名，保存在 `~/.codex/accounts/` 目录下
 3. **切换时替换**：当你要切换到另一个账号时，把目标账号的认证文件复制回 `~/.codex/auth.json` 即可
 
 就这么简单，没有任何黑魔法。
@@ -167,7 +167,7 @@ alias cx-personal="codex-auth switch personal"
 
 1. **自动备份**当前的 `auth.json`（仅在内容发生变化时才备份，避免重复）
 2. 将目标账号的认证文件复制到 `~/.codex/auth.json`
-3. 更新注册表的 `active_email` 字段
+3. 更新注册表的 `active_account_id` 字段
 
 备份文件保存在 `~/.codex/accounts/` 目录下，格式为 `auth.json.bak.<timestamp>`，最多保留最近 5 份。即使误操作，也能轻松恢复。
 

@@ -27,7 +27,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `~/.codex/auth.json`
 - `~/.codex/accounts/registry.json`
-- `~/.codex/accounts/<email_b64>.auth.json`
+- `~/.codex/accounts/<account_id_b64>.auth.json`
 - `~/.codex/accounts/auth.json.bak.<timestamp>`
 - `~/.codex/accounts/registry.json.bak.<timestamp>`
 - `~/.codex/sessions/...`
@@ -49,24 +49,27 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## First Run and Empty Registry
 
-- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<email_b64>.auth.json`.
+- If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account_id_b64>.auth.json`.
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
 - `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
-## Account Identity (Email-Only)
+## Account Identity
 
-The email is the unique key for an account.
+ChatGPT auth uses `chatgpt:<email>#<plan>` as the unique key for an account.
+API key auth uses `apikey:<fingerprint>`.
 
 - Emails are normalized to lowercase.
-- The auth file name is `base64url(email)` (URL-safe, no padding).
+- ChatGPT auth requires both `email` and `https://api.openai.com/auth.chatgpt_plan_type`; if the plan is missing, the tool panics.
+- API key auth stores only a stable fingerprint in the registry identity key.
+- The auth file name is `base64url(account_id)` (URL-safe, no padding).
 
 ## Auth Parsing
 
 `auth.json` is parsed as follows:
 
-- If `OPENAI_API_KEY` is present, the account is treated as API-key auth (`auth_mode = apikey`).
+- If `OPENAI_API_KEY` is present, the account is treated as API-key auth (`auth_mode = apikey`) and a fingerprint is derived from the key.
 - Otherwise it looks for `tokens.id_token`, decodes the JWT, and reads the `email` claim and `https://api.openai.com/auth.chatgpt_plan_type`.
-- If plan is missing, it remains blank in the registry. If email is missing, the account is not imported/synced.
+- For ChatGPT auth, missing plan is a fatal error. If email is missing, the account is not imported/synced.
 
 ## Import Behavior
 
@@ -85,36 +88,36 @@ Each command (`list`, `switch`, `remove`) runs `syncActiveAccountFromAuth` befor
 The sync flow is:
 
 1. Read `~/.codex/auth.json` and parse email/plan/auth mode.
-2. Match by **email only** against the registry.
-3. If an email match is found:
+2. Build the current account identity key (`email + plan` for ChatGPT auth, fingerprint for API-key auth).
+3. If an identity-key match is found:
    - Set that account as active.
-   - Overwrite `accounts/<email_b64>.auth.json` with the current `auth.json` if content differs.
-4. If no email match is found:
-   - Create a **new** account record for that email.
-   - Import the current `auth.json` into `accounts/<email_b64>.auth.json`.
+   - Overwrite `accounts/<account_id_b64>.auth.json` with the current `auth.json` if content differs.
+4. If no identity-key match is found:
+   - Create a **new** account record for that identity.
+   - Import the current `auth.json` into `accounts/<account_id_b64>.auth.json`.
 
 If `auth.json` has no email, sync is skipped.
 
 Important limits:
 
 - There is no background sync. Tokens are updated only when you run `codex-auth`.
-- Matching is strictly by email; no fallback to an alternate key or “active” heuristic.
+- Matching is strictly by account identity key; there is no fallback to an “active” heuristic.
 
 ## Switching Accounts
 
 `switch` supports two modes:
 
 - Interactive: `codex-auth switch`
-- Non-interactive: `codex-auth switch <email>`
+- Non-interactive: `codex-auth switch <email-or-email#plan>`
 
-For non-interactive switching, the target account is matched by email case-insensitively using fragment/prefix matching.
+For non-interactive switching, the target account is matched case-insensitively against account id, email, and `email#plan`.
 If multiple accounts match, interactive selection is shown.
 
 When switching:
 
 1. `auth.json` is backed up if its contents would change.
-2. The selected account’s `accounts/<email_b64>.auth.json` is copied to `~/.codex/auth.json`.
-3. The registry’s `active_email` is updated.
+2. The selected account’s `accounts/<account_id_b64>.auth.json` is copied to `~/.codex/auth.json`.
+3. The registry’s `active_account_id` is updated.
 
 ## Backups
 

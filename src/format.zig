@@ -24,13 +24,15 @@ fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const 
 }
 
 fn accountEmailCellLen(rec: *const registry.AccountRecord) usize {
-    if (rec.alias.len == 0) return rec.email.len;
-    return rec.alias.len + rec.email.len + 2;
+    const display = registry.accountDisplayName(rec);
+    if (rec.alias.len == 0) return display.len;
+    return rec.alias.len + display.len + 2;
 }
 
 fn formatAccountEmailCellAlloc(rec: *const registry.AccountRecord) ![]u8 {
-    if (rec.alias.len == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{rec.email});
-    return std.fmt.allocPrint(std.heap.page_allocator, "({s}){s}", .{ rec.alias, rec.email });
+    const display = registry.accountDisplayName(rec);
+    if (rec.alias.len == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{display});
+    return std.fmt.allocPrint(std.heap.page_allocator, "({s}){s}", .{ rec.alias, display });
 }
 
 pub fn printAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, fmt: cli.OutputFormat) !void {
@@ -133,7 +135,7 @@ fn printAccountsTable(reg: *registry.Registry) !void {
         defer std.heap.page_allocator.free(rate_week_cell);
         const last_cell = try truncateAlloc(last, widths[4]);
         defer std.heap.page_allocator.free(last_cell);
-        const is_active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
+        const is_active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
         if (use_color) {
             if (is_active) {
                 try out.writeAll(ansi.green);
@@ -162,7 +164,7 @@ fn printAccountsJson(reg: *registry.Registry) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    const dump = RegistryOut{ .version = reg.version, .active_email = reg.active_email, .accounts = reg.accounts.items };
+    const dump = RegistryOut{ .version = reg.version, .active_account_id = reg.active_account_id, .accounts = reg.accounts.items };
     try std.json.Stringify.value(dump, .{ .whitespace = .indent_2 }, out);
     try out.writeAll("\n");
     try out.flush();
@@ -174,8 +176,8 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
     const out = stdout.out();
     try out.writeAll("active,email,plan,limit_5h,limit_weekly,last_used\n");
     for (reg.accounts.items) |rec| {
-        const active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
-        const email = rec.email;
+        const active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
+        const email = registry.accountDisplayName(&rec);
         const plan = planDisplay(&rec, "");
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
         const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
@@ -198,8 +200,8 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
     stdout.init();
     const out = stdout.out();
     for (reg.accounts.items) |rec| {
-        const active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
-        const email = rec.email;
+        const active = if (reg.active_account_id) |k| std.mem.eql(u8, k, rec.account_id) else false;
+        const email = registry.accountDisplayName(&rec);
         const plan = planDisplay(&rec, "-");
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
         const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
@@ -220,7 +222,7 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
 
 const RegistryOut = struct {
     version: u32,
-    active_email: ?[]const u8,
+    active_account_id: ?[]const u8,
     accounts: []const registry.AccountRecord,
 };
 

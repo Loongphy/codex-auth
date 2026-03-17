@@ -116,16 +116,16 @@ test "Scenario: Given deprecated add alias warning when rendering then colorized
     try std.testing.expect(std.mem.indexOf(u8, warning, "\x1b[1;32m`codex-auth login`\x1b[0m") != null);
 }
 
-test "Scenario: Given switch with positional email when parsing then non-interactive target is preserved" {
+test "Scenario: Given switch with positional selector when parsing then non-interactive target is preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "switch", "user@example.com" };
+    const args = [_][:0]const u8{ "codex-auth", "switch", "user@example.com#pro" };
     var cmd = try cli.parseArgs(gpa, &args);
     defer cli.freeCommand(gpa, &cmd);
 
     switch (cmd) {
         .switch_account => |opts| {
             try std.testing.expect(opts.email != null);
-            try std.testing.expect(std.mem.eql(u8, opts.email.?, "user@example.com"));
+            try std.testing.expect(std.mem.eql(u8, opts.email.?, "user@example.com#pro"));
         },
         else => return error.TestExpectedEqual,
     }
