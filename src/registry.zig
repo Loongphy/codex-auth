@@ -902,11 +902,18 @@ fn importAccountsSnapshotDirectory(
         const canonical_name = try accountSnapshotFileName(allocator, record_key);
         defer allocator.free(canonical_name);
 
+        const candidate_name = try allocator.dupe(u8, entry.name);
+        errdefer allocator.free(candidate_name);
+        const candidate_record_key = try allocator.dupe(u8, record_key);
+        errdefer allocator.free(candidate_record_key);
+        const candidate_email = try allocator.dupe(u8, email);
+        errdefer allocator.free(candidate_email);
+
         var candidate = PurgeImportCandidate{
-            .name = try allocator.dupe(u8, entry.name),
+            .name = candidate_name,
             .path = file_path,
-            .record_key = try allocator.dupe(u8, record_key),
-            .email = try allocator.dupe(u8, email),
+            .record_key = candidate_record_key,
+            .email = candidate_email,
             .mtime = stat.mtime,
             .kind = if (std.mem.eql(u8, entry.name, canonical_name))
                 .current_snapshot
