@@ -188,8 +188,18 @@ pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, c
 pub fn handleApiUsageCommand(allocator: std.mem.Allocator, codex_home: []const u8, action: cli.ApiUsageAction) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    reg.api.usage = action == .enable;
+    const enabled = action == .enable;
+    reg.api.usage = enabled;
     try registry.saveRegistry(allocator, codex_home, &reg);
+
+    if (enabled) {
+        var stderr_buffer: [512]u8 = undefined;
+        var writer = std.fs.File.stderr().writer(&stderr_buffer);
+        const out = &writer.interface;
+        try out.writeAll("\x1b[1;33mWarning:\x1b[0m Enabling API-based usage refresh may violate OpenAI's usage guidelines\n");
+        try out.writeAll("         and lead to account suspension. Use at your own risk.\n");
+        try out.flush();
+    }
 }
 
 pub fn shouldEnsureManagedService(enabled: bool, runtime: RuntimeState, definition_matches: bool) bool {

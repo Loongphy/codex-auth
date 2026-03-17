@@ -1,13 +1,5 @@
 # Codex Auth
 
-> [!IMPORTANT]
-> Usage refresh can now read from the ChatGPT usage API with `codex-auth config api enable`.
-> This was added because local rollout/session files now often contain empty `rate_limits`, which makes local-only refresh unreliable.
-> The API mode is still off by default in the current release for a safer rollout, but it is planned to become the default in `v0.3`.
->
-> Current default: `codex-auth config api disable`
-> Planned `v0.3` default: `codex-auth config api enable`
-
 ![command list](https://github.com/user-attachments/assets/7bbd463b-c5ed-4b90-b1f6-8dfbf21a8944)
 
 `codex-auth` is a command-line tool for switching Codex accounts.
@@ -18,6 +10,22 @@
 > [!IMPORTANT]
 > After switching accounts, you must fully exit `codex` and start it again for the new account to take effect.
 > If you want seamless automatic account switching without restarting `codex`, use [codext](https://github.com/Loongphy/codext), but you need to build it yourself because there is no prebuilt install method yet.
+
+## Supported Platforms
+
+`codex-auth` works with these Codex clients:
+
+- Codex CLI
+- VS Code extension
+- Codex App
+
+For the best experience, install the Codex CLI even if you mainly use the VS Code extension or the App, because it makes adding accounts easier:
+
+```shell
+npm install -g @openai/codex
+```
+
+After that, you can use `codex login` or `codex-auth login` to sign in and add accounts more easily.
 
 ## Install
 
@@ -53,6 +61,32 @@ irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.p
 
   The installer adds the install dir to current/user `PATH` by default.
   Use `-NoAddToPath` to skip user `PATH` persistence.
+
+## Upgrade
+
+If you are upgrading from any `v0.1.x` release to `v0.2.0`, back up these files first to avoid data loss:
+
+- Always back up `~/.codex/auth.json`
+- If you have already used `codex-auth`, also back up `~/.codex/accounts/`
+
+Then complete these steps:
+
+1. Install the latest `v0.2.0` release:
+
+```shell
+npm install -g @loongphy/codex-auth@latest
+```
+
+> [!IMPORTANT]
+> OpenAI now often leaves `rate_limits` empty in local rollout/session files, so local-only usage refresh is no longer reliable enough for accurate data.
+>
+> However, enabling API-based usage refresh (see below) may violate OpenAI's usage guidelines and lead to account suspension. Use this feature with caution; the decision and risk are entirely yours.
+
+2. Enable API-based usage refresh for more accurate usage data:
+
+```shell
+codex-auth config api enable
+```
 
 ## Full Commands
 
@@ -170,3 +204,11 @@ Successful foreground `codex-auth` commands also reconcile the managed auto-swit
 Changing thresholds updates `registry.json`; Linux/WSL and Windows pick them up on the next scheduled run, while macOS picks them up on the next polling cycle, without a service restart.
 Changing `config api` updates `registry.json` immediately; `api enable` means API-only and `api disable` means local-sessions-only.
 `codex-auth help` also shows whether auto-switching and usage API calls are currently enabled.
+
+## Disclaimer
+
+This project is provided as-is and use is at your own risk.
+
+To get more accurate usage data, you currently need to enable API-based usage refresh with `codex-auth config api enable`, because local rollout/session files often contain empty `rate_limits`.
+
+**Enabling API-based usage refresh may create risk for your OpenAI account, including violation of OpenAI's usage guidelines and potential account suspension.** Review the behavior carefully and decide for yourself whether that risk is acceptable before using this feature.
