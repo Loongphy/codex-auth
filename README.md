@@ -77,12 +77,12 @@ Then complete these steps:
 npm install -g @loongphy/codex-auth@latest
 ```
 
-> [!IMPORTANT]
-> OpenAI now often leaves `rate_limits` empty in local rollout/session files, so local-only usage refresh is no longer reliable enough for accurate data.
+> [!CAUTION]
+> OpenAI now often leaves `rate_limits` empty in local session files, so local-only usage refresh is no longer reliable enough for accurate data.
 >
 > However, enabling API-based usage refresh (see below) may violate OpenAI's usage guidelines and lead to account suspension. Use this feature with caution; the decision and risk are entirely yours.
 
-2. Enable API-based usage refresh for more accurate usage data:
+1. Enable API-based usage refresh for more accurate usage data:
 
 ```shell
 codex-auth config api enable
@@ -209,6 +209,6 @@ Changing `config api` updates `registry.json` immediately; `api enable` means AP
 
 This project is provided as-is and use is at your own risk.
 
-To get more accurate usage data, you currently need to enable API-based usage refresh with `codex-auth config api enable`, because local rollout/session files often contain empty `rate_limits`.
+To get more accurate usage data, you currently need to enable API-based usage refresh with `codex-auth config api enable`, because local session files often contain empty `rate_limits`.
 
 **Enabling API-based usage refresh may create risk for your OpenAI account, including violation of OpenAI's usage guidelines and potential account suspension.** Review the behavior carefully and decide for yourself whether that risk is acceptable before using this feature.

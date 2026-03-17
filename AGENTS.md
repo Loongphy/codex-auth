@@ -11,10 +11,3 @@
 # Validation
 
 After modifying any `.zig` file, always run `zig build run -- list` to verify the changes work correctly.
-
-# WSL2 Windows Testing
-
-- This project is developed in WSL2.
-- When Windows-side testing is needed, use `pwsh.exe` and copy the current source to `D:/test` before running tests there.
-- Use overwrite sync behavior when copying so `D:/test` matches the current source state.
-- For cleanup, always use `rm -rf /mnt/d/test/*` to delete test contents under `D:/test`.
