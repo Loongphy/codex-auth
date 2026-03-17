@@ -12,6 +12,10 @@ All examples below assume:
 - tests are run from Windows PowerShell via `pwsh.exe`
 - the real `D:\test\.codex` is treated as read-only input; always copy it to a separate test root first
 
+When a command below uses an account fragment placeholder such as `<only-account-fragment>`,
+`<active-account-fragment>`, or `<alternate-account-fragment>`, replace it with any unique
+email fragment from the copied fixture accounts for your local test run.
+
 ## General Rules
 
 - Never run acceptance tests directly against the source fixture directory.
@@ -51,7 +55,7 @@ $env:USERPROFILE = $TestRoot
 
 ```powershell
 & $Exe list
-& $Exe switch washroom7098
+& $Exe switch <only-account-fragment>
 ```
 
 ### API Config Commands
@@ -83,7 +87,7 @@ This scenario is accepted when all of the following are true:
 - `list` creates exactly one `accounts/*.auth.json` snapshot keyed by the imported `record_key`.
 - `registry.json` is written in the current layout with `schema_version = 3`.
 - `active_account_id` matches the imported `record_key` from `auth.json`.
-- `switch <email-fragment>` exits with code `0`.
+- `switch <only-account-fragment>` exits with code `0`.
 - `config api enable` exits with code `0`, and `status` shows `usage: api`.
 - `config api disable` exits with code `0`, and `status` shows `usage: local`.
 - `config auto enable` exits with code `0`, and `status` shows `auto-switch: ON`.
@@ -124,8 +128,8 @@ Expected legacy markers:
 
 ```powershell
 & $Exe list
-& $Exe switch vdragonphy
-& $Exe switch washroom7098
+& $Exe switch <alternate-account-fragment>
+& $Exe switch <active-account-fragment>
 ```
 
 ### API Config Commands
@@ -144,7 +148,14 @@ For an isolated Windows test, validate two different things:
 1. command/service lifecycle via `config auto enable|disable`
 2. switching logic via a foreground `daemon --once`
 
-Create a rollout file that makes the current active account fall below the default `5h < 10%` threshold:
+First switch back to the target active account:
+
+```powershell
+& $Exe switch <active-account-fragment>
+```
+
+Then create a rollout file that makes the current active account fall below the default `5h < 10%` threshold.
+The rollout event must be newer than the active account activation time, so create it after the final switch:
 
 ```powershell
 $CodexHome = Join-Path $TestRoot '.codex'
@@ -161,7 +172,6 @@ $line = '{"timestamp":"' + $ts + '","type":"event_msg","payload":{"type":"token_
 Then run:
 
 ```powershell
-& $Exe switch washroom7098
 & $Exe config auto enable
 & $Exe status
 & $Exe daemon --once
@@ -180,8 +190,8 @@ This scenario is accepted when all of the following are true:
 - after `list`, `active_account_id` exists and there is no `active_email`
 - the migrated `accounts` array still contains the expected accounts
 - the legacy email-keyed snapshots are replaced by current account-id-keyed snapshots
-- `switch vdragonphy` exits with code `0`
-- `switch washroom7098` exits with code `0`
+- `switch <alternate-account-fragment>` exits with code `0`
+- `switch <active-account-fragment>` exits with code `0`
 - `config api enable` exits with code `0`, and `status` shows `usage: api`
 - `config api disable` exits with code `0`, and `status` shows `usage: local`
 - `config auto enable` exits with code `0`, and `status` shows `auto-switch: ON`
