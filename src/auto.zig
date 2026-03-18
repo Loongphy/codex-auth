@@ -104,6 +104,7 @@ pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     try writeStatusWithColor(stdout.out(), status, colorEnabled());
+    try cli.printUsageApiRiskWarning(status.api_usage_enabled);
 }
 
 pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
@@ -158,7 +159,6 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n");
 
-    try cli.writeUsageApiRiskWarning(out, use_color, status.api_usage_enabled);
     try out.flush();
 }
 

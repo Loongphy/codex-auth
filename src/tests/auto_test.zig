@@ -426,8 +426,8 @@ test "Scenario: Given api usage mode when rendering status then risk warning is 
 
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") == null);
 }
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {

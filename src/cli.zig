@@ -245,13 +245,14 @@ pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const reg
     const use_color = colorEnabled();
     try writeHelp(out, use_color, auto_cfg, api_cfg);
     try out.flush();
+    try printUsageApiRiskWarning(api_cfg.usage);
 }
 
 pub fn printUsageApiRiskWarning(api_usage_enabled: bool) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try writeUsageApiRiskWarning(out, colorEnabled(), api_usage_enabled);
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    try writeUsageApiRiskWarning(out, stderrColorEnabled(), api_usage_enabled);
     try out.flush();
 }
 
@@ -295,8 +296,6 @@ pub fn writeHelp(
         " {s} ({s})\n\n",
         .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api-only" else "local-sessions-only" },
     );
-
-    try writeUsageApiRiskWarning(out, use_color, api_cfg.usage);
 
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");

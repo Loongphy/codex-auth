@@ -127,8 +127,8 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
