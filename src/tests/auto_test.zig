@@ -411,7 +411,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
 }
 
-test "Scenario: Given api usage mode when rendering status then risk warning is shown" {
+test "Scenario: Given api usage mode when rendering status body then risk warning stays off stdout" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
