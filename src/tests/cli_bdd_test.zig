@@ -127,6 +127,8 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
@@ -141,6 +143,30 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`add` is accepted as a deprecated alias for `login` and will be removed in the next release.") != null);
+}
+
+test "Scenario: Given local-only usage mode when rendering warning then nothing is printed" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeUsageApiRiskWarning(&aw.writer, false, false);
+
+    try std.testing.expectEqualStrings("", aw.written());
+}
+
+test "Scenario: Given api-only usage mode when rendering warning then risk and fallback guidance are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeUsageApiRiskWarning(&aw.writer, false, true);
+
+    const warning = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, warning, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, warning, "may trigger OpenAI account restrictions or suspension") != null);
+    try std.testing.expect(std.mem.indexOf(u8, warning, "`codex-auth config api disable`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, warning, "less accurate usage data") != null);
 }
 
 test "Scenario: Given status when parsing then status command is preserved" {

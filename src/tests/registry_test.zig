@@ -220,7 +220,7 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
-    try std.testing.expect(!loaded.api.usage);
+    try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.active_account_activated_at_ms == null);
 }
 

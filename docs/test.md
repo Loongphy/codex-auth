@@ -88,6 +88,7 @@ This scenario is accepted when all of the following are true:
 - `registry.json` is written in the current layout with `schema_version = 3`.
 - `active_account_key` matches the imported `record_key` from `auth.json`.
 - `switch <only-account-fragment>` exits with code `0`.
+- default `status` shows `usage: api` before any `config api` changes.
 - `config api enable` exits with code `0`, and `status` shows `usage: api`.
 - `config api disable` exits with code `0`, and `status` shows `usage: local`.
 - `config auto enable` exits with code `0`, and `status` shows `auto-switch: ON`.

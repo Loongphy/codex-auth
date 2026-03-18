@@ -408,6 +408,26 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
+}
+
+test "Scenario: Given api usage mode when rendering status then risk warning is shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try auto.writeStatus(&aw.writer, .{
+        .enabled = true,
+        .runtime = .running,
+        .threshold_5h_percent = 12,
+        .threshold_weekly_percent = 8,
+        .api_usage_enabled = true,
+    });
+
+    const output = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, output, "usage: api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") != null);
 }
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {
@@ -540,6 +560,7 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = false;
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
     const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
@@ -574,6 +595,7 @@ test "Scenario: Given new rollout event in the same file after switching account
 
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = false;
     try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
     try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
     const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");

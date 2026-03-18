@@ -111,6 +111,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
+    try cli.printUsageApiRiskWarning(reg.api.usage);
     try format.printAccounts(allocator, &reg, .table);
 }
 

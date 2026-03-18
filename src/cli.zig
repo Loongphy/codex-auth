@@ -14,6 +14,8 @@ const ansi = struct {
     const dim = "\x1b[2m";
     const red = "\x1b[31m";
     const bold_red = "\x1b[1;31m";
+    const yellow = "\x1b[33m";
+    const bold_yellow = "\x1b[1;33m";
     const green = "\x1b[32m";
     const bold_green = "\x1b[1;32m";
     const cyan = "\x1b[36m";
@@ -245,6 +247,24 @@ pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const reg
     try out.flush();
 }
 
+pub fn printUsageApiRiskWarning(api_usage_enabled: bool) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeUsageApiRiskWarning(out, colorEnabled(), api_usage_enabled);
+    try out.flush();
+}
+
+pub fn writeUsageApiRiskWarning(out: *std.Io.Writer, use_color: bool, api_usage_enabled: bool) !void {
+    if (!api_usage_enabled) return;
+
+    if (use_color) try out.writeAll(ansi.bold_yellow);
+    try out.writeAll("Warning:");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll(" Usage refresh is currently using the ChatGPT usage API and may trigger OpenAI account restrictions or suspension.\n");
+    try out.writeAll("         Switch to local-only usage reading with `codex-auth config api disable` for safer but less accurate usage data.\n\n");
+}
+
 pub fn writeHelp(
     out: *std.Io.Writer,
     use_color: bool,
@@ -275,6 +295,8 @@ pub fn writeHelp(
         " {s} ({s})\n\n",
         .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api-only" else "local-sessions-only" },
     );
+
+    try writeUsageApiRiskWarning(out, use_color, api_cfg.usage);
 
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");

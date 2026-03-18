@@ -179,11 +179,12 @@ The switch command refreshes the current active account's usage once before rend
 The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
 `status` prints the current `Auto Switch: ON/OFF` state, service runtime, thresholds, and whether usage API calls are enabled.
 `help` prints the current `Auto Switch: ON/OFF` state plus the configured thresholds.
+When `api.usage = true`, `help`, `status`, and `list` also print a warning that API-based usage refresh may trigger OpenAI account restrictions or suspension, and that `codex-auth config api disable` switches to safer but less accurate local-only usage reading.
 
 Usage API refresh mode is persisted separately under a top-level `api` block:
 
-- `api.usage = false` (default): local-only mode, read `~/.codex/sessions/**/rollout-*.jsonl` only, make no usage API calls
-- `api.usage = true`: API-only mode, call the ChatGPT usage API only and do not fall back to local rollout files
+- `api.usage = true` (default): API-only mode, call the ChatGPT usage API only and do not fall back to local rollout files
+- `api.usage = false`: local-only mode, read `~/.codex/sessions/**/rollout-*.jsonl` only, make no usage API calls
 
 The related configuration command is:
 

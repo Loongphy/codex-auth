@@ -50,7 +50,7 @@ pub const AutoSwitchConfig = struct {
 };
 
 pub const ApiConfig = struct {
-    usage: bool = false,
+    usage: bool = true,
 };
 
 pub const AccountRecord = struct {

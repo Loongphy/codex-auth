@@ -157,6 +157,8 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
     try out.writeAll(if (status.api_usage_enabled) "api" else "local");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n");
+
+    try cli.writeUsageApiRiskWarning(out, use_color, status.api_usage_enabled);
     try out.flush();
 }
 

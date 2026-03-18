@@ -60,27 +60,6 @@ irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.p
   The installer adds the install dir to current/user `PATH` by default.
   Use `-NoAddToPath` to skip user `PATH` persistence.
 
-## Upgrade
-
-If you are upgrading from any `v0.1.x` release to `v0.2.0`, back up these files first to avoid data loss:
-
-- Always back up `~/.codex/auth.json`
-- If you have already used `codex-auth`, also back up `~/.codex/accounts/`
-
-Then complete these steps:
-
-1. Install the latest `v0.2.0` release:
-
-```shell
-npm install -g @loongphy/codex-auth@latest
-```
-
-1. Enable API-based usage refresh if needed (see the Disclaimer for more details):
-
-```shell
-codex-auth config api enable
-```
-
 ## Full Commands
 
 ```shell
