@@ -1074,6 +1074,7 @@ fn importAccountsSnapshotDirectory(
             continue;
         };
         var info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
+            if (!isImportSkippableBatchEntryError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             file_path_owned = false;
             allocator.free(file_path);
