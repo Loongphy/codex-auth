@@ -429,6 +429,53 @@ test "Scenario: Given directory import with an empty json file when running impo
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "still-imported@example.com"));
 }
 
+test "Scenario: Given directory import with a broken symlink when running import then it skips that entry and still imports valid files" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+
+    const valid_auth = try bdd.authJsonWithEmailPlan(gpa, "symlink-survivor@example.com", "plus");
+    defer gpa.free(valid_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/valid.json", .data = valid_auth });
+    try tmp.dir.symLink("missing.json", "imports/broken.json", .{});
+
+    const imports_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    defer gpa.free(imports_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    const expected_stdout = try std.fmt.allocPrint(
+        gpa,
+        "Scanning {s}...\n" ++
+            "  ✓ imported  valid\n" ++
+            "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
+        .{imports_path},
+    );
+    defer gpa.free(expected_stdout);
+    try std.testing.expectEqualStrings(expected_stdout, result.stdout);
+    try std.testing.expectEqualStrings("  ✗ skipped   broken: FileNotFound\n", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "symlink-survivor@example.com"));
+}
+
 test "Scenario: Given default api usage when rendering help then warning stays on stderr" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

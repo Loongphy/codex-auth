@@ -887,6 +887,19 @@ fn isImportValidationError(err: anyerror) bool {
     };
 }
 
+fn isImportSourceFileError(err: anyerror) bool {
+    return switch (err) {
+        error.FileNotFound,
+        error.AccessDenied,
+        error.IsDir,
+        error.NotDir,
+        error.StreamTooLong,
+        error.SymLinkLoop,
+        => true,
+        else => false,
+    };
+}
+
 pub fn importAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -937,6 +950,17 @@ fn importAuthFile(
 ) !ImportOutcome {
     const info = try @import("auth.zig").parseAuthInfo(allocator, auth_file);
     defer info.deinit(allocator);
+    return try importAuthInfo(allocator, codex_home, reg, auth_file, explicit_alias, &info);
+}
+
+fn importAuthInfo(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_file: []const u8,
+    explicit_alias: ?[]const u8,
+    info: *const @import("auth.zig").AuthInfo,
+) !ImportOutcome {
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
@@ -949,7 +973,7 @@ fn importAuthFile(
     try ensureAccountsDir(allocator, codex_home);
     try copyFile(auth_file, dest);
 
-    const record = try accountFromAuth(allocator, alias, &info);
+    const record = try accountFromAuth(allocator, alias, info);
     try upsertAccount(allocator, reg, record);
     return if (existed) .updated else .imported;
 }
@@ -986,7 +1010,13 @@ fn importAuthDirectory(
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
-        const outcome = importAuthFile(allocator, codex_home, reg, file_path, null) catch |err| {
+        const info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
+            if (!isImportSourceFileError(err) and !isImportValidationError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            continue;
+        };
+        defer info.deinit(allocator);
+        const outcome = importAuthInfo(allocator, codex_home, reg, file_path, null, &info) catch |err| {
             if (!isImportValidationError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             continue;
@@ -1032,7 +1062,13 @@ fn importAccountsSnapshotDirectory(
         const label = try importDisplayLabelFromName(allocator, entry.name);
         defer allocator.free(label);
 
-        const stat = try dir.statFile(entry.name);
+        const stat = dir.statFile(entry.name) catch |err| {
+            if (!isImportSourceFileError(err) and !isImportValidationError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            file_path_owned = false;
+            allocator.free(file_path);
+            continue;
+        };
         var info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             file_path_owned = false;
