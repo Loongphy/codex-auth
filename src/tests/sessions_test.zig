@@ -24,6 +24,35 @@ fn updateFileTimes(path: []const u8, atime: i128, mtime: i128) !void {
     try file.updateTimes(atime, mtime);
 }
 
+fn writeLargeRolloutFile(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    sub_path: []const u8,
+    target_bytes: usize,
+    trailer_line: []const u8,
+) !void {
+    var file = try dir.createFile(sub_path, .{});
+    defer file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&write_buffer);
+    const writer = &file_writer.interface;
+    var written: usize = 0;
+    const filler_len = 900 * 1024;
+    const filler = try allocator.alloc(u8, filler_len);
+    defer allocator.free(filler);
+    @memset(filler, 'x');
+
+    while (written < target_bytes) {
+        try writer.writeAll(filler);
+        try writer.writeByte('\n');
+        written += filler.len + 1;
+    }
+    try writer.writeAll(trailer_line);
+    try writer.writeByte('\n');
+    try writer.flush();
+}
+
 test "parse token_count usage" {
     const gpa = std.testing.allocator;
     const snap = sessions.parseUsageLine(gpa, line) orelse return error.TestExpectedEqual;
@@ -139,4 +168,26 @@ test "scan latest usage ignores rollout files beyond the most recent file" {
 
     const latest = try sessions.scanLatestUsageWithSource(gpa, codex_home);
     try std.testing.expect(latest == null);
+}
+
+test "scan latest usage streams rollout files larger than ten megabytes" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    const large_line = try usageLineAlloc(gpa, "2025-01-01T00:00:11.000Z", 42.0);
+    defer gpa.free(large_line);
+    try writeLargeRolloutFile(gpa, tmp.dir, "sessions/2025/01/01/rollout-large.jsonl", 11 * 1024 * 1024, large_line);
+
+    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expect(std.mem.endsWith(u8, latest.path, "sessions/2025/01/01/rollout-large.jsonl"));
+    try std.testing.expectEqual(@as(i64, 1735689611000), latest.event_timestamp_ms);
+    try std.testing.expect(latest.snapshot.primary != null);
+    try std.testing.expectEqual(@as(f64, 42.0), latest.snapshot.primary.?.used_percent);
 }

@@ -24,6 +24,7 @@ const ParsedUsageEvent = struct {
 };
 
 const max_recent_rollout_files: usize = 1;
+const max_rollout_line_bytes: usize = 1024 * 1024;
 
 pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
     const latest = try scanLatestUsageWithSource(allocator, codex_home);
@@ -110,13 +111,24 @@ fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsag
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
-    defer allocator.free(data);
-
-    var it = std.mem.splitScalar(u8, data, '\n');
+    const read_buffer = try allocator.alloc(u8, max_rollout_line_bytes);
+    defer allocator.free(read_buffer);
+    var file_reader = file.reader(read_buffer);
+    const reader = &file_reader.interface;
     var last: ?ParsedUsageEvent = null;
 
-    while (it.next()) |line| {
+    while (true) {
+        const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
+            error.StreamTooLong => {
+                _ = reader.discardDelimiterInclusive('\n') catch |discard_err| switch (discard_err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+                };
+                continue;
+            },
+            error.EndOfStream => break,
+            error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+        };
         const trimmed = std.mem.trim(u8, line, " \r\t");
         if (trimmed.len == 0) continue;
         if (parseUsageEventLine(allocator, trimmed)) |event| {
