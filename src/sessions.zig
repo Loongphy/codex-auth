@@ -42,7 +42,7 @@ const UsageRateLimitsJson = struct {
 };
 
 const UsageWindowJson = struct {
-    used_percent: f64 = 0.0,
+    used_percent: ?std.json.Value = null,
     window_minutes: ?i64 = null,
     resets_at: ?i64 = null,
 };
@@ -233,9 +233,15 @@ fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) re
     return snap;
 }
 
-fn parseWindow(parsed: UsageWindowJson) registry.RateLimitWindow {
+fn parseWindow(parsed: UsageWindowJson) ?registry.RateLimitWindow {
+    const used = parsed.used_percent orelse return null;
+    const used_percent = switch (used) {
+        .float => |f| f,
+        .integer => |i| @as(f64, @floatFromInt(i)),
+        else => 0.0,
+    };
     return .{
-        .used_percent = parsed.used_percent,
+        .used_percent = used_percent,
         .window_minutes = parsed.window_minutes,
         .resets_at = parsed.resets_at,
     };

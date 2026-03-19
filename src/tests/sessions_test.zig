@@ -9,6 +9,10 @@ const null_rate_limits_line = "{" ++
     "\"timestamp\":\"2025-01-01T00:00:01Z\"," ++
     "\"type\":\"event_msg\"," ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}";
+const missing_primary_used_percent_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:02Z\"," ++
+    "\"type\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}";
 
 fn usageLineAlloc(allocator: std.mem.Allocator, timestamp: []const u8, used_percent: f64) ![]u8 {
     return std.fmt.allocPrint(
@@ -104,6 +108,14 @@ test "parse token_count usage" {
     const snap = sessions.parseUsageLine(gpa, line) orelse return error.TestExpectedEqual;
     try std.testing.expect(snap.primary != null);
     try std.testing.expect(snap.secondary != null);
+}
+
+test "parse token_count usage ignores windows missing used_percent" {
+    const gpa = std.testing.allocator;
+    const snap = sessions.parseUsageLine(gpa, missing_primary_used_percent_line) orelse return error.TestExpectedEqual;
+    try std.testing.expect(snap.primary == null);
+    try std.testing.expect(snap.secondary != null);
+    try std.testing.expectEqual(@as(f64, 10.0), snap.secondary.?.used_percent);
 }
 
 test "scan latest usage chooses newest valid event from the most recent rollout file" {
