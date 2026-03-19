@@ -18,6 +18,22 @@ fn usageLineAlloc(allocator: std.mem.Allocator, timestamp: []const u8, used_perc
     );
 }
 
+fn usageLineWithLargeBalanceAlloc(
+    allocator: std.mem.Allocator,
+    timestamp: []const u8,
+    used_percent: f64,
+    balance_len: usize,
+) ![]u8 {
+    const balance = try allocator.alloc(u8, balance_len);
+    defer allocator.free(balance);
+    @memset(balance, '9');
+    return std.fmt.allocPrint(
+        allocator,
+        "{{\"timestamp\":\"{s}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{d:.1},\"window_minutes\":300,\"resets_at\":123}},\"secondary\":{{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456}},\"credits\":{{\"has_credits\":true,\"unlimited\":false,\"balance\":\"{s}\"}},\"plan_type\":\"pro\"}}}}}}",
+        .{ timestamp, used_percent, balance },
+    );
+}
+
 fn updateFileTimes(path: []const u8, atime: i128, mtime: i128) !void {
     var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
     defer file.close();
@@ -212,4 +228,30 @@ test "scan latest usage keeps final line without trailing newline" {
     try std.testing.expectEqual(@as(i64, 1735689612000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 33.0), latest.snapshot.primary.?.used_percent);
+}
+
+test "scan latest usage accepts valid token_count lines above one megabyte" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    const large_line = try usageLineWithLargeBalanceAlloc(gpa, "2025-01-01T00:00:13.000Z", 27.0, 2 * 1024 * 1024);
+    defer gpa.free(large_line);
+    const file_contents = try std.fmt.allocPrint(gpa, "{s}\n", .{large_line});
+    defer gpa.free(file_contents);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-large-line.jsonl", .data = file_contents });
+
+    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-large-line.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689613000), latest.event_timestamp_ms);
+    try std.testing.expect(latest.snapshot.primary != null);
+    try std.testing.expectEqual(@as(f64, 27.0), latest.snapshot.primary.?.used_percent);
+    try std.testing.expect(latest.snapshot.credits != null);
+    try std.testing.expectEqual(@as(usize, 2 * 1024 * 1024), latest.snapshot.credits.?.balance.?.len);
 }
