@@ -204,6 +204,33 @@ Upgrade notes:
 - If you are upgrading from `v0.1.x` to the latest `v0.2.x`, API usage refresh is enabled by default.
 - If you previously used an early `v0.2` prerelease/test build and `status` still shows `usage: local`, run `codex-auth config api enable` once to switch to API mode.
 
+### How to import tokens from cli-proxy-api?
+
+If you have token files from `~/.cli-proxy-api/token*.json`, use the bundled conversion script to convert them into a format codex-auth can read:
+
+```shell
+# Convert: ~/.cli-proxy-api → /tmp/tokens
+python3 scripts/convert_tokens.sh
+
+# Or specify custom directories
+python3 scripts/convert_tokens.sh <source_dir> <output_dir>
+```
+
+Then import and switch:
+
+```shell
+codex-auth import /tmp/tokens/
+codex-auth switch
+```
+
+Verify with:
+
+```shell
+codex exec "say hello"
+```
+
+> **Output format:** Each converted file contains `auth_mode`, `OPENAI_API_KEY`, `tokens` (with `id_token`, `access_token`, `refresh_token`, `account_id`), and `last_refresh`. The `refresh_token` field is required for token refresh to work.
+
 ## Disclaimer
 
 This project is provided as-is and use is at your own risk.
