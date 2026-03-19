@@ -900,6 +900,10 @@ fn isImportSourceFileError(err: anyerror) bool {
     };
 }
 
+fn isImportSkippableBatchEntryError(err: anyerror) bool {
+    return isImportValidationError(err) or isImportSourceFileError(err);
+}
+
 pub fn importAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -1011,7 +1015,7 @@ fn importAuthDirectory(
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
         const info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
-            if (!isImportSourceFileError(err) and !isImportValidationError(err)) return err;
+            if (!isImportSkippableBatchEntryError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             continue;
         };
@@ -1063,7 +1067,7 @@ fn importAccountsSnapshotDirectory(
         defer allocator.free(label);
 
         const stat = dir.statFile(entry.name) catch |err| {
-            if (!isImportSourceFileError(err) and !isImportValidationError(err)) return err;
+            if (!isImportSkippableBatchEntryError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             file_path_owned = false;
             allocator.free(file_path);
@@ -1136,7 +1140,11 @@ fn importAccountsSnapshotDirectory(
     for (candidates.items) |candidate| {
         const label = try importDisplayLabelFromName(allocator, candidate.name);
         defer allocator.free(label);
-        const outcome = try importAuthFile(allocator, codex_home, reg, candidate.path, null);
+        const outcome = importAuthFile(allocator, codex_home, reg, candidate.path, null) catch |err| {
+            if (!isImportSkippableBatchEntryError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            continue;
+        };
         try report.addEvent(allocator, label, outcome, null);
     }
     return report;
