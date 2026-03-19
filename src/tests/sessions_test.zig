@@ -191,3 +191,25 @@ test "scan latest usage streams rollout files larger than ten megabytes" {
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 42.0), latest.snapshot.primary.?.used_percent);
 }
+
+test "scan latest usage keeps final line without trailing newline" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    const final_line = try usageLineAlloc(gpa, "2025-01-01T00:00:12.000Z", 33.0);
+    defer gpa.free(final_line);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-no-newline.jsonl", .data = final_line });
+
+    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-no-newline.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689612000), latest.event_timestamp_ms);
+    try std.testing.expect(latest.snapshot.primary != null);
+    try std.testing.expectEqual(@as(f64, 33.0), latest.snapshot.primary.?.used_percent);
+}
