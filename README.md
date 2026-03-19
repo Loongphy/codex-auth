@@ -206,7 +206,9 @@ Upgrade notes:
 
 ### How to import tokens from cli-proxy-api?
 
-If you have token files from `~/.cli-proxy-api/token*.json`, use the bundled conversion script to convert them into a format codex-auth can read:
+If you have token files from `~/.cli-proxy-api/token*.json`, this repository includes a helper script that can convert them into a format codex-auth can read.
+
+The script is not bundled in the published npm package, so run it from a clone of this repository:
 
 ```shell
 # Convert: ~/.cli-proxy-api → /tmp/tokens

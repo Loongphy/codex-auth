@@ -69,6 +69,36 @@ fn writeLargeRolloutFile(
     try writer.flush();
 }
 
+fn writeOversizedMalformedLineThenTrailer(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    sub_path: []const u8,
+    oversized_line_bytes: usize,
+    trailer_line: []const u8,
+) !void {
+    var file = try dir.createFile(sub_path, .{});
+    defer file.close();
+
+    var write_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&write_buffer);
+    const writer = &file_writer.interface;
+    const chunk_len = 900 * 1024;
+    const chunk = try allocator.alloc(u8, chunk_len);
+    defer allocator.free(chunk);
+    @memset(chunk, 'x');
+
+    var written: usize = 0;
+    while (written < oversized_line_bytes) {
+        const next = @min(chunk.len, oversized_line_bytes - written);
+        try writer.writeAll(chunk[0..next]);
+        written += next;
+    }
+    try writer.writeByte('\n');
+    try writer.writeAll(trailer_line);
+    try writer.writeByte('\n');
+    try writer.flush();
+}
+
 test "parse token_count usage" {
     const gpa = std.testing.allocator;
     const snap = sessions.parseUsageLine(gpa, line) orelse return error.TestExpectedEqual;
@@ -254,4 +284,32 @@ test "scan latest usage accepts valid token_count lines above one megabyte" {
     try std.testing.expectEqual(@as(f64, 27.0), latest.snapshot.primary.?.used_percent);
     try std.testing.expect(latest.snapshot.credits != null);
     try std.testing.expectEqual(@as(usize, 2 * 1024 * 1024), latest.snapshot.credits.?.balance.?.len);
+}
+
+test "scan latest usage skips oversized malformed lines and keeps later valid events" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    const valid_line = try usageLineAlloc(gpa, "2025-01-01T00:00:14.000Z", 64.0);
+    defer gpa.free(valid_line);
+    try writeOversizedMalformedLineThenTrailer(
+        gpa,
+        tmp.dir,
+        "sessions/2025/01/01/rollout-oversized-line.jsonl",
+        11 * 1024 * 1024,
+        valid_line,
+    );
+
+    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-oversized-line.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689614000), latest.event_timestamp_ms);
+    try std.testing.expect(latest.snapshot.primary != null);
+    try std.testing.expectEqual(@as(f64, 64.0), latest.snapshot.primary.?.used_percent);
 }

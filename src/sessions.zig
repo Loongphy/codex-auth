@@ -24,6 +24,7 @@ const ParsedUsageEvent = struct {
 };
 
 const max_recent_rollout_files: usize = 1;
+const max_rollout_line_bytes: usize = 10 * 1024 * 1024;
 
 pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
     const latest = try scanLatestUsageWithSource(allocator, codex_home);
@@ -119,7 +120,18 @@ fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsag
 
     while (true) {
         line_buffer.clearRetainingCapacity();
-        const line_len = reader.streamDelimiterEnding(&line_buffer.writer, '\n') catch |err| switch (err) {
+        const line_len = reader.streamDelimiterLimit(
+            &line_buffer.writer,
+            '\n',
+            .limited(max_rollout_line_bytes),
+        ) catch |err| switch (err) {
+            error.StreamTooLong => {
+                _ = reader.discardDelimiterInclusive('\n') catch |discard_err| switch (discard_err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+                };
+                continue;
+            },
             error.ReadFailed => return file_reader.err orelse error.ReadFailed,
             error.WriteFailed => return error.OutOfMemory,
         };
