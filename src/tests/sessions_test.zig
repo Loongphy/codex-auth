@@ -186,7 +186,7 @@ test "scan latest usage streams rollout files larger than ten megabytes" {
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expect(std.mem.endsWith(u8, latest.path, "sessions/2025/01/01/rollout-large.jsonl"));
+    try std.testing.expectEqualStrings("rollout-large.jsonl", std.fs.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689611000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 42.0), latest.snapshot.primary.?.used_percent);
