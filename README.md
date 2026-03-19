@@ -103,6 +103,18 @@ Batch import from a folder:
 codex-auth import /path/to/auth-exports
 ```
 
+Typical batch import output:
+
+```text
+Scanning /path/to/auth-exports...
+  ✓ imported  token_ryan.taylor.alpha@email.com
+  ✓ updated   token_jane.smith.alpha@email.com
+  ✗ skipped   token_invalid: MalformedJson
+Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)
+```
+
+`stdout` carries scanning/success/summary lines. Skipped files and warnings stay on `stderr`.
+
 Rebuild `registry.json` from imported auth files:
 
 ```shell

@@ -169,6 +169,58 @@ test "Scenario: Given api-only usage mode when rendering warning then risk and f
     try std.testing.expect(std.mem.indexOf(u8, warning, "less accurate usage data") != null);
 }
 
+test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
+    const gpa = std.testing.allocator;
+    var stdout_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stdout_aw.deinit();
+    var stderr_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr_aw.deinit();
+
+    var report = registry.ImportReport.init(.scanned);
+    defer report.deinit(gpa);
+    report.source_label = try gpa.dupe(u8, "./tokens/");
+    try report.addEvent(gpa, "token_ryan.taylor.alpha@email.com", .imported, null);
+    try report.addEvent(gpa, "token_jane.smith.alpha@email.com", .updated, null);
+    try report.addEvent(gpa, "token_invalid", .skipped, "MalformedJson");
+
+    try cli.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
+
+    try std.testing.expectEqualStrings(
+        "Scanning ./tokens/...\n" ++
+            "  ✓ imported  token_ryan.taylor.alpha@email.com\n" ++
+            "  ✓ updated   token_jane.smith.alpha@email.com\n" ++
+            "Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)\n",
+        stdout_aw.written(),
+    );
+    try std.testing.expectEqualStrings(
+        "  ✗ skipped   token_invalid: MalformedJson\n",
+        stderr_aw.written(),
+    );
+}
+
+test "Scenario: Given single-file skipped import report when rendering then summary stays concise" {
+    const gpa = std.testing.allocator;
+    var stdout_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stdout_aw.deinit();
+    var stderr_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr_aw.deinit();
+
+    var report = registry.ImportReport.init(.single_file);
+    defer report.deinit(gpa);
+    try report.addEvent(gpa, "token_bob.wilson.alpha@email.com", .skipped, "MissingEmail");
+
+    try cli.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
+
+    try std.testing.expectEqualStrings(
+        "Import Summary: 0 imported, 1 skipped\n",
+        stdout_aw.written(),
+    );
+    try std.testing.expectEqualStrings(
+        "  ✗ skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
+        stderr_aw.written(),
+    );
+}
+
 test "Scenario: Given status when parsing then status command is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "status" };

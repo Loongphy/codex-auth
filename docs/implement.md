@@ -118,6 +118,19 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `--purge` does not delete old snapshot files or backups, so stale pre-migration snapshot filenames may still remain until cleaned up separately.
 - `--purge` is a recovery fallback when a registry cannot be migrated automatically; it is not the normal upgrade path between supported schemas.
 - Directory import scans only direct child files with a `.json` suffix (non-recursive), imports valid auth files, and skips invalid/malformed entries.
+- Directory import and purge print a progress preamble like `Scanning <path>...`, then one line per import result, then an `Import Summary: ...` line.
+- Single-file import prints one result line:
+  - `✓ imported` for a new account
+  - `✓ updated` when the target account already exists
+  - `✗ skipped` plus a short reason for parse/validation failures
+- Single-file import prints a summary only when the file is skipped; the current format is `Import Summary: 0 imported, 1 skipped`.
+- Import output is split by stream:
+  - `stdout`: scanning lines, `imported`/`updated` lines, and summaries
+  - `stderr`: `skipped` lines and alias-ignore warnings
+- Import result labels use the input filename with a trailing `.json` or `.auth.json` removed.
+- JSON parse failures are rendered as the user-facing reason `MalformedJson`; semantic validation errors keep explicit names such as `MissingEmail` or `MissingChatgptUserId`.
+- During `--purge`, duplicate snapshot candidates that lose to a newer snapshot are reported as `skipped` with the reason `SupersededByNewerSnapshot`.
+- During `--purge`, if the current `~/.codex/auth.json` is imported last, it is reported as `auth.json (active)` and counted in the purge summary.
 - Only `import` can set account `alias` (via `--alias` on single-file import).
 - For directory import or `--purge` without an explicit file path, `--alias` is ignored.
 - Non-import flows (`login`, auto-import on empty registry, and sync-created accounts) leave `alias` empty.

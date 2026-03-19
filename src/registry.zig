@@ -608,9 +608,78 @@ fn backupRegistryIfChanged(
     try pruneBackups(allocator, dir, "registry.json", max_backups);
 }
 
-pub const ImportSummary = struct {
+pub const ImportRenderKind = enum {
+    single_file,
+    scanned,
+};
+
+pub const ImportOutcome = enum {
+    imported,
+    updated,
+    skipped,
+};
+
+pub const ImportEvent = struct {
+    label: []u8,
+    outcome: ImportOutcome,
+    reason: ?[]u8 = null,
+
+    pub fn deinit(self: *ImportEvent, allocator: std.mem.Allocator) void {
+        allocator.free(self.label);
+        if (self.reason) |reason| allocator.free(reason);
+    }
+};
+
+pub const ImportReport = struct {
+    render_kind: ImportRenderKind,
+    source_label: ?[]u8 = null,
     imported: usize = 0,
+    updated: usize = 0,
     skipped: usize = 0,
+    total_files: usize = 0,
+    events: std.ArrayList(ImportEvent),
+
+    pub fn init(render_kind: ImportRenderKind) ImportReport {
+        return .{
+            .render_kind = render_kind,
+            .events = std.ArrayList(ImportEvent).empty,
+        };
+    }
+
+    pub fn deinit(self: *ImportReport, allocator: std.mem.Allocator) void {
+        if (self.source_label) |source_label| allocator.free(source_label);
+        for (self.events.items) |*event| event.deinit(allocator);
+        self.events.deinit(allocator);
+    }
+
+    pub fn addEvent(
+        self: *ImportReport,
+        allocator: std.mem.Allocator,
+        label: []const u8,
+        outcome: ImportOutcome,
+        reason: ?[]const u8,
+    ) !void {
+        const owned_label = try allocator.dupe(u8, label);
+        errdefer allocator.free(owned_label);
+        const owned_reason = if (reason) |reason_text| try allocator.dupe(u8, reason_text) else null;
+        errdefer if (owned_reason) |owned| allocator.free(owned);
+
+        try self.events.append(allocator, .{
+            .label = owned_label,
+            .outcome = outcome,
+            .reason = owned_reason,
+        });
+        self.total_files += 1;
+        switch (outcome) {
+            .imported => self.imported += 1,
+            .updated => self.updated += 1,
+            .skipped => self.skipped += 1,
+        }
+    }
+
+    pub fn appliedCount(self: *const ImportReport) usize {
+        return self.imported + self.updated;
+    }
 };
 
 const PurgeCarryForwardConfig = struct {
@@ -623,7 +692,7 @@ pub fn purgeRegistryFromImportSource(
     codex_home: []const u8,
     auth_path: ?[]const u8,
     explicit_alias: ?[]const u8,
-) !ImportSummary {
+) !ImportReport {
     if (auth_path == null and explicit_alias != null) {
         std.log.warn("--alias is ignored when purging from {s}", .{"~/.codex/accounts"});
     }
@@ -635,18 +704,23 @@ pub fn purgeRegistryFromImportSource(
     reg.api = carry_forward.api;
     defer reg.deinit(allocator);
 
-    var summary = if (auth_path) |path|
+    var report = if (auth_path) |path|
         try importAuthPath(allocator, codex_home, &reg, path, explicit_alias)
     else
         try importAccountsSnapshotDirectory(allocator, codex_home, &reg);
+    errdefer report.deinit(allocator);
+    report.render_kind = .scanned;
+    if (report.source_label == null) {
+        report.source_label = try allocator.dupe(u8, auth_path orelse "~/.codex/accounts");
+    }
 
-    if (try syncCurrentAuthBestEffort(allocator, codex_home, &reg)) {
-        summary.imported += 1;
+    if (try syncCurrentAuthBestEffort(allocator, codex_home, &reg)) |outcome| {
+        try report.addEvent(allocator, "auth.json (active)", outcome, null);
     }
 
     sortAccountsByEmail(&reg);
     try saveRegistry(allocator, codex_home, &reg);
-    return summary;
+    return report;
 }
 
 fn loadPurgeCarryForwardConfig(allocator: std.mem.Allocator, codex_home: []const u8) !PurgeCarryForwardConfig {
@@ -770,13 +844,46 @@ fn findBalancedObjectEnd(data: []const u8, start: usize) ?usize {
     return null;
 }
 
+fn importDisplayLabelFromName(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    if (std.mem.endsWith(u8, name, ".auth.json")) {
+        return allocator.dupe(u8, name[0 .. name.len - ".auth.json".len]);
+    }
+    if (std.mem.endsWith(u8, name, ".json")) {
+        return allocator.dupe(u8, name[0 .. name.len - ".json".len]);
+    }
+    return allocator.dupe(u8, name);
+}
+
+fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    return importDisplayLabelFromName(allocator, std.fs.path.basename(path));
+}
+
+fn importReasonLabel(err: anyerror) []const u8 {
+    if (std.mem.eql(u8, @errorName(err), "SyntaxError")) return "MalformedJson";
+    return @errorName(err);
+}
+
+fn isImportValidationError(err: anyerror) bool {
+    return switch (err) {
+        error.SyntaxError,
+        error.MissingEmail,
+        error.MissingChatgptUserId,
+        error.MissingAccountId,
+        error.AccountIdMismatch,
+        error.InvalidJwt,
+        error.InvalidBase64,
+        => true,
+        else => false,
+    };
+}
+
 pub fn importAuthPath(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *Registry,
     auth_path: []const u8,
     explicit_alias: ?[]const u8,
-) !ImportSummary {
+) !ImportReport {
     const stat = std.fs.cwd().statFile(auth_path) catch |err| switch (err) {
         error.IsDir => {
             if (explicit_alias != null) {
@@ -793,8 +900,21 @@ pub fn importAuthPath(
         return try importAuthDirectory(allocator, codex_home, reg, auth_path);
     }
 
-    try importAuthFile(allocator, codex_home, reg, auth_path, explicit_alias);
-    return ImportSummary{ .imported = 1 };
+    var report = ImportReport.init(.single_file);
+    errdefer report.deinit(allocator);
+
+    const outcome = importAuthFile(allocator, codex_home, reg, auth_path, explicit_alias) catch |err| {
+        if (!isImportValidationError(err)) return err;
+        const label = try importDisplayLabel(allocator, auth_path);
+        defer allocator.free(label);
+        try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+        return report;
+    };
+
+    const label = try importDisplayLabel(allocator, auth_path);
+    defer allocator.free(label);
+    try report.addEvent(allocator, label, outcome, null);
+    return report;
 }
 
 fn importAuthFile(
@@ -803,13 +923,14 @@ fn importAuthFile(
     reg: *Registry,
     auth_file: []const u8,
     explicit_alias: ?[]const u8,
-) !void {
+) !ImportOutcome {
     const info = try @import("auth.zig").parseAuthInfo(allocator, auth_file);
     defer info.deinit(allocator);
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
     const alias = explicit_alias orelse "";
+    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
 
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
@@ -819,6 +940,7 @@ fn importAuthFile(
 
     const record = try accountFromAuth(allocator, alias, &info);
     try upsertAccount(allocator, reg, record);
+    return if (existed) .updated else .imported;
 }
 
 fn importAuthDirectory(
@@ -826,7 +948,7 @@ fn importAuthDirectory(
     codex_home: []const u8,
     reg: *Registry,
     dir_path: []const u8,
-) !ImportSummary {
+) !ImportReport {
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
 
@@ -845,30 +967,38 @@ fn importAuthDirectory(
 
     std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
 
-    var summary = ImportSummary{};
+    var report = ImportReport.init(.scanned);
+    errdefer report.deinit(allocator);
+    report.source_label = try allocator.dupe(u8, dir_path);
     for (names.items) |name| {
         const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
-        importAuthFile(allocator, codex_home, reg, file_path, null) catch |err| {
-            summary.skipped += 1;
-            std.log.warn("skip import {s}: {s}", .{ file_path, @errorName(err) });
+        const label = try importDisplayLabelFromName(allocator, name);
+        defer allocator.free(label);
+        const outcome = importAuthFile(allocator, codex_home, reg, file_path, null) catch |err| {
+            if (!isImportValidationError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             continue;
         };
-        summary.imported += 1;
+        try report.addEvent(allocator, label, outcome, null);
     }
-    return summary;
+    return report;
 }
 
 fn importAccountsSnapshotDirectory(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *Registry,
-) !ImportSummary {
+) !ImportReport {
+    var report = ImportReport.init(.scanned);
+    errdefer report.deinit(allocator);
+    report.source_label = try allocator.dupe(u8, "~/.codex/accounts");
+
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
     var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return ImportSummary{},
+        error.FileNotFound => return report,
         else => return err,
     };
     defer dir.close();
@@ -879,7 +1009,6 @@ fn importAccountsSnapshotDirectory(
         candidates.deinit(allocator);
     }
 
-    var summary = ImportSummary{};
     var it = dir.iterate();
     while (try it.next()) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
@@ -889,10 +1018,12 @@ fn importAccountsSnapshotDirectory(
         var file_path_owned = true;
         errdefer if (file_path_owned) allocator.free(file_path);
 
+        const label = try importDisplayLabelFromName(allocator, entry.name);
+        defer allocator.free(label);
+
         const stat = try dir.statFile(entry.name);
         var info = @import("auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
-            summary.skipped += 1;
-            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(err) });
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             file_path_owned = false;
             allocator.free(file_path);
             continue;
@@ -900,15 +1031,13 @@ fn importAccountsSnapshotDirectory(
         defer info.deinit(allocator);
 
         const email = info.email orelse {
-            summary.skipped += 1;
-            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingEmail) });
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(error.MissingEmail));
             file_path_owned = false;
             allocator.free(file_path);
             continue;
         };
         const record_key = info.record_key orelse {
-            summary.skipped += 1;
-            std.log.warn("skip purge import {s}: {s}", .{ file_path, @errorName(error.MissingChatgptUserId) });
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(error.MissingChatgptUserId));
             file_path_owned = false;
             allocator.free(file_path);
             continue;
@@ -942,9 +1071,11 @@ fn importAccountsSnapshotDirectory(
 
         if (findPurgeImportCandidateIndexByRecordKey(candidates.items, candidate.record_key)) |idx| {
             if (purgeImportCandidateIsNewer(&candidates.items[idx], &candidate)) {
+                try report.addEvent(allocator, candidates.items[idx].name, .skipped, "SupersededByNewerSnapshot");
                 candidates.items[idx].deinit(allocator);
                 candidates.items[idx] = candidate;
             } else {
+                try report.addEvent(allocator, candidate.name, .skipped, "SupersededByNewerSnapshot");
                 candidate.deinit(allocator);
             }
             continue;
@@ -956,14 +1087,12 @@ fn importAccountsSnapshotDirectory(
     std.sort.insertion(PurgeImportCandidate, candidates.items, {}, purgeImportCandidateLessThan);
 
     for (candidates.items) |candidate| {
-        importAuthFile(allocator, codex_home, reg, candidate.path, null) catch |err| {
-            summary.skipped += 1;
-            std.log.warn("skip purge import {s}: {s}", .{ candidate.path, @errorName(err) });
-            continue;
-        };
-        summary.imported += 1;
+        const label = try importDisplayLabelFromName(allocator, candidate.name);
+        defer allocator.free(label);
+        const outcome = try importAuthFile(allocator, codex_home, reg, candidate.path, null);
+        try report.addEvent(allocator, label, outcome, null);
     }
-    return summary;
+    return report;
 }
 
 const PurgeImportCandidateKind = enum(u8) {
@@ -1050,20 +1179,20 @@ fn syncCurrentAuthBestEffort(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *Registry,
-) !bool {
+) !?ImportOutcome {
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
     if (std.fs.cwd().openFile(auth_path, .{})) |file| {
         file.close();
     } else |_| {
-        return false;
+        return null;
     }
 
-    const info = @import("auth.zig").parseAuthInfo(allocator, auth_path) catch return false;
+    const info = @import("auth.zig").parseAuthInfo(allocator, auth_path) catch return null;
     defer info.deinit(allocator);
-    _ = info.email orelse return false;
-    const record_key = info.record_key orelse return false;
+    _ = info.email orelse return null;
+    const record_key = info.record_key orelse return null;
 
     const existing_idx = findAccountIndexByAccountKey(reg, record_key);
     const dest = try accountAuthPath(allocator, codex_home, record_key);
@@ -1101,7 +1230,7 @@ fn syncCurrentAuthBestEffort(
     }
 
     try setActiveAccountKey(allocator, reg, record_key);
-    return true;
+    return if (existing_idx != null) .updated else .imported;
 }
 
 pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {

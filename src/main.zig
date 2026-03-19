@@ -144,16 +144,20 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
 fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ImportOptions) !void {
     if (opts.purge) {
-        _ = try registry.purgeRegistryFromImportSource(allocator, codex_home, opts.auth_path, opts.alias);
+        var report = try registry.purgeRegistryFromImportSource(allocator, codex_home, opts.auth_path, opts.alias);
+        defer report.deinit(allocator);
+        try cli.printImportReport(&report);
         return;
     }
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    const summary = try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path.?, opts.alias);
-    if (summary.imported > 0) {
+    var report = try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path.?, opts.alias);
+    defer report.deinit(allocator);
+    if (report.appliedCount() > 0) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    try cli.printImportReport(&report);
 }
 
 fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.SwitchOptions) !void {

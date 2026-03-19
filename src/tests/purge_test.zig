@@ -307,7 +307,8 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -375,7 +376,8 @@ test "Scenario: Given purge with newer schema registry when rebuilding then auto
     const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -419,7 +421,8 @@ test "Scenario: Given purge with malformed registry when rebuilding then auto an
     const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -451,7 +454,8 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json", .data = "{\"bad\":\"registry\"}" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.1", .data = "backup" });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -472,7 +476,8 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
     defer gpa.free(backup_auth);
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-010101", .data = backup_auth });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -518,7 +523,8 @@ test "Scenario: Given purge without path and duplicate snapshots when rebuilding
     defer gpa.free(alpha_auth);
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-020202", .data = alpha_auth });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -567,7 +573,8 @@ test "Scenario: Given same team account id across different users when purging t
     defer gpa.free(second_auth);
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-171806", .data = second_auth });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -620,7 +627,8 @@ test "Scenario: Given same user across team and free workspaces when purging the
     defer gpa.free(free_auth);
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-172239", .data = free_auth });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -655,7 +663,8 @@ test "Scenario: Given purge without accounts directory when rebuilding then curr
     defer gpa.free(active_auth);
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
 
-    _ = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);

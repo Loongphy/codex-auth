@@ -678,9 +678,13 @@ test "import auth path with single file keeps explicit alias" {
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
 
-    const summary = try registry.importAuthPath(gpa, codex_home, &reg, one_path, "personal");
+    var summary = try registry.importAuthPath(gpa, codex_home, &reg, one_path, "personal");
+    defer summary.deinit(gpa);
+    try std.testing.expect(summary.render_kind == .single_file);
     try std.testing.expect(summary.imported == 1);
+    try std.testing.expect(summary.updated == 0);
     try std.testing.expect(summary.skipped == 0);
+    try std.testing.expect(summary.total_files == 1);
     try std.testing.expect(reg.accounts.items.len == 1);
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].alias, "personal"));
 }
@@ -709,9 +713,13 @@ test "import auth path with directory imports multiple json files and skips bad 
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
 
-    const summary = try registry.importAuthPath(gpa, codex_home, &reg, imports_dir, null);
+    var summary = try registry.importAuthPath(gpa, codex_home, &reg, imports_dir, null);
+    defer summary.deinit(gpa);
+    try std.testing.expect(summary.render_kind == .scanned);
     try std.testing.expect(summary.imported == 2);
+    try std.testing.expect(summary.updated == 0);
     try std.testing.expect(summary.skipped == 1);
+    try std.testing.expect(summary.total_files == 3);
     try std.testing.expect(reg.accounts.items.len == 2);
     try std.testing.expect(reg.accounts.items[0].alias.len == 0);
     try std.testing.expect(reg.accounts.items[1].alias.len == 0);
@@ -728,4 +736,38 @@ test "import auth path with directory imports multiple json files and skips bad 
     defer file_a.close();
     var file_b = try std.fs.cwd().openFile(path_b, .{});
     defer file_b.close();
+}
+
+test "import auth path with repeated single file reports updated on second import" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const auth_json = try authJsonWithEmailPlan(gpa, "repeat@example.com", "plus");
+    defer gpa.free(auth_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/repeat.json", .data = auth_json });
+
+    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
+    defer gpa.free(auth_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var first = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, null);
+    defer first.deinit(gpa);
+    try std.testing.expect(first.imported == 1);
+    try std.testing.expect(first.updated == 0);
+    try std.testing.expect(first.skipped == 0);
+
+    var second = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, null);
+    defer second.deinit(gpa);
+    try std.testing.expect(second.imported == 0);
+    try std.testing.expect(second.updated == 1);
+    try std.testing.expect(second.skipped == 0);
+    try std.testing.expectEqual(@as(usize, 1), second.events.items.len);
+    try std.testing.expect(second.events.items[0].outcome == .updated);
 }

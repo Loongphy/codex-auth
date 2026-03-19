@@ -412,6 +412,65 @@ pub fn printVersion() !void {
     try out.flush();
 }
 
+pub fn printImportReport(report: *const registry.ImportReport) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    try writeImportReport(stdout.out(), &stderr_writer.interface, report);
+}
+
+pub fn writeImportReport(
+    out: *std.Io.Writer,
+    err_out: *std.Io.Writer,
+    report: *const registry.ImportReport,
+) !void {
+    if (report.render_kind == .scanned) {
+        try out.print("Scanning {s}...\n", .{report.source_label.?});
+        try out.flush();
+    }
+
+    for (report.events.items) |event| {
+        switch (event.outcome) {
+            .imported => {
+                try out.print("  ✓ imported  {s}\n", .{event.label});
+                try out.flush();
+            },
+            .updated => {
+                try out.print("  ✓ updated   {s}\n", .{event.label});
+                try out.flush();
+            },
+            .skipped => {
+                try err_out.print("  ✗ skipped   {s}: {s}\n", .{ event.label, event.reason.? });
+                try err_out.flush();
+            },
+        }
+    }
+
+    if (report.render_kind == .scanned) {
+        try out.print(
+            "Import Summary: {d} imported, {d} updated, {d} skipped (total {d} {s})\n",
+            .{
+                report.imported,
+                report.updated,
+                report.skipped,
+                report.total_files,
+                if (report.total_files == 1) "file" else "files",
+            },
+        );
+        try out.flush();
+        return;
+    }
+
+    if (report.skipped > 0 and report.imported == 0 and report.updated == 0) {
+        try out.print(
+            "Import Summary: {d} imported, {d} skipped\n",
+            .{ report.imported, report.skipped },
+        );
+        try out.flush();
+    }
+}
+
 pub fn warnDeprecatedLoginAlias(opts: LoginOptions) void {
     if (opts.invocation != .add_alias) return;
     writeDeprecatedLoginAliasWarning("codex-auth login", stderrColorEnabled()) catch {};
