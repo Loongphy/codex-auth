@@ -494,6 +494,42 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
     snapshot.close();
 }
 
+test "Scenario: Given purge without path and an empty snapshot when rebuilding then it reports malformed json and still imports valid backups" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const backup_auth = try authJsonWithEmailPlan(gpa, "backup-valid@example.com", "team");
+    defer gpa.free(backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-010101", .data = backup_auth });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260317-020202", .data = "" });
+
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), report.imported);
+    try std.testing.expectEqual(@as(usize, 1), report.skipped);
+
+    var found_malformed = false;
+    for (report.events.items) |event| {
+        if (event.outcome != .skipped) continue;
+        if (std.mem.eql(u8, event.label, "auth.json.bak.20260317-020202")) {
+            found_malformed = std.mem.eql(u8, event.reason.?, "MalformedJson");
+            break;
+        }
+    }
+    try std.testing.expect(found_malformed);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "backup-valid@example.com"));
+}
+
 test "Scenario: Given purge without path and duplicate snapshots when rebuilding then newest snapshot wins and accounts are sorted by email" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

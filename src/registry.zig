@@ -633,6 +633,7 @@ pub const ImportEvent = struct {
 pub const ImportReport = struct {
     render_kind: ImportRenderKind,
     source_label: ?[]u8 = null,
+    failure: ?anyerror = null,
     imported: usize = 0,
     updated: usize = 0,
     skipped: usize = 0,
@@ -712,6 +713,9 @@ pub fn purgeRegistryFromImportSource(
     report.render_kind = .scanned;
     if (report.source_label == null) {
         report.source_label = try allocator.dupe(u8, auth_path orelse "~/.codex/accounts");
+    }
+    if (report.failure != null) {
+        return report;
     }
 
     if (try syncCurrentAuthBestEffort(allocator, codex_home, &reg)) |outcome| {
@@ -859,13 +863,19 @@ fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn importReasonLabel(err: anyerror) []const u8 {
-    if (std.mem.eql(u8, @errorName(err), "SyntaxError")) return "MalformedJson";
+    switch (err) {
+        error.SyntaxError,
+        error.UnexpectedEndOfInput,
+        => return "MalformedJson",
+        else => {},
+    }
     return @errorName(err);
 }
 
 fn isImportValidationError(err: anyerror) bool {
     return switch (err) {
         error.SyntaxError,
+        error.UnexpectedEndOfInput,
         error.MissingEmail,
         error.MissingChatgptUserId,
         error.MissingAccountId,
@@ -908,6 +918,7 @@ pub fn importAuthPath(
         const label = try importDisplayLabel(allocator, auth_path);
         defer allocator.free(label);
         try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+        report.failure = err;
         return report;
     };
 

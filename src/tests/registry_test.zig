@@ -1,5 +1,6 @@
 const std = @import("std");
 const registry = @import("../registry.zig");
+const bdd = @import("bdd_helpers.zig");
 
 fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
@@ -770,4 +771,35 @@ test "import auth path with repeated single file reports updated on second impor
     try std.testing.expect(second.skipped == 0);
     try std.testing.expectEqual(@as(usize, 1), second.events.items.len);
     try std.testing.expect(second.events.items[0].outcome == .updated);
+}
+
+test "import auth path with invalid single file keeps failure for non-zero exit handling" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const invalid_auth = try bdd.authJsonWithoutEmail(gpa);
+    defer gpa.free(invalid_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/invalid.json", .data = invalid_auth });
+
+    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "invalid.json" });
+    defer gpa.free(auth_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var report = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, null);
+    defer report.deinit(gpa);
+    try std.testing.expect(report.render_kind == .single_file);
+    try std.testing.expectEqual(@as(usize, 0), report.appliedCount());
+    try std.testing.expectEqual(@as(usize, 1), report.skipped);
+    const failure = report.failure orelse return error.TestExpectedEqual;
+    try std.testing.expect(failure == error.MissingEmail);
+    try std.testing.expectEqual(@as(usize, 1), report.events.items.len);
+    try std.testing.expect(report.events.items[0].outcome == .skipped);
+    try std.testing.expectEqualStrings("MissingEmail", report.events.items[0].reason.?);
 }

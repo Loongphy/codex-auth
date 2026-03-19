@@ -88,6 +88,13 @@ fn expectSuccess(result: std.process.Child.RunResult) !void {
     }
 }
 
+fn expectFailure(result: std.process.Child.RunResult) !void {
+    switch (result.term) {
+        .Exited => |code| try std.testing.expect(code != 0),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
 fn expectUsageApiWarningOnStderrOnly(result: std.process.Child.RunResult) !void {
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`codex-auth config api disable`") != null);
@@ -271,7 +278,7 @@ test "Scenario: Given repeated single-file import when running import then first
     try std.testing.expectEqualStrings("", second.stderr);
 }
 
-test "Scenario: Given single-file import missing email when running import then it is reported as skipped with a summary" {
+test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -296,12 +303,9 @@ test "Scenario: Given single-file import missing email when running import then 
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
+    try expectFailure(result);
     try std.testing.expectEqualStrings("Import Summary: 0 imported, 1 skipped\n", result.stdout);
-    try std.testing.expectEqualStrings(
-        "  ✗ skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
-        result.stderr,
-    );
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "  ✗ skipped   token_bob.wilson.alpha@email.com: MissingEmail\n") != null);
 }
 
 test "Scenario: Given directory import with new updated and invalid files when running import then stdout and stderr split the report" {
@@ -378,6 +382,51 @@ test "Scenario: Given directory import with new updated and invalid files when r
             "  ✗ skipped   token_invalid: MalformedJson\n",
         result.stderr,
     );
+}
+
+test "Scenario: Given directory import with an empty json file when running import then it is skipped as malformed and valid imports still persist" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+
+    const valid_auth = try bdd.authJsonWithEmailPlan(gpa, "still-imported@example.com", "plus");
+    defer gpa.free(valid_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/valid.json", .data = valid_auth });
+    try tmp.dir.writeFile(.{ .sub_path = "imports/empty.json", .data = "" });
+
+    const imports_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    defer gpa.free(imports_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    const expected_stdout = try std.fmt.allocPrint(
+        gpa,
+        "Scanning {s}...\n" ++
+            "  ✓ imported  valid\n" ++
+            "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
+        .{imports_path},
+    );
+    defer gpa.free(expected_stdout);
+    try std.testing.expectEqualStrings(expected_stdout, result.stdout);
+    try std.testing.expectEqualStrings("  ✗ skipped   empty: MalformedJson\n", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "still-imported@example.com"));
 }
 
 test "Scenario: Given default api usage when rendering help then warning stays on stderr" {

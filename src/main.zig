@@ -147,6 +147,7 @@ fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         var report = try registry.purgeRegistryFromImportSource(allocator, codex_home, opts.auth_path, opts.alias);
         defer report.deinit(allocator);
         try cli.printImportReport(&report);
+        if (report.failure) |err| return err;
         return;
     }
 
@@ -158,6 +159,7 @@ fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try cli.printImportReport(&report);
+    if (report.failure) |err| return err;
 }
 
 fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.SwitchOptions) !void {
