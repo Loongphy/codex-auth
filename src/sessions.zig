@@ -23,6 +23,36 @@ const ParsedUsageEvent = struct {
     snapshot: registry.RateLimitSnapshot,
 };
 
+const UsageEventLineJson = struct {
+    timestamp: []const u8 = "",
+    type: []const u8 = "",
+    payload: UsagePayloadJson = .{},
+};
+
+const UsagePayloadJson = struct {
+    type: []const u8 = "",
+    rate_limits: ?UsageRateLimitsJson = null,
+};
+
+const UsageRateLimitsJson = struct {
+    primary: ?UsageWindowJson = null,
+    secondary: ?UsageWindowJson = null,
+    credits: ?UsageCreditsJson = null,
+    plan_type: ?[]const u8 = null,
+};
+
+const UsageWindowJson = struct {
+    used_percent: f64 = 0.0,
+    window_minutes: ?i64 = null,
+    resets_at: ?i64 = null,
+};
+
+const UsageCreditsJson = struct {
+    has_credits: bool = false,
+    unlimited: bool = false,
+    balance: ?[]const u8 = null,
+};
+
 const max_recent_rollout_files: usize = 1;
 const max_rollout_line_bytes: usize = 10 * 1024 * 1024;
 
@@ -167,108 +197,60 @@ pub fn parseUsageLine(allocator: std.mem.Allocator, line: []const u8) ?registry.
 }
 
 fn parseUsageEventLine(allocator: std.mem.Allocator, line: []const u8) ?ParsedUsageEvent {
-    var parsed = std.json.parseFromSlice(std.json.Value, allocator, line, .{}) catch return null;
+    if (!looksLikeUsageEventLine(line)) return null;
+
+    var parsed = std.json.parseFromSlice(UsageEventLineJson, allocator, line, .{
+        .ignore_unknown_fields = true,
+    }) catch return null;
     defer parsed.deinit();
 
     const root = parsed.value;
-    const root_obj = switch (root) {
-        .object => |o| o,
-        else => return null,
-    };
-    const t = root_obj.get("type") orelse return null;
-    const tstr = switch (t) {
-        .string => |s| s,
-        else => return null,
-    };
-    if (!std.mem.eql(u8, tstr, "event_msg")) return null;
-    const ts = root_obj.get("timestamp") orelse return null;
-    const timestamp = switch (ts) {
-        .string => |s| s,
-        else => return null,
-    };
-    const event_timestamp_ms = parseTimestampMs(timestamp) orelse return null;
-    const payload = root_obj.get("payload") orelse return null;
-    const pobj = switch (payload) {
-        .object => |o| o,
-        else => return null,
-    };
-    const ptype = pobj.get("type") orelse return null;
-    const pstr = switch (ptype) {
-        .string => |s| s,
-        else => return null,
-    };
-    if (!std.mem.eql(u8, pstr, "token_count")) return null;
-    const rate_limits = pobj.get("rate_limits") orelse return null;
+    if (!std.mem.eql(u8, root.type, "event_msg")) return null;
+    if (!std.mem.eql(u8, root.payload.type, "token_count")) return null;
 
-    const snapshot = parseRateLimits(allocator, rate_limits) orelse return null;
+    const event_timestamp_ms = parseTimestampMs(root.timestamp) orelse return null;
+    const rate_limits = root.payload.rate_limits orelse return null;
+    const snapshot = parseRateLimits(allocator, rate_limits);
     return .{
         .event_timestamp_ms = event_timestamp_ms,
         .snapshot = snapshot,
     };
 }
 
-fn parseRateLimits(allocator: std.mem.Allocator, v: std.json.Value) ?registry.RateLimitSnapshot {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return null,
-    };
+fn looksLikeUsageEventLine(line: []const u8) bool {
+    return std.mem.indexOf(u8, line, "\"event_msg\"") != null and
+        std.mem.indexOf(u8, line, "\"token_count\"") != null and
+        std.mem.indexOf(u8, line, "\"rate_limits\"") != null and
+        std.mem.indexOf(u8, line, "\"timestamp\"") != null;
+}
 
+fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) registry.RateLimitSnapshot {
     var snap = registry.RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .plan_type = null };
-    if (obj.get("primary")) |p| snap.primary = parseWindow(p);
-    if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
-    if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
-    if (obj.get("plan_type")) |p| {
-        switch (p) {
-            .string => |s| snap.plan_type = parsePlanType(s),
-            else => {},
-        }
-    }
+    if (parsed.primary) |p| snap.primary = parseWindow(p);
+    if (parsed.secondary) |p| snap.secondary = parseWindow(p);
+    if (parsed.credits) |c| snap.credits = parseCredits(allocator, c);
+    if (parsed.plan_type) |p| snap.plan_type = parsePlanType(p);
     return snap;
 }
 
-fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return null,
+fn parseWindow(parsed: UsageWindowJson) registry.RateLimitWindow {
+    return .{
+        .used_percent = parsed.used_percent,
+        .window_minutes = parsed.window_minutes,
+        .resets_at = parsed.resets_at,
     };
-    const used = obj.get("used_percent") orelse return null;
-    const used_percent = switch (used) {
-        .float => |f| f,
-        .integer => |i| @as(f64, @floatFromInt(i)),
-        else => 0.0,
-    };
-    const window_minutes = if (obj.get("window_minutes")) |wm| switch (wm) {
-        .integer => |i| i,
-        else => null,
-    } else null;
-    const resets_at = if (obj.get("resets_at")) |ra| switch (ra) {
-        .integer => |i| i,
-        else => null,
-    } else null;
-    return registry.RateLimitWindow{ .used_percent = used_percent, .window_minutes = window_minutes, .resets_at = resets_at };
 }
 
-fn parseCredits(allocator: std.mem.Allocator, v: std.json.Value) ?registry.CreditsSnapshot {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return null,
-    };
-    const has_credits = if (obj.get("has_credits")) |hc| switch (hc) {
-        .bool => |b| b,
-        else => false,
-    } else false;
-    const unlimited = if (obj.get("unlimited")) |u| switch (u) {
-        .bool => |b| b,
-        else => false,
-    } else false;
+fn parseCredits(allocator: std.mem.Allocator, parsed: UsageCreditsJson) registry.CreditsSnapshot {
     var balance: ?[]u8 = null;
-    if (obj.get("balance")) |b| {
-        switch (b) {
-            .string => |s| balance = allocator.dupe(u8, s) catch null,
-            else => {},
-        }
+    if (parsed.balance) |b| {
+        balance = allocator.dupe(u8, b) catch null;
     }
-    return registry.CreditsSnapshot{ .has_credits = has_credits, .unlimited = unlimited, .balance = balance };
+    return .{
+        .has_credits = parsed.has_credits,
+        .unlimited = parsed.unlimited,
+        .balance = balance,
+    };
 }
 
 fn parsePlanType(s: []const u8) registry.PlanType {
