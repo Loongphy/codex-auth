@@ -611,15 +611,23 @@ fn printWindowsIntervalClampWarning(requested_seconds: u32, effective_seconds: u
 }
 
 pub fn writeWindowsIntervalClampWarning(out: *std.Io.Writer, requested_seconds: u32, effective_seconds: u32) !void {
-    const requested_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, requested_seconds);
+    const requested_label = try formatWindowsIntervalClampLabelAlloc(std.heap.page_allocator, requested_seconds);
     defer std.heap.page_allocator.free(requested_label);
-    const effective_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, effective_seconds);
+    const effective_label = try formatWindowsIntervalClampLabelAlloc(std.heap.page_allocator, effective_seconds);
     defer std.heap.page_allocator.free(effective_label);
 
     try out.print(
-        "Warning: Windows Task Scheduler does not support intervals below 1 minute; saved auto-switch interval as {s} instead of {s}.\n",
+        "Warning: Windows Task Scheduler supports auto-switch intervals from 1m to 31d; saved auto-switch interval as {s} instead of {s}.\n",
         .{ effective_label, requested_label },
     );
+}
+
+fn formatWindowsIntervalClampLabelAlloc(allocator: std.mem.Allocator, seconds: u32) ![]u8 {
+    const day_seconds = 24 * 60 * 60;
+    if (seconds != 0 and @mod(seconds, day_seconds) == 0) {
+        return std.fmt.allocPrint(allocator, "{d}d", .{@divTrunc(seconds, day_seconds)});
+    }
+    return timefmt.formatSimpleDurationAlloc(allocator, seconds);
 }
 
 fn rankedAutoSwitchCandidateIndices(

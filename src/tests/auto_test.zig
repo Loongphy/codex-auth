@@ -1035,7 +1035,20 @@ test "Scenario: Given windows interval clamp warning when rendering then the mes
     try auto.writeWindowsIntervalClampWarning(&aw.writer, 4, 60);
 
     try std.testing.expectEqualStrings(
-        "Warning: Windows Task Scheduler does not support intervals below 1 minute; saved auto-switch interval as 1m instead of 4s.\n",
+        "Warning: Windows Task Scheduler supports auto-switch intervals from 1m to 31d; saved auto-switch interval as 1m instead of 4s.\n",
+        aw.written(),
+    );
+}
+
+test "Scenario: Given windows interval above scheduler limit when rendering warning then the message stays in English" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try auto.writeWindowsIntervalClampWarning(&aw.writer, 32 * 24 * 60 * 60, registry.windows_max_auto_switch_interval_seconds);
+
+    try std.testing.expectEqualStrings(
+        "Warning: Windows Task Scheduler supports auto-switch intervals from 1m to 31d; saved auto-switch interval as 31d instead of 32d.\n",
         aw.written(),
     );
 }

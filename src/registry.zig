@@ -11,6 +11,7 @@ pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
 pub const default_auto_switch_interval_seconds: u32 = 60;
+pub const windows_max_auto_switch_interval_seconds: u32 = 31 * 24 * 60 * 60;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -124,8 +125,13 @@ pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
 }
 
 pub fn effectiveAutoSwitchIntervalSeconds(interval_seconds: u32, os_tag: std.Target.Os.Tag) u32 {
-    if (os_tag == .windows and interval_seconds < default_auto_switch_interval_seconds) {
-        return default_auto_switch_interval_seconds;
+    if (os_tag == .windows) {
+        if (interval_seconds < default_auto_switch_interval_seconds) {
+            return default_auto_switch_interval_seconds;
+        }
+        if (interval_seconds > windows_max_auto_switch_interval_seconds) {
+            return windows_max_auto_switch_interval_seconds;
+        }
     }
     return interval_seconds;
 }

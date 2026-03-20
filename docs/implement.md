@@ -249,7 +249,7 @@ Service bootstrap is platform-specific:
 
 - Linux/WSL: `systemd --user` oneshot service plus timer, running at the configured interval
 - macOS: `LaunchAgent`
-- Windows: user scheduled task running at the configured interval and launching `codex-auth-auto.exe` directly with no batch wrapper; values below `60s` are warned about and clamped to `60s`
+- Windows: user scheduled task running at the configured interval and launching `codex-auth-auto.exe` directly with no batch wrapper; values outside the Task Scheduler-supported `60s` to `31d` range are warned about and clamped into that range
 
 Service install paths are resolved from the real user home directory.
 The generated Linux/macOS service definition stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:

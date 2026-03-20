@@ -135,6 +135,28 @@ test "resolve effective rate windows also aliases free weekly-only secondary sna
     try std.testing.expectEqual(@as(?i64, 10080), windows.rate_weekly.?.window_minutes);
 }
 
+test "effective auto-switch interval clamps Windows values to scheduler-supported range" {
+    try std.testing.expectEqual(
+        registry.default_auto_switch_interval_seconds,
+        registry.effectiveAutoSwitchIntervalSeconds(4, .windows),
+    );
+    try std.testing.expectEqual(
+        registry.windows_max_auto_switch_interval_seconds,
+        registry.effectiveAutoSwitchIntervalSeconds(registry.windows_max_auto_switch_interval_seconds + 1, .windows),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 60 * 60),
+        registry.effectiveAutoSwitchIntervalSeconds(60 * 60, .windows),
+    );
+}
+
+test "effective auto-switch interval leaves non-Windows values unchanged" {
+    try std.testing.expectEqual(
+        @as(u32, registry.windows_max_auto_switch_interval_seconds + 1),
+        registry.effectiveAutoSwitchIntervalSeconds(registry.windows_max_auto_switch_interval_seconds + 1, .linux),
+    );
+}
+
 fn makeAccountRecord(
     allocator: std.mem.Allocator,
     email: []const u8,
