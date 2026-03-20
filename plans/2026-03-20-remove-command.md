@@ -94,3 +94,10 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
   - check: `Build Preview Packages (win32-x64)`
   - assessment: valid
   - action: fixed locally and prepared follow-up commit
+- Follow-up review loop:
+  - posted issue comment: `/review PR`
+  - review comments generated after request: none during the observed polling window
+  - review submissions generated after request: none during the observed polling window
+- Current external status:
+  - GitHub Actions checks are green after the Windows fix
+  - `Macroscope - Correctness Check` remained `queued/pending` during polling and produced no actionable feedback yet
