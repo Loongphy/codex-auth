@@ -446,6 +446,42 @@ test "Scenario: Given free weekly-only account when checking current then both t
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
+test "Scenario: Given stale paid plan and fresh free weekly-only usage when checking current then latest usage plan still enables aliasing" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 10;
+    reg.auto_switch.threshold_weekly_percent = 50;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(70.0), 100);
+    reg.accounts.items[0].plan = .pro;
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given active usage windows without explicit minutes when checking current then fallback windows still trigger auto switch" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 10;
+    reg.auto_switch.threshold_weekly_percent = 5;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = null, .resets_at = null },
+        .secondary = .{ .used_percent = 96.0, .window_minutes = null, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
 test "Scenario: Given free weekly-only candidate when selecting auto candidate then it is eligible without dual windows" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();

@@ -77,14 +77,18 @@ pub const EffectiveRateWindows = struct {
 };
 
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
+    if (rec.last_usage) |u| {
+        if (u.plan_type) |p| {
+            if (p != .unknown or rec.plan == null) return p;
+        }
+    }
     if (rec.plan) |p| return p;
-    if (rec.last_usage) |u| return u.plan_type;
     return null;
 }
 
 pub fn resolveEffectiveRateWindows(usage: ?RateLimitSnapshot, plan: ?PlanType) EffectiveRateWindows {
-    const rate_5h = resolveExactRateWindow(usage, 300);
-    const rate_weekly = resolveExactRateWindow(usage, 10080);
+    const rate_5h = resolveEffectiveRateWindow(usage, 300, true);
+    const rate_weekly = resolveEffectiveRateWindow(usage, 10080, false);
 
     if (plan == .free and rate_5h == null and rate_weekly != null) {
         return .{
@@ -1719,6 +1723,23 @@ fn resolveExactRateWindow(usage: ?RateLimitSnapshot, minutes: i64) ?RateLimitWin
     }
     if (usage.?.secondary) |secondary| {
         if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
+    }
+    return null;
+}
+
+fn resolveEffectiveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?RateLimitWindow {
+    if (resolveExactRateWindow(usage, minutes)) |window| return window;
+    if (usage == null) return null;
+
+    if (fallback_primary) {
+        if (usage.?.primary) |primary| {
+            if (primary.window_minutes == null) return primary;
+        }
+        return null;
+    }
+
+    if (usage.?.secondary) |secondary| {
+        if (secondary.window_minutes == null) return secondary;
     }
     return null;
 }

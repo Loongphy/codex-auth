@@ -135,6 +135,53 @@ test "resolve effective rate windows also aliases free weekly-only secondary sna
     try std.testing.expectEqual(@as(?i64, 10080), windows.rate_weekly.?.window_minutes);
 }
 
+test "resolve plan prefers latest non-unknown usage plan over stale stored plan" {
+    const gpa = std.testing.allocator;
+    var rec = try makeAccountRecord(gpa, "stale-plan@example.com", "", .pro, .chatgpt, 1);
+    defer freeTestAccountRecord(gpa, &rec);
+
+    rec.last_usage = .{
+        .primary = .{ .used_percent = 70.0, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    };
+
+    try std.testing.expectEqual(@as(?registry.PlanType, .free), registry.resolvePlan(&rec));
+}
+
+test "resolve plan keeps stored plan when latest usage plan is unknown" {
+    const gpa = std.testing.allocator;
+    var rec = try makeAccountRecord(gpa, "unknown-plan@example.com", "", .pro, .chatgpt, 1);
+    defer freeTestAccountRecord(gpa, &rec);
+
+    rec.last_usage = .{
+        .primary = .{ .used_percent = 70.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .unknown,
+    };
+
+    try std.testing.expectEqual(@as(?registry.PlanType, .pro), registry.resolvePlan(&rec));
+}
+
+test "resolve effective rate windows preserves fallback windows without explicit minutes" {
+    const usage = registry.RateLimitSnapshot{
+        .primary = .{ .used_percent = 70.0, .window_minutes = null, .resets_at = 123 },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = null, .resets_at = 456 },
+        .credits = null,
+        .plan_type = .pro,
+    };
+
+    const windows = registry.resolveEffectiveRateWindows(usage, .pro);
+    try std.testing.expect(windows.rate_5h != null);
+    try std.testing.expect(windows.rate_weekly != null);
+    try std.testing.expectEqual(@as(?i64, null), windows.rate_5h.?.window_minutes);
+    try std.testing.expectEqual(@as(?i64, null), windows.rate_weekly.?.window_minutes);
+    try std.testing.expectEqual(@as(?i64, 123), windows.rate_5h.?.resets_at);
+    try std.testing.expectEqual(@as(?i64, 456), windows.rate_weekly.?.resets_at);
+}
+
 test "effective auto-switch interval clamps Windows values to scheduler-supported range" {
     try std.testing.expectEqual(
         registry.default_auto_switch_interval_seconds,
@@ -179,6 +226,15 @@ fn makeAccountRecord(
         .last_usage_at = null,
         .last_local_rollout = null,
     };
+}
+
+fn freeTestAccountRecord(allocator: std.mem.Allocator, rec: *registry.AccountRecord) void {
+    allocator.free(rec.account_key);
+    allocator.free(rec.chatgpt_account_id);
+    allocator.free(rec.chatgpt_user_id);
+    allocator.free(rec.email);
+    allocator.free(rec.alias);
+    if (rec.last_usage) |*usage| registry.freeRateLimitSnapshot(allocator, usage);
 }
 
 fn countBackups(dir: std.fs.Dir, prefix: []const u8) !usize {
