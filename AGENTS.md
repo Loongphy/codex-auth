@@ -1,3 +1,10 @@
+# Active Plan
+
+- Execute `plans/2026-03-20-auto-switch-interval.md`.
+- Resume work from the current recorded progress in that plan file.
+- Record implementation progress, CI state, GitHub review comments, and `codex review` findings in that plan file as work continues.
+- Remove this temporary section once the task is complete, the PR is green, and no actionable review findings remain.
+
 # Documentation First
 
 - `docs/implement.md` is the primary context for how the project works. Read it first.
