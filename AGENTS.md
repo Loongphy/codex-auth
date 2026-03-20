@@ -11,4 +11,7 @@
 # Validation
 
 After modifying any `.zig` file, always run `zig build run -- list` to verify the changes work correctly.
-- When a Zig test needs temporary custom cache directories, place them under `/tmp` instead of the repository root so the worktree stays clean.
+
+# Temp Files
+
+All temporary test content (custom cache directories, generated files, test data, etc.) must be placed under `/tmp` instead of the repository root so the worktree stays clean.

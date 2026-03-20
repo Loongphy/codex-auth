@@ -806,28 +806,29 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) 
     return try std.fmt.allocPrint(allocator, "\"{s}\"", .{helper_path});
 }
 
-fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(allocator);
+fn formatWindowsTaskIntervalAlloc(allocator: std.mem.Allocator, interval_seconds: u32) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "PT{d}S", .{interval_seconds});
+}
 
-    for (input) |ch| {
-        if (ch == '\'') {
-            try out.appendSlice(allocator, "''");
-        } else {
-            try out.append(allocator, ch);
-        }
-    }
-
-    return try out.toOwnedSlice(allocator);
+pub fn windowsTaskXmlText(allocator: std.mem.Allocator, helper_path: []const u8, interval_seconds: u32) ![]u8 {
+    const escaped_helper_path = try escapeXml(allocator, helper_path);
+    defer allocator.free(escaped_helper_path);
+    const interval = try formatWindowsTaskIntervalAlloc(allocator, interval_seconds);
+    defer allocator.free(interval);
+    return try std.fmt.allocPrint(
+        allocator,
+        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers>\n    <TimeTrigger>\n      <Repetition>\n        <Interval>{s}</Interval>\n      </Repetition>\n      <StartBoundary>2000-01-01T00:00:00</StartBoundary>\n      <Enabled>true</Enabled>\n    </TimeTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n  <Settings>\n    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n    <AllowHardTerminate>true</AllowHardTerminate>\n    <StartWhenAvailable>true</StartWhenAvailable>\n    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n    <IdleSettings>\n      <StopOnIdleEnd>false</StopOnIdleEnd>\n      <RestartOnIdle>false</RestartOnIdle>\n    </IdleSettings>\n    <AllowStartOnDemand>true</AllowStartOnDemand>\n    <Enabled>true</Enabled>\n    <Hidden>false</Hidden>\n    <RunOnlyIfIdle>false</RunOnlyIfIdle>\n    <WakeToRun>false</WakeToRun>\n    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n    <Priority>7</Priority>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>{s}</Command>\n    </Exec>\n  </Actions>\n</Task>\n",
+        .{ interval, escaped_helper_path },
+    );
 }
 
 pub fn windowsCreateTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, interval_seconds: u32) ![]u8 {
-    const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
-    defer allocator.free(escaped_helper_path);
+    const xml = try windowsTaskXmlText(allocator, helper_path, interval_seconds);
+    defer allocator.free(xml);
     return try std.fmt.allocPrint(
         allocator,
-        "$action = New-ScheduledTaskAction -Execute '{s}'; $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); $trigger.Repetition.Interval = [TimeSpan]::FromSeconds({d}); $trigger.Repetition.Duration = [TimeSpan]::FromDays(3650); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Force | Out-Null",
-        .{ escaped_helper_path, interval_seconds, windows_task_name },
+        "$xml = @'\n{s}'@\nRegister-ScheduledTask -TaskName '{s}' -Xml $xml -Force | Out-Null",
+        .{ xml, windows_task_name },
     );
 }
 

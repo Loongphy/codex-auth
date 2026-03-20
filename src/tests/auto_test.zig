@@ -275,13 +275,25 @@ test "Scenario: Given windows task match script when rendering then it validates
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER_SECONDS:") != null);
 }
 
-test "Scenario: Given windows task create script with apostrophe in helper path when rendering then it escapes for PowerShell" {
+test "Scenario: Given windows task xml when rendering then it includes a repeating interval trigger" {
+    const gpa = std.testing.allocator;
+    const xml = try auto.windowsTaskXmlText(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe", 240);
+    defer gpa.free(xml);
+
+    try std.testing.expect(std.mem.indexOf(u8, xml, "<TimeTrigger>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, xml, "<Repetition>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, xml, "<Interval>PT240S</Interval>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, xml, "<Command>C:\\Program Files\\codex-auth\\codex-auth-auto.exe</Command>") != null);
+}
+
+test "Scenario: Given windows task create script with apostrophe in helper path when rendering then it escapes for XML-backed registration" {
     const gpa = std.testing.allocator;
     const script = try auto.windowsCreateTaskScript(gpa, "C:\\Users\\O'Connor\\codex-auth-auto.exe", 240);
     defer gpa.free(script);
 
-    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction -Execute 'C:\\Users\\O''Connor\\codex-auth-auto.exe'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "[TimeSpan]::FromSeconds(240)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -Xml $xml -Force | Out-Null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "<Command>C:\\Users\\O&apos;Connor\\codex-auth-auto.exe</Command>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "<Interval>PT240S</Interval>") != null);
 }
 
 test "Scenario: Given windows interval clamp warning when rendering then the message stays in English" {
