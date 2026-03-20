@@ -1585,6 +1585,8 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         if (idx < removed.len) removed[idx] = true;
     }
 
+    try deleteRemovedAccountBackups(allocator, codex_home, reg, removed);
+
     if (reg.active_account_key) |key| {
         var active_removed = false;
         for (reg.accounts.items, 0..) |rec, i| {
@@ -1615,6 +1617,47 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         write_idx += 1;
     }
     reg.accounts.items.len = write_idx;
+}
+
+fn deleteRemovedAccountBackups(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const Registry,
+    removed: []const bool,
+) !void {
+    const dir_path = try backupDir(allocator, codex_home);
+    defer allocator.free(dir_path);
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+        if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
+
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        defer allocator.free(path);
+
+        var info = @import("auth.zig").parseAuthInfo(allocator, path) catch continue;
+        defer info.deinit(allocator);
+
+        const record_key = info.record_key orelse continue;
+        if (!isRemovedAccountKey(reg, removed, record_key)) continue;
+
+        dir.deleteFile(entry.name) catch {};
+    }
+}
+
+fn isRemovedAccountKey(reg: *const Registry, removed: []const bool, record_key: []const u8) bool {
+    for (reg.accounts.items, 0..) |rec, i| {
+        if (!removed[i]) continue;
+        if (std.mem.eql(u8, rec.account_key, record_key)) return true;
+    }
+    return false;
 }
 
 pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {

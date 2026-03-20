@@ -205,6 +205,13 @@ If no accounts match, the command prints an error and exits non-zero.
 If exactly one account matches, it is removed immediately.
 If multiple accounts match, the command prints the matched emails and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
 
+When an account is removed, `codex-auth` deletes both:
+
+- the account snapshot `accounts/<account file key>.auth.json`
+- any parseable `accounts/auth.json.bak.*` backup files whose auth `record_key` matches the removed account
+
+Malformed or non-parseable `auth.json.bak.*` files are left in place for manual cleanup or `codex-auth clean`.
+
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 
 When `remove` is run without a query and stdin is not a TTY, the command skips the `/dev/tty` interactive picker and falls back directly to the numbered remove selector so piped/automated runs do not attempt the fullscreen interactive UI.

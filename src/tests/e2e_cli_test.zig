@@ -702,6 +702,29 @@ test "Scenario: Given remove query with one match when running remove then it de
         .{ .email = "keeper@example.com", .alias = "" },
     });
 
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const removed_account_key = try bdd.accountKeyForEmailAlloc(gpa, "robot09@example.com");
+    defer gpa.free(removed_account_key);
+    const keeper_account_key = try bdd.accountKeyForEmailAlloc(gpa, "keeper@example.com");
+    defer gpa.free(keeper_account_key);
+
+    const removed_snapshot_path = try registry.accountAuthPath(gpa, codex_home, removed_account_key);
+    defer gpa.free(removed_snapshot_path);
+    const keeper_snapshot_path = try registry.accountAuthPath(gpa, codex_home, keeper_account_key);
+    defer gpa.free(keeper_snapshot_path);
+
+    const removed_auth = try bdd.authJsonWithEmailPlan(gpa, "robot09@example.com", "plus");
+    defer gpa.free(removed_auth);
+    const keeper_auth = try bdd.authJsonWithEmailPlan(gpa, "keeper@example.com", "team");
+    defer gpa.free(keeper_auth);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = removed_snapshot_path, .data = removed_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = keeper_snapshot_path, .data = keeper_auth });
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-010101", .data = removed_auth });
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-020202", .data = removed_auth });
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-030303", .data = keeper_auth });
+
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "09" }, "");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
@@ -713,12 +736,17 @@ test "Scenario: Given remove query with one match when running remove then it de
     );
     try std.testing.expectEqualStrings("", result.stderr);
 
-    const codex_home = try codexHomeAlloc(gpa, home_root);
-    defer gpa.free(codex_home);
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(removed_snapshot_path, .{}));
+    var keeper_snapshot = try std.fs.cwd().openFile(keeper_snapshot_path, .{});
+    keeper_snapshot.close();
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-010101", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-020202", .{}));
+    var keeper_backup = try tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-030303", .{});
+    keeper_backup.close();
 }
 
 test "Scenario: Given remove query with multiple matches when running remove then it asks for confirmation before deleting" {
