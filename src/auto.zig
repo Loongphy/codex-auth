@@ -806,11 +806,28 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) 
     return try std.fmt.allocPrint(allocator, "\"{s}\"", .{helper_path});
 }
 
+fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+
+    for (input) |ch| {
+        if (ch == '\'') {
+            try out.appendSlice(allocator, "''");
+        } else {
+            try out.append(allocator, ch);
+        }
+    }
+
+    return try out.toOwnedSlice(allocator);
+}
+
 pub fn windowsCreateTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, interval_seconds: u32) ![]u8 {
+    const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
+    defer allocator.free(escaped_helper_path);
     return try std.fmt.allocPrint(
         allocator,
         "$action = New-ScheduledTaskAction -Execute '{s}'; $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); $trigger.Repetition.Interval = [TimeSpan]::FromSeconds({d}); $trigger.Repetition.Duration = [TimeSpan]::FromDays(3650); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Force | Out-Null",
-        .{ helper_path, interval_seconds, windows_task_name },
+        .{ escaped_helper_path, interval_seconds, windows_task_name },
     );
 }
 

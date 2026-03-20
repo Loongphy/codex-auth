@@ -275,6 +275,15 @@ test "Scenario: Given windows task match script when rendering then it validates
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER_SECONDS:") != null);
 }
 
+test "Scenario: Given windows task create script with apostrophe in helper path when rendering then it escapes for PowerShell" {
+    const gpa = std.testing.allocator;
+    const script = try auto.windowsCreateTaskScript(gpa, "C:\\Users\\O'Connor\\codex-auth-auto.exe", 240);
+    defer gpa.free(script);
+
+    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction -Execute 'C:\\Users\\O''Connor\\codex-auth-auto.exe'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "[TimeSpan]::FromSeconds(240)") != null);
+}
+
 test "Scenario: Given windows interval clamp warning when rendering then the message stays in English" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);

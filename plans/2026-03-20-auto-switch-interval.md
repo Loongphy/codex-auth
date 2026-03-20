@@ -58,6 +58,7 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - 2026-03-20: Updated README and implementation/schema/manual-test docs to describe interval support and current schema behavior.
 - 2026-03-20: Reverted the unpublished schema bump so `interval_seconds` remains part of the current `schema_version = 3` layout, per follow-up product direction.
 - 2026-03-20: Updated `AGENTS.md` to require running `codex-auth switch` every 10 minutes while this task remains active.
+- 2026-03-20: Hardened the Windows scheduled-task creation script to escape apostrophes in helper paths and added a regression test for PowerShell-safe quoting.
 
 ## CI / PR log
 - Draft PR: https://github.com/Loongphy/codex-auth/pull/22
@@ -89,6 +90,14 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - Current PR status after pushing `test: fix schema migration assertions`:
   - `gh pr checks 22` -> all 10 checks green
   - `pr_review_snapshot.py --pr 22` -> `overall: green`, unresolved GitHub review threads: `0`
+- Current PR status after pushing `fix: keep auto-switch interval in schema 3`:
+  - `pr_review_snapshot.py --pr 22` -> `overall: green`, unresolved GitHub review threads: `0`
+  - all CI and preview checks completed successfully, including `Build & Test (windows-latest)` and `Macroscope - Correctness Check`
+  - merge state: `CLEAN`
+- Local validation after the Windows PowerShell quoting fix:
+  - `zig build run -- list` -> passed
+  - `zig build test` -> passed
+  - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
 
 ## Review ledger
 - `codex review --base main`
@@ -96,6 +105,14 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
   - result: the review process exited with `You've hit your usage limit... try again at Mar 27th, 2026 8:24 AM.`
   - action: no code review findings were produced, so there was nothing to accept or reject
   - note: the temporary `AGENTS.md` execution lock remains in place because the required `codex review` loop could not complete
+- `codex review --base main`
+  - status: partial
+  - note: this Codex CLI build rejected `--base main` when combined with a prompt, so the review was rerun with the default prompt only
+  - finding: Windows scheduled-task creation did not escape apostrophes in `helper_path` before interpolating it into a single-quoted PowerShell string
+  - decision: accepted
+  - rationale: a Windows path such as `C:\Users\O'Connor\...` would break `New-ScheduledTaskAction -Execute '...'` and prevent task registration
+  - fix: escaped single quotes before building the PowerShell script and added a regression test covering an apostrophe-bearing path
+  - resolution: fixed locally; pending commit/push and another review/CI pass
 
 ## Testing and validation
 - Required after any `.zig` change: `zig build run -- list`
