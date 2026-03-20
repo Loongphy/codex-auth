@@ -52,11 +52,22 @@ const CandidateScore = struct {
 
 pub const DaemonRefreshState = struct {
     last_api_refresh_at_ns: i128 = 0,
+    last_candidate_refresh_at_ns: i128 = 0,
+    last_candidate_refresh_account_key: ?[]u8 = null,
     pending_bad_account_key: ?[]u8 = null,
     pending_bad_rollout: ?registry.RolloutSignature = null,
 
     pub fn deinit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        self.clearCandidateRefresh(allocator);
         self.clearPending(allocator);
+    }
+
+    fn clearCandidateRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.last_candidate_refresh_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.last_candidate_refresh_account_key = null;
+        self.last_candidate_refresh_at_ns = 0;
     }
 
     fn clearPending(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
@@ -102,6 +113,31 @@ pub const DaemonRefreshState = struct {
             self.pending_bad_account_key = null;
         }
         self.pending_bad_rollout = try registry.cloneRolloutSignature(allocator, signature);
+    }
+
+    fn shouldRefreshCandidatesNow(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        active_account_key: []const u8,
+        now_ns: i128,
+    ) !bool {
+        if (self.last_candidate_refresh_account_key) |account_key| {
+            if (std.mem.eql(u8, account_key, active_account_key)) {
+                if (self.last_candidate_refresh_at_ns != 0 and (now_ns - self.last_candidate_refresh_at_ns) < api_refresh_interval_ns) {
+                    return false;
+                }
+                self.last_candidate_refresh_at_ns = now_ns;
+                return true;
+            }
+        }
+
+        const new_account_key = try allocator.dupe(u8, active_account_key);
+        if (self.last_candidate_refresh_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.last_candidate_refresh_account_key = new_account_key;
+        self.last_candidate_refresh_at_ns = now_ns;
+        return true;
     }
 };
 
@@ -510,7 +546,7 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
     const threshold_5h_percent = effective5hThresholdPercent(reg, rec);
-    const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
+    const rem_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
     return (rem_5h != null and rem_5h.? < threshold_5h_percent) or
         (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
@@ -535,12 +571,37 @@ pub fn maybeAutoSwitchWithUsageFetcher(
     reg: *registry.Registry,
     usage_fetcher: anytype,
 ) !AutoSwitchAttempt {
+    return maybeAutoSwitchWithUsageFetcherAndRefreshState(allocator, codex_home, reg, null, usage_fetcher);
+}
+
+pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    usage_fetcher: anytype,
+) !AutoSwitchAttempt {
+    return maybeAutoSwitchWithUsageFetcherAndRefreshState(allocator, codex_home, reg, refresh_state, usage_fetcher);
+}
+
+fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: ?*DaemonRefreshState,
+    usage_fetcher: anytype,
+) !AutoSwitchAttempt {
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
     const now = std.time.timestamp();
     if (!shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
 
-    const refreshed_candidates = if (reg.api.usage)
+    const should_refresh_candidates = if (reg.api.usage)
+        try shouldRefreshAutoSwitchCandidates(refresh_state, allocator, active)
+    else
+        false;
+
+    const refreshed_candidates = if (should_refresh_candidates)
         try refreshAutoSwitchCandidatesWithUsageFetcher(allocator, codex_home, reg, usage_fetcher)
     else
         false;
@@ -562,6 +623,15 @@ pub fn maybeAutoSwitchWithUsageFetcher(
 
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
     return .{ .refreshed_candidates = refreshed_candidates, .switched = true };
+}
+
+fn shouldRefreshAutoSwitchCandidates(
+    refresh_state: ?*DaemonRefreshState,
+    allocator: std.mem.Allocator,
+    active_account_key: []const u8,
+) !bool {
+    if (refresh_state == null) return true;
+    return try refresh_state.?.shouldRefreshCandidatesNow(allocator, active_account_key, std.time.nanoTimestamp());
 }
 
 fn refreshAutoSwitchCandidatesWithUsageFetcher(
@@ -596,6 +666,17 @@ fn refreshAutoSwitchCandidatesWithUsageFetcher(
     return changed;
 }
 
+fn resolveExactRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64) ?registry.RateLimitWindow {
+    if (usage == null) return null;
+    if (usage.?.primary) |primary| {
+        if (primary.window_minutes != null and primary.window_minutes.? == minutes) return primary;
+    }
+    if (usage.?.secondary) |secondary| {
+        if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
+    }
+    return null;
+}
+
 fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
@@ -625,7 +706,7 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_sta
         registry.findAccountIndexByAccountKey(&reg, account_key)
     else
         null;
-    const auto_switch_attempt = try maybeAutoSwitchWithUsageFetcher(allocator, codex_home, &reg, usage_api.fetchUsageForAuthPath);
+    const auto_switch_attempt = try maybeAutoSwitchForDaemonWithUsageFetcher(allocator, codex_home, &reg, refresh_state, usage_api.fetchUsageForAuthPath);
     if (auto_switch_attempt.refreshed_candidates or auto_switch_attempt.switched) {
         changed = true;
     }

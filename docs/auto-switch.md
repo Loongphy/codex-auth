@@ -66,7 +66,7 @@ The watcher switches without foreground CLI output when the active account drops
 
 There is one extra near-real-time safety rule for free plans:
 
-- the effective 5h threshold for `free` accounts is `max(configured_5h_threshold, 35%)`
+- when a real 5h window exists, the effective 5h threshold for `free` accounts is `max(configured_5h_threshold, 35%)`
 
 This higher floor exists because free accounts can burn through the last visible quota much faster than once-per-minute checks can react.
 
@@ -77,6 +77,7 @@ Candidate scoring is reset-aware:
 - if only one window is known, that window becomes the score
 - free accounts that expose only a single `10080`-minute weekly window remain eligible auto-switch candidates and use that weekly remaining percentage as their score
 - when `api.usage = true` and auto-switch is about to leave the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
+- in watcher mode, repeated candidate revalidation for the same active account is throttled instead of running on every 1-second loop
 - if no usage snapshot exists after that refresh step, the account is treated as fresh with score `100`
 - switching happens only when the best candidate scores strictly better than the current account
 

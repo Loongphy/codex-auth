@@ -219,7 +219,7 @@ Candidate selection follows the current watcher behavior:
 
 - when `config api enable` is on and the watcher is about to move away from the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
 - in local-only mode, accounts without any usage snapshot are still treated as fresh candidates with full quota
-- free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
+- when a real 5h window exists, free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
 - free accounts that expose only a single `10080`-minute weekly window are still eligible auto-switch candidates; that weekly remaining percentage is used as their candidate score
 
 The managed background worker is long-running on all supported platforms:
@@ -228,7 +228,7 @@ The managed background worker is long-running on all supported platforms:
 - macOS: `LaunchAgent`
 - Windows: scheduled task that launches the long-running helper at logon and also starts it immediately on enable
 
-The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. When `config api enable` is on, the usage API remains a slower fallback.
+The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. When `config api enable` is on, the usage API remains a slower fallback, and daemon-side candidate revalidation is throttled instead of running every second.
 
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or service drift.
 

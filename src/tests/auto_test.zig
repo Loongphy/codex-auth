@@ -16,6 +16,7 @@ const empty_rate_limits_rollout_line = "{" ++
     "\"type\":\"event_msg\"," ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{}}}";
 var daemon_api_fetch_count: usize = 0;
+var candidate_api_fetch_count: usize = 0;
 var candidate_high_auth_path: ?[]const u8 = null;
 var candidate_low_auth_path: ?[]const u8 = null;
 
@@ -76,6 +77,11 @@ fn fetchCandidateUsageByAuthPath(_: std.mem.Allocator, auth_path: []const u8) !?
         }
     }
     return null;
+}
+
+fn fetchCountingCandidateUsageByAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    candidate_api_fetch_count += 1;
+    return fetchCandidateUsageByAuthPath(allocator, auth_path);
 }
 
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -194,6 +200,24 @@ test "Scenario: Given free candidate with only a secondary weekly window when se
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
+}
+
+test "Scenario: Given free account with only a weekly window when checking current then the free 5h guard does not misfire" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "free@example.com", .{
+        .primary = .{ .used_percent = 66.0, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "free@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
 test "Scenario: Given weekly remaining below threshold when checking current then auto switch is required" {
@@ -433,6 +457,59 @@ test "Scenario: Given API mode and poor refreshed candidate when auto switching 
     try std.testing.expect(!attempt.switched);
     try std.testing.expect(reg.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, low_account_id));
+}
+
+test "Scenario: Given repeated daemon candidate refresh attempts within cooldown when auto switching then candidate API refresh is rate-limited" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
+    const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low@example.com");
+    defer gpa.free(low_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, low_account_id);
+
+    const fresh_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fresh@example.com");
+    defer gpa.free(fresh_account_id);
+    const fresh_auth = try bdd.authJsonWithEmailPlan(gpa, "fresh@example.com", "pro");
+    defer gpa.free(fresh_auth);
+    const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
+    defer gpa.free(fresh_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+
+    candidate_low_auth_path = try gpa.dupe(u8, fresh_path);
+    defer {
+        gpa.free(candidate_low_auth_path.?);
+        candidate_low_auth_path = null;
+    }
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const first_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPath);
+    const second_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPath);
+
+    try std.testing.expect(first_attempt.refreshed_candidates);
+    try std.testing.expect(!first_attempt.switched);
+    try std.testing.expect(!second_attempt.refreshed_candidates);
+    try std.testing.expect(!second_attempt.switched);
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
 }
 
 test "Scenario: Given linux service unit when rendering then it keeps a persistent daemon watcher alive" {
