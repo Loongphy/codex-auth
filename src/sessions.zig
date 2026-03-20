@@ -87,8 +87,17 @@ pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?r
 pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestUsage {
     var latest_rollout = (try scanLatestRolloutEventWithSource(allocator, codex_home)) orelse return null;
     if (!latest_rollout.hasUsableWindows()) {
-        latest_rollout.deinit(allocator);
-        return null;
+        const latest_usable = try scanFileForLatestUsableUsage(allocator, latest_rollout.path);
+        if (latest_usable == null) {
+            latest_rollout.deinit(allocator);
+            return null;
+        }
+        return .{
+            .path = latest_rollout.path,
+            .mtime = latest_rollout.mtime,
+            .event_timestamp_ms = latest_usable.?.event_timestamp_ms,
+            .snapshot = latest_usable.?.snapshot.?,
+        };
     }
 
     const snapshot = latest_rollout.snapshot.?;
@@ -174,6 +183,14 @@ pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home
 }
 
 fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsageEvent {
+    return scanFileForUsageWithMode(allocator, path, true);
+}
+
+fn scanFileForLatestUsableUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsageEvent {
+    return scanFileForUsageWithMode(allocator, path, false);
+}
+
+fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep_latest_unusable: bool) !?ParsedUsageEvent {
     var file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -218,6 +235,9 @@ fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsag
         const trimmed = std.mem.trim(u8, line, " \r\t");
         if (trimmed.len == 0) continue;
         if (parseUsageEventLine(allocator, trimmed)) |event| {
+            if (!keep_latest_unusable and event.snapshot == null) {
+                continue;
+            }
             if (last) |*prev| {
                 if (prev.snapshot) |*snapshot| {
                     registry.freeRateLimitSnapshot(allocator, snapshot);

@@ -66,7 +66,7 @@ The watcher switches without foreground CLI output when the active account drops
 
 There is one extra near-real-time safety rule for free plans:
 
-- when a real 5h window exists, the effective 5h threshold for `free` accounts is `max(configured_5h_threshold, 35%)`
+- when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window, the effective 5h threshold for `free` accounts is `max(configured_5h_threshold, 35%)`
 
 This higher floor exists because free accounts can burn through the last visible quota much faster than once-per-minute checks can react.
 

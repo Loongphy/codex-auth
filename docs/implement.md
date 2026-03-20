@@ -209,7 +209,7 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
 - `list` and `switch` use the foreground active-account refresh path.
 - The background auto-switch watcher has its own near-real-time refresh strategy; see `docs/auto-switch.md`.
-- The free-plan `35%` real-time guard applies only when a real 5h window exists; weekly-only free accounts still switch based on the configured weekly threshold.
+- The free-plan `35%` real-time guard applies only when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window; weekly-only free accounts still switch based on the configured weekly threshold.
 - For auto-switch candidate scoring, free accounts that expose only a single weekly (`10080`-minute) window still remain eligible and use that weekly remaining percentage as their candidate score.
 - `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.

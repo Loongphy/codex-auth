@@ -219,7 +219,7 @@ Candidate selection follows the current watcher behavior:
 
 - when `config api enable` is on and the watcher is about to move away from the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
 - in local-only mode, accounts without any usage snapshot are still treated as fresh candidates with full quota
-- when a real 5h window exists, free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
+- when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window, free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
 - free accounts that expose only a single `10080`-minute weekly window are still eligible auto-switch candidates; that weekly remaining percentage is used as their candidate score
 
 The managed background worker is long-running on all supported platforms:

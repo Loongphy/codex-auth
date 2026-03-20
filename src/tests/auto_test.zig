@@ -257,6 +257,24 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
+test "Scenario: Given missing window_minutes in the primary slot when checking current then 5h fallback still triggers auto switch" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = null, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
 test "Scenario: Given free account near exhaustion when checking current then realtime guard switches earlier than the configured threshold" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();

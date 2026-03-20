@@ -259,6 +259,33 @@ test "scan latest rollout event keeps newest token_count event even when rate_li
     try std.testing.expect(latest.snapshot == null);
 }
 
+test "scan latest usage keeps the last usable snapshot when a later token_count event has no usable rate limits" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    const valid_line = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
+    defer gpa.free(valid_line);
+    const file_contents = try std.fmt.allocPrint(gpa, "{s}\n{s}\n", .{ valid_line, null_rate_limits_line });
+    defer gpa.free(file_contents);
+    try tmp.dir.writeFile(.{
+        .sub_path = "sessions/2025/01/01/rollout-a.jsonl",
+        .data = file_contents,
+    });
+
+    var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689609000), latest.event_timestamp_ms);
+    try std.testing.expect(latest.snapshot.primary != null);
+    try std.testing.expectEqual(@as(f64, 90.0), latest.snapshot.primary.?.used_percent);
+}
+
 test "scan latest usage streams rollout files larger than ten megabytes" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

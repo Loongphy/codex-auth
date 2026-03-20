@@ -545,16 +545,17 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const account_key = reg.active_account_key orelse return false;
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
-    const threshold_5h_percent = effective5hThresholdPercent(reg, rec);
-    const rem_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
+    const resolved_5h = resolve5hTriggerWindow(rec.last_usage);
+    const threshold_5h_percent = effective5hThresholdPercent(reg, rec, resolved_5h.allow_free_guard);
+    const rem_5h = registry.remainingPercentAt(resolved_5h.window, now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
     return (rem_5h != null and rem_5h.? < threshold_5h_percent) or
         (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
 }
 
-fn effective5hThresholdPercent(reg: *registry.Registry, rec: *const registry.AccountRecord) i64 {
+fn effective5hThresholdPercent(reg: *registry.Registry, rec: *const registry.AccountRecord, allow_free_guard: bool) i64 {
     var threshold = @as(i64, reg.auto_switch.threshold_5h_percent);
-    if (registry.resolvePlan(rec) == .free) {
+    if (allow_free_guard and registry.resolvePlan(rec) == .free) {
         threshold = @max(threshold, free_plan_realtime_guard_5h_percent);
     }
     return threshold;
@@ -666,15 +667,30 @@ fn refreshAutoSwitchCandidatesWithUsageFetcher(
     return changed;
 }
 
-fn resolveExactRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64) ?registry.RateLimitWindow {
-    if (usage == null) return null;
+const Resolved5hWindow = struct {
+    window: ?registry.RateLimitWindow,
+    allow_free_guard: bool,
+};
+
+fn resolve5hTriggerWindow(usage: ?registry.RateLimitSnapshot) Resolved5hWindow {
+    if (usage == null) return .{ .window = null, .allow_free_guard = false };
     if (usage.?.primary) |primary| {
-        if (primary.window_minutes != null and primary.window_minutes.? == minutes) return primary;
+        if (primary.window_minutes == null) {
+            return .{ .window = primary, .allow_free_guard = true };
+        }
+        if (primary.window_minutes.? == 300) {
+            return .{ .window = primary, .allow_free_guard = true };
+        }
     }
     if (usage.?.secondary) |secondary| {
-        if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
+        if (secondary.window_minutes != null and secondary.window_minutes.? == 300) {
+            return .{ .window = secondary, .allow_free_guard = true };
+        }
     }
-    return null;
+    if (usage.?.primary) |primary| {
+        return .{ .window = primary, .allow_free_guard = false };
+    }
+    return .{ .window = null, .allow_free_guard = false };
 }
 
 fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
