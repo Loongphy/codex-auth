@@ -212,6 +212,11 @@ When an account is removed, `codex-auth` deletes both:
 
 Malformed or non-parseable `auth.json.bak.*` files are left in place for manual cleanup or `codex-auth clean`.
 
+If the removed account was the active one:
+
+- when other accounts still remain, `codex-auth` activates the first remaining account in registry order and rewrites `~/.codex/auth.json` from that snapshot
+- when no accounts remain, `codex-auth` deletes `~/.codex/auth.json`
+
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 
 When `remove` is run without a query and stdin is not a TTY, the command skips the `/dev/tty` interactive picker and falls back directly to the numbered remove selector so piped/automated runs do not attempt the fullscreen interactive UI.

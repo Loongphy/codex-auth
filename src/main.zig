@@ -61,6 +61,27 @@ pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list or target == .switch_account;
 }
 
+pub fn reconcileActiveAuthAfterRemove(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !void {
+    if (reg.active_account_key != null) return;
+
+    if (reg.accounts.items.len > 0) {
+        const account_key = reg.accounts.items[0].account_key;
+        try registry.activateAccountByKey(allocator, codex_home, reg, account_key);
+        return;
+    }
+
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+    std.fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
 pub const HelpConfig = struct {
     auto_switch: registry.AutoSwitchConfig,
     api: registry.ApiConfig,
@@ -287,12 +308,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    if (reg.active_account_key == null and reg.accounts.items.len > 0) {
-        const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
-        const account_key = reg.accounts.items[best_idx].account_key;
-
-        try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
-    }
+    try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.printRemoveSummary(removed_emails.items);
 }

@@ -784,6 +784,55 @@ test "Scenario: Given remove query with multiple matches when running remove the
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
 }
 
+test "Scenario: Given remove query deletes the final active account when running remove then active auth is deleted too" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "solo@example.com", &[_]SeedAccount{
+        .{ .email = "solo@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+    const account_key = try bdd.accountKeyForEmailAlloc(gpa, "solo@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+
+    const solo_auth = try bdd.authJsonWithEmailPlan(gpa, "solo@example.com", "pro");
+    defer gpa.free(solo_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = solo_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = solo_auth });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "solo" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings(
+        "Removed 1 account(s): solo@example.com\n",
+        result.stdout,
+    );
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key == null);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(snapshot_path, .{}));
+}
+
 test "Scenario: Given non-tty stdin when running interactive remove then it falls back to the numbered selector" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
