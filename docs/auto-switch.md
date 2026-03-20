@@ -75,7 +75,9 @@ Candidate scoring is reset-aware:
 - if `resets_at <= now`, that window is treated as `100%`
 - if both 5h and weekly are known, the candidate score is the lower remaining percentage
 - if only one window is known, that window becomes the score
-- if no usage snapshot exists, the account is treated as fresh with score `100`
+- free accounts that expose only a single `10080`-minute weekly window remain eligible auto-switch candidates and use that weekly remaining percentage as their score
+- when `api.usage = true` and auto-switch is about to leave the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
+- if no usage snapshot exists after that refresh step, the account is treated as fresh with score `100`
 - switching happens only when the best candidate scores strictly better than the current account
 
 ## Service Model

@@ -60,31 +60,75 @@ irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.p
   The installer adds the install dir to current/user `PATH` by default.
   Use `-NoAddToPath` to skip user `PATH` persistence.
 
-## Full Commands
+## Commands
 
-```shell
-codex-auth list # list all accounts
-codex-auth login # run `codex login`, then add the current account
-codex-auth switch [<email>] # switch active account (interactive or partial/fragment match)
-codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
-codex-auth import --cpa [<path>] # import CPA flat token JSON from one file or directory
-codex-auth import --purge [<path>] # rebuild registry.json from auth files for the current version
-codex-auth remove # remove accounts (interactive multi-select)
-codex-auth status # show auto-switch/service/api usage status
-codex-auth config auto enable|disable # manage background auto-switching
-codex-auth config auto --5h <percent> [--weekly <percent>] # configure auto-switch thresholds
-codex-auth config api enable|disable # switch between API mode and local-only mode
-```
+### Account Management
 
-Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
+| Command | Description |
+|---------|-------------|
+| `codex-auth list` | List all accounts |
+| `codex-auth login` | Run `codex login`, then add the current account |
+| `codex-auth switch [<email>]` | Switch active account interactively or by partial match |
+| `codex-auth remove` | Remove accounts with interactive multi-select |
+| `codex-auth status` | Show auto-switch, service, and usage status |
 
-### Examples
+> `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
-List accounts (default table with borders):
+### Import
+
+| Command | Description |
+|---------|-------------|
+| `codex-auth import <path> [--alias <alias>]` | Import a single file or batch import from a folder |
+| `codex-auth import --cpa [<path>]` | Import [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (CPA) token JSON |
+| `codex-auth import --purge [<path>]` | Rebuild `registry.json` from existing auth files |
+
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| `codex-auth config auto enable\|disable` | Enable or disable background auto-switching |
+| `codex-auth config auto [--5h <%>] [--weekly <%>]` | Set auto-switch thresholds |
+| `codex-auth config api enable\|disable` | Use API-backed fallback or local-only usage refresh |
+
+---
+
+## Examples
+
+### List Accounts
 
 ```shell
 codex-auth list
 ```
+
+### Switch Account
+
+Interactive: shows email, 5h, weekly, and last activity.
+
+```shell
+codex-auth switch
+```
+
+Before the picker opens, the current active account's usage is refreshed once so the selected row is not stale. The newly selected account is not refreshed after the switch completes.
+
+![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
+
+Non-interactive: fuzzy match by email or alias.
+
+```shell
+codex-auth switch john             # match any account containing "john"
+codex-auth switch john@gmail.com   # match by full or partial email
+codex-auth switch work             # match by alias set during import
+```
+
+If the keyword matches multiple accounts, the command falls back to interactive selection. Press `q` to quit without switching.
+
+### Remove Accounts
+
+```shell
+codex-auth remove
+```
+
+### Login (Add Account)
 
 Add the currently logged-in Codex account:
 
@@ -92,27 +136,23 @@ Add the currently logged-in Codex account:
 codex-auth login
 ```
 
-Import an auth.json backup:
+### Import
+
+#### Single File
 
 ```shell
 codex-auth import /path/to/auth.json --alias personal
 ```
 
-Batch import from a folder:
+#### Batch Import from a Folder
+
+Scans all `.json` files in the directory:
 
 ```shell
 codex-auth import /path/to/auth-exports
 ```
 
-Import CPA exports directly:
-
-```shell
-codex-auth import --cpa                  # scan ~/.cli-proxy-api/*.json
-codex-auth import --cpa /path/to/cpa-dir
-codex-auth import --cpa /path/to/cpa.json --alias personal
-```
-
-Typical batch import output:
+Typical output:
 
 ```text
 Scanning /path/to/auth-exports...
@@ -122,83 +162,94 @@ Scanning /path/to/auth-exports...
 Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)
 ```
 
-`stdout` carries scanning/success/summary lines. Skipped files and warnings stay on `stderr`.
+`stdout` carries scanning, success, and summary lines. Skipped files and warnings stay on `stderr`.
 
-Rebuild `registry.json` from imported auth files:
+#### Import CLIProxyAPI (CPA) Tokens
 
-```shell
-codex-auth import --purge /path/to/auth-exports
-codex-auth import --purge                  # rebuild from ~/.codex/accounts/*.auth.json
-```
-
-Switch accounts (interactive list shows email, 5h, weekly, last activity):
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) stores tokens as flat JSON under `~/.cli-proxy-api/`. Import them directly without conversion:
 
 ```shell
-codex-auth switch               # arrow + number input, q to quit
+codex-auth import --cpa                                  # scan default ~/.cli-proxy-api/*.json
+codex-auth import --cpa /path/to/cpa-dir                 # scan a specific directory
+codex-auth import --cpa /path/to/token.json --alias bob  # import a single CPA file
 ```
 
-Before the switch picker opens, `codex-auth switch` refreshes the current active account's usage once so the currently selected row is not stale. It does not refresh the newly selected account after the switch completes.
+#### Fix Broken Account Data (Rebuild Registry)
 
-![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
-
-Switch account non-interactively (for scripts/other CLIs):
+If `codex-auth list` shows missing accounts or wrong usage data, the internal registry file may be out of sync with the actual auth files on disk. This command re-reads all auth files and rebuilds the registry from scratch:
 
 ```shell
-codex-auth switch user
+codex-auth import --purge                                # rebuild from ~/.codex/accounts/*.auth.json
+codex-auth import --purge /path/to/auth-exports          # rebuild from a specific folder
 ```
 
-If multiple accounts match, interactive selection is shown, and you can press `q` to quit without switching.
+This does not import new files. It repairs the registry index for auth snapshots that already exist on disk.
 
-Remove accounts (interactive multi-select):
-
-```shell
-codex-auth remove
-```
-
-Show current status:
+### Show Status
 
 ```shell
 codex-auth status
 ```
 
-Enable background auto-switching:
+### Config
+
+#### Auto-Switch
+
+Enable or disable:
 
 ```shell
 codex-auth config auto enable
+codex-auth config auto disable
 ```
 
-Configure auto-switch thresholds:
+Adjust thresholds:
 
 ```shell
 codex-auth config auto --5h 12
 codex-auth config auto --5h 12 --weekly 8
+codex-auth config auto --weekly 8
 ```
 
-Enable usage API fallback:
+When auto-switching is enabled, a long-running background watcher refreshes the active account's usage and silently switches accounts when:
+
+- 5h remaining drops below the configured 5h threshold (default `10%`), or
+- weekly remaining drops below the configured weekly threshold (default `5%`)
+
+Candidate selection follows the current watcher behavior:
+
+- when `config api enable` is on and the watcher is about to move away from the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
+- in local-only mode, accounts without any usage snapshot are still treated as fresh candidates with full quota
+- free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
+- free accounts that expose only a single `10080`-minute weekly window are still eligible auto-switch candidates; that weekly remaining percentage is used as their candidate score
+
+The managed background worker is long-running on all supported platforms:
+
+- Linux/WSL: persistent `systemd --user` service
+- macOS: `LaunchAgent`
+- Windows: scheduled task that launches the long-running helper at logon and also starts it immediately on enable
+
+The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. When `config api enable` is on, the usage API remains a slower fallback.
+
+Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or service drift.
+
+Changing thresholds updates `registry.json`, and the running watcher picks them up on the next polling cycle without a service restart.
+
+#### Usage Refresh Source
+
+API-backed fallback:
 
 ```shell
 codex-auth config api enable
 ```
 
-Use pure local rollout refresh without any API calls:
+Local-only, no usage API calls:
 
 ```shell
 codex-auth config api disable
 ```
 
-When auto-switching is enabled, a background worker refreshes the active account's usage from the configured source and silently switches accounts when:
+Changing `config api` updates `registry.json` immediately. `api enable` is shown as API mode and `api disable` is shown as local mode.
 
-- 5h remaining drops below the configured 5h threshold (default `10%`), or
-- weekly remaining drops below the configured weekly threshold (default `5%`)
-
-Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
-For free accounts, the background watcher applies a stronger real-time 5h guard and switches no later than `35%` remaining even if the configured 5h threshold is lower.
-The managed background worker is now long-running on all supported platforms: Linux/WSL uses a persistent `systemd --user` service, macOS uses a `LaunchAgent`, and Windows uses a scheduled task that launches the long-running helper at logon and also starts it immediately on enable.
-The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling; when `config api enable` is on, the usage API is still used as a slower fallback.
-Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or stale service drift.
-Changing thresholds updates `registry.json` and the running watcher picks them up on the next polling cycle without a service restart.
-Changing `config api` updates `registry.json` immediately; `api enable` is shown as API mode and `api disable` is shown as local mode.
-`codex-auth help` also shows whether auto-switching and usage API calls are currently enabled.
 Implementation details are documented in [`docs/auto-switch.md`](docs/auto-switch.md).
 
 ## Q&A

@@ -16,6 +16,8 @@ const empty_rate_limits_rollout_line = "{" ++
     "\"type\":\"event_msg\"," ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{}}}";
 var daemon_api_fetch_count: usize = 0;
+var candidate_high_auth_path: ?[]const u8 = null;
+var candidate_low_auth_path: ?[]const u8 = null;
 
 fn appendAccountWithUsage(
     allocator: std.mem.Allocator,
@@ -50,6 +52,30 @@ fn fetchApiError(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapsh
 fn fetchCountingApiSnapshot(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapshot {
     daemon_api_fetch_count += 1;
     return apiSnapshot();
+}
+
+fn fetchCandidateUsageByAuthPath(_: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    if (candidate_high_auth_path) |path| {
+        if (std.mem.eql(u8, auth_path, path)) {
+            return .{
+                .primary = .{ .used_percent = 12.0, .window_minutes = 300, .resets_at = null },
+                .secondary = .{ .used_percent = 7.0, .window_minutes = 10080, .resets_at = null },
+                .credits = null,
+                .plan_type = .pro,
+            };
+        }
+    }
+    if (candidate_low_auth_path) |path| {
+        if (std.mem.eql(u8, auth_path, path)) {
+            return .{
+                .primary = .{ .used_percent = 96.0, .window_minutes = 300, .resets_at = null },
+                .secondary = .{ .used_percent = 60.0, .window_minutes = 10080, .resets_at = null },
+                .credits = null,
+                .plan_type = .pro,
+            };
+        }
+    }
+    return null;
 }
 
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -106,6 +132,68 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
+}
+
+test "Scenario: Given free candidate with only a primary weekly window when selecting auto candidate then it remains eligible" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 30.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "pro@example.com", .{
+        .primary = .{ .used_percent = 80.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 70.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "free@example.com", .{
+        .primary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
+}
+
+test "Scenario: Given free candidate with only a secondary weekly window when selecting auto candidate then it remains eligible" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 30.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "pro@example.com", .{
+        .primary = .{ .used_percent = 85.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 80.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "free@example.com", .{
+        .primary = null,
+        .secondary = .{ .used_percent = 45.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .free,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
 test "Scenario: Given weekly remaining below threshold when checking current then auto switch is required" {
@@ -247,6 +335,106 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
 }
 
+test "Scenario: Given API mode and unknown candidate usage when auto switching then it refreshes the candidate before switching" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
+    const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low@example.com");
+    defer gpa.free(low_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, low_account_id);
+
+    const fresh_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fresh@example.com");
+    defer gpa.free(fresh_account_id);
+    const low_auth = try bdd.authJsonWithEmailPlan(gpa, "low@example.com", "pro");
+    defer gpa.free(low_auth);
+    const fresh_auth = try bdd.authJsonWithEmailPlan(gpa, "fresh@example.com", "pro");
+    defer gpa.free(fresh_auth);
+    const low_path = try registry.accountAuthPath(gpa, codex_home, low_account_id);
+    defer gpa.free(low_path);
+    const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
+    defer gpa.free(fresh_path);
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
+
+    candidate_high_auth_path = try gpa.dupe(u8, fresh_path);
+    defer {
+        gpa.free(candidate_high_auth_path.?);
+        candidate_high_auth_path = null;
+    }
+
+    const attempt = try auto.maybeAutoSwitchWithUsageFetcher(gpa, codex_home, &reg, fetchCandidateUsageByAuthPath);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, fresh_account_id));
+}
+
+test "Scenario: Given API mode and poor refreshed candidate when auto switching then it stays on the current account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
+    const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low@example.com");
+    defer gpa.free(low_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, low_account_id);
+
+    const fresh_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fresh@example.com");
+    defer gpa.free(fresh_account_id);
+    const fresh_auth = try bdd.authJsonWithEmailPlan(gpa, "fresh@example.com", "pro");
+    defer gpa.free(fresh_auth);
+    const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
+    defer gpa.free(fresh_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+
+    candidate_low_auth_path = try gpa.dupe(u8, fresh_path);
+    defer {
+        gpa.free(candidate_low_auth_path.?);
+        candidate_low_auth_path = null;
+    }
+
+    const attempt = try auto.maybeAutoSwitchWithUsageFetcher(gpa, codex_home, &reg, fetchCandidateUsageByAuthPath);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, low_account_id));
+}
+
 test "Scenario: Given linux service unit when rendering then it keeps a persistent daemon watcher alive" {
     const gpa = std.testing.allocator;
     const unit = try auto.linuxUnitText(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home");
@@ -257,6 +445,8 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "[Install]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "WantedBy=default.target") != null);
 }
 
 test "Scenario: Given mac plist when rendering then it includes version metadata and daemon args" {
@@ -275,6 +465,7 @@ test "Scenario: Given windows task action when rendering then it launches the he
 
     try std.testing.expect(std.mem.indexOf(u8, action, "cmd.exe /D /C") == null);
     try std.testing.expect(std.mem.indexOf(u8, action, "\"C:\\Program Files\\codex-auth\\codex-auth-auto.exe\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "--service-version ") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe") == null);
     try std.testing.expect(action.len < 262);
 }

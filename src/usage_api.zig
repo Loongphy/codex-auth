@@ -10,6 +10,10 @@ pub fn fetchActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
+    return try fetchUsageForAuthPath(allocator, auth_path);
+}
+
+pub fn fetchUsageForAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
 

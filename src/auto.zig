@@ -39,6 +39,11 @@ pub const Status = struct {
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
 
+pub const AutoSwitchAttempt = struct {
+    refreshed_candidates: bool,
+    switched: bool,
+};
+
 const CandidateScore = struct {
     value: i64,
     last_usage_at: i64,
@@ -520,19 +525,75 @@ fn effective5hThresholdPercent(reg: *registry.Registry, rec: *const registry.Acc
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
-    if (!reg.auto_switch.enabled) return false;
-    const active = reg.active_account_key orelse return false;
-    const now = std.time.timestamp();
-    if (!shouldSwitchCurrent(reg, now)) return false;
+    const attempt = try maybeAutoSwitchWithUsageFetcher(allocator, codex_home, reg, usage_api.fetchUsageForAuthPath);
+    return attempt.switched;
+}
 
-    const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return false;
+pub fn maybeAutoSwitchWithUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: anytype,
+) !AutoSwitchAttempt {
+    if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
+    const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
+    const now = std.time.timestamp();
+    if (!shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
+
+    const refreshed_candidates = if (reg.api.usage)
+        try refreshAutoSwitchCandidatesWithUsageFetcher(allocator, codex_home, reg, usage_fetcher)
+    else
+        false;
+
+    const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return .{
+        .refreshed_candidates = refreshed_candidates,
+        .switched = false,
+    };
     const current = candidateScore(&reg.accounts.items[active_idx], now);
-    const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return false;
+    const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return .{
+        .refreshed_candidates = refreshed_candidates,
+        .switched = false,
+    };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) return false;
+    if (candidate.value <= current.value) return .{
+        .refreshed_candidates = refreshed_candidates,
+        .switched = false,
+    };
 
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
-    return true;
+    return .{ .refreshed_candidates = refreshed_candidates, .switched = true };
+}
+
+fn refreshAutoSwitchCandidatesWithUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: anytype,
+) !bool {
+    const active = reg.active_account_key orelse return false;
+    var changed = false;
+
+    for (reg.accounts.items) |rec| {
+        if (std.mem.eql(u8, rec.account_key, active)) continue;
+        if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
+
+        const auth_path = registry.accountAuthPath(allocator, codex_home, rec.account_key) catch continue;
+        defer allocator.free(auth_path);
+
+        const latest_usage = usage_fetcher(allocator, auth_path) catch continue;
+        if (latest_usage == null) continue;
+
+        var latest = latest_usage.?;
+        var snapshot_consumed = false;
+        defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
+
+        if (registry.rateLimitSnapshotsEqual(rec.last_usage, latest)) continue;
+        registry.updateUsage(allocator, reg, rec.account_key, latest);
+        snapshot_consumed = true;
+        changed = true;
+    }
+
+    return changed;
 }
 
 fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
@@ -564,8 +625,11 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_sta
         registry.findAccountIndexByAccountKey(&reg, account_key)
     else
         null;
-    if (try maybeAutoSwitch(allocator, codex_home, &reg)) {
+    const auto_switch_attempt = try maybeAutoSwitchWithUsageFetcher(allocator, codex_home, &reg, usage_api.fetchUsageForAuthPath);
+    if (auto_switch_attempt.refreshed_candidates or auto_switch_attempt.switched) {
         changed = true;
+    }
+    if (auto_switch_attempt.switched) {
         if (active_idx_before) |from_idx| {
             if (reg.active_account_key) |account_key| {
                 if (registry.findAccountIndexByAccountKey(&reg, account_key)) |to_idx| {
@@ -712,7 +776,7 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     const unit_dir = std.fs.path.dirname(unit_path).?;
     try std.fs.cwd().makePath(unit_dir);
     try std.fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
-    removeLinuxUnit(allocator, linux_timer_name) catch {};
+    try removeLinuxUnit(allocator, linux_timer_name);
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
     switch (queryLinuxRuntimeState(allocator)) {
@@ -730,7 +794,9 @@ fn uninstallLinuxService(allocator: std.mem.Allocator, codex_home: []const u8) !
 fn removeLinuxUnit(allocator: std.mem.Allocator, service_name: []const u8) !void {
     const unit_path = try linuxUnitPath(allocator, service_name);
     defer allocator.free(unit_path);
-    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "disable", "--now", service_name });
+    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "stop", service_name });
+    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "disable", service_name });
+    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "reset-failed", service_name });
     std.fs.cwd().deleteFile(unit_path) catch {};
     runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
 }
@@ -869,7 +935,7 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
+        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
         .{ service_version_env_name, escaped_version, exec },
     );
 }
@@ -888,7 +954,11 @@ pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_ho
 }
 
 pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "\"{s}\"", .{helper_path});
+    return try std.fmt.allocPrint(
+        allocator,
+        "\"{s}\" --service-version {s}",
+        .{ helper_path, version.app_version },
+    );
 }
 
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
@@ -951,12 +1021,56 @@ fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_e
     const expected = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(expected);
     if (!(try fileEqualsBytes(allocator, unit_path, expected))) return false;
+    return !(try linuxUnitHasLegacyResidue(allocator, linux_timer_name));
+}
 
-    const timer_path = try linuxUnitPath(allocator, linux_timer_name);
-    defer allocator.free(timer_path);
-    const legacy_timer = try readFileIfExists(allocator, timer_path);
-    defer if (legacy_timer) |bytes| allocator.free(bytes);
-    return legacy_timer == null;
+fn linuxUnitHasLegacyResidue(allocator: std.mem.Allocator, service_name: []const u8) !bool {
+    const unit_path = try linuxUnitPath(allocator, service_name);
+    defer allocator.free(unit_path);
+    const legacy_unit = try readFileIfExists(allocator, unit_path);
+    defer if (legacy_unit) |bytes| allocator.free(bytes);
+    if (legacy_unit != null) return true;
+
+    const result = runCapture(allocator, &[_][]const u8{
+        "systemctl",
+        "--user",
+        "show",
+        service_name,
+        "--property=LoadState,ActiveState,UnitFileState",
+    }) catch return false;
+    defer {
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
+    }
+    return switch (result.term) {
+        .Exited => |code| code == 0 and linuxShowUnitHasResidue(result.stdout),
+        else => false,
+    };
+}
+
+fn linuxShowUnitHasResidue(output: []const u8) bool {
+    const load_state = linuxShowProperty(output, "LoadState") orelse return false;
+    const active_state = linuxShowProperty(output, "ActiveState") orelse return false;
+    const unit_file_state = linuxShowProperty(output, "UnitFileState") orelse return false;
+
+    if (!std.mem.eql(u8, load_state, "not-found")) return true;
+    if (!std.mem.eql(u8, active_state, "inactive")) return true;
+    if (unit_file_state.len != 0 and !std.mem.eql(u8, unit_file_state, "not-found") and !std.mem.eql(u8, unit_file_state, "disabled")) {
+        return true;
+    }
+    return false;
+}
+
+fn linuxShowProperty(output: []const u8, key: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r\t");
+        if (line.len == 0) continue;
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        if (line.len <= key.len or line[key.len] != '=') continue;
+        return std.mem.trim(u8, line[key.len + 1 ..], " \r\t");
+    }
+    return null;
 }
 
 fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
@@ -971,10 +1085,12 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     _ = codex_home;
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
+    const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path);
+    defer allocator.free(expected_action);
     const expected_fingerprint = try std.fmt.allocPrint(
         allocator,
         "{s}|TRIGGER:{s}",
-        .{ helper_path, windows_task_trigger_kind },
+        .{ expected_action, windows_task_trigger_kind },
     );
     defer allocator.free(expected_fingerprint);
     const script = try windowsTaskMatchScript(allocator);
@@ -994,6 +1110,14 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
         .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
         else => false,
     };
+}
+
+fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "{s} --service-version {s}",
+        .{ helper_path, version.app_version },
+    );
 }
 
 fn windowsHelperPath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {

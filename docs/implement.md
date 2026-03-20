@@ -214,11 +214,11 @@ This document keeps only the cross-reference points that matter to the rest of t
 
 Foreground usage refresh is active-account-only and depends on `api.usage`:
 
-1. If `api.usage = true`, try only the ChatGPT usage API with the current active `~/.codex/auth.json`.
+1. If `api.usage = true`, foreground refresh tries only the ChatGPT usage API with the current active `~/.codex/auth.json`.
 2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
 
 - ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <chatgpt_account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
-- API refresh only updates the current active account. Other accounts keep their stored historical snapshots until they become active.
+- Foreground API refresh updates only the current active account. During background auto-switch, if the current active account is below threshold and a switch is being considered, the watcher can also refresh candidate ChatGPT accounts from their stored `accounts/<account file key>.auth.json` snapshots before making the final switch decision.
 - API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
 - In API-only mode, API failures do not overwrite the stored usage snapshot and do not fall back to local rollout files.
 - The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
@@ -231,6 +231,7 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
 - `list` and `switch` use the foreground active-account refresh path.
 - The background auto-switch watcher has its own near-real-time refresh strategy; see `docs/auto-switch.md`.
+- For auto-switch candidate scoring, free accounts that expose only a single weekly (`10080`-minute) window still remain eligible and use that weekly remaining percentage as their candidate score.
 - `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.
