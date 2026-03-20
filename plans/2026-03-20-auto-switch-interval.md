@@ -78,9 +78,16 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
   - Updated the affected registry and purge tests, then reran:
     - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
     - `zig build run -- list` -> passed after the test fixes
+- Current PR status after pushing `test: fix schema migration assertions`:
+  - `gh pr checks 22` -> all 10 checks green
+  - `pr_review_snapshot.py --pr 22` -> `overall: green`, unresolved GitHub review threads: `0`
 
 ## Review ledger
-- Pending.
+- `codex review --base main`
+  - status: blocked
+  - result: the review process exited with `You've hit your usage limit... try again at Mar 27th, 2026 8:24 AM.`
+  - action: no code review findings were produced, so there was nothing to accept or reject
+  - note: the temporary `AGENTS.md` execution lock remains in place because the required `codex review` loop could not complete
 
 ## Testing and validation
 - Required after any `.zig` change: `zig build run -- list`
