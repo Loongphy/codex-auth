@@ -377,8 +377,8 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const account_key = reg.active_account_key orelse return false;
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
-    const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
-    const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
+    const rem_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
+    const rem_week = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 10080), now);
     return shouldSwitchWithRemaining(registry.resolvePlan(rec), rem_5h, rem_week, reg.auto_switch);
 }
 
@@ -635,8 +635,8 @@ fn candidateState(
     cfg: registry.AutoSwitchConfig,
     allow_revalidation: bool,
 ) CandidateState {
-    const remaining_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
-    const remaining_weekly = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
+    const remaining_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
+    const remaining_weekly = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 10080), now);
     const tier = determineCandidateTier(remaining_5h, remaining_weekly, registry.resolvePlan(rec), cfg, allow_revalidation);
     return .{
         .tier = tier,
@@ -647,16 +647,23 @@ fn candidateState(
     };
 }
 
+fn resolveExactRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64) ?registry.RateLimitWindow {
+    if (usage == null) return null;
+    if (usage.?.primary) |primary| {
+        if (primary.window_minutes != null and primary.window_minutes.? == minutes) return primary;
+    }
+    if (usage.?.secondary) |secondary| {
+        if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
+    }
+    return null;
+}
+
 fn singleWindowRemaining(remaining_5h: ?i64, remaining_weekly: ?i64) ?i64 {
     return remaining_5h orelse remaining_weekly;
 }
 
 fn usesSingleWindowFreeMode(plan: ?registry.PlanType, remaining_5h: ?i64, remaining_weekly: ?i64) bool {
     return plan == .free and ((remaining_5h == null) != (remaining_weekly == null));
-}
-
-fn effectiveSingleWindowThreshold(cfg: registry.AutoSwitchConfig) i64 {
-    return @max(@as(i64, cfg.threshold_5h_percent), @as(i64, cfg.threshold_weekly_percent));
 }
 
 fn shouldSwitchWithRemaining(
@@ -667,10 +674,11 @@ fn shouldSwitchWithRemaining(
 ) bool {
     if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
         const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return false;
-        return remaining < effectiveSingleWindowThreshold(cfg);
+        return remaining < @as(i64, cfg.threshold_5h_percent);
     }
-    return (remaining_5h != null and remaining_5h.? < @as(i64, cfg.threshold_5h_percent)) or
-        (remaining_weekly != null and remaining_weekly.? < @as(i64, cfg.threshold_weekly_percent));
+    const rem_5h = remaining_5h orelse return false;
+    const rem_weekly = remaining_weekly orelse return false;
+    return rem_5h < @as(i64, cfg.threshold_5h_percent) or rem_weekly < @as(i64, cfg.threshold_weekly_percent);
 }
 
 fn determineCandidateTier(
@@ -683,7 +691,7 @@ fn determineCandidateTier(
     if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
         const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return if (allow_revalidation) .unknown else .ineligible;
         if (remaining <= 0) return .ineligible;
-        if (remaining > effectiveSingleWindowThreshold(cfg)) return .preferred;
+        if (remaining > @as(i64, cfg.threshold_5h_percent)) return .preferred;
         return .fallback;
     }
     const rem_5h = remaining_5h orelse return if (allow_revalidation) .unknown else .ineligible;
@@ -705,26 +713,20 @@ fn candidateSwitchEligible(candidate: CandidateState) bool {
     return candidate.tier == .preferred or candidate.tier == .fallback;
 }
 
-fn candidateEffectiveRemaining(candidate: CandidateState) i64 {
-    if (candidate.remaining_5h != null and candidate.remaining_weekly != null) {
-        return @min(candidate.remaining_5h.?, candidate.remaining_weekly.?);
-    }
-    return singleWindowRemaining(candidate.remaining_5h, candidate.remaining_weekly) orelse -1;
+fn candidatePrimaryRemaining(candidate: CandidateState) i64 {
+    return candidate.remaining_5h orelse candidate.remaining_weekly orelse -1;
 }
 
 fn candidateBetter(a: CandidateState, b: CandidateState) bool {
     if (@intFromEnum(a.tier) != @intFromEnum(b.tier)) return @intFromEnum(a.tier) > @intFromEnum(b.tier);
 
     if (candidateSwitchEligible(a) and candidateSwitchEligible(b)) {
-        const a_min = candidateEffectiveRemaining(a);
-        const b_min = candidateEffectiveRemaining(b);
-        if (a_min != b_min) return a_min > b_min;
+        const a_5h = candidatePrimaryRemaining(a);
+        const b_5h = candidatePrimaryRemaining(b);
+        if (a_5h != b_5h) return a_5h > b_5h;
         const a_weekly = a.remaining_weekly orelse a.remaining_5h orelse -1;
         const b_weekly = b.remaining_weekly orelse b.remaining_5h orelse -1;
         if (a_weekly != b_weekly) return a_weekly > b_weekly;
-        const a_5h = a.remaining_5h orelse a.remaining_weekly orelse -1;
-        const b_5h = b.remaining_5h orelse b.remaining_weekly orelse -1;
-        if (a_5h != b_5h) return a_5h > b_5h;
     }
 
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;

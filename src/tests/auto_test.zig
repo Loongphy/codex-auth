@@ -386,11 +386,30 @@ test "Scenario: Given stricter weekly threshold when checking current then defau
     try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
-test "Scenario: Given free weekly-only account when checking current then single-window thresholds can trigger auto switch" {
+test "Scenario: Given non-free weekly-only account when checking current then missing 5h prevents auto switch" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 97.0, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given free weekly-only account when checking current then it is treated like 5h for auto switch" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.threshold_5h_percent = 30;
+    reg.auto_switch.threshold_weekly_percent = 80;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(78.0), 100);
     const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
@@ -415,6 +434,38 @@ test "Scenario: Given free weekly-only candidate when selecting auto candidate t
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "healthy-free@example.com"));
+}
+
+test "Scenario: Given healthier weekly but weaker 5h candidate when selecting auto candidate then 5h stays higher priority" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 50.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "better-5h@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "better-weekly@example.com", .{
+        .primary = .{ .used_percent = 25.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "better-5h@example.com"));
 }
 
 test "Scenario: Given threshold overrides when applying config then unspecified values stay unchanged" {

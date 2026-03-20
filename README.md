@@ -255,8 +255,10 @@ When auto-switching is enabled, a background worker checks usage at the configur
 
 Candidate selection is conservative:
 
-- free accounts may expose only a single `10080`-minute weekly snapshot; when that happens, auto-switch treats them as single-window candidates instead of requiring a second 5h window
-- single-window free candidates are evaluated against the stricter configured threshold (`max(--5h, --weekly)`)
+- by default, auto-switch expects both 5h and weekly snapshots
+- candidate ranking prefers higher 5h remaining first and uses weekly remaining as the next tie-breaker
+- free accounts may expose only a single `10080`-minute weekly snapshot; when that happens, auto-switch treats it as a 5h proxy so those free accounts can still be selected
+- single-window free candidates are evaluated against `--5h`
 - in API mode, non-free accounts with missing 5h or weekly snapshots are treated as `unknown` and revalidated before preferred and fallback candidates
 - preferred dual-window candidates must have both 5h and weekly above their configured thresholds
 - if no preferred candidate exists, auto-switch can fall back only to accounts whose available windows are still above `0%`

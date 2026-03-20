@@ -234,14 +234,16 @@ When enabled:
    - on Linux/WSL, the timer-triggered service writes a user-service journal line with the source and destination emails when an automatic switch happens
 4. Candidate eligibility is reset-aware:
    - if `resets_at <= now`, that window is treated as fully reset (`100%`)
-   - free accounts may expose only a single `10080`-minute weekly window from the usage API; when exactly one positive window is available for a free account, auto-switch treats it as a single-window candidate instead of requiring a second 5h window
-   - single-window free accounts are compared against the stricter of the configured thresholds (`max(threshold_5h_percent, threshold_weekly_percent)`)
+   - by default, auto-switch expects both `5h` and `weekly` windows; accounts that expose only one of those windows are not eligible yet
+   - candidate ranking prefers higher `5h` remaining first and uses `weekly` remaining only as the next tie-breaker
+   - free accounts may expose only a single `10080`-minute weekly window from the usage API; when exactly one positive window is available for a free account, auto-switch treats that single window as a proxy for the 5h window so those accounts can still participate
+   - single-window free accounts are checked against `threshold_5h_percent`
    - in API mode, non-free candidates with no usable 5h/weekly pairing are treated as `unknown` and ranked ahead of preferred and fallback candidates so the daemon revalidates them first
    - a preferred dual-window candidate must satisfy both `5h > threshold_5h_percent` and `weekly > threshold_weekly_percent`
    - if no preferred candidate exists, auto-switch can fall back to candidates whose available windows are still above `0%`
    - candidates with any available window at `0%` are never auto-switch targets
    - in local-only mode, unknown candidates are never auto-switch targets
-5. In API mode, auto-switch revalidates unknown, preferred, and fallback candidates in ranked order; if an unknown candidate refresh fails because the usage API does not return HTTP 200, it is skipped immediately and the daemon tries the next ranked candidate. Single-window free candidates do not need that extra revalidation just because the 5h window is absent. In local-only mode, there is no candidate-side live refresh.
+5. In API mode, auto-switch revalidates unknown, preferred, and fallback candidates in ranked order; if an unknown candidate refresh fails because the usage API does not return HTTP 200, it is skipped immediately and the daemon tries the next ranked candidate. Single-window free candidates do not need that extra revalidation just because the weekly-only snapshot is being used as a 5h proxy. In local-only mode, there is no candidate-side live refresh.
 
 Service bootstrap is platform-specific:
 
