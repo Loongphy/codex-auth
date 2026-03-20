@@ -46,24 +46,26 @@ Add a background auto-switch daemon to `codex-auth`. The feature must be off by 
 - Add internal daemon-only command surface `codex-auth daemon --watch` for service managers.
 
 ## Action items
-[ ] Add the plan file and keep implementation aligned with it.
-[ ] Extend CLI parsing/help with `auto enable|disable|status`, and print current ON/OFF state in help.
-[ ] Persist `auto_switch` state in the registry with backward-compatible load/save behavior.
-[ ] Add rollout source tracking so the same latest rollout file is not reassigned to a different account immediately after a switch.
-[ ] Implement reset-aware remaining-percentage helpers and candidate scoring:
+[x] Add the plan file and keep implementation aligned with it.
+[x] Extend CLI parsing/help with auto-switch controls, and print current ON/OFF state in help.
+Final command surface: `codex-auth config auto enable|disable` and `codex-auth status`; the original top-level `auto ...` CLI shape was superseded before release.
+[x] Persist `auto_switch` state in the registry with backward-compatible load/save behavior.
+[x] Add rollout source tracking so the same latest rollout file is not reassigned to a different account immediately after a switch.
+Final implementation stores per-account `last_local_rollout` plus `active_account_activated_at_ms` rather than the original global `session_tracker` sketch.
+[x] Implement reset-aware remaining-percentage helpers and candidate scoring:
   - current-account trigger: `5h < 10` or `weekly < 5`
   - candidate scoring: min(`5h`, `weekly`) when both are known, otherwise the known window
   - no-snapshot accounts score as `100`
   - ties break by newer `last_usage_at`, then newer `created_at`, then stable registry order
   - switch only when the best candidate score is strictly better than the current score
-[ ] Add a single-instance daemon loop that periodically refreshes usage, evaluates thresholds, and performs silent account switching by rewriting `auth.json` and `active_email`.
-[ ] Implement platform service registration helpers:
+[x] Add a single-instance daemon loop that periodically refreshes usage, evaluates thresholds, and performs silent account switching by rewriting `auth.json` and the active-account registry key.
+[x] Implement platform service registration helpers:
   - Linux/WSL: install/remove `systemd --user` service and run `daemon-reload` + `enable --now` / `disable --now`
   - macOS: install/remove `LaunchAgent`
   - Windows: install/remove user scheduled task
-[ ] Make `auto status` report config state and service runtime state.
-[ ] Update `README.md` and reconcile `docs/implement.md` with the new background behavior.
-[ ] Add tests for CLI parsing, registry migration, candidate selection, no-snapshot scoring, rollout attribution, and service-definition generation.
+[x] Make status output report config state and service runtime state.
+[x] Update `README.md` and reconcile `docs/implement.md` with the new background behavior.
+[x] Add tests for CLI parsing, registry migration, candidate selection, no-snapshot scoring, rollout attribution, and service-definition generation.
 
 ## Testing and validation
 - `zig build test`
