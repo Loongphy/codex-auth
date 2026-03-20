@@ -46,13 +46,13 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
 
 ### Phase 4: PR Follow-up
 
-- [ ] Push implementation commits.
-- [ ] Review PR CI and review comments.
-- [ ] Log each comment and disposition in this file.
-- [ ] Fix accepted comments, commit, push, and resolve conversations.
-- [ ] Repeat until CI is green and there are no outstanding actionable comments.
-- [ ] Run `/review` loop, log outcomes here, address valid findings, and repeat until clean.
-- [ ] Remove the temporary `AGENTS.md` plan reference before the task is fully complete.
+- [x] Push implementation commits.
+- [x] Review PR CI and review comments.
+- [x] Log each comment and disposition in this file.
+- [x] Fix accepted comments, commit, push, and resolve conversations.
+- [x] Repeat until CI is green and there are no outstanding actionable comments.
+- [x] Run `/review` loop, log outcomes here, address valid findings, and repeat until clean.
+- [x] Remove the temporary `AGENTS.md` plan reference before the task is fully complete.
 
 ## Progress Log
 
@@ -82,6 +82,12 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
     - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/test-global ZIG_LOCAL_CACHE_DIR=.zig-cache/test-local zig test src/main.zig -lc`
     - `zig build run -- list`
     - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/win-global ZIG_LOCAL_CACHE_DIR=.zig-cache/win-local zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe`
+- 2026-03-20: Removed the temporary active-plan note from `AGENTS.md` in `1fc35db` (`chore: clear active remove plan note`) and pushed it to PR #23.
+- 2026-03-20: Final PR check confirmed:
+  - no pull request review comments
+  - no review submissions
+  - all GitHub Actions checks green
+  - `Macroscope - Correctness Check` concluded as `skipped` with no actionable feedback
 
 ## PR / Review Log
 
@@ -99,5 +105,8 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
   - review comments generated after request: none during the observed polling window
   - review submissions generated after request: none during the observed polling window
 - Current external status:
-  - GitHub Actions checks are green after the Windows fix
-  - `Macroscope - Correctness Check` remained `queued/pending` during polling and produced no actionable feedback yet
+  - branch `fix/remove-command` is pushed and up to date with `origin/fix/remove-command`
+  - GitHub Actions checks are green after the Windows fix and AGENTS cleanup commit
+  - `Macroscope - Correctness Check` completed as `skipped`
+  - PR review comments: none
+  - PR review submissions: none
