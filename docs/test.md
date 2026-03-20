@@ -212,6 +212,7 @@ Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch'
 ```
 
 After `config auto enable`, the task should exist and `status` should normally show `service: running`.
+The current implementation installs a long-running watcher helper behind that task instead of a once-per-minute one-shot task.
 
 After `config auto disable`, the task should be removed:
 
@@ -221,4 +222,4 @@ Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue
 
 Expected result after disable: no task is returned.
 
-For isolated HOME tests, use `daemon --once` to validate actual switching behavior. The Windows managed service artifacts are installed under the real Windows user profile, so `enable/disable/status` and `daemon --once` together provide the cleanest acceptance signal.
+For isolated HOME tests, use `daemon --once` to validate actual switching behavior. The Windows managed service artifacts are installed under the real Windows user profile, so `enable/disable/status` and `daemon --once` together provide the cleanest acceptance signal even though the managed task itself now starts the persistent watcher mode.

@@ -96,9 +96,9 @@ fn expectFailure(result: std.process.Child.RunResult) !void {
 }
 
 fn expectUsageApiWarningOnStderrOnly(result: std.process.Child.RunResult) !void {
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Warning: Usage refresh can use the ChatGPT usage API") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`codex-auth config api disable`") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Warning: Usage refresh can use the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "`codex-auth config api disable`") == null);
 }
 
@@ -601,7 +601,7 @@ test "Scenario: Given default api usage when rendering help then warning stays o
 
     try expectSuccess(result);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "codex-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API: ON (api-only)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API: ON (api)") != null);
     try expectUsageApiWarningOnStderrOnly(result);
 }
 

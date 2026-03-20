@@ -131,6 +131,24 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
+test "Scenario: Given free account near exhaustion when checking current then realtime guard switches earlier than the configured threshold" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccountWithUsage(gpa, &reg, "free@example.com", .{
+        .primary = .{ .used_percent = 70.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .free,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "free@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
 test "Scenario: Given stricter weekly threshold when checking current then default trigger can be suppressed" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -215,28 +233,16 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
 }
 
-test "Scenario: Given linux service unit when rendering then oneshot daemon command is included" {
+test "Scenario: Given linux service unit when rendering then it keeps a persistent daemon watcher alive" {
     const gpa = std.testing.allocator;
     const unit = try auto.linuxUnitText(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home");
     defer gpa.free(unit);
 
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch check") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Type=oneshot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch watcher") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Type=simple") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --once") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") == null);
-}
-
-test "Scenario: Given linux timer unit when rendering then it schedules the oneshot service every minute" {
-    const gpa = std.testing.allocator;
-    const timer = try auto.linuxTimerText(gpa);
-    defer gpa.free(timer);
-
-    try std.testing.expect(std.mem.indexOf(u8, timer, "Description=Run codex-auth auto-switch every minute") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=1min") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "OnUnitActiveSec=1min") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "Unit=codex-auth-autoswitch.service") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "WantedBy=timers.target") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
 }
 
 test "Scenario: Given mac plist when rendering then it includes version metadata and daemon args" {
@@ -259,15 +265,15 @@ test "Scenario: Given windows task action when rendering then it launches the he
     try std.testing.expect(action.len < 262);
 }
 
-test "Scenario: Given windows task match script when rendering then it validates both action and one-minute trigger" {
+test "Scenario: Given windows task match script when rendering then it validates both action and the logon trigger" {
     const gpa = std.testing.allocator;
     const script = try auto.windowsTaskMatchScript(gpa);
     defer gpa.free(script);
 
     try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "Repetition.Interval") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $interval") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "LocalName") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
 }
 
@@ -626,7 +632,7 @@ test "Scenario: Given new rollout event in the same file after switching account
     try std.testing.expectEqual(@as(f64, 48.0), reg.accounts.items[b_idx].last_usage.?.primary.?.used_percent);
 }
 
-test "Scenario: Given api-only mode and api failure when refreshing usage then local usage stays untouched and local rollout state is unchanged" {
+test "Scenario: Given API-enabled mode and API failure when refreshing usage then local usage stays untouched and local rollout state is unchanged" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -73,7 +73,7 @@ codex-auth remove # remove accounts (interactive multi-select)
 codex-auth status # show auto-switch/service/api usage status
 codex-auth config auto enable|disable # manage background auto-switching
 codex-auth config auto --5h <percent> [--weekly <percent>] # configure auto-switch thresholds
-codex-auth config api enable|disable # choose API-only or local-sessions-only usage refresh
+codex-auth config api enable|disable # switch between API mode and local-only mode
 ```
 
 Compatibility note: `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
@@ -174,7 +174,7 @@ codex-auth config auto --5h 12
 codex-auth config auto --5h 12 --weekly 8
 ```
 
-Use API-only usage refresh:
+Enable usage API fallback:
 
 ```shell
 codex-auth config api enable
@@ -192,11 +192,14 @@ When auto-switching is enabled, a background worker refreshes the active account
 - weekly remaining drops below the configured weekly threshold (default `5%`)
 
 Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
-On Linux/WSL, background checks run through `systemd --user` as a oneshot service triggered every minute by a timer. On Windows, a user scheduled task runs the same one-shot check every minute. On macOS, the background worker remains long-running.
+For free accounts, the background watcher applies a stronger real-time 5h guard and switches no later than `35%` remaining even if the configured 5h threshold is lower.
+The managed background worker is now long-running on all supported platforms: Linux/WSL uses a persistent `systemd --user` service, macOS uses a `LaunchAgent`, and Windows uses a scheduled task that launches the long-running helper at logon and also starts it immediately on enable.
+The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling; when `config api enable` is on, the usage API is still used as a slower fallback.
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or stale service drift.
-Changing thresholds updates `registry.json`; Linux/WSL and Windows pick them up on the next scheduled run, while macOS picks them up on the next polling cycle, without a service restart.
-Changing `config api` updates `registry.json` immediately; `api enable` means API-only and `api disable` means local-sessions-only.
+Changing thresholds updates `registry.json` and the running watcher picks them up on the next polling cycle without a service restart.
+Changing `config api` updates `registry.json` immediately; `api enable` is shown as API mode and `api disable` is shown as local mode.
 `codex-auth help` also shows whether auto-switching and usage API calls are currently enabled.
+Implementation details are documented in [`docs/auto-switch.md`](docs/auto-switch.md).
 
 ## Q&A
 
@@ -223,7 +226,7 @@ codex-auth status
 Upgrade notes:
 
 - If you are upgrading from `v0.1.x` to the latest `v0.2.x`, API usage refresh is enabled by default.
-- If you previously used an early `v0.2` prerelease/test build and `status` still shows `usage: local`, run `codex-auth config api enable` once to switch to API mode.
+- If you previously used an early `v0.2` prerelease/test build and `status` still shows `usage: local`, run `codex-auth config api enable` once to switch back to API mode.
 
 ### How to import tokens from cli-proxy-api?
 

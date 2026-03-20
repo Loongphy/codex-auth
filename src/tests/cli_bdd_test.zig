@@ -152,7 +152,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") == null);
@@ -182,7 +182,7 @@ test "Scenario: Given local-only usage mode when rendering warning then nothing 
     try std.testing.expectEqualStrings("", aw.written());
 }
 
-test "Scenario: Given api-only usage mode when rendering warning then risk and fallback guidance are shown" {
+test "Scenario: Given API fallback mode when rendering warning then risk and fallback guidance are shown" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -190,7 +190,7 @@ test "Scenario: Given api-only usage mode when rendering warning then risk and f
     try cli.writeUsageApiRiskWarning(&aw.writer, false, true);
 
     const warning = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, warning, "Warning: Usage refresh is currently using the ChatGPT usage API") != null);
+    try std.testing.expect(std.mem.indexOf(u8, warning, "Warning: Usage refresh can use the ChatGPT usage API") != null);
     try std.testing.expect(std.mem.indexOf(u8, warning, "may trigger OpenAI account restrictions or suspension") != null);
     try std.testing.expect(std.mem.indexOf(u8, warning, "`codex-auth config api disable`") != null);
     try std.testing.expect(std.mem.indexOf(u8, warning, "less accurate usage data") != null);

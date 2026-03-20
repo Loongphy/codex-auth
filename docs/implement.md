@@ -191,64 +191,14 @@ The switch command refreshes the current active account's usage once before rend
 
 ## Background Auto Switch
 
-`config auto` supports the user-facing commands:
+The detailed runtime, thresholds, service model, and data-source priority rules for auto-switching now live in `docs/auto-switch.md`.
 
-- `codex-auth config auto enable`
-- `codex-auth config auto disable`
-- `codex-auth config auto [--5h <percent>] [--weekly <percent>]`
+This document keeps only the cross-reference points that matter to the rest of the implementation:
 
-The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
-`status` prints the current `Auto Switch: ON/OFF` state, service runtime, thresholds, and whether usage API calls are enabled.
-`help` prints the current `Auto Switch: ON/OFF` state plus the configured thresholds.
-When `api.usage = true`, `help`, `status`, and `list` also print a warning that API-based usage refresh may trigger OpenAI account restrictions or suspension, and that `codex-auth config api disable` switches to safer but less accurate local-only usage reading.
-
-Usage API refresh mode is persisted separately under a top-level `api` block:
-
-- `api.usage = true` (default): API-only mode, call the ChatGPT usage API only and do not fall back to local rollout files
-- `api.usage = false`: local-only mode, read `~/.codex/sessions/**/rollout-*.jsonl` only, make no usage API calls
-
-The related configuration command is:
-
-- `codex-auth config api enable`
-- `codex-auth config api disable`
-
-The threshold configuration is also persisted in `registry.json`:
-
-- `auto_switch.threshold_5h_percent` (default `10`)
-- `auto_switch.threshold_weekly_percent` (default `5`)
-
-The configuration command can update either threshold independently or both in one command.
-If background auto-switching is already active, threshold changes do not require reinstalling or restarting the managed service. On Linux/WSL and Windows the next scheduled run reads the updated registry; on macOS the running daemon reads it on the next poll cycle.
-
-When enabled:
-
-1. A background worker checks usage continuously or on a fixed schedule, depending on platform.
-2. It refreshes usage for the current active account:
-   - in API mode, only from the ChatGPT usage API
-   - in local-only mode, only from the newest rollout file
-   In local-only mode, a rollout event is attributed only if its `event_timestamp_ms` is at or after the current active account's activation time. Each account also remembers its own last consumed local rollout signature so repeated `list`/daemon runs do not reconsume the same local event.
-3. If active-account remaining quota is below either threshold, it switches to the best alternative account without foreground CLI output:
-   - `5h` remaining `< auto_switch.threshold_5h_percent` (default `10%`)
-   - `weekly` remaining `< auto_switch.threshold_weekly_percent` (default `5%`)
-   - on Linux/WSL, the timer-triggered service writes a user-service journal line with the source and destination emails when an automatic switch happens
-4. Candidate scoring is reset-aware:
-   - if `resets_at <= now`, that window is treated as fully reset (`100%`)
-   - if both 5h and weekly are known, the candidate score is the lower remaining value
-   - if only one window is known, that window is the score
-   - if an account has no usage snapshot at all, it is treated as a fresh account with `100%` remaining
-
-Service bootstrap is platform-specific:
-
-- Linux/WSL: `systemd --user` oneshot service plus timer, running once per minute
-- macOS: `LaunchAgent`
-- Windows: user scheduled task running once per minute and launching `codex-auth-auto.exe` directly with no batch wrapper
-
-Service install paths are resolved from the real user home directory.
-The generated Linux/macOS service definition stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:
-
-- if `auto_switch.enabled = false`, it stops and uninstalls any managed background service left behind by an earlier enablement
-- if `auto_switch.enabled = true` and the managed timer/service definition is missing, stopped, or still points at an older service definition/version, it reinstalls the platform service and starts it with the current binary
-- On Linux/WSL, `config auto enable` also requires a working `systemd --user` session; if it is unavailable, the command fails before changing `registry.json`.
+- background config still lives in `registry.json` under top-level `auto_switch` and `api` blocks
+- managed services still resolve install paths from the real user home directory
+- successful foreground `codex-auth` commands except `help`, `version`, `status`, and `daemon` still reconcile the managed service definition
+- Linux/WSL `config auto enable` still requires a working `systemd --user` session
 
 ## Backups
 
@@ -262,7 +212,7 @@ The generated Linux/macOS service definition stamps the current `codex-auth` ver
 
 ## Usage and Rate Limits
 
-Usage refresh is active-account-only and depends on `api.usage`:
+Foreground usage refresh is active-account-only and depends on `api.usage`:
 
 1. If `api.usage = true`, try only the ChatGPT usage API with the current active `~/.codex/auth.json`.
 2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
@@ -279,7 +229,8 @@ Usage refresh is active-account-only and depends on `api.usage`:
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
-- `list`, `switch`, and the auto-switch background worker use the same active-account refresh path.
+- `list` and `switch` use the foreground active-account refresh path.
+- The background auto-switch watcher has its own near-real-time refresh strategy; see `docs/auto-switch.md`.
 - `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.

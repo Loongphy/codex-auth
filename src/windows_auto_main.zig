@@ -10,5 +10,5 @@ pub fn main() !void {
     const codex_home = try registry.resolveCodexHome(allocator);
     defer allocator.free(codex_home);
 
-    try auto.runDaemonOnce(allocator, codex_home);
+    try auto.runDaemon(allocator, codex_home);
 }

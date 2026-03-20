@@ -278,7 +278,7 @@ pub fn writeUsageApiRiskWarning(out: *std.Io.Writer, use_color: bool, api_usage_
     if (use_color) try out.writeAll(ansi.bold_yellow);
     try out.writeAll("Warning:");
     if (use_color) try out.writeAll(ansi.reset);
-    try out.writeAll(" Usage refresh is currently using the ChatGPT usage API and may trigger OpenAI account restrictions or suspension.\n");
+    try out.writeAll(" Usage refresh can use the ChatGPT usage API and may trigger OpenAI account restrictions or suspension.\n");
     try out.writeAll("         Switch to local-only usage reading with `codex-auth config api disable` for safer but less accurate usage data.\n\n");
 }
 
@@ -310,7 +310,7 @@ pub fn writeHelp(
     if (use_color) try out.writeAll(ansi.reset);
     try out.print(
         " {s} ({s})\n\n",
-        .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api-only" else "local-sessions-only" },
+        .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api" else "local" },
     );
 
     if (use_color) try out.writeAll(ansi.bold);
@@ -339,8 +339,8 @@ pub fn writeHelp(
         .{ .name = "auto enable", .description = "Enable background auto-switching" },
         .{ .name = "auto disable", .description = "Disable background auto-switching" },
         .{ .name = "auto --5h <percent> [--weekly <percent>]", .description = "Configure auto-switch thresholds" },
-        .{ .name = "api enable", .description = "Use usage API only" },
-        .{ .name = "api disable", .description = "Use local sessions only" },
+        .{ .name = "api enable", .description = "Enable usage API mode" },
+        .{ .name = "api disable", .description = "Enable local-only mode" },
     };
     const parent_indent: usize = 2;
     const child_indent: usize = parent_indent + 4;

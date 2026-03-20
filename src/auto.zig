@@ -12,9 +12,11 @@ const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const windows_helper_name = "codex-auth-auto.exe";
-const windows_task_trigger_interval = "PT1M";
+const windows_task_trigger_kind = "LogonTrigger";
 const lock_file_name = "auto-switch.lock";
-const poll_interval_ns = 60 * std.time.ns_per_s;
+const watch_poll_interval_ns = 1 * std.time.ns_per_s;
+const api_refresh_interval_ns = 60 * std.time.ns_per_s;
+const free_plan_realtime_guard_5h_percent: i64 = 35;
 pub const RuntimeState = enum { running, stopped, unknown };
 
 const ansi = struct {
@@ -242,14 +244,15 @@ pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try registry.ensureAccountsDir(allocator, codex_home);
     var daemon_lock = (try DaemonLock.acquire(allocator, codex_home)) orelse return;
     defer daemon_lock.release();
+    var last_api_refresh_at_ns: i128 = 0;
 
     while (true) {
-        const keep_running = daemonCycle(allocator, codex_home) catch |err| blk: {
+        const keep_running = daemonCycle(allocator, codex_home, &last_api_refresh_at_ns) catch |err| blk: {
             std.log.err("auto daemon cycle failed: {s}", .{@errorName(err)});
             break :blk true;
         };
         if (!keep_running) return;
-        std.Thread.sleep(poll_interval_ns);
+        std.Thread.sleep(watch_poll_interval_ns);
     }
 }
 
@@ -258,7 +261,8 @@ pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void
     var daemon_lock = (try DaemonLock.acquire(allocator, codex_home)) orelse return;
     defer daemon_lock.release();
 
-    _ = try daemonCycle(allocator, codex_home);
+    var last_api_refresh_at_ns: i128 = 0;
+    _ = try daemonCycle(allocator, codex_home, &last_api_refresh_at_ns);
 }
 
 pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -337,6 +341,29 @@ fn refreshActiveUsageFromSessions(
     return true;
 }
 
+fn refreshActiveUsageForDaemon(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    last_api_refresh_at_ns: *i128,
+) !bool {
+    if (try refreshActiveUsageFromSessions(allocator, codex_home, reg)) {
+        return true;
+    }
+    if (!reg.api.usage) return false;
+
+    const now_ns = std.time.nanoTimestamp();
+    if (last_api_refresh_at_ns.* != 0 and (now_ns - last_api_refresh_at_ns.*) < api_refresh_interval_ns) {
+        return false;
+    }
+    last_api_refresh_at_ns.* = now_ns;
+
+    return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, usage_api.fetchActiveUsage)) {
+        .updated => true,
+        .unchanged, .unavailable => false,
+    };
+}
+
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
     const active = reg.active_account_key orelse return null;
     var best_idx: ?usize = null;
@@ -356,10 +383,19 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const account_key = reg.active_account_key orelse return false;
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
+    const threshold_5h_percent = effective5hThresholdPercent(reg, rec);
     const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
-    return (rem_5h != null and rem_5h.? < @as(i64, reg.auto_switch.threshold_5h_percent)) or
+    return (rem_5h != null and rem_5h.? < threshold_5h_percent) or
         (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
+}
+
+fn effective5hThresholdPercent(reg: *registry.Registry, rec: *const registry.AccountRecord) i64 {
+    var threshold = @as(i64, reg.auto_switch.threshold_5h_percent);
+    if (registry.resolvePlan(rec) == .free) {
+        threshold = @max(threshold, free_plan_realtime_guard_5h_percent);
+    }
+    return threshold;
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -378,7 +414,7 @@ pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg
     return true;
 }
 
-fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
+fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, last_api_refresh_at_ns: *i128) !bool {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     if (!reg.auto_switch.enabled) return false;
@@ -400,7 +436,7 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
         changed = true;
     }
 
-    if (try refreshActiveUsage(allocator, codex_home, &reg)) {
+    if (try refreshActiveUsageForDaemon(allocator, codex_home, &reg, last_api_refresh_at_ns)) {
         changed = true;
     }
     const active_idx_before = if (reg.active_account_key) |account_key|
@@ -551,22 +587,16 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     defer allocator.free(unit_path);
     const unit_text = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(unit_text);
-    const timer_path = try linuxUnitPath(allocator, linux_timer_name);
-    defer allocator.free(timer_path);
-    const timer_text = try linuxTimerText(allocator);
-    defer allocator.free(timer_text);
 
     const unit_dir = std.fs.path.dirname(unit_path).?;
     try std.fs.cwd().makePath(unit_dir);
     try std.fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
-    try std.fs.cwd().writeFile(.{ .sub_path = timer_path, .data = timer_text });
+    removeLinuxUnit(allocator, linux_timer_name) catch {};
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
-    // Clean up the legacy long-running service enablement before switching to the timer model.
-    runIgnoringFailure(allocator, &[_][]const u8{ "systemctl", "--user", "disable", "--now", linux_service_name });
-    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_timer_name });
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
     switch (queryLinuxRuntimeState(allocator)) {
-        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_timer_name }),
-        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_timer_name }),
+        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_service_name }),
+        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_service_name }),
     }
 }
 
@@ -638,9 +668,7 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
         "schtasks",
         "/Create",
         "/SC",
-        "MINUTE",
-        "/MO",
-        "1",
+        "ONLOGON",
         "/TN",
         windows_task_name,
         "/TR",
@@ -668,7 +696,7 @@ fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
 }
 
 fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", linux_timer_name }) catch return .unknown;
+    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", linux_service_name }) catch return .unknown;
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
@@ -714,22 +742,14 @@ fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
 
 pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
     _ = codex_home;
-    const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --once", .{self_exe});
+    const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --watch", .{self_exe});
     defer allocator.free(exec);
     const escaped_version = try escapeSystemdValue(allocator, version.app_version);
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch check\n\n[Service]\nType=oneshot\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
+        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nExecStart={s}\n",
         .{ service_version_env_name, escaped_version, exec },
-    );
-}
-
-pub fn linuxTimerText(allocator: std.mem.Allocator) ![]u8 {
-    return try std.fmt.allocPrint(
-        allocator,
-        "[Unit]\nDescription=Run codex-auth auto-switch every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
-        .{linux_service_name},
     );
 }
 
@@ -753,7 +773,7 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) 
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $interval)",
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind)",
         .{ windows_task_name, windows_task_name },
     );
 }
@@ -813,9 +833,9 @@ fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_e
 
     const timer_path = try linuxUnitPath(allocator, linux_timer_name);
     defer allocator.free(timer_path);
-    const expected_timer = try linuxTimerText(allocator);
-    defer allocator.free(expected_timer);
-    return try fileEqualsBytes(allocator, timer_path, expected_timer);
+    const legacy_timer = try readFileIfExists(allocator, timer_path);
+    defer if (legacy_timer) |bytes| allocator.free(bytes);
+    return legacy_timer == null;
 }
 
 fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
@@ -833,7 +853,7 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     const expected_fingerprint = try std.fmt.allocPrint(
         allocator,
         "{s}|TRIGGER:{s}",
-        .{ helper_path, windows_task_trigger_interval },
+        .{ helper_path, windows_task_trigger_kind },
     );
     defer allocator.free(expected_fingerprint);
     const script = try windowsTaskMatchScript(allocator);
