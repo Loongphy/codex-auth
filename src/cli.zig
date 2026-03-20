@@ -45,13 +45,14 @@ pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
-pub const AutoThresholdOptions = struct {
+pub const AutoConfigOptions = struct {
     threshold_5h_percent: ?u8,
     threshold_weekly_percent: ?u8,
+    interval_seconds: ?u32,
 };
 pub const AutoOptions = union(enum) {
     action: AutoAction,
-    configure: AutoThresholdOptions,
+    configure: AutoConfigOptions,
 };
 pub const ApiUsageAction = enum { enable, disable };
 pub const ConfigOptions = union(enum) {
@@ -178,6 +179,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
 
             var threshold_5h_percent: ?u8 = null;
             var threshold_weekly_percent: ?u8 = null;
+            var interval_seconds: ?u32 = null;
             var i: usize = 3;
             while (i < args.len) : (i += 1) {
                 const arg = std.mem.sliceTo(args[i], 0);
@@ -193,12 +195,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                     i += 1;
                     continue;
                 }
+                if (std.mem.eql(u8, arg, "--interval") and i + 1 < args.len) {
+                    if (interval_seconds != null) return Command{ .help = {} };
+                    interval_seconds = timefmt.parseSimpleDurationSeconds(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                    i += 1;
+                    continue;
+                }
                 return Command{ .help = {} };
             }
-            if (threshold_5h_percent == null and threshold_weekly_percent == null) return Command{ .help = {} };
+            if (threshold_5h_percent == null and threshold_weekly_percent == null and interval_seconds == null) return Command{ .help = {} };
             return Command{ .config = .{ .auto_switch = .{ .configure = .{
                 .threshold_5h_percent = threshold_5h_percent,
                 .threshold_weekly_percent = threshold_weekly_percent,
+                .interval_seconds = interval_seconds,
             } } } };
         }
 
@@ -272,6 +281,10 @@ pub fn writeHelp(
     auto_cfg: *const registry.AutoSwitchConfig,
     api_cfg: *const registry.ApiConfig,
 ) !void {
+    const interval_seconds = registry.effectiveAutoSwitchIntervalSeconds(auto_cfg.interval_seconds, builtin.os.tag);
+    const interval_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, interval_seconds);
+    defer std.heap.page_allocator.free(interval_label);
+
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("codex-auth");
     if (use_color) try out.writeAll(ansi.reset);
@@ -285,8 +298,8 @@ pub fn writeHelp(
     try out.writeAll("Auto Switch:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.print(
-        " {s} (5h<{d}%, weekly<{d}%)\n\n",
-        .{ if (auto_cfg.enabled) "ON" else "OFF", auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
+        " {s} (interval {s}, 5h<{d}%, weekly<{d}%)\n\n",
+        .{ if (auto_cfg.enabled) "ON" else "OFF", interval_label, auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
     );
 
     if (use_color) try out.writeAll(ansi.bold);
@@ -321,7 +334,7 @@ pub fn writeHelp(
     const config_details = [_]HelpEntry{
         .{ .name = "auto enable", .description = "Enable background auto-switching" },
         .{ .name = "auto disable", .description = "Disable background auto-switching" },
-        .{ .name = "auto --5h <percent> [--weekly <percent>]", .description = "Configure auto-switch thresholds" },
+        .{ .name = "auto [--interval <duration>] [--5h <percent>] [--weekly <percent>]", .description = "Configure auto-switch interval and thresholds" },
         .{ .name = "api enable", .description = "Use usage API only" },
         .{ .name = "api disable", .description = "Use local sessions only" },
     };

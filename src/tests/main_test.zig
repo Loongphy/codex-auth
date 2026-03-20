@@ -77,6 +77,7 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .configure = .{
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = null,
+        .interval_seconds = null,
     } } } }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api_usage = .enable } }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = {} }));

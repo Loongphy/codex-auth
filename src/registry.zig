@@ -6,10 +6,11 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 3;
+pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
+pub const default_auto_switch_interval_seconds: u32 = 60;
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -47,6 +48,7 @@ pub const AutoSwitchConfig = struct {
     enabled: bool = false,
     threshold_5h_percent: u8 = default_auto_switch_threshold_5h_percent,
     threshold_weekly_percent: u8 = default_auto_switch_threshold_weekly_percent,
+    interval_seconds: u32 = default_auto_switch_interval_seconds,
 };
 
 pub const ApiConfig = struct {
@@ -93,6 +95,13 @@ pub const Registry = struct {
 
 pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
     return .{};
+}
+
+pub fn effectiveAutoSwitchIntervalSeconds(interval_seconds: u32, os_tag: std.Target.Os.Tag) u32 {
+    if (os_tag == .windows and interval_seconds < default_auto_switch_interval_seconds) {
+        return default_auto_switch_interval_seconds;
+    }
+    return interval_seconds;
 }
 
 pub fn defaultApiConfig() ApiConfig {
@@ -2030,7 +2039,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",
@@ -2190,6 +2199,11 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
             cfg.threshold_weekly_percent = value;
         }
     }
+    if (obj.get("interval_seconds")) |interval| {
+        if (parseIntervalSeconds(interval)) |value| {
+            cfg.interval_seconds = value;
+        }
+    }
 }
 
 fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
@@ -2203,6 +2217,12 @@ fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
             else => {},
         }
     }
+}
+
+fn parseIntervalSeconds(v: std.json.Value) ?u32 {
+    const interval = readInt(v) orelse return null;
+    if (interval <= 0) return null;
+    return std.math.cast(u32, interval);
 }
 
 fn parseRolloutSignature(allocator: std.mem.Allocator, v: std.json.Value) ?RolloutSignature {

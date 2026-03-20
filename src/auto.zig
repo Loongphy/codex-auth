@@ -4,6 +4,7 @@ const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
+const timefmt = @import("timefmt.zig");
 const usage_api = @import("usage_api.zig");
 const version = @import("version.zig");
 
@@ -12,9 +13,7 @@ const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const windows_helper_name = "codex-auth-auto.exe";
-const windows_task_trigger_interval = "PT1M";
 const lock_file_name = "auto-switch.lock";
-const poll_interval_ns = 60 * std.time.ns_per_s;
 pub const RuntimeState = enum { running, stopped, unknown };
 
 const ansi = struct {
@@ -30,6 +29,7 @@ const ansi = struct {
 pub const Status = struct {
     enabled: bool,
     runtime: RuntimeState,
+    interval_seconds: u32,
     threshold_5h_percent: u8,
     threshold_weekly_percent: u8,
     api_usage_enabled: bool,
@@ -113,6 +113,7 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
     return .{
         .enabled = reg.auto_switch.enabled,
         .runtime = queryRuntimeState(allocator),
+        .interval_seconds = currentPlatformIntervalSeconds(reg.auto_switch.interval_seconds),
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
         .api_usage_enabled = reg.api.usage,
@@ -124,6 +125,9 @@ pub fn writeStatus(out: *std.Io.Writer, status: Status) !void {
 }
 
 fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !void {
+    const interval_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, status.interval_seconds);
+    defer std.heap.page_allocator.free(interval_label);
+
     if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("auto-switch: ");
     if (use_color) try out.writeAll(if (status.enabled) ansi.bold_green else ansi.bold_red);
@@ -139,6 +143,13 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
         .unknown => ansi.bold_red,
     });
     try out.writeAll(@tagName(status.runtime));
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
+
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("interval: ");
+    if (use_color) try out.writeAll(ansi.yellow);
+    try out.writeAll(interval_label);
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n");
 
@@ -183,7 +194,7 @@ pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, c
             .enable => try enable(allocator, codex_home),
             .disable => try disable(allocator, codex_home),
         },
-        .configure => |opts| try configureThresholds(allocator, codex_home, opts),
+        .configure => |opts| try configureAutoSwitch(allocator, codex_home, opts),
     }
 }
 
@@ -249,7 +260,7 @@ pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
             break :blk true;
         };
         if (!keep_running) return;
-        std.Thread.sleep(poll_interval_ns);
+        std.Thread.sleep(daemonPollIntervalNs(allocator, codex_home));
     }
 }
 
@@ -487,21 +498,66 @@ fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try uninstallService(allocator, codex_home);
 }
 
-pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThresholdOptions) void {
+pub fn applyAutoConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoConfigOptions) void {
     if (opts.threshold_5h_percent) |value| {
         cfg.threshold_5h_percent = value;
     }
     if (opts.threshold_weekly_percent) |value| {
         cfg.threshold_weekly_percent = value;
     }
+    if (opts.interval_seconds) |value| {
+        cfg.interval_seconds = value;
+    }
 }
 
-fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoThresholdOptions) !void {
+fn configureAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoConfigOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    applyThresholdConfig(&reg.auto_switch, opts);
+    const requested_interval_seconds = opts.interval_seconds;
+    applyAutoConfig(&reg.auto_switch, opts);
+    if (requested_interval_seconds) |requested| {
+        const effective = currentPlatformIntervalSeconds(requested);
+        if (builtin.os.tag == .windows and effective != requested) {
+            reg.auto_switch.interval_seconds = effective;
+            try printWindowsIntervalClampWarning(requested, effective);
+        }
+    }
     try registry.saveRegistry(allocator, codex_home, &reg);
     try printStatus(allocator, codex_home);
+}
+
+fn currentPlatformIntervalSeconds(interval_seconds: u32) u32 {
+    return registry.effectiveAutoSwitchIntervalSeconds(interval_seconds, builtin.os.tag);
+}
+
+fn daemonPollIntervalNs(allocator: std.mem.Allocator, codex_home: []const u8) u64 {
+    const interval_seconds = loadConfiguredIntervalSeconds(allocator, codex_home) catch registry.default_auto_switch_interval_seconds;
+    return @as(u64, interval_seconds) * std.time.ns_per_s;
+}
+
+fn loadConfiguredIntervalSeconds(allocator: std.mem.Allocator, codex_home: []const u8) !u32 {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    return currentPlatformIntervalSeconds(reg.auto_switch.interval_seconds);
+}
+
+fn printWindowsIntervalClampWarning(requested_seconds: u32, effective_seconds: u32) !void {
+    var buffer: [256]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    try writeWindowsIntervalClampWarning(&writer.interface, requested_seconds, effective_seconds);
+    try writer.interface.flush();
+}
+
+pub fn writeWindowsIntervalClampWarning(out: *std.Io.Writer, requested_seconds: u32, effective_seconds: u32) !void {
+    const requested_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, requested_seconds);
+    defer std.heap.page_allocator.free(requested_label);
+    const effective_label = try timefmt.formatSimpleDurationAlloc(std.heap.page_allocator, effective_seconds);
+    defer std.heap.page_allocator.free(effective_label);
+
+    try out.print(
+        "Warning: Windows Task Scheduler does not support intervals below 1 minute; saved auto-switch interval as {s} instead of {s}.\n",
+        .{ effective_label, requested_label },
+    );
 }
 
 fn candidateScore(rec: *const registry.AccountRecord, now: i64) CandidateScore {
@@ -547,13 +603,14 @@ fn uninstallService(allocator: std.mem.Allocator, codex_home: []const u8) !void 
 }
 
 fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
+    const interval_seconds = try loadConfiguredIntervalSeconds(allocator, codex_home);
     const unit_path = try linuxUnitPath(allocator, linux_service_name);
     defer allocator.free(unit_path);
     const unit_text = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(unit_text);
     const timer_path = try linuxUnitPath(allocator, linux_timer_name);
     defer allocator.free(timer_path);
-    const timer_text = try linuxTimerText(allocator);
+    const timer_text = try linuxTimerText(allocator, interval_seconds);
     defer allocator.free(timer_text);
 
     const unit_dir = std.fs.path.dirname(unit_path).?;
@@ -618,13 +675,15 @@ fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !vo
 }
 
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    _ = codex_home;
+    const interval_seconds = try loadConfiguredIntervalSeconds(allocator, codex_home);
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
     try std.fs.cwd().access(helper_path, .{});
 
     const action = try windowsTaskAction(allocator, helper_path);
     defer allocator.free(action);
+    const create_script = try windowsCreateTaskScript(allocator, helper_path, interval_seconds);
+    defer allocator.free(create_script);
     const end_script = try windowsEndTaskScript(allocator);
     defer allocator.free(end_script);
     _ = runChecked(allocator, &[_][]const u8{
@@ -635,23 +694,18 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
         end_script,
     }) catch {};
     try runChecked(allocator, &[_][]const u8{
-        "schtasks",
-        "/Create",
-        "/SC",
-        "MINUTE",
-        "/MO",
-        "1",
-        "/TN",
-        windows_task_name,
-        "/TR",
-        action,
-        "/F",
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        create_script,
     });
     try runChecked(allocator, &[_][]const u8{
-        "schtasks",
-        "/Run",
-        "/TN",
-        windows_task_name,
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        "Start-ScheduledTask -TaskName '" ++ windows_task_name ++ "'",
     });
 }
 
@@ -725,11 +779,13 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     );
 }
 
-pub fn linuxTimerText(allocator: std.mem.Allocator) ![]u8 {
+pub fn linuxTimerText(allocator: std.mem.Allocator, interval_seconds: u32) ![]u8 {
+    const interval_label = try formatSystemdIntervalAlloc(allocator, interval_seconds);
+    defer allocator.free(interval_label);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=Run codex-auth auto-switch every minute\n\n[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
-        .{linux_service_name},
+        "[Unit]\nDescription=Run codex-auth auto-switch every {s}\n\n[Timer]\nOnBootSec={s}\nOnUnitActiveSec={s}\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
+        .{ interval_label, interval_label, interval_label, linux_service_name },
     );
 }
 
@@ -750,10 +806,18 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) 
     return try std.fmt.allocPrint(allocator, "\"{s}\"", .{helper_path});
 }
 
+pub fn windowsCreateTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, interval_seconds: u32) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "$action = New-ScheduledTaskAction -Execute '{s}'; $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date); $trigger.Repetition.Interval = [TimeSpan]::FromSeconds({d}); $trigger.Repetition.Duration = [TimeSpan]::FromDays(3650); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Force | Out-Null",
+        .{ helper_path, interval_seconds, windows_task_name },
+    );
+}
+
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $interval)",
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $interval = [string]$triggers[0].Repetition.Interval; if ([string]::IsNullOrWhiteSpace($interval)) {{ exit 4 }}; $seconds = [int][System.Xml.XmlConvert]::ToTimeSpan($interval).TotalSeconds; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER_SECONDS:' + $seconds)",
         .{ windows_task_name, windows_task_name },
     );
 }
@@ -805,6 +869,7 @@ fn currentServiceDefinitionMatches(allocator: std.mem.Allocator, codex_home: []c
 }
 
 fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const interval_seconds = try loadConfiguredIntervalSeconds(allocator, codex_home);
     const unit_path = try linuxUnitPath(allocator, linux_service_name);
     defer allocator.free(unit_path);
     const expected = try linuxUnitText(allocator, self_exe, codex_home);
@@ -813,7 +878,7 @@ fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_e
 
     const timer_path = try linuxUnitPath(allocator, linux_timer_name);
     defer allocator.free(timer_path);
-    const expected_timer = try linuxTimerText(allocator);
+    const expected_timer = try linuxTimerText(allocator, interval_seconds);
     defer allocator.free(expected_timer);
     return try fileEqualsBytes(allocator, timer_path, expected_timer);
 }
@@ -827,13 +892,13 @@ fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_ex
 }
 
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    _ = codex_home;
+    const interval_seconds = try loadConfiguredIntervalSeconds(allocator, codex_home);
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
     const expected_fingerprint = try std.fmt.allocPrint(
         allocator,
-        "{s}|TRIGGER:{s}",
-        .{ helper_path, windows_task_trigger_interval },
+        "{s}|TRIGGER_SECONDS:{d}",
+        .{ helper_path, interval_seconds },
     );
     defer allocator.free(expected_fingerprint);
     const script = try windowsTaskMatchScript(allocator);
@@ -853,6 +918,16 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
         .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
         else => false,
     };
+}
+
+fn formatSystemdIntervalAlloc(allocator: std.mem.Allocator, interval_seconds: u32) ![]u8 {
+    if (interval_seconds != 0 and @mod(interval_seconds, 60 * 60) == 0) {
+        return std.fmt.allocPrint(allocator, "{d}h", .{@divTrunc(interval_seconds, 60 * 60)});
+    }
+    if (interval_seconds != 0 and @mod(interval_seconds, 60) == 0) {
+        return std.fmt.allocPrint(allocator, "{d}min", .{@divTrunc(interval_seconds, 60)});
+    }
+    return std.fmt.allocPrint(allocator, "{d}s", .{interval_seconds});
 }
 
 fn windowsHelperPath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {

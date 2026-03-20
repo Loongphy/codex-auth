@@ -125,7 +125,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try cli.writeHelp(&aw.writer, false, &auto_cfg, &api_cfg);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (interval 1m, 5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") == null);
@@ -137,7 +137,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto disable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "auto [--interval <duration>] [--5h <percent>] [--weekly <percent>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api disable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
@@ -246,6 +246,7 @@ test "Scenario: Given config auto 5h threshold when parsing then threshold confi
                     try std.testing.expect(cfg.threshold_5h_percent != null);
                     try std.testing.expect(cfg.threshold_5h_percent.? == 12);
                     try std.testing.expect(cfg.threshold_weekly_percent == null);
+                    try std.testing.expect(cfg.interval_seconds == null);
                 },
                 else => return error.TestExpectedEqual,
             },
@@ -269,6 +270,55 @@ test "Scenario: Given config auto thresholds together when parsing then both win
                     try std.testing.expect(cfg.threshold_5h_percent.? == 12);
                     try std.testing.expect(cfg.threshold_weekly_percent != null);
                     try std.testing.expect(cfg.threshold_weekly_percent.? == 8);
+                    try std.testing.expect(cfg.interval_seconds == null);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given config auto interval when parsing then interval configuration is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--interval", "4s" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .config => |opts| switch (opts) {
+            .auto_switch => |auto_opts| switch (auto_opts) {
+                .configure => |cfg| {
+                    try std.testing.expect(cfg.threshold_5h_percent == null);
+                    try std.testing.expect(cfg.threshold_weekly_percent == null);
+                    try std.testing.expect(cfg.interval_seconds != null);
+                    try std.testing.expect(cfg.interval_seconds.? == 4);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given config auto interval and thresholds when parsing then all config is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--interval", "4m", "--5h", "12", "--weekly", "8" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .config => |opts| switch (opts) {
+            .auto_switch => |auto_opts| switch (auto_opts) {
+                .configure => |cfg| {
+                    try std.testing.expect(cfg.threshold_5h_percent != null);
+                    try std.testing.expect(cfg.threshold_5h_percent.? == 12);
+                    try std.testing.expect(cfg.threshold_weekly_percent != null);
+                    try std.testing.expect(cfg.threshold_weekly_percent.? == 8);
+                    try std.testing.expect(cfg.interval_seconds != null);
+                    try std.testing.expect(cfg.interval_seconds.? == 240);
                 },
                 else => return error.TestExpectedEqual,
             },
@@ -335,6 +385,15 @@ test "Scenario: Given config auto action mixed with threshold flags when parsing
     try std.testing.expect(isHelp(cmd));
 }
 
+test "Scenario: Given config auto action mixed with interval flag when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "enable", "--interval", "4s" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
 test "Scenario: Given config auto threshold percent out of range when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--weekly", "0" };
@@ -353,9 +412,27 @@ test "Scenario: Given config auto repeated threshold flag when parsing then help
     try std.testing.expect(isHelp(cmd));
 }
 
+test "Scenario: Given config auto repeated interval flag when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--interval", "4s", "--interval", "4m" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
 test "Scenario: Given config auto threshold without value when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--weekly" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given config auto interval without value when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--interval" };
     var cmd = try cli.parseArgs(gpa, &args);
     defer cli.freeCommand(gpa, &cmd);
 
@@ -384,6 +461,7 @@ test "Scenario: Given config auto threshold with weekly only when parsing then s
                     try std.testing.expect(cfg.threshold_5h_percent == null);
                     try std.testing.expect(cfg.threshold_weekly_percent != null);
                     try std.testing.expect(cfg.threshold_weekly_percent.? == 9);
+                    try std.testing.expect(cfg.interval_seconds == null);
                 },
                 else => return error.TestExpectedEqual,
             },
@@ -391,6 +469,15 @@ test "Scenario: Given config auto threshold with weekly only when parsing then s
         },
         else => return error.TestExpectedEqual,
     }
+}
+
+test "Scenario: Given config auto interval with uppercase suffix when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--interval", "4S" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
 }
 
 test "Scenario: Given removed top-level auto command when parsing then help command is returned" {

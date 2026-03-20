@@ -64,12 +64,13 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - The current binary supports all released schemas:
-  - `schema_version = 3` is the current layout with record-keyed snapshots, active-account activation timestamps, and per-account local rollout dedupe.
-  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
-- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized `schema_version = 3` format.
+  - `schema_version = 4` is the current layout with record-keyed snapshots, active-account activation timestamps, per-account local rollout dedupe, and configurable auto-switch intervals.
+  - `schema_version = 3` registries missing `auto_switch.interval_seconds` are auto-migrated to schema `4` with the default interval.
+  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to the current schema.
+- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized current `schema_version`.
 - Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
-- Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
+- Saving always rewrites `registry.json` into the current field set with `schema_version = 4`.
 - Unknown extra fields are still ignored on load and dropped on save, so additive compatibility is only guaranteed for schemas explicitly supported by the current binary.
 - See `docs/schema-migration.md` for the versioning policy and migration rules.
 
@@ -187,11 +188,11 @@ The switch command refreshes the current active account's usage once before rend
 
 - `codex-auth config auto enable`
 - `codex-auth config auto disable`
-- `codex-auth config auto [--5h <percent>] [--weekly <percent>]`
+- `codex-auth config auto [--interval <duration>] [--5h <percent>] [--weekly <percent>]`
 
 The feature is off by default and persisted in `registry.json` under a top-level `auto_switch` block.
-`status` prints the current `Auto Switch: ON/OFF` state, service runtime, thresholds, and whether usage API calls are enabled.
-`help` prints the current `Auto Switch: ON/OFF` state plus the configured thresholds.
+`status` prints the current `Auto Switch: ON/OFF` state, service runtime, interval, thresholds, and whether usage API calls are enabled.
+`help` prints the current `Auto Switch: ON/OFF` state plus the configured interval and thresholds.
 When `api.usage = true`, `help`, `status`, and `list` also print a warning that API-based usage refresh may trigger OpenAI account restrictions or suspension, and that `codex-auth config api disable` switches to safer but less accurate local-only usage reading.
 
 Usage API refresh mode is persisted separately under a top-level `api` block:
@@ -208,9 +209,10 @@ The threshold configuration is also persisted in `registry.json`:
 
 - `auto_switch.threshold_5h_percent` (default `10`)
 - `auto_switch.threshold_weekly_percent` (default `5`)
+- `auto_switch.interval_seconds` (default `60`)
 
-The configuration command can update either threshold independently or both in one command.
-If background auto-switching is already active, threshold changes do not require reinstalling or restarting the managed service. On Linux/WSL and Windows the next scheduled run reads the updated registry; on macOS the running daemon reads it on the next poll cycle.
+The configuration command can update the interval, either threshold independently, or all of them in one command.
+If background auto-switching is already active, threshold changes do not require reinstalling or restarting the managed service. Interval changes refresh the Linux/WSL timer and Windows scheduled task definition; on macOS the running daemon reads the new interval on the next poll cycle.
 
 When enabled:
 
@@ -231,9 +233,9 @@ When enabled:
 
 Service bootstrap is platform-specific:
 
-- Linux/WSL: `systemd --user` oneshot service plus timer, running once per minute
+- Linux/WSL: `systemd --user` oneshot service plus timer, running at the configured interval
 - macOS: `LaunchAgent`
-- Windows: user scheduled task running once per minute and launching `codex-auth-auto.exe` directly with no batch wrapper
+- Windows: user scheduled task running at the configured interval and launching `codex-auth-auto.exe` directly with no batch wrapper; values below `60s` are warned about and clamped to `60s`
 
 Service install paths are resolved from the real user home directory.
 The generated Linux/macOS service definition stamps the current `codex-auth` version. On macOS and Windows, and on Linux/WSL when a `systemd --user` session is available, any successful foreground `codex-auth` command except `help`, `version`, `status`, and `daemon` reconciles the managed service after command execution. Unsupported platforms or Linux/WSL environments without user systemd skip this reconciliation entirely:

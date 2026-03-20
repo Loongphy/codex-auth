@@ -13,15 +13,16 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 - `codex-auth` keeps a single `registry.json`; feature state such as `auto_switch` and `api` stays in that file.
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
-  - current `schema_version = 3`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 3`.
+  - `schema_version = 3`
+  - current `schema_version = 4`
+- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized current schema.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- In the current code, supported automatic migration is `version = 2 -> schema_version = 3`, then the file is rewritten once as schema `3`.
+- In the current code, supported automatic migration is `version = 2 -> schema_version = 3 -> schema_version = 4`, then the file is rewritten once as schema `4`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Released Schemas
@@ -35,10 +36,15 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - `active_account_key`
   - `active_account_activated_at_ms`
   - Per-account `last_local_rollout`
-  - Current `auto_switch` block
+  - `auto_switch.enabled`
+  - `auto_switch.threshold_5h_percent`
+  - `auto_switch.threshold_weekly_percent`
   - Current top-level `api` block
   - Per-account `account_key`
   - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
+- `schema_version = 4`
+  - Everything in schema `3`
+  - `auto_switch.interval_seconds`
 
 ## When To Bump `schema_version`
 

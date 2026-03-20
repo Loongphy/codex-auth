@@ -71,7 +71,7 @@ codex-auth import --purge [<path>] # rebuild registry.json from auth files for t
 codex-auth remove # remove accounts (interactive multi-select)
 codex-auth status # show auto-switch/service/api usage status
 codex-auth config auto enable|disable # manage background auto-switching
-codex-auth config auto --5h <percent> [--weekly <percent>] # configure auto-switch thresholds
+codex-auth config auto [--interval <duration>] [--5h <percent>] [--weekly <percent>] # configure auto-switch interval and thresholds
 codex-auth config api enable|disable # choose API-only or local-sessions-only usage refresh
 ```
 
@@ -165,6 +165,14 @@ codex-auth config auto --5h 12
 codex-auth config auto --5h 12 --weekly 8
 ```
 
+Configure auto-switch interval:
+
+```shell
+codex-auth config auto --interval 4s
+codex-auth config auto --interval 4m --5h 12 --weekly 8
+codex-auth config auto --interval 4h
+```
+
 Use API-only usage refresh:
 
 ```shell
@@ -183,9 +191,10 @@ When auto-switching is enabled, a background worker refreshes the active account
 - weekly remaining drops below the configured weekly threshold (default `5%`)
 
 Accounts without any usage snapshot are treated as fresh accounts with full quota when ranking candidates.
-On Linux/WSL, background checks run through `systemd --user` as a oneshot service triggered every minute by a timer. On Windows, a user scheduled task runs the same one-shot check every minute. On macOS, the background worker remains long-running.
+The polling interval defaults to `1m` and accepts only `s`, `m`, or `h` suffixes.
+On Linux/WSL, background checks run through `systemd --user` as a oneshot service triggered at the configured interval by a timer. On Windows, the user scheduled task also uses the configured interval, but any value below `1m` is warned about and clamped up to `1m`. On macOS, the background worker remains long-running and applies the updated interval on the next polling cycle.
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or stale service drift.
-Changing thresholds updates `registry.json`; Linux/WSL and Windows pick them up on the next scheduled run, while macOS picks them up on the next polling cycle, without a service restart.
+Changing thresholds updates `registry.json`; Linux/WSL and Windows pick them up on the next scheduled run, while macOS picks them up on the next polling cycle, without a service restart. Changing the interval also updates `registry.json`; Linux/WSL and Windows refresh their managed service definitions to apply the new schedule, while macOS uses the new interval on the next loop.
 Changing `config api` updates `registry.json` immediately; `api enable` means API-only and `api disable` means local-sessions-only.
 `codex-auth help` also shows whether auto-switching and usage API calls are currently enabled.
 

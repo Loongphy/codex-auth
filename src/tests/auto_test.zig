@@ -154,14 +154,17 @@ test "Scenario: Given threshold overrides when applying config then unspecified 
     var cfg = registry.defaultAutoSwitchConfig();
     cfg.threshold_5h_percent = 11;
     cfg.threshold_weekly_percent = 7;
+    cfg.interval_seconds = 60;
 
-    auto.applyThresholdConfig(&cfg, .{
+    auto.applyAutoConfig(&cfg, .{
         .threshold_5h_percent = 13,
         .threshold_weekly_percent = null,
+        .interval_seconds = 240,
     });
 
     try std.testing.expect(cfg.threshold_5h_percent == 13);
     try std.testing.expect(cfg.threshold_weekly_percent == 7);
+    try std.testing.expect(cfg.interval_seconds == 240);
 }
 
 test "Scenario: Given better candidate when auto switch runs then auth and active account move silently" {
@@ -227,14 +230,14 @@ test "Scenario: Given linux service unit when rendering then oneshot daemon comm
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") == null);
 }
 
-test "Scenario: Given linux timer unit when rendering then it schedules the oneshot service every minute" {
+test "Scenario: Given linux timer unit when rendering then it schedules the oneshot service at the configured interval" {
     const gpa = std.testing.allocator;
-    const timer = try auto.linuxTimerText(gpa);
+    const timer = try auto.linuxTimerText(gpa, 240);
     defer gpa.free(timer);
 
-    try std.testing.expect(std.mem.indexOf(u8, timer, "Description=Run codex-auth auto-switch every minute") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=1min") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "OnUnitActiveSec=1min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "Description=Run codex-auth auto-switch every 4min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=4min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "OnUnitActiveSec=4min") != null);
     try std.testing.expect(std.mem.indexOf(u8, timer, "Unit=codex-auth-autoswitch.service") != null);
     try std.testing.expect(std.mem.indexOf(u8, timer, "WantedBy=timers.target") != null);
 }
@@ -259,7 +262,7 @@ test "Scenario: Given windows task action when rendering then it launches the he
     try std.testing.expect(action.len < 262);
 }
 
-test "Scenario: Given windows task match script when rendering then it validates both action and one-minute trigger" {
+test "Scenario: Given windows task match script when rendering then it validates action and normalized trigger seconds" {
     const gpa = std.testing.allocator;
     const script = try auto.windowsTaskMatchScript(gpa);
     defer gpa.free(script);
@@ -267,8 +270,22 @@ test "Scenario: Given windows task match script when rendering then it validates
     try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Repetition.Interval") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $interval") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "[System.Xml.XmlConvert]::ToTimeSpan($interval).TotalSeconds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER_SECONDS:' + $seconds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER_SECONDS:") != null);
+}
+
+test "Scenario: Given windows interval clamp warning when rendering then the message stays in English" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try auto.writeWindowsIntervalClampWarning(&aw.writer, 4, 60);
+
+    try std.testing.expectEqualStrings(
+        "Warning: Windows Task Scheduler does not support intervals below 1 minute; saved auto-switch interval as 1m instead of 4s.\n",
+        aw.written(),
+    );
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -398,6 +415,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try auto.writeStatus(&aw.writer, .{
         .enabled = true,
         .runtime = .running,
+        .interval_seconds = 240,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = false,
@@ -406,6 +424,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "interval: 4m") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
@@ -419,6 +438,7 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
     try auto.writeStatus(&aw.writer, .{
         .enabled = true,
         .runtime = .running,
+        .interval_seconds = 240,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = true,

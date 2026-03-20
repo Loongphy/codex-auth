@@ -177,6 +177,7 @@ test "registry save/load" {
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
+    reg.auto_switch.interval_seconds = 240;
     reg.api.usage = true;
     try registry.setAccountLastLocalRollout(gpa, &reg.accounts.items[0], "/tmp/sessions/run-1/rollout-a.jsonl", 1735689600000);
 
@@ -187,6 +188,7 @@ test "registry save/load" {
     try std.testing.expect(loaded.accounts.items.len == 1);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
+    try std.testing.expect(loaded.auto_switch.interval_seconds == 240);
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
     try std.testing.expect(loaded.accounts.items[0].last_local_rollout != null);
@@ -194,7 +196,7 @@ test "registry save/load" {
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].last_local_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
 }
 
-test "registry load defaults missing auto threshold fields" {
+test "registry load defaults missing auto interval and threshold fields" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -221,6 +223,8 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.auto_switch.enabled);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
+    try std.testing.expect(loaded.auto_switch.interval_seconds == registry.default_auto_switch_interval_seconds);
+    try std.testing.expect(loaded.schema_version == registry.current_schema_version);
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.active_account_activated_at_ms == null);
 }

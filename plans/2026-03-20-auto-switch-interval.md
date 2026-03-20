@@ -40,22 +40,28 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 ## Action items
 - [x] Add this plan file and keep implementation aligned with it.
 - [x] Add a temporary `AGENTS.md` execution lock pointing at this plan file.
-- [ ] Extend CLI parsing/help with `--interval`.
-- [ ] Persist `auto_switch.interval_seconds` and migrate registry schema `3 -> 4`.
-- [ ] Replace hard-coded poll intervals with config-driven scheduling on all platforms.
-- [ ] Clamp sub-minute Windows intervals to `1m` with an English warning.
-- [ ] Update docs to describe the new flag, schema version, and platform behavior.
-- [ ] Add or update tests for parsing, migration, rendering, and service interval handling.
-- [ ] Validate locally with the required Zig commands and record outcomes here.
+- [x] Extend CLI parsing/help with `--interval`.
+- [x] Persist `auto_switch.interval_seconds` and migrate registry schema `3 -> 4`.
+- [x] Replace hard-coded poll intervals with config-driven scheduling on all platforms.
+- [x] Clamp sub-minute Windows intervals to `1m` with an English warning.
+- [x] Update docs to describe the new flag, schema version, and platform behavior.
+- [x] Add or update tests for parsing, migration, rendering, and service interval handling.
+- [x] Validate locally with the required Zig commands and record outcomes here.
 - [ ] Commit the bootstrap plan changes, push the branch, and create a Draft PR.
 - [ ] Drive the PR through CI, GitHub review comments, and `codex review` loops.
 - [ ] Remove the temporary `AGENTS.md` execution lock in the final cleanup commit.
 
 ## Implementation log
 - 2026-03-20: Created the execution plan and prepared to add the temporary `AGENTS.md` execution lock.
+- 2026-03-20: Implemented `config auto --interval <integer><s|m|h>` parsing, help/status interval rendering, registry schema `4`, and config-driven interval handling in the auto-switch runtime.
+- 2026-03-20: Updated Linux timer generation, macOS daemon sleep handling, and Windows scheduled-task creation/matching to use the configured interval. Windows sub-minute values now warn and clamp to `1m`.
+- 2026-03-20: Updated README and implementation/schema/manual-test docs to describe interval support and schema `4`.
 
 ## CI / PR log
-- Pending.
+- Local validation:
+  - `zig build run -- list` -> passed
+  - `zig build test` -> passed
+  - `zig test src/main.zig -lc` -> failed due existing Zig environment/cache issue: `failed to check cache: manifest_create Unexpected` while loading `std.zig`
 
 ## Review ledger
 - Pending.
