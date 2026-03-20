@@ -424,8 +424,8 @@ pub fn maybeAutoSwitchWithCandidateUsageFetcherResult(
     defer candidate_indices.deinit(allocator);
     var changed = false;
 
-    for (candidate_indices.items) |candidate_idx| {
-        if (reg.api.usage) {
+    if (reg.api.usage) {
+        for (candidate_indices.items) |candidate_idx| {
             const refreshed = try refreshCandidateUsageWithFetcher(
                 allocator,
                 codex_home,
@@ -433,10 +433,12 @@ pub fn maybeAutoSwitchWithCandidateUsageFetcherResult(
                 reg.accounts.items[candidate_idx].account_key,
                 candidate_usage_fetcher,
             );
-            if (refreshed == .unavailable) continue;
             if (refreshed == .updated) changed = true;
         }
+        std.sort.insertion(usize, candidate_indices.items, CandidateSortContext{ .reg = reg, .now = now }, lessThanCandidateIndex);
+    }
 
+    for (candidate_indices.items) |candidate_idx| {
         const candidate = candidateState(&reg.accounts.items[candidate_idx], now, reg.auto_switch, false);
         if (!candidateSwitchEligible(candidate)) continue;
         if (!candidateBetter(candidate, current)) continue;
