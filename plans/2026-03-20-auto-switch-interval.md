@@ -59,6 +59,7 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - 2026-03-20: Reverted the unpublished schema bump so `interval_seconds` remains part of the current `schema_version = 3` layout, per follow-up product direction.
 - 2026-03-20: Updated `AGENTS.md` to require running `codex-auth switch` every 10 minutes while this task remains active.
 - 2026-03-20: Hardened the Windows scheduled-task creation script to escape apostrophes in helper paths and added a regression test for PowerShell-safe quoting.
+- 2026-03-20: Reverted the temporary `AGENTS.md` requirement that forced running `codex-auth switch` every 10 minutes.
 
 ## CI / PR log
 - Draft PR: https://github.com/Loongphy/codex-auth/pull/22
@@ -113,6 +114,11 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
   - rationale: a Windows path such as `C:\Users\O'Connor\...` would break `New-ScheduledTaskAction -Execute '...'` and prevent task registration
   - fix: escaped single quotes before building the PowerShell script and added a regression test covering an apostrophe-bearing path
   - resolution: fixed locally; pending commit/push and another review/CI pass
+- `codex review --base main` via subagent
+  - status: blocked
+  - result: the subagent exited with `You've hit your usage limit... try again at Mar 26th, 2026 7:51 PM.`
+  - action: no new review findings were produced
+  - note: the requested delegated review loop could not complete because the Codex account hit a usage cap
 
 ## Testing and validation
 - Required after any `.zig` change: `zig build run -- list`
