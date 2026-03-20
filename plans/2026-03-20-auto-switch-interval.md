@@ -47,7 +47,7 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - [x] Update docs to describe the new flag, schema version, and platform behavior.
 - [x] Add or update tests for parsing, migration, rendering, and service interval handling.
 - [x] Validate locally with the required Zig commands and record outcomes here.
-- [ ] Commit the bootstrap plan changes, push the branch, and create a Draft PR.
+- [x] Commit the bootstrap plan changes, push the branch, and create a Draft PR.
 - [ ] Drive the PR through CI, GitHub review comments, and `codex review` loops.
 - [ ] Remove the temporary `AGENTS.md` execution lock in the final cleanup commit.
 
@@ -58,10 +58,26 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - 2026-03-20: Updated README and implementation/schema/manual-test docs to describe interval support and schema `4`.
 
 ## CI / PR log
+- Draft PR: https://github.com/Loongphy/codex-auth/pull/22
+- Initial PR state:
+  - number: `22`
+  - title: `feat: support custom auto-switch interval`
+  - draft: `true`
+  - base/head: `main` <- `feat/auto-switch-interval`
 - Local validation:
   - `zig build run -- list` -> passed
   - `zig build test` -> passed
   - `zig test src/main.zig -lc` -> failed due existing Zig environment/cache issue: `failed to check cache: manifest_create Unexpected` while loading `std.zig`
+- First CI snapshot:
+  - overall: `failing`
+  - failing: `Build & Test (ubuntu-latest)`
+  - pending: `Build & Test (macos-latest)`, `Build & Test (windows-latest)`, preview package jobs, `Macroscope - Correctness Check`
+- CI triage:
+  - `Build & Test (ubuntu-latest)` and `Build & Test (macos-latest)` both failed in the `Zig test` step.
+  - Reproduced locally with isolated Zig cache directories and found stale test assertions still expecting `"schema_version": 3` after the schema bump.
+  - Updated the affected registry and purge tests, then reran:
+    - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
+    - `zig build run -- list` -> passed after the test fixes
 
 ## Review ledger
 - Pending.

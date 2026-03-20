@@ -141,7 +141,9 @@ test "Scenario: Given legacy version key current-layout registry when loading th
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    const schema_expect = try std.fmt.allocPrint(gpa, "\"schema_version\": {d}", .{registry.current_schema_version});
+    defer gpa.free(schema_expect);
+    try std.testing.expect(std.mem.indexOf(u8, contents, schema_expect) != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\": 3") == null);
 }
 
@@ -241,7 +243,9 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    const schema_expect = try std.fmt.allocPrint(gpa, "\"schema_version\": {d}", .{registry.current_schema_version});
+    defer gpa.free(schema_expect);
+    try std.testing.expect(std.mem.indexOf(u8, contents, schema_expect) != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
