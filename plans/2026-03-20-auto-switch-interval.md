@@ -32,7 +32,7 @@ description: Final implementation record for background auto-switching and confi
 ## Runtime And Platform Behavior
 - Linux/WSL uses a managed `systemd --user` oneshot service plus timer at the configured interval.
 - macOS uses a `LaunchAgent`; the long-running daemon re-reads the configured interval on subsequent cycles.
-- Windows uses a user scheduled task at the configured interval.
+- Windows uses a user scheduled task registered from XML with a repeating time trigger at the configured interval.
 - On Windows, intervals below `1m` are warned about in English and clamped to `1m`.
 - Windows scheduled-task creation now safely escapes apostrophes in helper paths.
 
@@ -40,6 +40,6 @@ description: Final implementation record for background auto-switching and confi
 - Local validation passed with:
   - `zig build run -- list`
   - `zig build test`
-  - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci`
+  - `zig test src/main.zig -lc --cache-dir /tmp/codex-auth-zig-cache --global-cache-dir /tmp/codex-auth-zig-global-cache`
 - PR `#22` has no GitHub reviews or review comments; only the preview-package bot comment is present.
 - `codex review --base main` did not yield a stable final summary because the Codex account hit usage limits during repeated review attempts.

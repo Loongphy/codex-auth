@@ -680,8 +680,6 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
     defer allocator.free(helper_path);
     try std.fs.cwd().access(helper_path, .{});
 
-    const action = try windowsTaskAction(allocator, helper_path);
-    defer allocator.free(action);
     const create_script = try windowsCreateTaskScript(allocator, helper_path, interval_seconds);
     defer allocator.free(create_script);
     const end_script = try windowsEndTaskScript(allocator);
