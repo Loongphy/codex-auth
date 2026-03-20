@@ -7,6 +7,15 @@ const rollout_line = "{" ++
     "\"timestamp\":\"2025-01-01T00:00:00Z\"," ++
     "\"type\":\"event_msg\"," ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":92.0,\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":49.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}";
+const null_rate_limits_rollout_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:01Z\"," ++
+    "\"type\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}";
+const empty_rate_limits_rollout_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:02Z\"," ++
+    "\"type\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{}}}";
+var daemon_api_fetch_count: usize = 0;
 
 fn appendAccountWithUsage(
     allocator: std.mem.Allocator,
@@ -36,6 +45,11 @@ fn fetchApiSnapshot(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSna
 
 fn fetchApiError(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapshot {
     return error.TestApiUnavailable;
+}
+
+fn fetchCountingApiSnapshot(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapshot {
+    daemon_api_fetch_count += 1;
+    return apiSnapshot();
 }
 
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -655,6 +669,89 @@ test "Scenario: Given API-enabled mode and API failure when refreshing usage the
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
     try std.testing.expect(reg.accounts.items[idx].last_local_rollout == null);
+}
+
+test "Scenario: Given daemon sees a null-rate-limits rollout then it falls back to the API without overwriting local rollout state" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = null_rate_limits_rollout_line ++ "\n" });
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchApiSnapshot));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 15.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expect(reg.accounts.items[idx].last_local_rollout == null);
+}
+
+test "Scenario: Given daemon sees an empty-rate-limits rollout then it also falls back to the API" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = empty_rate_limits_rollout_line ++ "\n" });
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchApiSnapshot));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 15.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expect(reg.accounts.items[idx].last_local_rollout == null);
+}
+
+test "Scenario: Given repeated bad rollout events within the daemon cooldown then API fallback is rate-limited" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = null_rate_limits_rollout_line ++ "\n" });
+
+    daemon_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot));
+    try std.testing.expect(!(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot)));
+    try std.testing.expectEqual(@as(usize, 1), daemon_api_fetch_count);
 }
 
 test "Scenario: Given api failure when returning to local refresh after switching accounts then the pre-switch rollout is not assigned to the new active account" {

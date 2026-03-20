@@ -34,7 +34,7 @@ Each cycle:
 2. syncs the currently active `auth.json` into the registry
 3. refreshes missing account metadata from stored auth snapshots when needed
 4. tries to refresh usage from the newest local rollout event first
-5. if no new local rollout event is available and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute
+5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute
 6. evaluates whether the active account should be switched
 7. writes `registry.json` only when state changed
 
@@ -47,11 +47,13 @@ The background watcher is intentionally not API-only, even when `api.usage = tru
 - Local rollout events are preferred because they arrive much faster than periodic usage API polling.
 - API refresh remains useful as a slower fallback and calibration path when rollout data is missing or stale.
 - When `api.usage = false`, the watcher uses local rollout data only and makes no usage API requests.
+- When a new rollout event arrives but its `rate_limits` payload is `null`, `{}`, or otherwise lacks usable 5h/weekly windows, the watcher keeps the previous `last_usage` snapshot and relies on the API fallback path instead of overwriting usage with empty data.
 
 Local rollout attribution rules are unchanged:
 
 - only the newest `~/.codex/sessions/**/rollout-*.jsonl` file is considered
 - the last usable `token_count` event in that file is used
+- a newer `token_count` event with unusable `rate_limits` is still treated as a fresh signal for API fallback, but it does not overwrite the stored usage snapshot
 - the event is applied only when `event_timestamp_ms >= active_account_activated_at_ms`
 - each account remembers its own last consumed local rollout signature `(path, event_timestamp_ms)` so the same local event is not reapplied
 

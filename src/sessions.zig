@@ -13,6 +13,27 @@ pub const LatestUsage = struct {
     }
 };
 
+pub const LatestRolloutEvent = struct {
+    path: []u8,
+    mtime: i64,
+    event_timestamp_ms: i64,
+    snapshot: ?registry.RateLimitSnapshot,
+
+    pub fn deinit(self: *LatestRolloutEvent, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        if (self.snapshot) |*snapshot| {
+            registry.freeRateLimitSnapshot(allocator, snapshot);
+        }
+    }
+
+    pub fn hasUsableWindows(self: LatestRolloutEvent) bool {
+        if (self.snapshot) |snapshot| {
+            return snapshot.primary != null or snapshot.secondary != null;
+        }
+        return false;
+    }
+};
+
 const RolloutCandidate = struct {
     path: []u8,
     mtime: i64,
@@ -20,7 +41,7 @@ const RolloutCandidate = struct {
 
 const ParsedUsageEvent = struct {
     event_timestamp_ms: i64,
-    snapshot: registry.RateLimitSnapshot,
+    snapshot: ?registry.RateLimitSnapshot,
 };
 
 const UsageEventLineJson = struct {
@@ -64,6 +85,23 @@ pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?r
 }
 
 pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestUsage {
+    var latest_rollout = (try scanLatestRolloutEventWithSource(allocator, codex_home)) orelse return null;
+    if (!latest_rollout.hasUsableWindows()) {
+        latest_rollout.deinit(allocator);
+        return null;
+    }
+
+    const snapshot = latest_rollout.snapshot.?;
+    latest_rollout.snapshot = null;
+    return .{
+        .path = latest_rollout.path,
+        .mtime = latest_rollout.mtime,
+        .event_timestamp_ms = latest_rollout.event_timestamp_ms,
+        .snapshot = snapshot,
+    };
+}
+
+pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestRolloutEvent {
     const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
     defer allocator.free(sessions_root);
 
@@ -98,32 +136,30 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
         }
     }.lessThan);
 
-    var best: ?LatestUsage = null;
+    var best: ?LatestRolloutEvent = null;
     const scan_count = @min(candidates.items.len, max_recent_rollout_files);
 
     for (candidates.items[0..scan_count]) |candidate| {
-        const usage = try scanFileForUsage(allocator, candidate.path);
-        if (usage == null) continue;
-
-        const parsed = usage.?;
+        var parsed = (try scanFileForUsage(allocator, candidate.path)) orelse continue;
         const better = best == null or
             parsed.event_timestamp_ms > best.?.event_timestamp_ms or
             (parsed.event_timestamp_ms == best.?.event_timestamp_ms and candidate.mtime > best.?.mtime);
 
         if (!better) {
-            var skipped = parsed;
-            registry.freeRateLimitSnapshot(allocator, &skipped.snapshot);
+            if (parsed.snapshot) |*snapshot| {
+                registry.freeRateLimitSnapshot(allocator, snapshot);
+            }
             continue;
         }
 
         if (best) |*prev| {
-            allocator.free(prev.path);
-            registry.freeRateLimitSnapshot(allocator, &prev.snapshot);
+            prev.deinit(allocator);
         }
 
         const path = allocator.dupe(u8, candidate.path) catch |err| {
-            var failed = parsed;
-            registry.freeRateLimitSnapshot(allocator, &failed.snapshot);
+            if (parsed.snapshot) |*snapshot| {
+                registry.freeRateLimitSnapshot(allocator, snapshot);
+            }
             return err;
         };
         best = .{
@@ -183,7 +219,9 @@ fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsag
         if (trimmed.len == 0) continue;
         if (parseUsageEventLine(allocator, trimmed)) |event| {
             if (last) |*prev| {
-                registry.freeRateLimitSnapshot(allocator, &prev.snapshot);
+                if (prev.snapshot) |*snapshot| {
+                    registry.freeRateLimitSnapshot(allocator, snapshot);
+                }
             }
             last = event;
         }
@@ -209,8 +247,10 @@ fn parseUsageEventLine(allocator: std.mem.Allocator, line: []const u8) ?ParsedUs
     if (!std.mem.eql(u8, root.payload.type, "token_count")) return null;
 
     const event_timestamp_ms = parseTimestampMs(root.timestamp) orelse return null;
-    const rate_limits = root.payload.rate_limits orelse return null;
-    const snapshot = parseRateLimits(allocator, rate_limits);
+    const snapshot = if (root.payload.rate_limits) |rate_limits|
+        parseRateLimits(allocator, rate_limits)
+    else
+        null;
     return .{
         .event_timestamp_ms = event_timestamp_ms,
         .snapshot = snapshot,
@@ -224,12 +264,18 @@ fn looksLikeUsageEventLine(line: []const u8) bool {
         std.mem.indexOf(u8, line, "\"timestamp\"") != null;
 }
 
-fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) registry.RateLimitSnapshot {
+fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) ?registry.RateLimitSnapshot {
     var snap = registry.RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .plan_type = null };
     if (parsed.primary) |p| snap.primary = parseWindow(p);
     if (parsed.secondary) |p| snap.secondary = parseWindow(p);
     if (parsed.credits) |c| snap.credits = parseCredits(allocator, c);
     if (parsed.plan_type) |p| snap.plan_type = parsePlanType(p);
+    if (snap.primary == null and snap.secondary == null) {
+        if (snap.credits) |*credits| {
+            if (credits.balance) |balance| allocator.free(balance);
+        }
+        return null;
+    }
     return snap;
 }
 

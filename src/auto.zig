@@ -45,6 +45,61 @@ const CandidateScore = struct {
     created_at: i64,
 };
 
+pub const DaemonRefreshState = struct {
+    last_api_refresh_at_ns: i128 = 0,
+    pending_bad_account_key: ?[]u8 = null,
+    pending_bad_rollout: ?registry.RolloutSignature = null,
+
+    pub fn deinit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        self.clearPending(allocator);
+    }
+
+    fn clearPending(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.pending_bad_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        if (self.pending_bad_rollout) |*signature| {
+            registry.freeRolloutSignature(allocator, signature);
+        }
+        self.pending_bad_account_key = null;
+        self.pending_bad_rollout = null;
+    }
+
+    fn clearPendingIfAccountChanged(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        active_account_key: ?[]const u8,
+    ) void {
+        if (self.pending_bad_account_key == null) return;
+        if (active_account_key) |account_key| {
+            if (std.mem.eql(u8, self.pending_bad_account_key.?, account_key)) return;
+        }
+        self.clearPending(allocator);
+    }
+
+    fn pendingMatches(self: *const DaemonRefreshState, account_key: []const u8, signature: registry.RolloutSignature) bool {
+        if (self.pending_bad_account_key == null or self.pending_bad_rollout == null) return false;
+        return std.mem.eql(u8, self.pending_bad_account_key.?, account_key) and
+            registry.rolloutSignaturesEqual(self.pending_bad_rollout, signature);
+    }
+
+    fn setPending(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        account_key: []const u8,
+        signature: registry.RolloutSignature,
+    ) !void {
+        if (self.pendingMatches(account_key, signature)) return;
+        self.clearPending(allocator);
+        self.pending_bad_account_key = try allocator.dupe(u8, account_key);
+        errdefer {
+            allocator.free(self.pending_bad_account_key.?);
+            self.pending_bad_account_key = null;
+        }
+        self.pending_bad_rollout = try registry.cloneRolloutSignature(allocator, signature);
+    }
+};
+
 const DaemonLock = struct {
     file: std.fs.File,
 
@@ -244,10 +299,11 @@ pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try registry.ensureAccountsDir(allocator, codex_home);
     var daemon_lock = (try DaemonLock.acquire(allocator, codex_home)) orelse return;
     defer daemon_lock.release();
-    var last_api_refresh_at_ns: i128 = 0;
+    var refresh_state = DaemonRefreshState{};
+    defer refresh_state.deinit(allocator);
 
     while (true) {
-        const keep_running = daemonCycle(allocator, codex_home, &last_api_refresh_at_ns) catch |err| blk: {
+        const keep_running = daemonCycle(allocator, codex_home, &refresh_state) catch |err| blk: {
             std.log.err("auto daemon cycle failed: {s}", .{@errorName(err)});
             break :blk true;
         };
@@ -261,8 +317,9 @@ pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void
     var daemon_lock = (try DaemonLock.acquire(allocator, codex_home)) orelse return;
     defer daemon_lock.release();
 
-    var last_api_refresh_at_ns: i128 = 0;
-    _ = try daemonCycle(allocator, codex_home, &last_api_refresh_at_ns);
+    var refresh_state = DaemonRefreshState{};
+    defer refresh_state.deinit(allocator);
+    _ = try daemonCycle(allocator, codex_home, &refresh_state);
 }
 
 pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -345,23 +402,87 @@ fn refreshActiveUsageForDaemon(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
-    last_api_refresh_at_ns: *i128,
+    refresh_state: *DaemonRefreshState,
 ) !bool {
-    if (try refreshActiveUsageFromSessions(allocator, codex_home, reg)) {
+    return refreshActiveUsageForDaemonWithApiFetcher(
+        allocator,
+        codex_home,
+        reg,
+        refresh_state,
+        usage_api.fetchActiveUsage,
+    );
+}
+
+pub fn refreshActiveUsageForDaemonWithApiFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    api_fetcher: anytype,
+) !bool {
+    const account_key = reg.active_account_key orelse return false;
+    refresh_state.clearPendingIfAccountChanged(allocator, account_key);
+
+    if (try refreshActiveUsageFromSessionsForDaemon(allocator, codex_home, reg, refresh_state)) {
         return true;
     }
     if (!reg.api.usage) return false;
 
     const now_ns = std.time.nanoTimestamp();
-    if (last_api_refresh_at_ns.* != 0 and (now_ns - last_api_refresh_at_ns.*) < api_refresh_interval_ns) {
+    if (refresh_state.last_api_refresh_at_ns != 0 and (now_ns - refresh_state.last_api_refresh_at_ns) < api_refresh_interval_ns) {
         return false;
     }
-    last_api_refresh_at_ns.* = now_ns;
+    refresh_state.last_api_refresh_at_ns = now_ns;
 
-    return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, usage_api.fetchActiveUsage)) {
-        .updated => true,
-        .unchanged, .unavailable => false,
+    return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
+        .updated => blk: {
+            refresh_state.clearPending(allocator);
+            break :blk true;
+        },
+        .unchanged => blk: {
+            refresh_state.clearPending(allocator);
+            break :blk false;
+        },
+        .unavailable => false,
     };
+}
+
+fn refreshActiveUsageFromSessionsForDaemon(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+) !bool {
+    var latest_event = (sessions.scanLatestRolloutEventWithSource(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    }) orelse return false;
+    defer latest_event.deinit(allocator);
+
+    const account_key = reg.active_account_key orelse return false;
+    const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
+    if (latest_event.event_timestamp_ms < activated_at_ms) return false;
+
+    const signature: registry.RolloutSignature = .{
+        .path = latest_event.path,
+        .event_timestamp_ms = latest_event.event_timestamp_ms,
+    };
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) {
+        refresh_state.clearPending(allocator);
+        return false;
+    }
+
+    if (!latest_event.hasUsableWindows()) {
+        try refresh_state.setPending(allocator, account_key, signature);
+        return false;
+    }
+
+    registry.updateUsage(allocator, reg, account_key, latest_event.snapshot.?);
+    latest_event.snapshot = null;
+    try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest_event.path, latest_event.event_timestamp_ms);
+    refresh_state.clearPending(allocator);
+    return true;
 }
 
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
@@ -414,7 +535,7 @@ pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg
     return true;
 }
 
-fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, last_api_refresh_at_ns: *i128) !bool {
+fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     if (!reg.auto_switch.enabled) return false;
@@ -436,7 +557,7 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, last_api_re
         changed = true;
     }
 
-    if (try refreshActiveUsageForDaemon(allocator, codex_home, &reg, last_api_refresh_at_ns)) {
+    if (try refreshActiveUsageForDaemon(allocator, codex_home, &reg, refresh_state)) {
         changed = true;
     }
     const active_idx_before = if (reg.active_account_key) |account_key|
