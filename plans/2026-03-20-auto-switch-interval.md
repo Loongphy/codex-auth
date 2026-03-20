@@ -12,8 +12,8 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - Allow `--interval` to be combined with `--5h` and `--weekly`.
 - Keep `enable` and `disable` mutually exclusive with config flags.
 - Persist the interval in `registry.json`.
-- Bump the registry schema from `3` to `4`.
-- Default older registries to `1m` during migration.
+- Keep the registry schema at `3`.
+- Default missing interval data to `1m` when older current-layout registries are rewritten.
 - Show the current interval in help and status output.
 - Apply the configured interval on Linux/WSL, macOS, and Windows.
 - On Windows, warn in English and clamp any interval below `1m` up to `1m`.
@@ -33,15 +33,15 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 
 ## Data model / API changes
 - Add `auto_switch.interval_seconds: u32` with default `60`.
-- Write `registry.json` as `schema_version = 4`.
-- Keep loading support for schema versions `2`, `3`, and `4`.
+- Write `registry.json` as `schema_version = 3`.
+- Keep loading support for schema versions `2` and `3`.
 - Add CLI support for `config auto --interval <integer><s|m|h>`.
 
 ## Action items
 - [x] Add this plan file and keep implementation aligned with it.
 - [x] Add a temporary `AGENTS.md` execution lock pointing at this plan file.
 - [x] Extend CLI parsing/help with `--interval`.
-- [x] Persist `auto_switch.interval_seconds` and migrate registry schema `3 -> 4`.
+- [x] Persist `auto_switch.interval_seconds` within the current schema `3` layout.
 - [x] Replace hard-coded poll intervals with config-driven scheduling on all platforms.
 - [x] Clamp sub-minute Windows intervals to `1m` with an English warning.
 - [x] Update docs to describe the new flag, schema version, and platform behavior.
@@ -53,9 +53,11 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 
 ## Implementation log
 - 2026-03-20: Created the execution plan and prepared to add the temporary `AGENTS.md` execution lock.
-- 2026-03-20: Implemented `config auto --interval <integer><s|m|h>` parsing, help/status interval rendering, registry schema `4`, and config-driven interval handling in the auto-switch runtime.
+- 2026-03-20: Implemented `config auto --interval <integer><s|m|h>` parsing, help/status interval rendering, and config-driven interval handling in the auto-switch runtime.
 - 2026-03-20: Updated Linux timer generation, macOS daemon sleep handling, and Windows scheduled-task creation/matching to use the configured interval. Windows sub-minute values now warn and clamp to `1m`.
-- 2026-03-20: Updated README and implementation/schema/manual-test docs to describe interval support and schema `4`.
+- 2026-03-20: Updated README and implementation/schema/manual-test docs to describe interval support and current schema behavior.
+- 2026-03-20: Reverted the unpublished schema bump so `interval_seconds` remains part of the current `schema_version = 3` layout, per follow-up product direction.
+- 2026-03-20: Updated `AGENTS.md` to require running `codex-auth switch` every 10 minutes while this task remains active.
 
 ## CI / PR log
 - Draft PR: https://github.com/Loongphy/codex-auth/pull/22
@@ -74,10 +76,16 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
   - pending: `Build & Test (macos-latest)`, `Build & Test (windows-latest)`, preview package jobs, `Macroscope - Correctness Check`
 - CI triage:
   - `Build & Test (ubuntu-latest)` and `Build & Test (macos-latest)` both failed in the `Zig test` step.
-  - Reproduced locally with isolated Zig cache directories and found stale test assertions still expecting `"schema_version": 3` after the schema bump.
+  - Reproduced locally with isolated Zig cache directories and found stale test assertions around the registry schema expectations.
   - Updated the affected registry and purge tests, then reran:
     - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
     - `zig build run -- list` -> passed after the test fixes
+- Follow-up change:
+  - Product direction changed before release: keep `schema_version = 3` and treat `auto_switch.interval_seconds` as an additive current-layout field.
+  - The code and docs were updated accordingly, then revalidated with:
+    - `zig build run -- list` -> passed
+    - `zig build test` -> passed
+    - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
 - Current PR status after pushing `test: fix schema migration assertions`:
   - `gh pr checks 22` -> all 10 checks green
   - `pr_review_snapshot.py --pr 22` -> `overall: green`, unresolved GitHub review threads: `0`
@@ -95,13 +103,12 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
 - Add or update tests for:
   - valid `4s`, `4m`, `4h`
   - invalid interval inputs and mixed action/config rejection
-  - schema `3 -> 4` default interval migration
+  - schema `3` default interval fill when the field is absent
   - help/status interval rendering
   - Linux/macOS/Windows interval handling
 
 ## Risks and edge cases
 - Windows Task Scheduler does not support sub-minute repetition, so the CLI must normalize the saved/displayed value on Windows instead of silently drifting from the configured value.
-- Adding a persisted field requires a schema bump because unknown fields are dropped on save by older binaries.
 - The macOS daemon is long-running, so interval changes must be picked up by the loop itself rather than by plist changes alone.
 - Service-definition matching must include interval-sensitive data so Linux/Windows installs refresh when the interval changes.
 

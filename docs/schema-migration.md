@@ -13,8 +13,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 - `codex-auth` keeps a single `registry.json`; feature state such as `auto_switch` and `api` stays in that file.
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
-  - `schema_version = 3`
-  - current `schema_version = 4`
+  - current `schema_version = 3`
 - The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized current schema.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
@@ -22,7 +21,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- In the current code, supported automatic migration is `version = 2 -> schema_version = 3 -> schema_version = 4`, then the file is rewritten once as schema `4`.
+- In the current code, supported automatic migration is `version = 2 -> schema_version = 3`, then the file is rewritten once as schema `3`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Released Schemas
@@ -39,18 +38,16 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - `auto_switch.enabled`
   - `auto_switch.threshold_5h_percent`
   - `auto_switch.threshold_weekly_percent`
+  - `auto_switch.interval_seconds`
   - Current top-level `api` block
   - Per-account `account_key`
   - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
-- `schema_version = 4`
-  - Everything in schema `3`
-  - `auto_switch.interval_seconds`
 
 ## When To Bump `schema_version`
 
-Bump the schema version whenever the persisted `registry.json` shape or semantics change. That includes:
+Bump the schema version whenever the persisted `registry.json` shape or semantics change incompatibly. That includes:
 
-- Adding, removing, or renaming a persisted field
+- Removing or renaming a persisted field
 - Changing a field type
 - Changing identity keys such as `active_email` to `active_account_key`
 - Changing snapshot filename conventions or any other rule needed to find persisted files
@@ -58,6 +55,7 @@ Bump the schema version whenever the persisted `registry.json` shape or semantic
 
 Do not bump the schema version for:
 
+- Adding a new persisted field that can be defaulted when absent and treated as part of the current layout
 - CLI output changes
 - Pure in-memory logic changes
 - Help text or documentation changes

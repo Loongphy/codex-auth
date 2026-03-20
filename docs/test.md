@@ -85,7 +85,7 @@ This scenario is accepted when all of the following are true:
 - `list` exits with code `0`.
 - `list` creates `accounts/registry.json`.
 - `list` creates exactly one `accounts/*.auth.json` snapshot keyed by the imported `record_key`.
-- `registry.json` is written in the current layout with `schema_version = 4`.
+- `registry.json` is written in the current layout with `schema_version = 3`.
 - `active_account_key` matches the imported `record_key` from `auth.json`.
 - `switch <only-account-fragment>` exits with code `0`.
 - default `status` shows `usage: api` before any `config api` changes.
@@ -188,7 +188,7 @@ This scenario is accepted when all of the following are true:
 
 - the copied pre-run `registry.json` is a legacy schema `2` registry
 - the first `list` exits with code `0`
-- after `list`, `registry.json` is rewritten to the current layout with `schema_version = 4`
+- after `list`, `registry.json` is rewritten to the current layout with `schema_version = 3`
 - after `list`, `active_account_key` exists and there is no `active_email`
 - the migrated `accounts` array still contains the expected accounts
 - the legacy email-keyed snapshots are replaced by current account-id-keyed snapshots

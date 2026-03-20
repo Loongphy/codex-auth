@@ -229,7 +229,7 @@ test "registry load defaults missing auto interval and threshold fields" {
     try std.testing.expect(loaded.active_account_activated_at_ms == null);
 }
 
-test "schema 3 registry with legacy rollout attribution rewrites to normalized schema 4" {
+test "schema 3 registry with legacy rollout attribution rewrites to normalized current schema" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
