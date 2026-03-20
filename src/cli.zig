@@ -644,7 +644,10 @@ pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
-    if (shouldUseNumberedRemoveSelector(builtin.os.tag == .windows, std.fs.File.stdin().isTty())) {
+    if (comptime builtin.os.tag == .windows) {
+        return selectRemoveWithNumbers(allocator, reg);
+    }
+    if (shouldUseNumberedRemoveSelector(false, std.fs.File.stdin().isTty())) {
         return selectRemoveWithNumbers(allocator, reg);
     }
     return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);

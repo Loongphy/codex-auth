@@ -74,8 +74,23 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
 - 2026-03-20: Validation completed:
   - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/test-global ZIG_LOCAL_CACHE_DIR=.zig-cache/test-local zig test src/main.zig -lc`
   - `zig build run -- list`
+- 2026-03-20: Implementation committed as `9e833b2` (`fix: improve remove command query flow`) and pushed to PR #23.
+- 2026-03-20: CI follow-up:
+  - `Build Preview Packages (win32-x64)` failed because `selectAccountsToRemove` compiled the `/dev/tty` branch on Windows after a runtime-only selector change.
+  - Fixed by restoring a compile-time Windows branch and keeping the non-TTY fallback only for non-Windows builds.
+  - Re-validated with:
+    - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/test-global ZIG_LOCAL_CACHE_DIR=.zig-cache/test-local zig test src/main.zig -lc`
+    - `zig build run -- list`
+    - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/win-global ZIG_LOCAL_CACHE_DIR=.zig-cache/win-local zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseSafe`
 
 ## PR / Review Log
 
 - PR #23 created as Draft.
-- CI/review follow-up pending.
+- Initial PR check:
+  - review comments: none
+  - review submissions: none
+  - CI state: pending for all current checks
+- CI issue recorded:
+  - check: `Build Preview Packages (win32-x64)`
+  - assessment: valid
+  - action: fixed locally and prepared follow-up commit
