@@ -13,6 +13,8 @@ const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
 const windows_helper_name = "codex-auth-auto.exe";
 const windows_task_trigger_kind = "LogonTrigger";
+const windows_task_restart_count = "999";
+const windows_task_restart_interval_xml = "PT1M";
 const lock_file_name = "auto-switch.lock";
 const watch_poll_interval_ns = 1 * std.time.ns_per_s;
 const api_refresh_interval_ns = 60 * std.time.ns_per_s;
@@ -937,8 +939,8 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
     defer allocator.free(helper_path);
     try std.fs.cwd().access(helper_path, .{});
 
-    const action = try windowsTaskAction(allocator, helper_path);
-    defer allocator.free(action);
+    const register_script = try windowsRegisterTaskScript(allocator, helper_path);
+    defer allocator.free(register_script);
     const end_script = try windowsEndTaskScript(allocator);
     defer allocator.free(end_script);
     _ = runChecked(allocator, &[_][]const u8{
@@ -949,15 +951,11 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
         end_script,
     }) catch {};
     try runChecked(allocator, &[_][]const u8{
-        "schtasks",
-        "/Create",
-        "/SC",
-        "ONLOGON",
-        "/TN",
-        windows_task_name,
-        "/TR",
-        action,
-        "/F",
+        "powershell.exe",
+        "-NoLogo",
+        "-NoProfile",
+        "-Command",
+        register_script,
     });
     try runChecked(allocator, &[_][]const u8{
         "schtasks",
@@ -1058,10 +1056,22 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) 
     );
 }
 
+pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
+    defer allocator.free(escaped_helper_path);
+    const escaped_version = try escapePowerShellSingleQuoted(allocator, version.app_version);
+    defer allocator.free(escaped_version);
+    return try std.fmt.allocPrint(
+        allocator,
+        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '--service-version {s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
+        .{ escaped_helper_path, escaped_version, windows_task_restart_count, windows_task_name },
+    );
+}
+
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind)",
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $restartNode = $xml.Task.Settings.RestartOnFailure; if ($null -eq $restartNode) {{ exit 5 }}; $restartCount = [string]$restartNode.Count; $restartInterval = [string]$restartNode.Interval; if ([string]::IsNullOrWhiteSpace($restartCount) -or [string]::IsNullOrWhiteSpace($restartInterval)) {{ exit 6 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval)",
         .{ windows_task_name, windows_task_name },
     );
 }
@@ -1091,8 +1101,8 @@ pub fn parseWindowsTaskStateOutput(output: []const u8) RuntimeState {
     if (trimmed.len == 0) return .unknown;
     const value = std.fmt.parseInt(u8, trimmed, 10) catch return .unknown;
     return switch (value) {
-        2, 3, 4 => .running,
-        0, 1 => .stopped,
+        4 => .running,
+        0, 1, 2, 3 => .stopped,
         else => .unknown,
     };
 }
@@ -1184,11 +1194,7 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     defer allocator.free(helper_path);
     const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path);
     defer allocator.free(expected_action);
-    const expected_fingerprint = try std.fmt.allocPrint(
-        allocator,
-        "{s}|TRIGGER:{s}",
-        .{ expected_action, windows_task_trigger_kind },
-    );
+    const expected_fingerprint = try windowsExpectedTaskDefinitionFingerprint(allocator, expected_action);
     defer allocator.free(expected_fingerprint);
     const script = try windowsTaskMatchScript(allocator);
     defer allocator.free(script);
@@ -1214,6 +1220,14 @@ fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []c
         allocator,
         "{s} --service-version {s}",
         .{ helper_path, version.app_version },
+    );
+}
+
+fn windowsExpectedTaskDefinitionFingerprint(allocator: std.mem.Allocator, action: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "{s}|TRIGGER:{s}|RESTART:{s},{s}",
+        .{ action, windows_task_trigger_kind, windows_task_restart_count, windows_task_restart_interval_xml },
     );
 }
 
@@ -1303,4 +1317,8 @@ fn escapeSystemdValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
         }
     }
     return try out.toOwnedSlice(allocator);
+}
+
+fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    return std.mem.replaceOwned(u8, allocator, input, "'", "''");
 }

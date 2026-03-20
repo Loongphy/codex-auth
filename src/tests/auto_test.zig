@@ -565,6 +565,17 @@ test "Scenario: Given windows task action when rendering then it launches the he
     try std.testing.expect(action.len < 262);
 }
 
+test "Scenario: Given windows task register script when rendering then it configures restart-on-failure" {
+    const gpa = std.testing.allocator;
+    const script = try auto.windowsRegisterTaskScript(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
+    defer gpa.free(script);
+
+    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskTrigger -AtLogOn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
+}
+
 test "Scenario: Given windows task match script when rendering then it validates both action and the logon trigger" {
     const gpa = std.testing.allocator;
     const script = try auto.windowsTaskMatchScript(gpa);
@@ -572,9 +583,11 @@ test "Scenario: Given windows task match script when rendering then it validates
 
     try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "RestartOnFailure") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "LocalName") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "|RESTART:") != null);
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -691,7 +704,8 @@ test "Scenario: Given windows delete task script when rendering then missing tas
 
 test "Scenario: Given windows task state output when parsing then localized text is no longer required" {
     try std.testing.expect(auto.parseWindowsTaskStateOutput("4\r\n") == .running);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .running);
+    try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .stopped);
+    try std.testing.expect(auto.parseWindowsTaskStateOutput("2\r\n") == .stopped);
     try std.testing.expect(auto.parseWindowsTaskStateOutput("1\r\n") == .stopped);
     try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
 }

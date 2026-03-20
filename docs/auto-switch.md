@@ -87,7 +87,7 @@ Platform bootstrap:
 
 - Linux/WSL: `systemd --user` persistent service
 - macOS: `LaunchAgent` with `KeepAlive`
-- Windows: user scheduled task with an `ONLOGON` trigger that launches `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
+- Windows: user scheduled task with an `ONLOGON` trigger and restart-on-failure settings for `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
 
 Service install paths still resolve from the real user home directory.
 Foreground commands other than `help`, `version`, `status`, and `daemon` still reconcile the managed service definition after they complete.
