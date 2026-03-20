@@ -11,3 +11,9 @@
 # Validation
 
 After modifying any `.zig` file, always run `zig build run -- list` to verify the changes work correctly.
+
+# Active Plan
+
+- The current task must follow `plans/2026-03-20-remove-command.md`.
+- Continue implementation from the progress recorded in that plan file.
+- When this task is complete, remove this temporary section from `AGENTS.md`.
