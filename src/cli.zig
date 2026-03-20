@@ -36,10 +36,12 @@ pub const OutputFormat = enum { table, json, csv, compact };
 pub const ListOptions = struct {};
 pub const LoginInvocation = enum { login, add_alias };
 pub const LoginOptions = struct { invocation: LoginInvocation };
+pub const ImportSource = enum { standard, cpa };
 pub const ImportOptions = struct {
     auth_path: ?[]u8,
     alias: ?[]u8,
     purge: bool,
+    source: ImportSource,
 };
 pub const SwitchOptions = struct { query: ?[]u8 };
 pub const RemoveOptions = struct {};
@@ -100,6 +102,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         var auth_path: ?[]u8 = null;
         var alias: ?[]u8 = null;
         var purge = false;
+        var source: ImportSource = .standard;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
@@ -109,6 +112,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                 i += 1;
             } else if (std.mem.eql(u8, arg, "--purge")) {
                 purge = true;
+            } else if (std.mem.eql(u8, arg, "--cpa")) {
+                if (source == .cpa) {
+                    if (auth_path) |p| allocator.free(p);
+                    if (alias) |a| allocator.free(a);
+                    return Command{ .help = {} };
+                }
+                source = .cpa;
             } else if (std.mem.startsWith(u8, arg, "-")) {
                 if (auth_path) |p| allocator.free(p);
                 if (alias) |a| allocator.free(a);
@@ -122,7 +132,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
                 auth_path = try allocator.dupe(u8, arg);
             }
         }
-        if (auth_path == null and !purge) {
+        if (purge and source == .cpa) {
+            if (auth_path) |p| allocator.free(p);
+            if (alias) |a| allocator.free(a);
+            return Command{ .help = {} };
+        }
+        if (auth_path == null and !purge and source == .standard) {
             if (alias) |a| allocator.free(a);
             return Command{ .help = {} };
         }
@@ -130,6 +145,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
             .auth_path = auth_path,
             .alias = alias,
             .purge = purge,
+            .source = source,
         } };
     }
 
@@ -328,6 +344,7 @@ pub fn writeHelp(
     };
     const import_details = [_]HelpEntry{
         .{ .name = "<path>", .description = "Import one file or batch import a directory" },
+        .{ .name = "--cpa [<path>]", .description = "Import CPA flat token JSON from one file or directory" },
         .{ .name = "--alias <alias>", .description = "Set alias for single-file import" },
         .{ .name = "--purge [<path>]", .description = "Rebuild `registry.json` from auth files" },
     };
@@ -353,6 +370,7 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[0].name, import_details[0].description);
     try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[1].name, import_details[1].description);
     try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[2].name, import_details[2].description);
+    try writeHelpEntry(out, use_color, child_indent, import_detail_col, import_details[3].name, import_details[3].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[5].name, commands[5].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[6].name, commands[6].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[7].name, commands[7].description);

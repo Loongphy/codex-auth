@@ -19,6 +19,18 @@ pub const AuthInfo = struct {
     }
 };
 
+const StandardAuthJson = struct {
+    auth_mode: []const u8,
+    OPENAI_API_KEY: ?[]const u8,
+    tokens: struct {
+        id_token: []const u8,
+        access_token: []const u8,
+        refresh_token: []const u8,
+        account_id: []const u8,
+    },
+    last_refresh: []const u8,
+};
+
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
     for (email, 0..) |ch, i| {
@@ -42,6 +54,10 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
     const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
     defer allocator.free(data);
 
+    return try parseAuthInfoData(allocator, data);
+}
+
+pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthInfo {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
     defer parsed.deinit();
     const root = parsed.value;
@@ -195,6 +211,36 @@ pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthI
     };
 }
 
+pub fn convertCpaAuthJson(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return error.InvalidCpaFormat,
+    };
+
+    const refresh_token = jsonStringField(obj, "refresh_token") orelse return error.MissingRefreshToken;
+    if (refresh_token.len == 0) return error.MissingRefreshToken;
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try std.json.Stringify.value(StandardAuthJson{
+        .auth_mode = "chatgpt",
+        .OPENAI_API_KEY = null,
+        .tokens = .{
+            .id_token = jsonStringFieldOrDefault(obj, "id_token"),
+            .access_token = jsonStringFieldOrDefault(obj, "access_token"),
+            .refresh_token = refresh_token,
+            .account_id = jsonStringFieldOrDefault(obj, "account_id"),
+        },
+        .last_refresh = jsonStringFieldOrDefault(obj, "last_refresh"),
+    }, .{ .whitespace = .indent_2 }, &out.writer);
+    try out.writer.writeAll("\n");
+    return try out.toOwnedSlice();
+}
+
 pub fn decodeJwtPayload(allocator: std.mem.Allocator, jwt: []const u8) ![]u8 {
     var it = std.mem.splitScalar(u8, jwt, '.');
     _ = it.next();
@@ -223,4 +269,16 @@ fn parsePlanType(s: []const u8) registry.PlanType {
     if (std.ascii.eqlIgnoreCase(s, "enterprise")) return .enterprise;
     if (std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
     return .unknown;
+}
+
+fn jsonStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = obj.get(key) orelse return null;
+    return switch (value) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn jsonStringFieldOrDefault(obj: std.json.ObjectMap, key: []const u8) []const u8 {
+    return jsonStringField(obj, key) orelse "";
 }

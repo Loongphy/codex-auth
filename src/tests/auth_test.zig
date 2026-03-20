@@ -1,5 +1,6 @@
 const std = @import("std");
 const auth = @import("../auth.zig");
+const bdd = @import("bdd_helpers.zig");
 
 fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     const encoder = std.base64.url_safe_no_pad.Encoder;
@@ -120,4 +121,32 @@ test "parse auth info frees allocations on account mismatch" {
     defer gpa.free(auth_path);
 
     try std.testing.expectError(error.AccountIdMismatch, auth.parseAuthInfo(gpa, auth_path));
+}
+
+test "convert cpa auth json produces a parseable standard auth snapshot" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try bdd.cpaJsonWithEmailPlan(gpa, "cpa@example.com", "team");
+    defer gpa.free(cpa_json);
+
+    const converted = try auth.convertCpaAuthJson(gpa, cpa_json);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"auth_mode\": \"chatgpt\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\": \"refresh-cpa@example.com\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"account_id\":") != null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.email != null);
+    try std.testing.expect(std.mem.eql(u8, info.email.?, "cpa@example.com"));
+    try std.testing.expect(info.record_key != null);
+    try std.testing.expect(info.auth_mode == .chatgpt);
+}
+
+test "convert cpa auth json requires refresh token" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try bdd.cpaJsonWithoutRefreshToken(gpa, "missing-refresh@example.com", "plus");
+    defer gpa.free(cpa_json);
+
+    try std.testing.expectError(error.MissingRefreshToken, auth.convertCpaAuthJson(gpa, cpa_json));
 }

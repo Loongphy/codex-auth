@@ -67,6 +67,7 @@ codex-auth list # list all accounts
 codex-auth login # run `codex login`, then add the current account
 codex-auth switch [<email>] # switch active account (interactive or partial/fragment match)
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
+codex-auth import --cpa [<path>] # import CPA flat token JSON from one file or directory
 codex-auth import --purge [<path>] # rebuild registry.json from auth files for the current version
 codex-auth remove # remove accounts (interactive multi-select)
 codex-auth status # show auto-switch/service/api usage status
@@ -101,6 +102,14 @@ Batch import from a folder:
 
 ```shell
 codex-auth import /path/to/auth-exports
+```
+
+Import CPA exports directly:
+
+```shell
+codex-auth import --cpa                  # scan ~/.cli-proxy-api/*.json
+codex-auth import --cpa /path/to/cpa-dir
+codex-auth import --cpa /path/to/cpa.json --alias personal
 ```
 
 Typical batch import output:
@@ -229,6 +238,15 @@ Upgrade notes:
 
 If you have token files from `~/.cli-proxy-api/token*.json`, this repository includes a helper script that can convert them into a format codex-auth can read.
 
+The CLI can also import the flat cli-proxy-api / CPA JSON files directly:
+
+```shell
+codex-auth import --cpa                  # default source: ~/.cli-proxy-api
+codex-auth import --cpa /path/to/cpa-dir # scans direct child .json files
+```
+
+Each CPA file is converted in memory to the standard auth snapshot shape before it is written into `~/.codex/accounts/`. Missing or empty `refresh_token` values are skipped as `MissingRefreshToken`.
+
 The script is not bundled in the published npm package, so run it from a clone of this repository:
 
 ```shell
@@ -243,6 +261,8 @@ Then import and switch:
 
 ```shell
 codex-auth import /tmp/tokens/
+# or import the CPA files directly without a conversion step
+codex-auth import --cpa
 codex-auth switch
 ```
 

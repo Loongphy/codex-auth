@@ -80,6 +80,52 @@ pub fn authJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, pl
     );
 }
 
+pub fn cpaJsonWithEmailPlan(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
+    const access_token = try std.fmt.allocPrint(allocator, "access-{s}", .{email});
+    defer allocator.free(access_token);
+    const refresh_token = try std.fmt.allocPrint(allocator, "refresh-{s}", .{email});
+    defer allocator.free(refresh_token);
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+    );
+    defer allocator.free(payload);
+    const auth = try authJsonFromPayload(allocator, payload);
+    defer allocator.free(auth);
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"id_token\":\"{s}\",\"access_token\":\"{s}\",\"refresh_token\":\"{s}\",\"account_id\":\"{s}\",\"last_refresh\":\"2026-03-20T00:00:00Z\"}}",
+        .{ email, extractToken(auth), access_token, refresh_token, chatgpt_account_id },
+    );
+}
+
+pub fn cpaJsonWithoutRefreshToken(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
+    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_account_id);
+    const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
+    defer allocator.free(chatgpt_user_id);
+    const access_token = try std.fmt.allocPrint(allocator, "access-{s}", .{email});
+    defer allocator.free(access_token);
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+    );
+    defer allocator.free(payload);
+    const auth = try authJsonFromPayload(allocator, payload);
+    defer allocator.free(auth);
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"id_token\":\"{s}\",\"access_token\":\"{s}\",\"account_id\":\"{s}\",\"last_refresh\":\"2026-03-20T00:00:00Z\"}}",
+        .{ email, extractToken(auth), access_token, chatgpt_account_id },
+    );
+}
+
 pub fn authJsonWithoutEmail(allocator: std.mem.Allocator) ![]u8 {
     const account_id = "67000000-0000-4000-8000-000000000001";
     const payload =

@@ -476,6 +476,113 @@ test "Scenario: Given directory import with a broken symlink when running import
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "symlink-survivor@example.com"));
 }
 
+test "Scenario: Given cpa directory in default location when running import cpa then it imports from ~/.cli-proxy-api" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".cli-proxy-api");
+
+    const first = try bdd.cpaJsonWithEmailPlan(gpa, "default-cpa@example.com", "plus");
+    defer gpa.free(first);
+    const second = try bdd.cpaJsonWithEmailPlan(gpa, "second-cpa@example.com", "team");
+    defer gpa.free(second);
+    const missing_refresh = try bdd.cpaJsonWithoutRefreshToken(gpa, "skip-cpa@example.com", "pro");
+    defer gpa.free(missing_refresh);
+    try tmp.dir.writeFile(.{ .sub_path = ".cli-proxy-api/first.json", .data = first });
+    try tmp.dir.writeFile(.{ .sub_path = ".cli-proxy-api/second.json", .data = second });
+    try tmp.dir.writeFile(.{ .sub_path = ".cli-proxy-api/no-refresh.json", .data = missing_refresh });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", "--cpa" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings(
+        "Scanning ~/.cli-proxy-api...\n" ++
+            "  ✓ imported  first\n" ++
+            "  ✓ imported  second\n" ++
+            "Import Summary: 2 imported, 0 updated, 1 skipped (total 3 files)\n",
+        result.stdout,
+    );
+    try std.testing.expectEqualStrings("  ✗ skipped   no-refresh: MissingRefreshToken\n", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+}
+
+test "Scenario: Given missing default cpa directory when running import cpa then it fails" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", "--cpa" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+}
+
+test "Scenario: Given cpa file import when running import cpa then it stores a standard auth snapshot" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try bdd.cpaJsonWithEmailPlan(gpa, "single-file-cpa@example.com", "business");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/cpa.json", .data = cpa_json });
+
+    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "cpa.json" });
+    defer gpa.free(import_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", "--cpa", import_path, "--alias", "personal" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("  ✓ imported  cpa\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const account_key = try bdd.accountKeyForEmailAlloc(gpa, "single-file-cpa@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_data = try bdd.readFileAlloc(gpa, snapshot_path);
+    defer gpa.free(snapshot_data);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"tokens\": {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"refresh_token\": \"refresh-single-file-cpa@example.com\"") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "personal"));
+}
+
 test "Scenario: Given default api usage when rendering help then warning stays on stderr" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

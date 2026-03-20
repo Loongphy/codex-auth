@@ -57,6 +57,32 @@ test "Scenario: Given import purge without path when parsing then purge mode is 
     }
 }
 
+test "Scenario: Given import cpa without path when parsing then cpa mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "--cpa" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .import_auth => |opts| {
+            try std.testing.expect(opts.auth_path == null);
+            try std.testing.expect(opts.alias == null);
+            try std.testing.expect(!opts.purge);
+            try std.testing.expect(opts.source == .cpa);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given import cpa with purge when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "--cpa", "--purge" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
 test "Scenario: Given import unknown short purge flag when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "import", "-P", "/tmp/auth.json" };
@@ -127,6 +153,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (interval 1m, 5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api-only)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);

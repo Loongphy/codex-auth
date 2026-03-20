@@ -300,6 +300,12 @@ pub fn copyFile(src: []const u8, dest: []const u8) !void {
     try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{});
 }
 
+fn writeFile(path: []const u8, data: []const u8) !void {
+    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(data);
+}
+
 const max_backups: usize = 5;
 
 pub const CleanSummary = struct {
@@ -885,9 +891,11 @@ fn isImportValidationError(err: anyerror) bool {
     return switch (err) {
         error.SyntaxError,
         error.UnexpectedEndOfInput,
+        error.InvalidCpaFormat,
         error.MissingEmail,
         error.MissingChatgptUserId,
         error.MissingAccountId,
+        error.MissingRefreshToken,
         error.AccountIdMismatch,
         error.InvalidJwt,
         error.InvalidBase64,
@@ -911,6 +919,57 @@ fn isImportSourceFileError(err: anyerror) bool {
 
 fn isImportSkippableBatchEntryError(err: anyerror) bool {
     return isImportValidationError(err) or isImportSourceFileError(err);
+}
+
+pub fn importCpaPath(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_path: ?[]const u8,
+    explicit_alias: ?[]const u8,
+) !ImportReport {
+    if (auth_path == null) {
+        if (explicit_alias != null) {
+            std.log.warn("--alias is ignored when importing a directory: {s}", .{"~/.cli-proxy-api"});
+        }
+        const default_path = try defaultCpaImportPath(allocator);
+        defer allocator.free(default_path);
+        return try importCpaDirectory(allocator, codex_home, reg, default_path, "~/.cli-proxy-api", false);
+    }
+
+    const path = auth_path.?;
+    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+        error.IsDir => {
+            if (explicit_alias != null) {
+                std.log.warn("--alias is ignored when importing a directory: {s}", .{path});
+            }
+            return try importCpaDirectory(allocator, codex_home, reg, path, path, false);
+        },
+        else => return err,
+    };
+    if (stat.kind == .directory) {
+        if (explicit_alias != null) {
+            std.log.warn("--alias is ignored when importing a directory: {s}", .{path});
+        }
+        return try importCpaDirectory(allocator, codex_home, reg, path, path, false);
+    }
+
+    var report = ImportReport.init(.single_file);
+    errdefer report.deinit(allocator);
+
+    const outcome = importCpaFile(allocator, codex_home, reg, path, explicit_alias) catch |err| {
+        if (!isImportValidationError(err) and !isImportSourceFileError(err)) return err;
+        const label = try importDisplayLabel(allocator, path);
+        defer allocator.free(label);
+        try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+        report.failure = err;
+        return report;
+    };
+
+    const label = try importDisplayLabel(allocator, path);
+    defer allocator.free(label);
+    try report.addEvent(allocator, label, outcome, null);
+    return report;
 }
 
 pub fn importAuthPath(
@@ -954,6 +1013,59 @@ pub fn importAuthPath(
     return report;
 }
 
+fn defaultCpaImportPath(allocator: std.mem.Allocator) ![]u8 {
+    const home = try resolveUserHome(allocator);
+    defer allocator.free(home);
+    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
+}
+
+fn importCpaFile(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_file: []const u8,
+    explicit_alias: ?[]const u8,
+) !ImportOutcome {
+    var file = try std.fs.cwd().openFile(auth_file, .{});
+    defer file.close();
+
+    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    defer allocator.free(data);
+
+    const converted = try @import("auth.zig").convertCpaAuthJson(allocator, data);
+    defer allocator.free(converted);
+
+    const info = try @import("auth.zig").parseAuthInfoData(allocator, converted);
+    defer info.deinit(allocator);
+
+    return try importConvertedAuthInfo(allocator, codex_home, reg, explicit_alias, &info, converted);
+}
+
+fn importConvertedAuthInfo(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    explicit_alias: ?[]const u8,
+    info: *const @import("auth.zig").AuthInfo,
+    auth_data: []const u8,
+) !ImportOutcome {
+    _ = info.email orelse return error.MissingEmail;
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
+
+    const alias = explicit_alias orelse "";
+    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(dest);
+
+    try ensureAccountsDir(allocator, codex_home);
+    try writeFile(dest, auth_data);
+
+    const record = try accountFromAuth(allocator, alias, info);
+    try upsertAccount(allocator, reg, record);
+    return if (existed) .updated else .imported;
+}
+
 fn importAuthFile(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -989,6 +1101,55 @@ fn importAuthInfo(
     const record = try accountFromAuth(allocator, alias, info);
     try upsertAccount(allocator, reg, record);
     return if (existed) .updated else .imported;
+}
+
+fn importCpaDirectory(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    dir_path: []const u8,
+    source_label: []const u8,
+    missing_ok: bool,
+) !ImportReport {
+    var report = ImportReport.init(.scanned);
+    errdefer report.deinit(allocator);
+    report.source_label = try allocator.dupe(u8, source_label);
+
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => if (missing_ok) return report else return err,
+        else => return err,
+    };
+    defer dir.close();
+
+    var names = std.ArrayList([]u8).empty;
+    defer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file and entry.kind != .sym_link) continue;
+        if (!isImportConfigFile(entry.name)) continue;
+        try names.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+
+    std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
+
+    for (names.items) |name| {
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        defer allocator.free(file_path);
+        const label = try importDisplayLabelFromName(allocator, name);
+        defer allocator.free(label);
+        const outcome = importCpaFile(allocator, codex_home, reg, file_path, null) catch |err| {
+            if (!isImportSkippableBatchEntryError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            continue;
+        };
+        try report.addEvent(allocator, label, outcome, null);
+    }
+
+    return report;
 }
 
 fn importAuthDirectory(

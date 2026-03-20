@@ -813,3 +813,108 @@ test "import auth path with invalid single file keeps failure for non-zero exit 
     try std.testing.expect(report.events.items[0].outcome == .skipped);
     try std.testing.expectEqualStrings("MissingEmail", report.events.items[0].reason.?);
 }
+
+test "import cpa path with single file converts to standard auth and keeps explicit alias" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try bdd.cpaJsonWithEmailPlan(gpa, "single-cpa@example.com", "plus");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/one.json", .data = cpa_json });
+
+    const one_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
+    defer gpa.free(one_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var report = try registry.importCpaPath(gpa, codex_home, &reg, one_path, "personal");
+    defer report.deinit(gpa);
+    try std.testing.expect(report.render_kind == .single_file);
+    try std.testing.expect(report.imported == 1);
+    try std.testing.expectEqual(@as(usize, 1), reg.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].alias, "personal"));
+
+    const account_key = try bdd.accountKeyForEmailAlloc(gpa, "single-cpa@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_data = try bdd.readFileAlloc(gpa, snapshot_path);
+    defer gpa.free(snapshot_data);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"tokens\": {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"refresh_token\": \"refresh-single-cpa@example.com\"") != null);
+}
+
+test "import cpa path with repeated single file reports updated on second import" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try bdd.cpaJsonWithEmailPlan(gpa, "repeat-cpa@example.com", "pro");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/repeat.json", .data = cpa_json });
+
+    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var first = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer first.deinit(gpa);
+    try std.testing.expect(first.imported == 1);
+    try std.testing.expect(first.updated == 0);
+    try std.testing.expect(first.events.items[0].outcome == .imported);
+
+    var second = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer second.deinit(gpa);
+    try std.testing.expect(second.imported == 0);
+    try std.testing.expect(second.updated == 1);
+    try std.testing.expect(second.events.items[0].outcome == .updated);
+}
+
+test "import cpa path with directory imports multiple json files and skips bad files" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const a = try bdd.cpaJsonWithEmailPlan(gpa, "a-cpa@example.com", "pro");
+    defer gpa.free(a);
+    const b = try bdd.cpaJsonWithEmailPlan(gpa, "b-cpa@example.com", "team");
+    defer gpa.free(b);
+    const no_refresh = try bdd.cpaJsonWithoutRefreshToken(gpa, "no-refresh@example.com", "plus");
+    defer gpa.free(no_refresh);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/a.json", .data = a });
+    try tmp.dir.writeFile(.{ .sub_path = "imports/b.json", .data = b });
+    try tmp.dir.writeFile(.{ .sub_path = "imports/no-refresh.json", .data = no_refresh });
+    try tmp.dir.writeFile(.{ .sub_path = "imports/bad.json", .data = "{not-json}" });
+    try tmp.dir.writeFile(.{ .sub_path = "imports/readme.txt", .data = "ignored" });
+
+    const imports_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
+    defer gpa.free(imports_dir);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var report = try registry.importCpaPath(gpa, codex_home, &reg, imports_dir, null);
+    defer report.deinit(gpa);
+    try std.testing.expect(report.render_kind == .scanned);
+    try std.testing.expect(report.imported == 2);
+    try std.testing.expect(report.updated == 0);
+    try std.testing.expect(report.skipped == 2);
+    try std.testing.expect(report.total_files == 4);
+    try std.testing.expectEqual(@as(usize, 2), reg.accounts.items.len);
+}

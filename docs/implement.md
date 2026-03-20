@@ -107,6 +107,14 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `codex-auth import <path>` auto-detects the path type:
   - file path: imports one auth/config file.
   - directory path: batch imports config files from that directory.
+- `codex-auth import --cpa [<path>]` imports flat CPA token JSON:
+  - explicit file path: imports one CPA JSON file
+  - explicit directory path: batch imports direct child `.json` files from that directory
+  - omitted path: defaults to `~/.cli-proxy-api` and scans direct child `.json` files there
+- CPA imports convert each source file in memory to the current standard auth snapshot layout before writing `accounts/<account file key>.auth.json`.
+- CPA conversion expects the flat fields `id_token`, `access_token`, `refresh_token`, `account_id`, and `last_refresh`; `refresh_token` is required and missing/empty values are skipped as `MissingRefreshToken`.
+- CPA imports keep the current report formatting and stream split used by standard imports.
+- `--cpa` cannot be combined with `--purge`.
 - `codex-auth import --purge [<path>]` rebuilds `registry.json` from scratch using the imported auth set for the current binary format.
 - During `--purge`, `auto_switch` and `api` configuration are carried forward from an existing `registry.json`; account snapshots, stored usage, active-account activation time, and per-account local rollout dedupe state are cleared and rebuilt from auth files.
 - When `--purge` is used without a path, the source defaults to `~/.codex/accounts/` and scans direct child auth files from that directory: current account snapshots (`*.auth.json`) plus `auth.json.bak.*` backups.

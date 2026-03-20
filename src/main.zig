@@ -153,7 +153,10 @@ fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    var report = try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path.?, opts.alias);
+    var report = switch (opts.source) {
+        .standard => try registry.importAuthPath(allocator, codex_home, &reg, opts.auth_path.?, opts.alias),
+        .cpa => try registry.importCpaPath(allocator, codex_home, &reg, opts.auth_path, opts.alias),
+    };
     defer report.deinit(allocator);
     if (report.appliedCount() > 0) {
         try registry.saveRegistry(allocator, codex_home, &reg);
