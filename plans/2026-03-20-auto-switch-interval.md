@@ -99,6 +99,11 @@ Implement configurable auto-switch polling intervals for `codex-auth`, then driv
   - `zig build run -- list` -> passed
   - `zig build test` -> passed
   - `zig test src/main.zig -lc --cache-dir .zig-cache-ci --global-cache-dir .zig-global-cache-ci` -> passed
+- Remote PR snapshot after pushing `docs(plan): record review blocker and revert agent polling note`:
+  - GitHub REST review endpoints report `0` pull-request reviews and `0` review comments
+  - issue comments contain only the `pkg-pr-new[bot]` preview-package comment
+  - `mergeable_state` is `clean`
+  - the PR body summary is stale and still mentions a schema bump to `4`, so it needs to be updated to match the final implementation
 
 ## Review ledger
 - `codex review --base main`
