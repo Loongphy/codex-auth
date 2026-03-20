@@ -255,10 +255,12 @@ When auto-switching is enabled, a background worker checks usage at the configur
 
 Candidate selection is conservative:
 
-- in API mode, accounts with a missing 5h or weekly snapshot are treated as `unknown` and revalidated before preferred and fallback candidates
-- preferred candidates must have both 5h and weekly above their configured thresholds
-- if no preferred candidate exists, auto-switch can fall back only to accounts where both 5h and weekly are still above `0%`
-- accounts with `5h = 0` or `weekly = 0` are never auto-switch targets
+- free accounts may expose only a single `10080`-minute weekly snapshot; when that happens, auto-switch treats them as single-window candidates instead of requiring a second 5h window
+- single-window free candidates are evaluated against the stricter configured threshold (`max(--5h, --weekly)`)
+- in API mode, non-free accounts with missing 5h or weekly snapshots are treated as `unknown` and revalidated before preferred and fallback candidates
+- preferred dual-window candidates must have both 5h and weekly above their configured thresholds
+- if no preferred candidate exists, auto-switch can fall back only to accounts whose available windows are still above `0%`
+- accounts with any available window at `0%` are never auto-switch targets
 - in local-only mode, unknown candidates are never auto-switch targets
 
 Changing thresholds or the `config api` source takes effect immediately on the next check. Changing the interval takes effect on the next polling cycle. You can verify the current state with:

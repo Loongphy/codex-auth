@@ -379,8 +379,7 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const rec = &reg.accounts.items[idx];
     const rem_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
-    return (rem_5h != null and rem_5h.? < @as(i64, reg.auto_switch.threshold_5h_percent)) or
-        (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
+    return shouldSwitchWithRemaining(registry.resolvePlan(rec), rem_5h, rem_week, reg.auto_switch);
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -638,7 +637,7 @@ fn candidateState(
 ) CandidateState {
     const remaining_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
     const remaining_weekly = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
-    const tier = determineCandidateTier(remaining_5h, remaining_weekly, cfg, allow_revalidation);
+    const tier = determineCandidateTier(remaining_5h, remaining_weekly, registry.resolvePlan(rec), cfg, allow_revalidation);
     return .{
         .tier = tier,
         .remaining_5h = remaining_5h,
@@ -648,12 +647,45 @@ fn candidateState(
     };
 }
 
-fn determineCandidateTier(
+fn singleWindowRemaining(remaining_5h: ?i64, remaining_weekly: ?i64) ?i64 {
+    return remaining_5h orelse remaining_weekly;
+}
+
+fn usesSingleWindowFreeMode(plan: ?registry.PlanType, remaining_5h: ?i64, remaining_weekly: ?i64) bool {
+    return plan == .free and ((remaining_5h == null) != (remaining_weekly == null));
+}
+
+fn effectiveSingleWindowThreshold(cfg: registry.AutoSwitchConfig) i64 {
+    return @max(@as(i64, cfg.threshold_5h_percent), @as(i64, cfg.threshold_weekly_percent));
+}
+
+fn shouldSwitchWithRemaining(
+    plan: ?registry.PlanType,
     remaining_5h: ?i64,
     remaining_weekly: ?i64,
     cfg: registry.AutoSwitchConfig,
+) bool {
+    if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
+        const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return false;
+        return remaining < effectiveSingleWindowThreshold(cfg);
+    }
+    return (remaining_5h != null and remaining_5h.? < @as(i64, cfg.threshold_5h_percent)) or
+        (remaining_weekly != null and remaining_weekly.? < @as(i64, cfg.threshold_weekly_percent));
+}
+
+fn determineCandidateTier(
+    remaining_5h: ?i64,
+    remaining_weekly: ?i64,
+    plan: ?registry.PlanType,
+    cfg: registry.AutoSwitchConfig,
     allow_revalidation: bool,
 ) CandidateTier {
+    if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
+        const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return if (allow_revalidation) .unknown else .ineligible;
+        if (remaining <= 0) return .ineligible;
+        if (remaining > effectiveSingleWindowThreshold(cfg)) return .preferred;
+        return .fallback;
+    }
     const rem_5h = remaining_5h orelse return if (allow_revalidation) .unknown else .ineligible;
     const rem_weekly = remaining_weekly orelse return if (allow_revalidation) .unknown else .ineligible;
     if (rem_5h <= 0 or rem_weekly <= 0) {
@@ -673,15 +705,26 @@ fn candidateSwitchEligible(candidate: CandidateState) bool {
     return candidate.tier == .preferred or candidate.tier == .fallback;
 }
 
+fn candidateEffectiveRemaining(candidate: CandidateState) i64 {
+    if (candidate.remaining_5h != null and candidate.remaining_weekly != null) {
+        return @min(candidate.remaining_5h.?, candidate.remaining_weekly.?);
+    }
+    return singleWindowRemaining(candidate.remaining_5h, candidate.remaining_weekly) orelse -1;
+}
+
 fn candidateBetter(a: CandidateState, b: CandidateState) bool {
     if (@intFromEnum(a.tier) != @intFromEnum(b.tier)) return @intFromEnum(a.tier) > @intFromEnum(b.tier);
 
     if (candidateSwitchEligible(a) and candidateSwitchEligible(b)) {
-        const a_min = @min(a.remaining_5h.?, a.remaining_weekly.?);
-        const b_min = @min(b.remaining_5h.?, b.remaining_weekly.?);
+        const a_min = candidateEffectiveRemaining(a);
+        const b_min = candidateEffectiveRemaining(b);
         if (a_min != b_min) return a_min > b_min;
-        if (a.remaining_weekly.? != b.remaining_weekly.?) return a.remaining_weekly.? > b.remaining_weekly.?;
-        if (a.remaining_5h.? != b.remaining_5h.?) return a.remaining_5h.? > b.remaining_5h.?;
+        const a_weekly = a.remaining_weekly orelse a.remaining_5h orelse -1;
+        const b_weekly = b.remaining_weekly orelse b.remaining_5h orelse -1;
+        if (a_weekly != b_weekly) return a_weekly > b_weekly;
+        const a_5h = a.remaining_5h orelse a.remaining_weekly orelse -1;
+        const b_5h = b.remaining_5h orelse b.remaining_weekly orelse -1;
+        if (a_5h != b_5h) return a_5h > b_5h;
     }
 
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;

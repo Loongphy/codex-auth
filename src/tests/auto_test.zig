@@ -47,6 +47,15 @@ fn candidateHealthySnapshot() registry.RateLimitSnapshot {
     };
 }
 
+fn freeWeeklyOnlySnapshot(used_percent: f64) registry.RateLimitSnapshot {
+    return .{
+        .primary = .{ .used_percent = used_percent, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    };
+}
+
 fn readAuthSnapshotAlloc(allocator: std.mem.Allocator, auth_path: []const u8) ![]u8 {
     var file = try std.fs.cwd().openFile(auth_path, .{});
     defer file.close();
@@ -377,6 +386,37 @@ test "Scenario: Given stricter weekly threshold when checking current then defau
     try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
+test "Scenario: Given free weekly-only account when checking current then single-window thresholds can trigger auto switch" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 30;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(78.0), 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given free weekly-only candidate when selecting auto candidate then it is eligible without dual windows" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 30;
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(78.0), 100);
+    try appendAccountWithUsage(gpa, &reg, "healthy-free@example.com", freeWeeklyOnlySnapshot(33.0), 200);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "healthy-free@example.com"));
+}
+
 test "Scenario: Given threshold overrides when applying config then unspecified values stay unchanged" {
     var cfg = registry.defaultAutoSwitchConfig();
     cfg.threshold_5h_percent = 11;
@@ -444,6 +484,50 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     const active_data = try bdd.readFileAlloc(gpa, active_path);
     defer gpa.free(active_data);
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
+}
+
+test "Scenario: Given free weekly-only candidate when auto switch runs then it can become the destination" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 30;
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "low-free@example.com", freeWeeklyOnlySnapshot(78.0), 100);
+    try appendAccountWithUsage(gpa, &reg, "fresh-free@example.com", freeWeeklyOnlySnapshot(33.0), 200);
+    const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low-free@example.com");
+    defer gpa.free(low_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, low_account_id);
+
+    const low_auth = try bdd.authJsonWithEmailPlan(gpa, "low-free@example.com", "free");
+    defer gpa.free(low_auth);
+    const fresh_auth = try bdd.authJsonWithEmailPlan(gpa, "fresh-free@example.com", "free");
+    defer gpa.free(fresh_auth);
+
+    const low_path = try registry.accountAuthPath(gpa, codex_home, low_account_id);
+    defer gpa.free(low_path);
+    const fresh_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fresh-free@example.com");
+    defer gpa.free(fresh_account_id);
+    const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
+    defer gpa.free(fresh_path);
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
+
+    try std.testing.expect(try auto.maybeAutoSwitch(gpa, codex_home, &reg));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, fresh_account_id));
 }
 
 test "Scenario: Given stale top candidate when auto switch revalidates then it skips to the next valid account" {

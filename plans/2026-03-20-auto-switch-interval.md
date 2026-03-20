@@ -8,6 +8,7 @@ description: Final implementation record for background auto-switching and confi
 `codex-auth` now supports background auto-switching with configurable polling intervals.
 
 ## Delivered Behavior
+- New command: `codex-auth config auto --interval` for auto-switch polling intervals.
 - Background auto-switching is controlled through `codex-auth config auto enable`, `codex-auth config auto disable`, and `codex-auth config auto [--interval <duration>] [--5h <percent>] [--weekly <percent>]`.
 - `status` reports whether auto-switching is enabled, the managed-service runtime state, the effective interval, and the configured thresholds.
 - `help` and `README.md` document the auto-switch state and interval-aware configuration surface.
@@ -15,7 +16,7 @@ description: Final implementation record for background auto-switching and confi
   - `5h` remaining `< 10%`
   - `weekly` remaining `< 5%`
 - Accounts without stored usage are treated as fresh candidates.
-- Candidate selection is reset-aware and only switches when the best candidate is strictly better than the current account.
+- Candidate selection is reset-aware, treats free single-weekly-window snapshots as valid auto-switch candidates, and only switches when the best candidate is strictly better than the current account.
 
 ## Persistence And Compatibility
 - `registry.json.schema_version` remains `3`.
