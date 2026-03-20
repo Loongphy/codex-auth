@@ -38,6 +38,88 @@ fn fetchApiError(_: std.mem.Allocator, _: []const u8) !?registry.RateLimitSnapsh
     return error.TestApiUnavailable;
 }
 
+fn candidateHealthySnapshot() registry.RateLimitSnapshot {
+    return .{
+        .primary = .{ .used_percent = 12.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 6.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
+fn readAuthSnapshotAlloc(allocator: std.mem.Allocator, auth_path: []const u8) ![]u8 {
+    var file = try std.fs.cwd().openFile(auth_path, .{});
+    defer file.close();
+    return try file.readToEndAlloc(allocator, 1024 * 1024);
+}
+
+fn fetchCandidateUsageRevalidating(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    const data = try readAuthSnapshotAlloc(allocator, auth_path);
+    defer allocator.free(data);
+
+    if (std.mem.indexOf(u8, data, "stale@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 5.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 100.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    if (std.mem.indexOf(u8, data, "fallback@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 35.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    if (std.mem.indexOf(u8, data, "unknown@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 15.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    return error.TestUnexpectedCandidateFetch;
+}
+
+fn fetchCandidateUsageAllRejected(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    const data = try readAuthSnapshotAlloc(allocator, auth_path);
+    defer allocator.free(data);
+
+    if (std.mem.indexOf(u8, data, "@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 100.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    return error.TestUnexpectedCandidateFetch;
+}
+
+fn fetchUnknownApiUnavailableFallbackHealthy(
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) !?registry.RateLimitSnapshot {
+    const data = try readAuthSnapshotAlloc(allocator, auth_path);
+    defer allocator.free(data);
+
+    if (std.mem.indexOf(u8, data, "unknown@example.com") != null) {
+        return error.TestApiUnavailable;
+    }
+    if (std.mem.indexOf(u8, data, "fallback@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 18.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 12.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    return error.TestUnexpectedCandidateFetch;
+}
+
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "partial-service-artifact" });
 }
@@ -68,10 +150,11 @@ fn preflightFailure(_: std.mem.Allocator) !void {
 
 fn preflightSuccess(_: std.mem.Allocator) !void {}
 
-test "Scenario: Given no-snapshot account when selecting auto candidate then it is treated as fresh quota" {
+test "Scenario: Given no-snapshot account when selecting auto candidate then it is excluded from auto switch" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.api.usage = false;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
         .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
@@ -81,7 +164,7 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
     }, 100);
     try appendAccountWithUsage(gpa, &reg, "known@example.com", .{
         .primary = .{ .used_percent = 40.0, .window_minutes = 300, .resets_at = null },
-        .secondary = null,
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
         .credits = null,
         .plan_type = null,
     }, 200);
@@ -91,7 +174,151 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
-    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "known@example.com"));
+}
+
+test "Scenario: Given zero-weekly candidate when selecting auto candidate then it is excluded" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 15.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "zero-week@example.com", .{
+        .primary = .{ .used_percent = 0.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 100.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "healthy@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "healthy@example.com"));
+}
+
+test "Scenario: Given no preferred candidate when selecting auto candidate then non-zero fallback is used" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "fallback-a@example.com", .{
+        .primary = .{ .used_percent = 94.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 96.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "fallback-b@example.com", .{
+        .primary = .{ .used_percent = 96.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 97.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fallback-a@example.com"));
+}
+
+test "Scenario: Given api mode and only unknown candidate when selecting auto candidate then it ranks ahead of known tiers" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "unknown@example.com", null, null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "unknown@example.com"));
+}
+
+test "Scenario: Given api mode and healthier known candidate when selecting auto candidate then unknown candidate stays top priority" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "healthy@example.com", .{
+        .primary = .{ .used_percent = 10.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 8.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "unknown@example.com", null, null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "unknown@example.com"));
+}
+
+test "Scenario: Given api mode and zero candidate when selecting auto candidate then zero is excluded" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "zero@example.com", .{
+        .primary = .{ .used_percent = 100.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 80.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "fallback@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fallback@example.com"));
 }
 
 test "Scenario: Given weekly remaining below threshold when checking current then auto switch is required" {
@@ -179,6 +406,7 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.api.usage = false;
 
     try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
         .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
@@ -186,7 +414,7 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
         .credits = null,
         .plan_type = null,
     }, 100);
-    try appendAccountWithUsage(gpa, &reg, "fresh@example.com", null, null);
+    try appendAccountWithUsage(gpa, &reg, "fresh@example.com", candidateHealthySnapshot(), 200);
     const low_account_id = try bdd.accountKeyForEmailAlloc(gpa, "low@example.com");
     defer gpa.free(low_account_id);
     try registry.setActiveAccountKey(gpa, &reg, low_account_id);
@@ -216,6 +444,248 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     const active_data = try bdd.readFileAlloc(gpa, active_path);
     defer gpa.free(active_data);
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
+}
+
+test "Scenario: Given stale top candidate when auto switch revalidates then it skips to the next valid account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 15.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "stale@example.com", .{
+        .primary = .{ .used_percent = 5.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 2.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 300);
+    try appendAccountWithUsage(gpa, &reg, "fallback@example.com", .{
+        .primary = .{ .used_percent = 8.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 4.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const stale_auth = try bdd.authJsonWithEmailPlan(gpa, "stale@example.com", "pro");
+    defer gpa.free(stale_auth);
+    const fallback_auth = try bdd.authJsonWithEmailPlan(gpa, "fallback@example.com", "pro");
+    defer gpa.free(fallback_auth);
+
+    const stale_account_id = try bdd.accountKeyForEmailAlloc(gpa, "stale@example.com");
+    defer gpa.free(stale_account_id);
+    const fallback_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fallback@example.com");
+    defer gpa.free(fallback_account_id);
+
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    const stale_path = try registry.accountAuthPath(gpa, codex_home, stale_account_id);
+    defer gpa.free(stale_path);
+    const fallback_path = try registry.accountAuthPath(gpa, codex_home, fallback_account_id);
+    defer gpa.free(fallback_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = stale_path, .data = stale_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = fallback_path, .data = fallback_auth });
+
+    try std.testing.expect(try auto.maybeAutoSwitchWithCandidateUsageFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        fetchCandidateUsageRevalidating,
+    ));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, fallback_account_id));
+}
+
+test "Scenario: Given unknown candidate after known tiers fail when auto switch revalidates then it can still become the destination" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 15.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "unknown@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const unknown_auth = try bdd.authJsonWithEmailPlan(gpa, "unknown@example.com", "pro");
+    defer gpa.free(unknown_auth);
+    const unknown_account_id = try bdd.accountKeyForEmailAlloc(gpa, "unknown@example.com");
+    defer gpa.free(unknown_account_id);
+
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    const unknown_path = try registry.accountAuthPath(gpa, codex_home, unknown_account_id);
+    defer gpa.free(unknown_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = unknown_path, .data = unknown_auth });
+
+    try std.testing.expect(try auto.maybeAutoSwitchWithCandidateUsageFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        fetchCandidateUsageRevalidating,
+    ));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, unknown_account_id));
+}
+
+test "Scenario: Given unknown candidate with non-200 api result when auto switch runs then it is skipped" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 15.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "unknown@example.com", null, null);
+    try appendAccountWithUsage(gpa, &reg, "fallback@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const unknown_auth = try bdd.authJsonWithEmailPlan(gpa, "unknown@example.com", "pro");
+    defer gpa.free(unknown_auth);
+    const fallback_auth = try bdd.authJsonWithEmailPlan(gpa, "fallback@example.com", "pro");
+    defer gpa.free(fallback_auth);
+
+    const unknown_account_id = try bdd.accountKeyForEmailAlloc(gpa, "unknown@example.com");
+    defer gpa.free(unknown_account_id);
+    const fallback_account_id = try bdd.accountKeyForEmailAlloc(gpa, "fallback@example.com");
+    defer gpa.free(fallback_account_id);
+
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    const unknown_path = try registry.accountAuthPath(gpa, codex_home, unknown_account_id);
+    defer gpa.free(unknown_path);
+    const fallback_path = try registry.accountAuthPath(gpa, codex_home, fallback_account_id);
+    defer gpa.free(fallback_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = unknown_path, .data = unknown_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = fallback_path, .data = fallback_auth });
+
+    try std.testing.expect(try auto.maybeAutoSwitchWithCandidateUsageFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        fetchUnknownApiUnavailableFallbackHealthy,
+    ));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, fallback_account_id));
+}
+
+test "Scenario: Given all candidates rejected after revalidation when auto switch runs then it stays on the current account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", .{
+        .primary = .{ .used_percent = 5.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 2.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 200);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    try std.testing.expect(!(try auto.maybeAutoSwitchWithCandidateUsageFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        fetchCandidateUsageAllRejected,
+    )));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
 }
 
 test "Scenario: Given linux service unit when rendering then oneshot daemon command is included" {

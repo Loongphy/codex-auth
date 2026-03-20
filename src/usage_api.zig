@@ -20,6 +20,17 @@ pub fn fetchActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?
     return try fetchUsageForToken(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
 }
 
+pub fn fetchUsageForAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    const info = try auth.parseAuthInfo(allocator, auth_path);
+    defer info.deinit(allocator);
+
+    if (info.auth_mode != .chatgpt) return null;
+    const access_token = info.access_token orelse return null;
+    const chatgpt_account_id = info.chatgpt_account_id orelse return null;
+
+    return try fetchUsageForToken(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+}
+
 pub fn fetchUsageForToken(
     allocator: std.mem.Allocator,
     endpoint: []const u8,

@@ -253,7 +253,13 @@ When auto-switching is enabled, a background worker checks usage at the configur
 - 5h remaining drops below the `--5h` threshold (default `10%`), or
 - weekly remaining drops below the `--weekly` threshold (default `5%`)
 
-Accounts that have never been used are treated as having full quota.
+Candidate selection is conservative:
+
+- in API mode, accounts with a missing 5h or weekly snapshot are treated as `unknown` and revalidated before preferred and fallback candidates
+- preferred candidates must have both 5h and weekly above their configured thresholds
+- if no preferred candidate exists, auto-switch can fall back only to accounts where both 5h and weekly are still above `0%`
+- accounts with `5h = 0` or `weekly = 0` are never auto-switch targets
+- in local-only mode, unknown candidates are never auto-switch targets
 
 Changing thresholds or the `config api` source takes effect immediately on the next check. Changing the interval takes effect on the next polling cycle. You can verify the current state with:
 

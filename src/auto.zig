@@ -37,8 +37,17 @@ pub const Status = struct {
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
 
-const CandidateScore = struct {
-    value: i64,
+const CandidateTier = enum(u8) {
+    ineligible = 0,
+    fallback = 1,
+    preferred = 2,
+    unknown = 3,
+};
+
+const CandidateState = struct {
+    tier: CandidateTier,
+    remaining_5h: ?i64,
+    remaining_weekly: ?i64,
     last_usage_at: i64,
     created_at: i64,
 };
@@ -351,12 +360,13 @@ fn refreshActiveUsageFromSessions(
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
     const active = reg.active_account_key orelse return null;
     var best_idx: ?usize = null;
-    var best: ?CandidateScore = null;
+    var best: ?CandidateState = null;
     for (reg.accounts.items, 0..) |*rec, idx| {
         if (std.mem.eql(u8, rec.account_key, active)) continue;
-        const score = candidateScore(rec, now);
-        if (best == null or candidateBetter(score, best.?)) {
-            best = score;
+        const state = candidateState(rec, now, reg.auto_switch, reg.api.usage);
+        if (!candidateRankEligible(state)) continue;
+        if (best == null or candidateBetter(state, best.?)) {
+            best = state;
             best_idx = idx;
         }
     }
@@ -374,19 +384,47 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
+    return maybeAutoSwitchWithCandidateUsageFetcher(allocator, codex_home, reg, usage_api.fetchUsageForAuthPath);
+}
+
+pub fn maybeAutoSwitchWithCandidateUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    candidate_usage_fetcher: anytype,
+) !bool {
     if (!reg.auto_switch.enabled) return false;
     const active = reg.active_account_key orelse return false;
     const now = std.time.timestamp();
     if (!shouldSwitchCurrent(reg, now)) return false;
 
     const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return false;
-    const current = candidateScore(&reg.accounts.items[active_idx], now);
-    const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return false;
-    const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) return false;
+    const current = candidateState(&reg.accounts.items[active_idx], now, reg.auto_switch, false);
 
-    try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
-    return true;
+    var candidate_indices = try rankedAutoSwitchCandidateIndices(allocator, reg, now);
+    defer candidate_indices.deinit(allocator);
+
+    for (candidate_indices.items) |candidate_idx| {
+        if (reg.api.usage) {
+            const refreshed = try refreshCandidateUsageWithFetcher(
+                allocator,
+                codex_home,
+                reg,
+                reg.accounts.items[candidate_idx].account_key,
+                candidate_usage_fetcher,
+            );
+            if (refreshed == .unavailable) continue;
+        }
+
+        const candidate = candidateState(&reg.accounts.items[candidate_idx], now, reg.auto_switch, false);
+        if (!candidateSwitchEligible(candidate)) continue;
+        if (!candidateBetter(candidate, current)) continue;
+
+        try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
+        return true;
+    }
+
+    return false;
 }
 
 fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
@@ -560,19 +598,121 @@ pub fn writeWindowsIntervalClampWarning(out: *std.Io.Writer, requested_seconds: 
     );
 }
 
-fn candidateScore(rec: *const registry.AccountRecord, now: i64) CandidateScore {
-    const usage_score = registry.usageScoreAt(rec.last_usage, now) orelse 100;
+fn rankedAutoSwitchCandidateIndices(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    now: i64,
+) !std.ArrayList(usize) {
+    const active = reg.active_account_key orelse return std.ArrayList(usize).empty;
+    var indices = std.ArrayList(usize).empty;
+    errdefer indices.deinit(allocator);
+
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        if (std.mem.eql(u8, rec.account_key, active)) continue;
+        const state = candidateState(rec, now, reg.auto_switch, reg.api.usage);
+        if (!candidateRankEligible(state)) continue;
+        try indices.append(allocator, idx);
+    }
+
+    std.sort.insertion(usize, indices.items, CandidateSortContext{ .reg = reg, .now = now }, lessThanCandidateIndex);
+    return indices;
+}
+
+const CandidateSortContext = struct {
+    reg: *registry.Registry,
+    now: i64,
+};
+
+fn lessThanCandidateIndex(ctx: CandidateSortContext, lhs: usize, rhs: usize) bool {
+    const reg = ctx.reg;
+    const left = candidateState(&reg.accounts.items[lhs], ctx.now, reg.auto_switch, reg.api.usage);
+    const right = candidateState(&reg.accounts.items[rhs], ctx.now, reg.auto_switch, reg.api.usage);
+    return candidateBetter(left, right);
+}
+
+fn candidateState(
+    rec: *const registry.AccountRecord,
+    now: i64,
+    cfg: registry.AutoSwitchConfig,
+    allow_revalidation: bool,
+) CandidateState {
+    const remaining_5h = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 300, true), now);
+    const remaining_weekly = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
+    const tier = determineCandidateTier(remaining_5h, remaining_weekly, cfg, allow_revalidation);
     return .{
-        .value = usage_score,
+        .tier = tier,
+        .remaining_5h = remaining_5h,
+        .remaining_weekly = remaining_weekly,
         .last_usage_at = rec.last_usage_at orelse -1,
         .created_at = rec.created_at,
     };
 }
 
-fn candidateBetter(a: CandidateScore, b: CandidateScore) bool {
-    if (a.value != b.value) return a.value > b.value;
+fn determineCandidateTier(
+    remaining_5h: ?i64,
+    remaining_weekly: ?i64,
+    cfg: registry.AutoSwitchConfig,
+    allow_revalidation: bool,
+) CandidateTier {
+    const rem_5h = remaining_5h orelse return if (allow_revalidation) .unknown else .ineligible;
+    const rem_weekly = remaining_weekly orelse return if (allow_revalidation) .unknown else .ineligible;
+    if (rem_5h <= 0 or rem_weekly <= 0) {
+        return .ineligible;
+    }
+    if (rem_5h > @as(i64, cfg.threshold_5h_percent) and rem_weekly > @as(i64, cfg.threshold_weekly_percent)) {
+        return .preferred;
+    }
+    return .fallback;
+}
+
+fn candidateRankEligible(candidate: CandidateState) bool {
+    return candidate.tier != .ineligible;
+}
+
+fn candidateSwitchEligible(candidate: CandidateState) bool {
+    return candidate.tier == .preferred or candidate.tier == .fallback;
+}
+
+fn candidateBetter(a: CandidateState, b: CandidateState) bool {
+    if (@intFromEnum(a.tier) != @intFromEnum(b.tier)) return @intFromEnum(a.tier) > @intFromEnum(b.tier);
+
+    if (candidateSwitchEligible(a) and candidateSwitchEligible(b)) {
+        const a_min = @min(a.remaining_5h.?, a.remaining_weekly.?);
+        const b_min = @min(b.remaining_5h.?, b.remaining_weekly.?);
+        if (a_min != b_min) return a_min > b_min;
+        if (a.remaining_weekly.? != b.remaining_weekly.?) return a.remaining_weekly.? > b.remaining_weekly.?;
+        if (a.remaining_5h.? != b.remaining_5h.?) return a.remaining_5h.? > b.remaining_5h.?;
+    }
+
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;
     return a.created_at > b.created_at;
+}
+
+const CandidateRefreshResult = enum { unavailable, unchanged, updated };
+
+fn refreshCandidateUsageWithFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    candidate_usage_fetcher: anytype,
+) !CandidateRefreshResult {
+    const auth_path = registry.accountAuthPath(allocator, codex_home, account_key) catch return .unavailable;
+    defer allocator.free(auth_path);
+
+    const latest_usage = candidate_usage_fetcher(allocator, auth_path) catch return .unavailable;
+    if (latest_usage == null) return .unavailable;
+
+    var latest = latest_usage.?;
+    var snapshot_consumed = false;
+    defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
+
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return .unavailable;
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, latest)) return .unchanged;
+
+    registry.updateUsage(allocator, reg, account_key, latest);
+    snapshot_consumed = true;
+    return .updated;
 }
 
 fn queryRuntimeState(allocator: std.mem.Allocator) RuntimeState {
