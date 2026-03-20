@@ -189,6 +189,26 @@ When switching:
 
 The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
+## Removing Accounts
+
+`remove` now supports two foreground modes:
+
+- Interactive: `codex-auth remove`
+- Query-driven: `codex-auth remove <query>`
+
+For query-driven removal, the target query is matched case-insensitively by:
+
+- alias fragment
+- email fragment
+
+If no accounts match, the command prints an error and exits non-zero.
+If exactly one account matches, it is removed immediately.
+If multiple accounts match, the command prints the matched emails and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
+
+After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
+
+When `remove` is run without a query and stdin is not a TTY, the command skips the `/dev/tty` interactive picker and falls back directly to the numbered remove selector so piped/automated runs do not attempt the fullscreen interactive UI.
+
 ## Background Auto Switch
 
 `config auto` supports the user-facing commands:

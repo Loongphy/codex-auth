@@ -34,7 +34,7 @@ pub fn main() !void {
         .login => |opts| try handleLogin(allocator, codex_home, opts),
         .import_auth => |opts| try handleImport(allocator, codex_home, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
-        .remove_account => |_| try handleRemove(allocator, codex_home),
+        .remove_account => |opts| try handleRemove(allocator, codex_home, opts),
         .clean => |_| try handleClean(allocator, codex_home),
     }
 
@@ -207,6 +207,28 @@ fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 }
 
+fn collectAccountEmails(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+) !std.ArrayList([]const u8) {
+    var emails = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (emails.items) |email| allocator.free(@constCast(email));
+        emails.deinit(allocator);
+    }
+
+    for (indices) |idx| {
+        if (idx >= reg.accounts.items.len) continue;
+        try emails.append(allocator, try allocator.dupe(u8, reg.accounts.items[idx].email));
+    }
+    return emails;
+}
+
+fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {
+    for (items) |item| allocator.free(@constCast(item));
+}
+
 pub fn findMatchingAccounts(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -223,7 +245,7 @@ pub fn findMatchingAccounts(
     return matches;
 }
 
-fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.RemoveOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
@@ -231,10 +253,38 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .remove_account);
 
-    const selected = try cli.selectAccountsToRemove(allocator, &reg);
+    var selected: ?[]usize = null;
+    if (opts.query) |query| {
+        var matches = try findMatchingAccounts(allocator, &reg, query);
+        defer matches.deinit(allocator);
+
+        if (matches.items.len == 0) {
+            try cli.printAccountNotFoundError(query);
+            return error.AccountNotFound;
+        }
+
+        if (matches.items.len > 1) {
+            var matched_emails = try collectAccountEmails(allocator, &reg, matches.items);
+            defer {
+                freeOwnedStrings(allocator, matched_emails.items);
+                matched_emails.deinit(allocator);
+            }
+            if (!(try cli.confirmRemoveMatches(matched_emails.items))) return;
+        }
+
+        selected = try allocator.dupe(usize, matches.items);
+    } else {
+        selected = try cli.selectAccountsToRemove(allocator, &reg);
+    }
     if (selected == null) return;
     defer allocator.free(selected.?);
     if (selected.?.len == 0) return;
+
+    var removed_emails = try collectAccountEmails(allocator, &reg, selected.?);
+    defer {
+        freeOwnedStrings(allocator, removed_emails.items);
+        removed_emails.deinit(allocator);
+    }
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
     if (reg.active_account_key == null and reg.accounts.items.len > 0) {
@@ -244,6 +294,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
+    try cli.printRemoveSummary(removed_emails.items);
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {

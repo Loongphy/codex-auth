@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
+const SeedAccount = struct {
+    email: []const u8,
+    alias: []const u8,
+};
+
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
     return std.fs.cwd().realpathAlloc(allocator, ".");
 }
@@ -81,6 +86,59 @@ fn runCliWithIsolatedHome(
     });
 }
 
+fn runCliWithIsolatedHomeAndStdin(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    args: []const []const u8,
+    stdin_data: []const u8,
+) !std.process.Child.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+
+    var child = std.process.Child.init(argv.items, allocator);
+    child.cwd = project_root;
+    child.env_map = &env_map;
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    var stdout = std.ArrayList(u8).empty;
+    defer stdout.deinit(allocator);
+    var stderr = std.ArrayList(u8).empty;
+    defer stderr.deinit(allocator);
+
+    try child.spawn();
+    errdefer {
+        _ = child.kill() catch {};
+    }
+
+    if (child.stdin) |stdin_pipe| {
+        try stdin_pipe.writeAll(stdin_data);
+        stdin_pipe.close();
+        child.stdin = null;
+    }
+
+    try child.collectOutput(allocator, &stdout, &stderr, 1024 * 1024);
+
+    return .{
+        .stdout = try stdout.toOwnedSlice(allocator),
+        .stderr = try stderr.toOwnedSlice(allocator),
+        .term = try child.wait(),
+    };
+}
+
 fn expectSuccess(result: std.process.Child.RunResult) !void {
     switch (result.term) {
         .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
@@ -114,6 +172,28 @@ fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) !
     const encoded = try bdd.b64url(allocator, email);
     defer allocator.free(encoded);
     return try std.fmt.allocPrint(allocator, "{s}.auth.json", .{encoded});
+}
+
+fn seedRegistryWithAccounts(
+    allocator: std.mem.Allocator,
+    home_root: []const u8,
+    active_email: []const u8,
+    entries: []const SeedAccount,
+) !void {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(allocator);
+
+    for (entries) |entry| {
+        try bdd.appendAccount(allocator, &reg, entry.email, entry.alias, null);
+    }
+
+    const active_key = try bdd.accountKeyForEmailAlloc(allocator, active_email);
+    reg.active_account_key = active_key;
+    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
 // This simulates first-time use on v0.2 when ~/.codex/auth.json already exists
@@ -603,6 +683,106 @@ test "Scenario: Given default api usage when rendering help then warning stays o
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "codex-auth") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API: ON (api-only)") != null);
     try expectUsageApiWarningOnStderrOnly(result);
+}
+
+test "Scenario: Given remove query with one match when running remove then it deletes immediately and prints a summary" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "robot09@example.com", .alias = "" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "09" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings(
+        "Removed 1 account(s): robot09@example.com\n",
+        result.stdout,
+    );
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
+}
+
+test "Scenario: Given remove query with multiple matches when running remove then it asks for confirmation before deleting" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "team-a" },
+        .{ .email = "beta@example.com", .alias = "team-b" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "team" }, "y\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Matched multiple accounts:\n- alpha@example.com\n- beta@example.com\nConfirm delete? [y/N]: ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): alpha@example.com, beta@example.com\n") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
+}
+
+test "Scenario: Given non-tty stdin when running interactive remove then it falls back to the numbered selector" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{"remove"}, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\x1b[2J\x1b[H") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Keys: ↑/↓ or j/k move") == null);
+    try std.testing.expectEqualStrings("", result.stderr);
 }
 
 test "Scenario: Given default api usage when rendering status then warning stays on stderr" {

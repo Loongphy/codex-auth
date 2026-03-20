@@ -44,7 +44,7 @@ pub const ImportOptions = struct {
     source: ImportSource,
 };
 pub const SwitchOptions = struct { query: ?[]u8 };
-pub const RemoveOptions = struct {};
+pub const RemoveOptions = struct { query: ?[]u8 };
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
 pub const AutoThresholdOptions = struct {
@@ -167,8 +167,21 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
     }
 
     if (std.mem.eql(u8, cmd, "remove")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .remove_account = .{} };
+        var query: ?[]u8 = null;
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.startsWith(u8, arg, "-")) {
+                if (query) |q| allocator.free(q);
+                return Command{ .help = {} };
+            }
+            if (query != null) {
+                if (query) |q| allocator.free(q);
+                return Command{ .help = {} };
+            }
+            query = try allocator.dupe(u8, arg);
+        }
+        return Command{ .remove_account = .{ .query = query } };
     }
 
     if (std.mem.eql(u8, cmd, "clean")) {
@@ -250,6 +263,9 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
         .switch_account => |*opts| {
             if (opts.query) |e| allocator.free(e);
         },
+        .remove_account => |*opts| {
+            if (opts.query) |q| allocator.free(q);
+        },
         else => {},
     }
 }
@@ -325,7 +341,7 @@ pub fn writeHelp(
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
         .{ .name = "switch [<query>]", .description = "Switch the active account" },
-        .{ .name = "remove", .description = "Remove one or more accounts" },
+        .{ .name = "remove [<query>]", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -524,6 +540,44 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, emails: []const []const u8) !void {
+    try out.writeAll("Matched multiple accounts:\n");
+    for (emails) |email| {
+        try out.print("- {s}\n", .{email});
+    }
+    try out.writeAll("Confirm delete? [y/N]: ");
+}
+
+pub fn confirmRemoveMatches(emails: []const []const u8) !bool {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeRemoveConfirmationTo(out, emails);
+    try out.flush();
+
+    var buf: [64]u8 = undefined;
+    const n = try std.fs.File.stdin().read(&buf);
+    const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
+    return line.len == 1 and (line[0] == 'y' or line[0] == 'Y');
+}
+
+pub fn writeRemoveSummaryTo(out: *std.Io.Writer, emails: []const []const u8) !void {
+    try out.print("Removed {d} account(s): ", .{emails.len});
+    for (emails, 0..) |email, idx| {
+        if (idx != 0) try out.writeAll(", ");
+        try out.writeAll(email);
+    }
+    try out.writeAll("\n");
+}
+
+pub fn printRemoveSummary(emails: []const []const u8) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeRemoveSummaryTo(out, emails);
+    try out.flush();
+}
+
 pub fn writeDeprecatedLoginAliasWarningTo(out: *std.Io.Writer, replacement: []const u8, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.bold_red);
     try out.writeAll("warning:");
@@ -590,10 +644,14 @@ pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
-    if (comptime builtin.os.tag == .windows) {
+    if (shouldUseNumberedRemoveSelector(builtin.os.tag == .windows, std.fs.File.stdin().isTty())) {
         return selectRemoveWithNumbers(allocator, reg);
     }
     return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);
+}
+
+pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool) bool {
+    return is_windows or !stdin_is_tty;
 }
 
 fn isQuitInput(input: []const u8) bool {

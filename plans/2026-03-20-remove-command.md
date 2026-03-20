@@ -27,22 +27,22 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
 
 - [x] Create this plan file and keep it updated with progress.
 - [x] Temporarily update `AGENTS.md` so the active task explicitly follows this plan file.
-- [ ] Commit the planning setup and open a Draft PR.
+- [x] Commit the planning setup and open a Draft PR.
 
 ### Phase 2: CLI and Flow Changes
 
-- [ ] Extend `RemoveOptions` to carry an optional positional query.
-- [ ] Update `parseArgs`, `freeCommand`, and help output for `remove [<query>]`.
-- [ ] Update `handleRemove` to support query-based deletion and summary output.
-- [ ] Add/remove helpers needed for confirmation prompts and remove summaries.
-- [ ] Change remove selection so non-TTY stdin goes straight to numbered selection.
+- [x] Extend `RemoveOptions` to carry an optional positional query.
+- [x] Update `parseArgs`, `freeCommand`, and help output for `remove [<query>]`.
+- [x] Update `handleRemove` to support query-based deletion and summary output.
+- [x] Add/remove helpers needed for confirmation prompts and remove summaries.
+- [x] Change remove selection so non-TTY stdin goes straight to numbered selection.
 
 ### Phase 3: Tests and Docs
 
-- [ ] Add/adjust unit tests for parsing, matching, summary rendering, and selector mode choice.
-- [ ] Add/adjust e2e coverage for query deletion and non-TTY remove behavior.
-- [ ] Update `docs/implement.md` for the new remove behavior.
-- [ ] Run required validation, including `zig build run -- list`.
+- [x] Add/adjust unit tests for parsing, matching, summary rendering, and selector mode choice.
+- [x] Add/adjust e2e coverage for query deletion and non-TTY remove behavior.
+- [x] Update `docs/implement.md` for the new remove behavior.
+- [x] Run required validation, including `zig build run -- list`.
 
 ### Phase 4: PR Follow-up
 
@@ -63,8 +63,19 @@ Fix the `remove` command workflow so it is easier to use in query-based and pipe
   - no `--email` flag
   - query matches alias or email
   - multi-match query path asks for explicit delete confirmation
-- 2026-03-20: Implementation not started yet.
+- 2026-03-20: Planning setup committed as `cc8688e` (`docs: add remove command execution plan`).
+- 2026-03-20: Draft PR created: `#23 fix: improve remove command query and pipe flows`.
+- 2026-03-20: Implemented:
+  - positional query support for `remove`
+  - multi-match confirmation prompt
+  - remove summary output
+  - non-TTY fallback to numbered remove selection
+  - unit/e2e/doc updates
+- 2026-03-20: Validation completed:
+  - `env ZIG_GLOBAL_CACHE_DIR=.zig-cache/test-global ZIG_LOCAL_CACHE_DIR=.zig-cache/test-local zig test src/main.zig -lc`
+  - `zig build run -- list`
 
 ## PR / Review Log
 
-- Pending.
+- PR #23 created as Draft.
+- CI/review follow-up pending.
