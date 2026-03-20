@@ -138,6 +138,24 @@ fn fetchUnknownApiUnavailableFallbackHealthy(
     return error.TestUnexpectedCandidateFetch;
 }
 
+fn fetchCandidateUsageUpdatedButStillWorse(
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) !?registry.RateLimitSnapshot {
+    const data = try readAuthSnapshotAlloc(allocator, auth_path);
+    defer allocator.free(data);
+
+    if (std.mem.indexOf(u8, data, "candidate@example.com") != null) {
+        return .{
+            .primary = .{ .used_percent = 97.0, .window_minutes = 300, .resets_at = null },
+            .secondary = .{ .used_percent = 94.0, .window_minutes = 10080, .resets_at = null },
+            .credits = null,
+            .plan_type = .pro,
+        };
+    }
+    return error.TestUnexpectedCandidateFetch;
+}
+
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "partial-service-artifact" });
 }
@@ -876,6 +894,61 @@ test "Scenario: Given all candidates rejected after revalidation when auto switc
     try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
 }
 
+test "Scenario: Given candidate usage refresh without switch when evaluating auto switch then the change is still reported" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 92.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 96.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    const result = try auto.maybeAutoSwitchWithCandidateUsageFetcherResult(
+        gpa,
+        codex_home,
+        &reg,
+        fetchCandidateUsageUpdatedButStillWorse,
+    );
+    try std.testing.expect(!result.switched);
+    try std.testing.expect(result.changed);
+
+    const candidate_idx = registry.findAccountIndexByAccountKey(&reg, candidate_account_id) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 97.0), reg.accounts.items[candidate_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 94.0), reg.accounts.items[candidate_idx].last_usage.?.secondary.?.used_percent);
+}
+
 test "Scenario: Given linux service unit when rendering then oneshot daemon command is included" {
     const gpa = std.testing.allocator;
     const unit = try auto.linuxUnitText(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home");
@@ -894,7 +967,7 @@ test "Scenario: Given linux timer unit when rendering then it schedules the ones
     defer gpa.free(timer);
 
     try std.testing.expect(std.mem.indexOf(u8, timer, "Description=Run codex-auth auto-switch every 4min") != null);
-    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=4min") != null);
+    try std.testing.expect(std.mem.indexOf(u8, timer, "OnBootSec=1s") != null);
     try std.testing.expect(std.mem.indexOf(u8, timer, "OnUnitActiveSec=4min") != null);
     try std.testing.expect(std.mem.indexOf(u8, timer, "Unit=codex-auth-autoswitch.service") != null);
     try std.testing.expect(std.mem.indexOf(u8, timer, "WantedBy=timers.target") != null);

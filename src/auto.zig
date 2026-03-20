@@ -384,7 +384,7 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
-    return maybeAutoSwitchWithCandidateUsageFetcher(allocator, codex_home, reg, usage_api.fetchUsageForAuthPath);
+    return (try maybeAutoSwitchWithCandidateUsageFetcherResult(allocator, codex_home, reg, usage_api.fetchUsageForAuthPath)).switched;
 }
 
 pub fn maybeAutoSwitchWithCandidateUsageFetcher(
@@ -393,16 +393,36 @@ pub fn maybeAutoSwitchWithCandidateUsageFetcher(
     reg: *registry.Registry,
     candidate_usage_fetcher: anytype,
 ) !bool {
-    if (!reg.auto_switch.enabled) return false;
-    const active = reg.active_account_key orelse return false;
-    const now = std.time.timestamp();
-    if (!shouldSwitchCurrent(reg, now)) return false;
+    return (try maybeAutoSwitchWithCandidateUsageFetcherResult(
+        allocator,
+        codex_home,
+        reg,
+        candidate_usage_fetcher,
+    )).switched;
+}
 
-    const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return false;
+pub const AutoSwitchAttemptResult = struct {
+    switched: bool,
+    changed: bool,
+};
+
+pub fn maybeAutoSwitchWithCandidateUsageFetcherResult(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    candidate_usage_fetcher: anytype,
+) !AutoSwitchAttemptResult {
+    if (!reg.auto_switch.enabled) return .{ .switched = false, .changed = false };
+    const active = reg.active_account_key orelse return .{ .switched = false, .changed = false };
+    const now = std.time.timestamp();
+    if (!shouldSwitchCurrent(reg, now)) return .{ .switched = false, .changed = false };
+
+    const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return .{ .switched = false, .changed = false };
     const current = candidateState(&reg.accounts.items[active_idx], now, reg.auto_switch, false);
 
     var candidate_indices = try rankedAutoSwitchCandidateIndices(allocator, reg, now);
     defer candidate_indices.deinit(allocator);
+    var changed = false;
 
     for (candidate_indices.items) |candidate_idx| {
         if (reg.api.usage) {
@@ -414,6 +434,7 @@ pub fn maybeAutoSwitchWithCandidateUsageFetcher(
                 candidate_usage_fetcher,
             );
             if (refreshed == .unavailable) continue;
+            if (refreshed == .updated) changed = true;
         }
 
         const candidate = candidateState(&reg.accounts.items[candidate_idx], now, reg.auto_switch, false);
@@ -421,10 +442,10 @@ pub fn maybeAutoSwitchWithCandidateUsageFetcher(
         if (!candidateBetter(candidate, current)) continue;
 
         try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
-        return true;
+        return .{ .switched = true, .changed = true };
     }
 
-    return false;
+    return .{ .switched = false, .changed = changed };
 }
 
 fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
@@ -456,8 +477,11 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
         registry.findAccountIndexByAccountKey(&reg, account_key)
     else
         null;
-    if (try maybeAutoSwitch(allocator, codex_home, &reg)) {
+    const switch_result = try maybeAutoSwitchWithCandidateUsageFetcherResult(allocator, codex_home, &reg, usage_api.fetchUsageForAuthPath);
+    if (switch_result.changed) {
         changed = true;
+    }
+    if (switch_result.switched) {
         if (active_idx_before) |from_idx| {
             if (reg.active_account_key) |account_key| {
                 if (registry.findAccountIndexByAccountKey(&reg, account_key)) |to_idx| {
@@ -938,8 +962,8 @@ pub fn linuxTimerText(allocator: std.mem.Allocator, interval_seconds: u32) ![]u8
     defer allocator.free(interval_label);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=Run codex-auth auto-switch every {s}\n\n[Timer]\nOnBootSec={s}\nOnUnitActiveSec={s}\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
-        .{ interval_label, interval_label, interval_label, linux_service_name },
+        "[Unit]\nDescription=Run codex-auth auto-switch every {s}\n\n[Timer]\nOnBootSec=1s\nOnUnitActiveSec={s}\nUnit={s}\n\n[Install]\nWantedBy=timers.target\n",
+        .{ interval_label, interval_label, linux_service_name },
     );
 }
 
