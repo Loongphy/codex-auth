@@ -257,8 +257,8 @@ Candidate selection is conservative:
 
 - by default, auto-switch expects both 5h and weekly snapshots
 - candidate ranking prefers higher 5h remaining first and uses weekly remaining as the next tie-breaker
-- free accounts may expose only a single `10080`-minute weekly snapshot; when that happens, auto-switch treats it as a 5h proxy so those free accounts can still be selected
-- single-window free candidates are evaluated against `--5h`
+- free accounts may expose only a single `10080`-minute weekly snapshot; when `5h` is missing but that weekly snapshot exists, auto-switch treats the weekly snapshot as both the effective `5h` and `weekly` window
+- the same free-plan aliasing is used for account list and switch display, so `5H` and `WEEKLY` show the same value for those weekly-only free accounts
 - in API mode, non-free accounts with missing 5h or weekly snapshots are treated as `unknown` and revalidated before preferred and fallback candidates
 - preferred dual-window candidates must have both 5h and weekly above their configured thresholds
 - if no preferred candidate exists, auto-switch can fall back only to accounts whose available windows are still above `0%`

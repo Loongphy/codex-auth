@@ -59,11 +59,10 @@ fn printAccountsTable(reg: *registry.Registry) !void {
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = planDisplay(&rec, "-");
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitFullAlloc(rate_5h);
+            const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+            const rate_5h_str = try formatRateLimitFullAlloc(windows.rate_5h);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try formatRateLimitFullAlloc(rate_week);
+            const rate_week_str = try formatRateLimitFullAlloc(windows.rate_weekly);
             defer std.heap.page_allocator.free(rate_week_str);
             const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last_str);
@@ -113,11 +112,10 @@ fn printAccountsTable(reg: *registry.Registry) !void {
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = planDisplay(&rec, "-");
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitUiAlloc(rate_5h, widths[2]);
+            const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+            const rate_5h_str = try formatRateLimitUiAlloc(windows.rate_5h, widths[2]);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try formatRateLimitUiAlloc(rate_week, widths[3]);
+            const rate_week_str = try formatRateLimitUiAlloc(windows.rate_weekly, widths[3]);
             defer std.heap.page_allocator.free(rate_week_str);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last);
@@ -195,11 +193,10 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
         const chatgpt_account_id = rec.chatgpt_account_id;
         const chatgpt_user_id = rec.chatgpt_user_id;
         const plan = planDisplay(&rec, "");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
+        const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+        const rate_5h_str = try formatRateLimitStatusAlloc(windows.rate_5h);
         defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
+        const rate_week_str = try formatRateLimitStatusAlloc(windows.rate_weekly);
         defer std.heap.page_allocator.free(rate_week_str);
         const last = if (rec.last_used_at) |t| try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{t}) else "";
         defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
@@ -219,11 +216,10 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
         const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
         const email = rec.email;
         const plan = planDisplay(&rec, "-");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
+        const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+        const rate_5h_str = try formatRateLimitStatusAlloc(windows.rate_5h);
         defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
+        const rate_week_str = try formatRateLimitStatusAlloc(windows.rate_weekly);
         defer std.heap.page_allocator.free(rate_week_str);
         const last = if (rec.last_used_at) |t| try formatTimestampAlloc(t) else "-";
         defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
@@ -242,17 +238,6 @@ const RegistryOut = struct {
     api: registry.ApiConfig,
     accounts: []const registry.AccountRecord,
 };
-
-fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
-    if (usage == null) return null;
-    if (usage.?.primary) |p| {
-        if (p.window_minutes != null and p.window_minutes.? == minutes) return p;
-    }
-    if (usage.?.secondary) |s| {
-        if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
-    }
-    return if (fallback_primary) usage.?.primary else usage.?.secondary;
-}
 
 fn formatRateLimitStatusAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});

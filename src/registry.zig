@@ -70,10 +70,36 @@ pub const AccountRecord = struct {
     last_local_rollout: ?RolloutSignature,
 };
 
+pub const EffectiveRateWindows = struct {
+    rate_5h: ?RateLimitWindow,
+    rate_weekly: ?RateLimitWindow,
+};
+
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
     if (rec.plan) |p| return p;
     if (rec.last_usage) |u| return u.plan_type;
     return null;
+}
+
+pub fn resolveEffectiveRateWindows(usage: ?RateLimitSnapshot, plan: ?PlanType) EffectiveRateWindows {
+    const rate_5h = resolveExactRateWindow(usage, 300);
+    const rate_weekly = resolveExactRateWindow(usage, 10080);
+
+    if (plan == .free and rate_5h == null and rate_weekly != null) {
+        return .{
+            .rate_5h = rate_weekly,
+            .rate_weekly = rate_weekly,
+        };
+    }
+
+    return .{
+        .rate_5h = rate_5h,
+        .rate_weekly = rate_weekly,
+    };
+}
+
+pub fn resolveEffectiveRateWindowsForRecord(rec: *const AccountRecord) EffectiveRateWindows {
+    return resolveEffectiveRateWindows(rec.last_usage, resolvePlan(rec));
 }
 
 pub const Registry = struct {
@@ -1678,6 +1704,17 @@ pub fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_prima
         if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
     }
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
+}
+
+fn resolveExactRateWindow(usage: ?RateLimitSnapshot, minutes: i64) ?RateLimitWindow {
+    if (usage == null) return null;
+    if (usage.?.primary) |primary| {
+        if (primary.window_minutes != null and primary.window_minutes.? == minutes) return primary;
+    }
+    if (usage.?.secondary) |secondary| {
+        if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
+    }
+    return null;
 }
 
 pub fn activateAccountByKey(

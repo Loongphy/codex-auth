@@ -91,6 +91,50 @@ fn makeEmptyRegistry() registry.Registry {
     };
 }
 
+test "resolve effective rate windows aliases free weekly-only snapshots to both windows" {
+    const usage = registry.RateLimitSnapshot{
+        .primary = .{ .used_percent = 70.0, .window_minutes = 10080, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    };
+
+    const windows = registry.resolveEffectiveRateWindows(usage, .free);
+    try std.testing.expect(windows.rate_5h != null);
+    try std.testing.expect(windows.rate_weekly != null);
+    try std.testing.expectEqual(@as(?i64, 10080), windows.rate_5h.?.window_minutes);
+    try std.testing.expectEqual(@as(?i64, 10080), windows.rate_weekly.?.window_minutes);
+}
+
+test "resolve effective rate windows keeps free 5h-only snapshots missing weekly" {
+    const usage = registry.RateLimitSnapshot{
+        .primary = .{ .used_percent = 70.0, .window_minutes = 300, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    };
+
+    const windows = registry.resolveEffectiveRateWindows(usage, .free);
+    try std.testing.expect(windows.rate_5h != null);
+    try std.testing.expect(windows.rate_weekly == null);
+    try std.testing.expectEqual(@as(?i64, 300), windows.rate_5h.?.window_minutes);
+}
+
+test "resolve effective rate windows also aliases free weekly-only secondary snapshots" {
+    const usage = registry.RateLimitSnapshot{
+        .primary = null,
+        .secondary = .{ .used_percent = 70.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .free,
+    };
+
+    const windows = registry.resolveEffectiveRateWindows(usage, .free);
+    try std.testing.expect(windows.rate_5h != null);
+    try std.testing.expect(windows.rate_weekly != null);
+    try std.testing.expectEqual(@as(?i64, 10080), windows.rate_5h.?.window_minutes);
+    try std.testing.expectEqual(@as(?i64, 10080), windows.rate_weekly.?.window_minutes);
+}
+
 fn makeAccountRecord(
     allocator: std.mem.Allocator,
     email: []const u8,

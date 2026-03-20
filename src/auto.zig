@@ -377,9 +377,10 @@ pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const account_key = reg.active_account_key orelse return false;
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
-    const rem_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
-    const rem_week = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 10080), now);
-    return shouldSwitchWithRemaining(registry.resolvePlan(rec), rem_5h, rem_week, reg.auto_switch);
+    const windows = registry.resolveEffectiveRateWindowsForRecord(rec);
+    const rem_5h = registry.remainingPercentAt(windows.rate_5h, now);
+    const rem_week = registry.remainingPercentAt(windows.rate_weekly, now);
+    return shouldSwitchWithRemaining(rem_5h, rem_week, reg.auto_switch);
 }
 
 pub fn maybeAutoSwitch(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -635,9 +636,10 @@ fn candidateState(
     cfg: registry.AutoSwitchConfig,
     allow_revalidation: bool,
 ) CandidateState {
-    const remaining_5h = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 300), now);
-    const remaining_weekly = registry.remainingPercentAt(resolveExactRateWindow(rec.last_usage, 10080), now);
-    const tier = determineCandidateTier(remaining_5h, remaining_weekly, registry.resolvePlan(rec), cfg, allow_revalidation);
+    const windows = registry.resolveEffectiveRateWindowsForRecord(rec);
+    const remaining_5h = registry.remainingPercentAt(windows.rate_5h, now);
+    const remaining_weekly = registry.remainingPercentAt(windows.rate_weekly, now);
+    const tier = determineCandidateTier(remaining_5h, remaining_weekly, cfg, allow_revalidation);
     return .{
         .tier = tier,
         .remaining_5h = remaining_5h,
@@ -647,35 +649,11 @@ fn candidateState(
     };
 }
 
-fn resolveExactRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64) ?registry.RateLimitWindow {
-    if (usage == null) return null;
-    if (usage.?.primary) |primary| {
-        if (primary.window_minutes != null and primary.window_minutes.? == minutes) return primary;
-    }
-    if (usage.?.secondary) |secondary| {
-        if (secondary.window_minutes != null and secondary.window_minutes.? == minutes) return secondary;
-    }
-    return null;
-}
-
-fn singleWindowRemaining(remaining_5h: ?i64, remaining_weekly: ?i64) ?i64 {
-    return remaining_5h orelse remaining_weekly;
-}
-
-fn usesSingleWindowFreeMode(plan: ?registry.PlanType, remaining_5h: ?i64, remaining_weekly: ?i64) bool {
-    return plan == .free and ((remaining_5h == null) != (remaining_weekly == null));
-}
-
 fn shouldSwitchWithRemaining(
-    plan: ?registry.PlanType,
     remaining_5h: ?i64,
     remaining_weekly: ?i64,
     cfg: registry.AutoSwitchConfig,
 ) bool {
-    if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
-        const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return false;
-        return remaining < @as(i64, cfg.threshold_5h_percent);
-    }
     const rem_5h = remaining_5h orelse return false;
     const rem_weekly = remaining_weekly orelse return false;
     return rem_5h < @as(i64, cfg.threshold_5h_percent) or rem_weekly < @as(i64, cfg.threshold_weekly_percent);
@@ -684,16 +662,9 @@ fn shouldSwitchWithRemaining(
 fn determineCandidateTier(
     remaining_5h: ?i64,
     remaining_weekly: ?i64,
-    plan: ?registry.PlanType,
     cfg: registry.AutoSwitchConfig,
     allow_revalidation: bool,
 ) CandidateTier {
-    if (usesSingleWindowFreeMode(plan, remaining_5h, remaining_weekly)) {
-        const remaining = singleWindowRemaining(remaining_5h, remaining_weekly) orelse return if (allow_revalidation) .unknown else .ineligible;
-        if (remaining <= 0) return .ineligible;
-        if (remaining > @as(i64, cfg.threshold_5h_percent)) return .preferred;
-        return .fallback;
-    }
     const rem_5h = remaining_5h orelse return if (allow_revalidation) .unknown else .ineligible;
     const rem_weekly = remaining_weekly orelse return if (allow_revalidation) .unknown else .ineligible;
     if (rem_5h <= 0 or rem_weekly <= 0) {

@@ -56,6 +56,15 @@ fn freeWeeklyOnlySnapshot(used_percent: f64) registry.RateLimitSnapshot {
     };
 }
 
+fn free5hOnlySnapshot(used_percent: f64) registry.RateLimitSnapshot {
+    return .{
+        .primary = .{ .used_percent = used_percent, .window_minutes = 300, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .free,
+    };
+}
+
 fn readAuthSnapshotAlloc(allocator: std.mem.Allocator, auth_path: []const u8) ![]u8 {
     var file = try std.fs.cwd().openFile(auth_path, .{});
     defer file.close();
@@ -404,14 +413,14 @@ test "Scenario: Given non-free weekly-only account when checking current then mi
     try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
 }
 
-test "Scenario: Given free weekly-only account when checking current then it is treated like 5h for auto switch" {
+test "Scenario: Given free weekly-only account when checking current then both thresholds use the same window" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(gpa);
-    reg.auto_switch.threshold_5h_percent = 30;
-    reg.auto_switch.threshold_weekly_percent = 80;
+    reg.auto_switch.threshold_5h_percent = 10;
+    reg.auto_switch.threshold_weekly_percent = 50;
 
-    try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(78.0), 100);
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", freeWeeklyOnlySnapshot(70.0), 100);
     const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
@@ -434,6 +443,50 @@ test "Scenario: Given free weekly-only candidate when selecting auto candidate t
 
     const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "healthy-free@example.com"));
+}
+
+test "Scenario: Given free 5h-only account when checking current then missing weekly still prevents auto switch" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 30;
+    reg.auto_switch.threshold_weekly_percent = 50;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", free5hOnlySnapshot(70.0), 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+}
+
+test "Scenario: Given stricter weekly threshold and free weekly-only candidate when selecting auto candidate then preferred dual-window account stays ahead" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 10;
+    reg.auto_switch.threshold_weekly_percent = 50;
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 95.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "free-weekly@example.com", freeWeeklyOnlySnapshot(70.0), 200);
+    try appendAccountWithUsage(gpa, &reg, "preferred@example.com", .{
+        .primary = .{ .used_percent = 80.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "preferred@example.com"));
 }
 
 test "Scenario: Given healthier weekly but weaker 5h candidate when selecting auto candidate then 5h stays higher priority" {

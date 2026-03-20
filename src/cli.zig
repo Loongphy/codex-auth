@@ -1326,10 +1326,9 @@ fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !Switc
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);
-            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, rate_week);
+            const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, windows.rate_5h);
+            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, windows.rate_weekly);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
             rows[i] = .{
                 .account_index = account_idx,
@@ -1388,10 +1387,9 @@ fn buildSwitchRowsFromIndices(
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);
-            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, rate_week);
+            const windows = registry.resolveEffectiveRateWindowsForRecord(&rec);
+            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, windows.rate_5h);
+            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, windows.rate_weekly);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
             rows[i] = .{
                 .account_index = account_idx,
@@ -1428,17 +1426,6 @@ fn buildSwitchRowsFromIndices(
         .selectable_row_indices = try allocator.dupe(usize, display.selectable_row_indices),
         .widths = widths,
     };
-}
-
-fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
-    if (usage == null) return null;
-    if (usage.?.primary) |p| {
-        if (p.window_minutes != null and p.window_minutes.? == minutes) return p;
-    }
-    if (usage.?.secondary) |s| {
-        if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
-    }
-    return if (fallback_primary) usage.?.primary else usage.?.secondary;
 }
 
 fn formatRateLimitSwitchAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow) ![]u8 {
