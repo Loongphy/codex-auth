@@ -69,7 +69,7 @@ codex-auth switch [<email>] # switch active account (interactive or partial/frag
 codex-auth import <path> [--alias <alias>] # smart import: file -> single import, folder -> batch import
 codex-auth import --cpa [<path>] # import CPA flat token JSON from one file or directory
 codex-auth import --purge [<path>] # rebuild registry.json from auth files for the current version
-codex-auth remove # remove accounts (interactive multi-select)
+codex-auth remove [<query>|--all] # remove accounts
 codex-auth status # show auto-switch/service/api usage status
 codex-auth config auto enable|disable # manage background auto-switching
 codex-auth config auto --5h <percent> [--weekly <percent>] # configure auto-switch thresholds

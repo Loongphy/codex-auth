@@ -1732,6 +1732,23 @@ pub fn activateAccountByKey(
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
+pub fn replaceActiveAuthWithAccountByKey(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    account_key: []const u8,
+) !void {
+    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(src);
+
+    const dest = try activeAuthPath(allocator, codex_home);
+    defer allocator.free(dest);
+
+    try copyFile(src, dest);
+    try setActiveAccountKey(allocator, reg, account_key);
+}
+
 pub fn accountFromAuth(
     allocator: std.mem.Allocator,
     alias: []const u8,

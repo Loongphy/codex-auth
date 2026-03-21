@@ -191,10 +191,11 @@ The switch command refreshes the current active account's usage once before rend
 
 ## Removing Accounts
 
-`remove` now supports two foreground modes:
+`remove` now supports three foreground modes:
 
 - Interactive: `codex-auth remove`
 - Query-driven: `codex-auth remove <query>`
+- Clear-all: `codex-auth remove --all`
 
 For query-driven removal, the target query is matched case-insensitively by:
 
@@ -220,7 +221,7 @@ If the removed account was the active one:
 
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 
-When `remove` is run without a query and stdin is not a TTY, the command skips the `/dev/tty` interactive picker and falls back directly to the numbered remove selector so piped/automated runs do not attempt the fullscreen interactive UI.
+When `remove` is run without a query and stdin is not a TTY, the command exits non-zero instead of consuming piped input as delete selections. Use `remove <query>` or `remove --all` for explicit non-interactive deletion.
 
 ## Background Auto Switch
 

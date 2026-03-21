@@ -168,6 +168,19 @@ fn codexHomeAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".codex" });
 }
 
+fn countAuthBackups(dir: std.fs.Dir, rel_path: []const u8) !usize {
+    var accounts = try dir.openDir(rel_path, .{ .iterate = true });
+    defer accounts.close();
+
+    var count: usize = 0;
+    var it = accounts.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.startsWith(u8, entry.name, "auth.json.bak.")) count += 1;
+    }
+    return count;
+}
+
 fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const encoded = try bdd.b64url(allocator, email);
     defer allocator.free(encoded);
@@ -749,6 +762,60 @@ test "Scenario: Given remove query with one match when running remove then it de
     keeper_backup.close();
 }
 
+test "Scenario: Given active account removal with a replacement when running remove then it does not recreate a backup for the deleted auth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "" },
+        .{ .email = "backup@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try bdd.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): active@example.com\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const replaced_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(replaced_auth);
+    try std.testing.expectEqualStrings(backup_auth, replaced_auth);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_snapshot_path, .{}));
+    try std.testing.expectEqual(@as(usize, 0), try countAuthBackups(tmp.dir, ".codex/accounts"));
+}
+
 test "Scenario: Given remove query with no matches when running remove then it exits cleanly with one stderr line" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -865,7 +932,7 @@ test "Scenario: Given remove query deletes the final active account when running
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(snapshot_path, .{}));
 }
 
-test "Scenario: Given non-tty stdin when running interactive remove then it falls back to the numbered selector" {
+test "Scenario: Given non-tty stdin when running interactive remove then it fails with a tty requirement" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -886,12 +953,53 @@ test "Scenario: Given non-tty stdin when running interactive remove then it fall
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings(
+        "error: interactive remove requires a TTY.\n" ++
+            "hint: Use `codex-auth remove <query>` or `codex-auth remove --all` instead.\n",
+        result.stderr,
+    );
+}
+
+test "Scenario: Given remove all when running remove then it clears all accounts and deletes active auth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "pro");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\x1b[2J\x1b[H") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Keys: ↑/↓ or j/k move") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key == null);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given default api usage when rendering status then warning stays on stderr" {

@@ -56,7 +56,9 @@ fn runMain() !void {
 }
 
 fn isHandledCliError(err: anyerror) bool {
-    return err == error.AccountNotFound or err == error.RemoveConfirmationUnavailable;
+    return err == error.AccountNotFound or
+        err == error.RemoveConfirmationUnavailable or
+        err == error.RemoveSelectionRequiresTty;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
@@ -87,7 +89,7 @@ pub fn reconcileActiveAuthAfterRemove(
     if (reg.accounts.items.len > 0) {
         const best_idx = registry.selectBestAccountIndexByUsage(reg) orelse 0;
         const account_key = reg.accounts.items[best_idx].account_key;
-        try registry.activateAccountByKey(allocator, codex_home, reg, account_key);
+        try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, account_key);
         return;
     }
 
@@ -292,7 +294,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .remove_account);
 
     var selected: ?[]usize = null;
-    if (opts.query) |query| {
+    if (opts.all) {
+        selected = try allocator.alloc(usize, reg.accounts.items.len);
+        for (selected.?, 0..) |*slot, idx| slot.* = idx;
+    } else if (opts.query) |query| {
         var matches = try findMatchingAccounts(allocator, &reg, query);
         defer matches.deinit(allocator);
 
@@ -316,6 +321,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
         selected = try allocator.dupe(usize, matches.items);
     } else {
+        if (!std.fs.File.stdin().isTty()) {
+            try cli.printRemoveRequiresTtyError();
+            return error.RemoveSelectionRequiresTty;
+        }
         selected = try cli.selectAccountsToRemove(allocator, &reg);
     }
     if (selected == null) return;

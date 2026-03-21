@@ -159,7 +159,7 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "add [--no-login]") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove [<query>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "remove [<query>|--all]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
@@ -574,6 +574,22 @@ test "Scenario: Given remove with positional query when parsing then query mode 
         .remove_account => |opts| {
             try std.testing.expect(opts.query != null);
             try std.testing.expect(std.mem.eql(u8, opts.query.?, "user@example.com"));
+            try std.testing.expect(!opts.all);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove with all flag when parsing then all mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--all" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    switch (cmd) {
+        .remove_account => |opts| {
+            try std.testing.expect(opts.query == null);
+            try std.testing.expect(opts.all);
         },
         else => return error.TestExpectedEqual,
     }
@@ -591,6 +607,15 @@ test "Scenario: Given remove with duplicate targets when parsing then help comma
 test "Scenario: Given remove with unexpected flag when parsing then help command is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "remove", "--email" };
+    var cmd = try cli.parseArgs(gpa, &args);
+    defer cli.freeCommand(gpa, &cmd);
+
+    try std.testing.expect(isHelp(cmd));
+}
+
+test "Scenario: Given remove with all and query when parsing then help command is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--all", "a@example.com" };
     var cmd = try cli.parseArgs(gpa, &args);
     defer cli.freeCommand(gpa, &cmd);
 
@@ -629,7 +654,7 @@ test "Scenario: Given multiple matched accounts when rendering confirmation then
 }
 
 test "Scenario: Given selector environment when deciding remove UI then non-tty or windows use the numbered selector" {
-    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, false));
+    try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, false));
     try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true));
     try std.testing.expect(cli.shouldUseNumberedRemoveSelector(true, true));
 }
