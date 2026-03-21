@@ -8,6 +8,18 @@ const format = @import("format.zig");
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 
 pub fn main() !void {
+    var exit_code: u8 = 0;
+    runMain() catch |err| {
+        if (isHandledCliError(err)) {
+            exit_code = 1;
+        } else {
+            return err;
+        }
+    };
+    if (exit_code != 0) std.process.exit(exit_code);
+}
+
+fn runMain() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -41,6 +53,10 @@ pub fn main() !void {
     if (shouldReconcileManagedService(cmd)) {
         try auto.reconcileManagedService(allocator, codex_home);
     }
+}
+
+fn isHandledCliError(err: anyerror) bool {
+    return err == error.AccountNotFound;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {

@@ -749,6 +749,33 @@ test "Scenario: Given remove query with one match when running remove then it de
     keeper_backup.close();
 }
 
+test "Scenario: Given remove query with no matches when running remove then it exits cleanly with one stderr line" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "tmp2" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("error: no account matches 'tmp2'.\n", result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+}
+
 test "Scenario: Given remove query with multiple matches when running remove then it asks for confirmation before deleting" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
