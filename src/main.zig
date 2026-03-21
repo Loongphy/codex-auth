@@ -447,6 +447,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     const allow_auth_file_update = if (current_active_account_key) |key|
         active_removed and ((current_auth_state.syncable and current_auth_state.record_key != null and
             std.mem.eql(u8, current_auth_state.record_key.?, key)) or current_auth_state.missing)
+    else if (current_auth_state.missing)
+        true
     else if (opts.all)
         current_auth_state.syncable and current_auth_state.record_key != null and
             selectionContainsAccountKey(&reg, selected.?, current_auth_state.record_key.?)

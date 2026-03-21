@@ -894,6 +894,72 @@ test "Scenario: Given active account removal with missing auth json when running
     try std.testing.expectEqualStrings(backup_auth, recreated_auth);
 }
 
+test "Scenario: Given missing auth json and no valid active key when running remove then replacement auth is recreated" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "" },
+        .{ .email = "backup@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try bdd.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    var reg = try registry.loadRegistry(gpa, codex_home);
+    defer reg.deinit(gpa);
+    if (reg.active_account_key) |key| {
+        gpa.free(key);
+        reg.active_account_key = null;
+    }
+    reg.active_account_activated_at_ms = null;
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): active@example.com\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const recreated_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(recreated_auth);
+    try std.testing.expectEqualStrings(backup_auth, recreated_auth);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+}
+
 test "Scenario: Given auth json already points at another registry account when removing it then later sync does not recreate that deleted account" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
