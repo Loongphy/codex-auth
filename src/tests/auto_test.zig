@@ -538,10 +538,38 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
     try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch watcher") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Type=simple") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "SyslogPriorityPrefix=yes") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "[Install]") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "WantedBy=default.target") != null);
+}
+
+test "Scenario: Given a zig build run executable path when resolving the managed service binary then it prefers zig-out" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makePath("zig-out/bin");
+    try tmp.dir.writeFile(.{ .sub_path = "zig-out/bin/codex-auth", .data = "" });
+
+    const path = try auto.managedServiceSelfExePathFromDir(
+        gpa,
+        tmp.dir,
+        "/tmp/codex-auth/.zig-cache/o/abcd1234/codex-auth",
+    );
+    defer gpa.free(path);
+
+    const expected = try tmp.dir.realpathAlloc(gpa, "zig-out/bin/codex-auth");
+    defer gpa.free(expected);
+    try std.testing.expectEqualStrings(expected, path);
+}
+
+test "Scenario: Given a stable executable path when resolving the managed service binary then it keeps the original path" {
+    const gpa = std.testing.allocator;
+    const path = try auto.managedServiceSelfExePath(gpa, "/usr/local/bin/codex-auth");
+    defer gpa.free(path);
+
+    try std.testing.expectEqualStrings("/usr/local/bin/codex-auth", path);
 }
 
 test "Scenario: Given mac plist when rendering then it includes version metadata and daemon args" {

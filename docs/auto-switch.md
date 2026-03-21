@@ -38,6 +38,13 @@ Each cycle:
 6. evaluates whether the active account should be switched
 7. writes `registry.json` only when state changed
 
+The watcher also emits English-only service logs for debugging:
+
+- local rollout event captures when a fresh event is seen
+- API fallback attempts/results, including HTTP status codes when available
+- candidate refresh / final switch decisions
+- on Linux systemd services, these daemon log lines use syslog priority prefixes so `journalctl` can color warnings/errors automatically
+
 `daemon --once` still exists for tests and one-shot validation, but the managed service path uses `daemon --watch`.
 
 ## Data Source Priority

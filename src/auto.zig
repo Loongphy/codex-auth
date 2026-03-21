@@ -41,6 +41,7 @@ pub const Status = struct {
 };
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
+const systemd_invocation_env_name = "INVOCATION_ID";
 
 pub const AutoSwitchAttempt = struct {
     refreshed_candidates: bool,
@@ -302,6 +303,45 @@ fn emitAutoSwitchLog(from: *const registry.AccountRecord, to: *const registry.Ac
     writeAutoSwitchLogLine(&writer.interface, from, to) catch {};
 }
 
+const DaemonLogPriority = enum {
+    err,
+    warning,
+    notice,
+    info,
+    debug,
+};
+
+fn emitDaemonLog(priority: DaemonLogPriority, comptime fmt: []const u8, args: anytype) void {
+    var stderr_buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&stderr_buffer);
+    writer.interface.writeAll(daemonLogPriorityPrefix(priority)) catch {};
+    writer.interface.print("auto-switch: " ++ fmt ++ "\n", args) catch {};
+    writer.interface.flush() catch {};
+}
+
+fn daemonLogPriorityPrefix(priority: DaemonLogPriority) []const u8 {
+    if (builtin.os.tag != .linux) return "";
+    if (!std.process.hasNonEmptyEnvVarConstant(systemd_invocation_env_name)) return "";
+    return switch (priority) {
+        .err => "<3>",
+        .warning => "<4>",
+        .notice => "<5>",
+        .info => "<6>",
+        .debug => "<7>",
+    };
+}
+
+fn percentLabel(buf: *[5]u8, value: ?i64) []const u8 {
+    const percent = value orelse return "-";
+    const clamped = @min(@max(percent, 0), 100);
+    return std.fmt.bufPrint(buf, "{d}%", .{clamped}) catch "-";
+}
+
+fn statusLabel(buf: *[4]u8, status_code: ?u16) []const u8 {
+    const status = status_code orelse return "-";
+    return std.fmt.bufPrint(buf, "{d}", .{status}) catch "-";
+}
+
 pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: cli.AutoOptions) !void {
     switch (cmd) {
         .action => |action| switch (action) {
@@ -357,10 +397,12 @@ pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const
     const runtime = queryRuntimeState(allocator);
     const self_exe = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
-    const definition_matches = try currentServiceDefinitionMatches(allocator, codex_home, self_exe);
+    const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
+    defer allocator.free(managed_self_exe);
+    const definition_matches = try currentServiceDefinitionMatches(allocator, codex_home, managed_self_exe);
     if (!shouldEnsureManagedService(reg.auto_switch.enabled, runtime, definition_matches)) return;
 
-    try installService(allocator, codex_home, self_exe);
+    try installService(allocator, codex_home, managed_self_exe);
 }
 
 pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -472,13 +514,90 @@ fn refreshActiveUsageForDaemon(
     reg: *registry.Registry,
     refresh_state: *DaemonRefreshState,
 ) !bool {
-    return refreshActiveUsageForDaemonWithApiFetcher(
+    return refreshActiveUsageForDaemonWithDetailedApiFetcher(
         allocator,
         codex_home,
         reg,
         refresh_state,
-        usage_api.fetchActiveUsage,
+        usage_api.fetchActiveUsageDetailed,
     );
+}
+
+fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    api_fetcher: anytype,
+) !bool {
+    const account_key = reg.active_account_key orelse return false;
+    refresh_state.clearPendingIfAccountChanged(allocator, account_key);
+    try refresh_state.resetApiCooldownIfAccountChanged(allocator, account_key);
+    const active_idx = registry.findAccountIndexByAccountKey(reg, account_key);
+    const active_email = if (active_idx) |idx| reg.accounts.items[idx].email else "<missing>";
+
+    if (try refreshActiveUsageFromSessionsForDaemon(allocator, codex_home, reg, refresh_state)) {
+        return true;
+    }
+    if (!reg.api.usage) return false;
+
+    const now_ns = std.time.nanoTimestamp();
+    if (refresh_state.last_api_refresh_at_ns != 0 and (now_ns - refresh_state.last_api_refresh_at_ns) < api_refresh_interval_ns) {
+        if (refresh_state.pending_bad_rollout != null) {
+            emitDaemonLog(.debug, "api fallback pending active={s} cooldown=yes", .{active_email});
+        }
+        return false;
+    }
+    refresh_state.last_api_refresh_at_ns = now_ns;
+    emitDaemonLog(.info, "api fallback active={s} trigger={s}", .{
+        active_email,
+        if (refresh_state.pending_bad_rollout != null) "bad-local-event" else "no-local-update",
+    });
+
+    const fetch_result = api_fetcher(allocator, codex_home) catch |err| {
+        emitDaemonLog(.warning, "api refresh unavailable active={s} error={s}", .{ active_email, @errorName(err) });
+        return false;
+    };
+
+    const latest_usage = fetch_result.snapshot;
+    const status_code = fetch_result.status_code;
+    var status_buf: [4]u8 = undefined;
+    if (latest_usage == null) {
+        emitDaemonLog(.warning, "api refresh unavailable active={s} status={s}", .{
+            active_email,
+            statusLabel(&status_buf, status_code),
+        });
+        return false;
+    }
+
+    var latest = latest_usage.?;
+    var snapshot_consumed = false;
+    defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
+
+    if (active_idx == null) {
+        emitDaemonLog(.debug, "api refresh unchanged active={s} status={s}", .{
+            active_email,
+            statusLabel(&status_buf, status_code),
+        });
+        return false;
+    }
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[active_idx.?].last_usage, latest)) {
+        emitDaemonLog(.debug, "api refresh unchanged active={s} status={s}", .{
+            active_email,
+            statusLabel(&status_buf, status_code),
+        });
+        refresh_state.clearPending(allocator);
+        return false;
+    }
+
+    registry.updateUsage(allocator, reg, account_key, latest);
+    snapshot_consumed = true;
+    emitDaemonLog(.info, "api refresh updated active={s} status={s}", .{
+        active_email,
+        statusLabel(&status_buf, status_code),
+    });
+    refresh_state.clearPending(allocator);
+    return true;
 }
 
 pub fn refreshActiveUsageForDaemonWithApiFetcher(
@@ -491,6 +610,8 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
     const account_key = reg.active_account_key orelse return false;
     refresh_state.clearPendingIfAccountChanged(allocator, account_key);
     try refresh_state.resetApiCooldownIfAccountChanged(allocator, account_key);
+    const active_idx = registry.findAccountIndexByAccountKey(reg, account_key);
+    const active_email = if (active_idx) |idx| reg.accounts.items[idx].email else "<missing>";
 
     if (try refreshActiveUsageFromSessionsForDaemon(allocator, codex_home, reg, refresh_state)) {
         return true;
@@ -499,20 +620,32 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
 
     const now_ns = std.time.nanoTimestamp();
     if (refresh_state.last_api_refresh_at_ns != 0 and (now_ns - refresh_state.last_api_refresh_at_ns) < api_refresh_interval_ns) {
+        if (refresh_state.pending_bad_rollout != null) {
+            emitDaemonLog(.debug, "api fallback pending active={s} cooldown=yes", .{active_email});
+        }
         return false;
     }
     refresh_state.last_api_refresh_at_ns = now_ns;
+    emitDaemonLog(.info, "api fallback active={s} trigger={s}", .{
+        active_email,
+        if (refresh_state.pending_bad_rollout != null) "bad-local-event" else "no-local-update",
+    });
 
     return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
         .updated => blk: {
+            emitDaemonLog(.info, "api refresh updated active={s}", .{active_email});
             refresh_state.clearPending(allocator);
             break :blk true;
         },
         .unchanged => blk: {
+            emitDaemonLog(.debug, "api refresh unchanged active={s}", .{active_email});
             refresh_state.clearPending(allocator);
             break :blk false;
         },
-        .unavailable => false,
+        .unavailable => blk: {
+            emitDaemonLog(.warning, "api refresh unavailable active={s}", .{active_email});
+            break :blk false;
+        },
     };
 }
 
@@ -543,10 +676,24 @@ fn refreshActiveUsageFromSessionsForDaemon(
     }
 
     if (!latest_event.hasUsableWindows()) {
+        emitDaemonLog(.warning, "local event active={s} file={s} event_ts_ms={d} usable=no", .{
+            reg.accounts.items[idx].email,
+            std.fs.path.basename(latest_event.path),
+            latest_event.event_timestamp_ms,
+        });
         try refresh_state.setPending(allocator, account_key, signature);
         return false;
     }
 
+    var event_5h_buf: [5]u8 = undefined;
+    var event_week_buf: [5]u8 = undefined;
+    emitDaemonLog(.notice, "local event active={s} file={s} event_ts_ms={d} usable=yes 5h={s} weekly={s}", .{
+        reg.accounts.items[idx].email,
+        std.fs.path.basename(latest_event.path),
+        latest_event.event_timestamp_ms,
+        percentLabel(&event_5h_buf, registry.remainingPercentAt(resolve5hTriggerWindow(latest_event.snapshot).window, std.time.timestamp())),
+        percentLabel(&event_week_buf, registry.remainingPercentAt(registry.resolveRateWindow(latest_event.snapshot, 10080, false), std.time.timestamp())),
+    });
     registry.updateUsage(allocator, reg, account_key, latest_event.snapshot.?);
     latest_event.snapshot = null;
     try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest_event.path, latest_event.event_timestamp_ms);
@@ -645,11 +792,35 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
         .switched = false,
     };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) return .{
-        .refreshed_candidates = refreshed_candidates,
-        .switched = false,
-    };
+    if (candidate.value <= current.value) {
+        emitDaemonLog(
+            .debug,
+            "decision active={s} current-score={d} best={s} best-score={d} refreshed-candidates={s} action=stay",
+            .{
+                reg.accounts.items[active_idx].email,
+                current.value,
+                reg.accounts.items[candidate_idx].email,
+                candidate.value,
+                if (refreshed_candidates) "yes" else "no",
+            },
+        );
+        return .{
+            .refreshed_candidates = refreshed_candidates,
+            .switched = false,
+        };
+    }
 
+    emitDaemonLog(
+        .notice,
+        "decision active={s} current-score={d} best={s} best-score={d} refreshed-candidates={s} action=switch",
+        .{
+            reg.accounts.items[active_idx].email,
+            current.value,
+            reg.accounts.items[candidate_idx].email,
+            candidate.value,
+            if (refreshed_candidates) "yes" else "no",
+        },
+    );
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
     return .{ .refreshed_candidates = refreshed_candidates, .switched = true };
 }
@@ -670,11 +841,15 @@ fn refreshAutoSwitchCandidatesWithUsageFetcher(
     usage_fetcher: anytype,
 ) !bool {
     const active = reg.active_account_key orelse return false;
+    const active_idx = registry.findAccountIndexByAccountKey(reg, active);
     var changed = false;
+    var attempted: usize = 0;
+    var updated: usize = 0;
 
     for (reg.accounts.items) |rec| {
         if (std.mem.eql(u8, rec.account_key, active)) continue;
         if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
+        attempted += 1;
 
         const auth_path = registry.accountAuthPath(allocator, codex_home, rec.account_key) catch continue;
         defer allocator.free(auth_path);
@@ -690,7 +865,14 @@ fn refreshAutoSwitchCandidatesWithUsageFetcher(
         registry.updateUsage(allocator, reg, rec.account_key, latest);
         snapshot_consumed = true;
         changed = true;
+        updated += 1;
     }
+
+    emitDaemonLog(.info, "candidate refresh active={s} attempted={d} updated={d}", .{
+        if (active_idx) |idx| reg.accounts.items[idx].email else active,
+        attempted,
+        updated,
+    });
 
     return changed;
 }
@@ -773,7 +955,9 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_sta
 fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const self_exe = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
-    try enableWithServiceHooks(allocator, codex_home, self_exe, installService, uninstallService);
+    const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
+    defer allocator.free(managed_self_exe);
+    try enableWithServiceHooks(allocator, codex_home, managed_self_exe, installService, uninstallService);
 }
 
 fn ensureAutoSwitchCanEnable(allocator: std.mem.Allocator) !void {
@@ -1056,7 +1240,7 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nSyslogPriorityPrefix=yes\nEnvironment=\"{s}={s}\"\nExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
         .{ service_version_env_name, escaped_version, exec },
     );
 }
@@ -1137,6 +1321,20 @@ fn linuxUnitPath(allocator: std.mem.Allocator, service_name: []const u8) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
     return try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", service_name });
+}
+
+pub fn managedServiceSelfExePath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
+    return managedServiceSelfExePathFromDir(allocator, std.fs.cwd(), self_exe);
+}
+
+pub fn managedServiceSelfExePathFromDir(allocator: std.mem.Allocator, cwd: std.fs.Dir, self_exe: []const u8) ![]u8 {
+    if (std.mem.indexOf(u8, self_exe, "/.zig-cache/") != null or std.mem.indexOf(u8, self_exe, "\\.zig-cache\\") != null) {
+        const candidate_rel = try std.fs.path.join(allocator, &[_][]const u8{ "zig-out", "bin", std.fs.path.basename(self_exe) });
+        defer allocator.free(candidate_rel);
+        cwd.access(candidate_rel, .{}) catch return try allocator.dupe(u8, self_exe);
+        return try cwd.realpathAlloc(allocator, candidate_rel);
+    }
+    return try allocator.dupe(u8, self_exe);
 }
 
 fn currentServiceDefinitionMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
