@@ -654,7 +654,7 @@ test "Scenario: Given multiple matched accounts when rendering confirmation then
 }
 
 test "Scenario: Given selector environment when deciding remove UI then non-tty or windows use the numbered selector" {
-    try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, false));
+    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, false));
     try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true));
     try std.testing.expect(cli.shouldUseNumberedRemoveSelector(true, true));
 }

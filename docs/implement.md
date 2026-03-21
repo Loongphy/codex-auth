@@ -216,12 +216,14 @@ Malformed or non-parseable `auth.json.bak.*` files are left in place for manual 
 
 If the removed account was the active one:
 
-- when other accounts still remain, `codex-auth` activates the remaining account with the best current usage score and rewrites `~/.codex/auth.json` from that snapshot
-- when no accounts remain, `codex-auth` deletes `~/.codex/auth.json`
+- when other accounts still remain, `codex-auth` activates the remaining account with the best current usage score
+- `~/.codex/auth.json` is only rewritten or deleted when the current active auth file can be identified as the removed active account
+- when no accounts remain and the current active auth file matches the removed active account, `codex-auth` deletes `~/.codex/auth.json`
+- if the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise does not match the removed active account, `remove` leaves that file untouched
 
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 
-When `remove` is run without a query and stdin is not a TTY, the command exits non-zero instead of consuming piped input as delete selections. Use `remove <query>` or `remove --all` for explicit non-interactive deletion.
+When `remove` is run without a query and stdin is not a TTY, the command falls back to the numbered selector and accepts only strict numeric selections like `1 2` or `1,2`; other piped input is rejected.
 
 ## Background Auto Switch
 

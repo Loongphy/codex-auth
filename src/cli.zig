@@ -564,6 +564,18 @@ pub fn printRemoveRequiresTtyError() !void {
     try out.flush();
 }
 
+pub fn printInvalidRemoveSelectionError() !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" invalid remove selection input.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Use numbers separated by commas or spaces, for example `1 2` or `1,2`.\n");
+    try out.flush();
+}
+
 fn writeMatchedAccountsListTo(out: *std.Io.Writer, emails: []const []const u8) !void {
     try out.writeAll("Matched multiple accounts:\n");
     for (emails) |email| {
@@ -688,12 +700,14 @@ pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Regis
     if (comptime builtin.os.tag == .windows) {
         return selectRemoveWithNumbers(allocator, reg);
     }
+    if (shouldUseNumberedRemoveSelector(false, std.fs.File.stdin().isTty())) {
+        return selectRemoveWithNumbers(allocator, reg);
+    }
     return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);
 }
 
 pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool) bool {
-    _ = stdin_is_tty;
-    return is_windows;
+    return is_windows or !stdin_is_tty;
 }
 
 fn isQuitInput(input: []const u8) bool {
@@ -913,6 +927,7 @@ fn selectRemoveWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry
     const n = try std.fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (line.len == 0) return null;
+    if (!isStrictRemoveSelectionLine(line)) return error.InvalidRemoveSelectionInput;
 
     var current: usize = 0;
     var in_number = false;
@@ -947,6 +962,14 @@ fn selectRemoveWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry
         idx += 1;
     }
     return selected;
+}
+
+fn isStrictRemoveSelectionLine(line: []const u8) bool {
+    for (line) |ch| {
+        if ((ch >= '0' and ch <= '9') or ch == ',' or ch == ' ' or ch == '\t') continue;
+        return false;
+    }
+    return true;
 }
 
 fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {

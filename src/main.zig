@@ -58,7 +58,8 @@ fn runMain() !void {
 fn isHandledCliError(err: anyerror) bool {
     return err == error.AccountNotFound or
         err == error.RemoveConfirmationUnavailable or
-        err == error.RemoveSelectionRequiresTty;
+        err == error.RemoveSelectionRequiresTty or
+        err == error.InvalidRemoveSelectionInput;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
@@ -83,15 +84,22 @@ pub fn reconcileActiveAuthAfterRemove(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
+    allow_auth_file_update: bool,
 ) !void {
     if (reg.active_account_key != null) return;
 
     if (reg.accounts.items.len > 0) {
         const best_idx = registry.selectBestAccountIndexByUsage(reg) orelse 0;
         const account_key = reg.accounts.items[best_idx].account_key;
-        try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, account_key);
+        if (allow_auth_file_update) {
+            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, account_key);
+        } else {
+            try registry.setActiveAccountKey(allocator, reg, account_key);
+        }
         return;
     }
+
+    if (!allow_auth_file_update) return;
 
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
@@ -285,9 +293,38 @@ pub fn findMatchingAccounts(
     return matches;
 }
 
+fn currentAuthRecordKeyAlloc(allocator: std.mem.Allocator, codex_home: []const u8) !?[]u8 {
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    const info = auth.parseAuthInfo(allocator, auth_path) catch return null;
+    defer info.deinit(allocator);
+
+    const record_key = info.record_key orelse return null;
+    return try allocator.dupe(u8, record_key);
+}
+
+fn selectionContainsAccountKey(reg: *registry.Registry, indices: []const usize, account_key: []const u8) bool {
+    for (indices) |idx| {
+        if (idx >= reg.accounts.items.len) continue;
+        if (std.mem.eql(u8, reg.accounts.items[idx].account_key, account_key)) return true;
+    }
+    return false;
+}
+
 fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.RemoveOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
+
+    const old_active_account_key = if (reg.active_account_key) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+    defer if (old_active_account_key) |key| allocator.free(key);
+
+    const current_auth_record_key = try currentAuthRecordKeyAlloc(allocator, codex_home);
+    defer if (current_auth_record_key) |key| allocator.free(key);
+
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
@@ -321,11 +358,13 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
         selected = try allocator.dupe(usize, matches.items);
     } else {
-        if (!std.fs.File.stdin().isTty()) {
-            try cli.printRemoveRequiresTtyError();
-            return error.RemoveSelectionRequiresTty;
-        }
-        selected = try cli.selectAccountsToRemove(allocator, &reg);
+        selected = cli.selectAccountsToRemove(allocator, &reg) catch |err| switch (err) {
+            error.InvalidRemoveSelectionInput => {
+                try cli.printInvalidRemoveSelectionError();
+                return error.InvalidRemoveSelectionInput;
+            },
+            else => return err,
+        };
     }
     if (selected == null) return;
     defer allocator.free(selected.?);
@@ -337,8 +376,17 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         removed_emails.deinit(allocator);
     }
 
+    const active_removed = if (old_active_account_key) |key|
+        selectionContainsAccountKey(&reg, selected.?, key)
+    else
+        false;
+    const allow_auth_file_update = if (old_active_account_key) |key|
+        active_removed and current_auth_record_key != null and std.mem.eql(u8, current_auth_record_key.?, key)
+    else
+        false;
+
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg);
+    try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg, allow_auth_file_update);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.printRemoveSummary(removed_emails.items);
 }

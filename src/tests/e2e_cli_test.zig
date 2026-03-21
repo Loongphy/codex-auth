@@ -843,6 +843,43 @@ test "Scenario: Given remove query with no matches when running remove then it e
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
 
+test "Scenario: Given non-tty remove with invalid selection input when running remove then it fails without deleting accounts" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{"remove"}, "{\"id\":1}\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
+    try std.testing.expectEqualStrings(
+        "error: invalid remove selection input.\n" ++
+            "hint: Use numbers separated by commas or spaces, for example `1 2` or `1,2`.\n",
+        result.stderr,
+    );
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+}
+
 test "Scenario: Given remove query with multiple matches in non-tty mode when running remove then it fails without reading piped stdin" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -932,7 +969,7 @@ test "Scenario: Given remove query deletes the final active account when running
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(snapshot_path, .{}));
 }
 
-test "Scenario: Given non-tty stdin when running interactive remove then it fails with a tty requirement" {
+test "Scenario: Given non-tty stdin when running interactive remove then it falls back to the numbered selector" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -953,13 +990,12 @@ test "Scenario: Given non-tty stdin when running interactive remove then it fail
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectFailure(result);
-    try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expectEqualStrings(
-        "error: interactive remove requires a TTY.\n" ++
-            "hint: Use `codex-auth remove <query>` or `codex-auth remove --all` instead.\n",
-        result.stderr,
-    );
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\x1b[2J\x1b[H") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Keys: ↑/↓ or j/k move") == null);
+    try std.testing.expectEqualStrings("", result.stderr);
 }
 
 test "Scenario: Given remove all when running remove then it clears all accounts and deletes active auth" {
@@ -1000,6 +1036,64 @@ test "Scenario: Given remove all when running remove then it clears all accounts
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+}
+
+test "Scenario: Given unsynced active auth when removing the active registry account then auth json is preserved" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "" },
+        .{ .email = "backup@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try bdd.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = "{\"broken\":true}" });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): active@example.com\n", result.stdout);
+    try std.testing.expectEqualStrings("warning: auth.json missing email; skipping sync\n", result.stderr);
+
+    const auth_after = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after);
+    try std.testing.expectEqualStrings("{\"broken\":true}", auth_after);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
 }
 
 test "Scenario: Given default api usage when rendering status then warning stays on stderr" {

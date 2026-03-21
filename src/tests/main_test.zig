@@ -141,7 +141,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     defer gpa.free(stale_auth);
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
 
-    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg);
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
 
     try std.testing.expect(reg.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, gamma_key));
@@ -170,7 +170,7 @@ test "Scenario: Given no remaining accounts when reconciling after remove then a
     defer gpa.free(stale_auth);
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
 
-    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg);
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
 
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
