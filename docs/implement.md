@@ -221,6 +221,8 @@ If the removed account was the active one:
 - when no accounts remain and the current active auth file matches the removed active account, `codex-auth` deletes `~/.codex/auth.json`
 - if the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise does not match the removed active account, `remove` leaves that file untouched
 
+For `remove --all`, the command clears all accounts tracked in `registry.json` and deletes any matching managed snapshots/backups. If the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise cannot be identified as one of those tracked accounts, `remove --all` leaves that file untouched.
+
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 
 When `remove` is run without a query and stdin is not a TTY, the command falls back to the numbered selector and accepts only strict numeric selections like `1 2` or `1,2`; other piped input is rejected.
