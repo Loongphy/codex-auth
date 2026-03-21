@@ -102,7 +102,7 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
 }
 
-test "Scenario: Given removed active account with remaining accounts when reconciling then the first remaining account becomes active" {
+test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -144,15 +144,15 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg);
 
     try std.testing.expect(reg.active_account_key != null);
-    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, alpha_key));
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, gamma_key));
 
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
     const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(active_auth);
-    const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "plus");
-    defer gpa.free(alpha_auth);
-    try std.testing.expectEqualStrings(alpha_auth, active_auth);
+    const gamma_auth = try bdd.authJsonWithEmailPlan(gpa, "gamma@example.com", "team");
+    defer gpa.free(gamma_auth);
+    try std.testing.expectEqualStrings(gamma_auth, active_auth);
 }
 
 test "Scenario: Given no remaining accounts when reconciling after remove then active auth is deleted" {

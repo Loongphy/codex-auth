@@ -540,12 +540,29 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
-pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, emails: []const []const u8) !void {
+fn writeMatchedAccountsListTo(out: *std.Io.Writer, emails: []const []const u8) !void {
     try out.writeAll("Matched multiple accounts:\n");
     for (emails) |email| {
         try out.print("- {s}\n", .{email});
     }
+}
+
+pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, emails: []const []const u8) !void {
+    try writeMatchedAccountsListTo(out, emails);
     try out.writeAll("Confirm delete? [y/N]: ");
+}
+
+pub fn printRemoveConfirmationUnavailableError(emails: []const []const u8) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeMatchedAccountsListTo(out, emails);
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" multiple accounts match the query in non-interactive mode.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Refine the query to match one account, or run the command in a TTY.\n");
+    try out.flush();
 }
 
 pub fn confirmRemoveMatches(emails: []const []const u8) !bool {

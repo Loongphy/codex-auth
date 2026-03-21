@@ -203,7 +203,8 @@ For query-driven removal, the target query is matched case-insensitively by:
 
 If no accounts match, the command prints an error and exits non-zero.
 If exactly one account matches, it is removed immediately.
-If multiple accounts match, the command prints the matched emails and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
+If multiple accounts match in a TTY session, the command prints the matched emails and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
+If multiple accounts match and stdin is not a TTY, the command exits non-zero instead of reading the pipe as confirmation input; the user must refine the query or rerun it interactively.
 
 When an account is removed, `codex-auth` deletes both:
 
@@ -214,7 +215,7 @@ Malformed or non-parseable `auth.json.bak.*` files are left in place for manual 
 
 If the removed account was the active one:
 
-- when other accounts still remain, `codex-auth` activates the first remaining account in registry order and rewrites `~/.codex/auth.json` from that snapshot
+- when other accounts still remain, `codex-auth` activates the remaining account with the best current usage score and rewrites `~/.codex/auth.json` from that snapshot
 - when no accounts remain, `codex-auth` deletes `~/.codex/auth.json`
 
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.

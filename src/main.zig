@@ -56,7 +56,7 @@ fn runMain() !void {
 }
 
 fn isHandledCliError(err: anyerror) bool {
-    return err == error.AccountNotFound;
+    return err == error.AccountNotFound or err == error.RemoveConfirmationUnavailable;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
@@ -85,7 +85,8 @@ pub fn reconcileActiveAuthAfterRemove(
     if (reg.active_account_key != null) return;
 
     if (reg.accounts.items.len > 0) {
-        const account_key = reg.accounts.items[0].account_key;
+        const best_idx = registry.selectBestAccountIndexByUsage(reg) orelse 0;
+        const account_key = reg.accounts.items[best_idx].account_key;
         try registry.activateAccountByKey(allocator, codex_home, reg, account_key);
         return;
     }
@@ -305,6 +306,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             defer {
                 freeOwnedStrings(allocator, matched_emails.items);
                 matched_emails.deinit(allocator);
+            }
+            if (!std.fs.File.stdin().isTty()) {
+                try cli.printRemoveConfirmationUnavailableError(matched_emails.items);
+                return error.RemoveConfirmationUnavailable;
             }
             if (!(try cli.confirmRemoveMatches(matched_emails.items))) return;
         }

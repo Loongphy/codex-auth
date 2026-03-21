@@ -776,7 +776,7 @@ test "Scenario: Given remove query with no matches when running remove then it e
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
 
-test "Scenario: Given remove query with multiple matches when running remove then it asks for confirmation before deleting" {
+test "Scenario: Given remove query with multiple matches in non-tty mode when running remove then it fails without reading piped stdin" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -798,17 +798,22 @@ test "Scenario: Given remove query with multiple matches when running remove the
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Matched multiple accounts:\n- alpha@example.com\n- beta@example.com\nConfirm delete? [y/N]: ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): alpha@example.com, beta@example.com\n") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings(
+        "Matched multiple accounts:\n" ++
+            "- alpha@example.com\n" ++
+            "- beta@example.com\n" ++
+            "error: multiple accounts match the query in non-interactive mode.\n" ++
+            "hint: Refine the query to match one account, or run the command in a TTY.\n",
+        result.stderr,
+    );
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
+    try std.testing.expectEqual(@as(usize, 3), loaded.accounts.items.len);
 }
 
 test "Scenario: Given remove query deletes the final active account when running remove then active auth is deleted too" {
