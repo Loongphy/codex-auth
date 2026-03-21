@@ -576,24 +576,54 @@ pub fn printInvalidRemoveSelectionError() !void {
     try out.flush();
 }
 
-fn writeMatchedAccountsListTo(out: *std.Io.Writer, emails: []const []const u8) !void {
+pub fn buildRemoveLabels(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+) !std.ArrayList([]const u8) {
+    var labels = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (labels.items) |label| allocator.free(@constCast(label));
+        labels.deinit(allocator);
+    }
+
+    var display = try display_rows.buildDisplayRows(allocator, reg, indices);
+    defer display.deinit(allocator);
+
+    var current_header: ?[]const u8 = null;
+    for (display.rows) |row| {
+        if (row.account_index == null) {
+            current_header = row.account_cell;
+            continue;
+        }
+
+        const label = if (row.depth == 0 or current_header == null)
+            try allocator.dupe(u8, row.account_cell)
+        else
+            try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
+        try labels.append(allocator, label);
+    }
+    return labels;
+}
+
+fn writeMatchedAccountsListTo(out: *std.Io.Writer, labels: []const []const u8) !void {
     try out.writeAll("Matched multiple accounts:\n");
-    for (emails) |email| {
-        try out.print("- {s}\n", .{email});
+    for (labels) |label| {
+        try out.print("- {s}\n", .{label});
     }
 }
 
-pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, emails: []const []const u8) !void {
-    try writeMatchedAccountsListTo(out, emails);
+pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, labels: []const []const u8) !void {
+    try writeMatchedAccountsListTo(out, labels);
     try out.writeAll("Confirm delete? [y/N]: ");
 }
 
-pub fn printRemoveConfirmationUnavailableError(emails: []const []const u8) !void {
+pub fn printRemoveConfirmationUnavailableError(labels: []const []const u8) !void {
     var buffer: [1024]u8 = undefined;
     var writer = std.fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
-    try writeMatchedAccountsListTo(out, emails);
+    try writeMatchedAccountsListTo(out, labels);
     try writeErrorPrefixTo(out, use_color);
     try out.writeAll(" multiple accounts match the query in non-interactive mode.\n");
     try writeHintPrefixTo(out, use_color);
@@ -601,11 +631,11 @@ pub fn printRemoveConfirmationUnavailableError(emails: []const []const u8) !void
     try out.flush();
 }
 
-pub fn confirmRemoveMatches(emails: []const []const u8) !bool {
+pub fn confirmRemoveMatches(labels: []const []const u8) !bool {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeRemoveConfirmationTo(out, emails);
+    try writeRemoveConfirmationTo(out, labels);
     try out.flush();
 
     var buf: [64]u8 = undefined;
@@ -614,20 +644,20 @@ pub fn confirmRemoveMatches(emails: []const []const u8) !bool {
     return line.len == 1 and (line[0] == 'y' or line[0] == 'Y');
 }
 
-pub fn writeRemoveSummaryTo(out: *std.Io.Writer, emails: []const []const u8) !void {
-    try out.print("Removed {d} account(s): ", .{emails.len});
-    for (emails, 0..) |email, idx| {
+pub fn writeRemoveSummaryTo(out: *std.Io.Writer, labels: []const []const u8) !void {
+    try out.print("Removed {d} account(s): ", .{labels.len});
+    for (labels, 0..) |label, idx| {
         if (idx != 0) try out.writeAll(", ");
-        try out.writeAll(email);
+        try out.writeAll(label);
     }
     try out.writeAll("\n");
 }
 
-pub fn printRemoveSummary(emails: []const []const u8) !void {
+pub fn printRemoveSummary(labels: []const []const u8) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeRemoveSummaryTo(out, emails);
+    try writeRemoveSummaryTo(out, labels);
     try out.flush();
 }
 

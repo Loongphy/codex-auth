@@ -255,24 +255,6 @@ fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 }
 
-fn collectAccountEmails(
-    allocator: std.mem.Allocator,
-    reg: *registry.Registry,
-    indices: []const usize,
-) !std.ArrayList([]const u8) {
-    var emails = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (emails.items) |email| allocator.free(@constCast(email));
-        emails.deinit(allocator);
-    }
-
-    for (indices) |idx| {
-        if (idx >= reg.accounts.items.len) continue;
-        try emails.append(allocator, try allocator.dupe(u8, reg.accounts.items[idx].email));
-    }
-    return emails;
-}
-
 fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {
     for (items) |item| allocator.free(@constCast(item));
 }
@@ -296,6 +278,7 @@ pub fn findMatchingAccounts(
 const CurrentAuthState = struct {
     record_key: ?[]u8,
     syncable: bool,
+    missing: bool,
 
     fn deinit(self: *CurrentAuthState, allocator: std.mem.Allocator) void {
         if (self.record_key) |key| allocator.free(key);
@@ -306,9 +289,19 @@ fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !C
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
+    std.fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{
+            .record_key = null,
+            .syncable = false,
+            .missing = true,
+        },
+        else => {},
+    };
+
     const info = auth.parseAuthInfo(allocator, auth_path) catch return .{
         .record_key = null,
         .syncable = false,
+        .missing = false,
     };
     defer info.deinit(allocator);
 
@@ -320,6 +313,7 @@ fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !C
     return .{
         .record_key = record_key,
         .syncable = info.email != null and info.record_key != null,
+        .missing = false,
     };
 }
 
@@ -390,16 +384,16 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         }
 
         if (matches.items.len > 1) {
-            var matched_emails = try collectAccountEmails(allocator, &reg, matches.items);
+            var matched_labels = try cli.buildRemoveLabels(allocator, &reg, matches.items);
             defer {
-                freeOwnedStrings(allocator, matched_emails.items);
-                matched_emails.deinit(allocator);
+                freeOwnedStrings(allocator, matched_labels.items);
+                matched_labels.deinit(allocator);
             }
             if (!std.fs.File.stdin().isTty()) {
-                try cli.printRemoveConfirmationUnavailableError(matched_emails.items);
+                try cli.printRemoveConfirmationUnavailableError(matched_labels.items);
                 return error.RemoveConfirmationUnavailable;
             }
-            if (!(try cli.confirmRemoveMatches(matched_emails.items))) return;
+            if (!(try cli.confirmRemoveMatches(matched_labels.items))) return;
         }
 
         selected = try allocator.dupe(usize, matches.items);
@@ -416,10 +410,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     defer allocator.free(selected.?);
     if (selected.?.len == 0) return;
 
-    var removed_emails = try collectAccountEmails(allocator, &reg, selected.?);
+    var removed_labels = try cli.buildRemoveLabels(allocator, &reg, selected.?);
     defer {
-        freeOwnedStrings(allocator, removed_emails.items);
-        removed_emails.deinit(allocator);
+        freeOwnedStrings(allocator, removed_labels.items);
+        removed_labels.deinit(allocator);
     }
 
     const current_active_account_key = if (reg.active_account_key) |key|
@@ -436,8 +430,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     else
         false;
     const allow_auth_file_update = if (current_active_account_key) |key|
-        active_removed and current_auth_state.syncable and current_auth_state.record_key != null and
-            std.mem.eql(u8, current_auth_state.record_key.?, key)
+        active_removed and ((current_auth_state.syncable and current_auth_state.record_key != null and
+            std.mem.eql(u8, current_auth_state.record_key.?, key)) or current_auth_state.missing)
     else if (opts.all)
         current_auth_state.syncable and current_auth_state.record_key != null and
             selectionContainsAccountKey(&reg, selected.?, current_auth_state.record_key.?)
@@ -455,7 +449,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
     try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg, allow_auth_file_update);
     try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.printRemoveSummary(removed_emails.items);
+    try cli.printRemoveSummary(removed_labels.items);
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {

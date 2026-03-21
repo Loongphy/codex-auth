@@ -209,6 +209,33 @@ fn seedRegistryWithAccounts(
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
+fn appendCustomAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    record_key: []const u8,
+    email: []const u8,
+    alias: []const u8,
+    plan: registry.PlanType,
+) !void {
+    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const chatgpt_user_id = record_key[0..sep];
+    const chatgpt_account_id = record_key[sep + 2 ..];
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, alias),
+        .plan = plan,
+        .auth_mode = .chatgpt,
+        .created_at = std.time.timestamp(),
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
 // This simulates first-time use on v0.2 when ~/.codex/auth.json already exists
 // but ~/.codex/accounts has not been created yet.
 test "Scenario: Given first-time use on v0.2 with an existing auth.json and no accounts directory when list runs then cli auto-imports and stays usable" {
@@ -816,6 +843,57 @@ test "Scenario: Given active account removal with a replacement when running rem
     try std.testing.expectEqual(@as(usize, 0), try countAuthBackups(tmp.dir, ".codex/accounts"));
 }
 
+test "Scenario: Given active account removal with missing auth json when running remove then replacement auth is recreated" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "" },
+        .{ .email = "backup@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try bdd.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): active@example.com\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const recreated_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(recreated_auth);
+    try std.testing.expectEqualStrings(backup_auth, recreated_auth);
+}
+
 test "Scenario: Given auth json already points at another registry account when removing it then later sync does not recreate that deleted account" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -978,8 +1056,8 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- alpha@example.com\n" ++
-            "- beta@example.com\n" ++
+            "- (team-a)alpha@example.com\n" ++
+            "- (team-b)beta@example.com\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,
@@ -990,6 +1068,43 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 3), loaded.accounts.items.len);
+}
+
+test "Scenario: Given remove query with duplicate-email accounts when running remove then confirmation output keeps list-style identity" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .team);
+    try appendCustomAccount(gpa, &reg, "user-b::acct-personal", "alice@example.com", "personal", .plus);
+    reg.active_account_key = try gpa.dupe(u8, "user-a::acct-work");
+    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "alice@" }, "y\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings(
+        "Matched multiple accounts:\n" ++
+            "- alice@example.com / work\n" ++
+            "- alice@example.com / personal\n" ++
+            "error: multiple accounts match the query in non-interactive mode.\n" ++
+            "hint: Refine the query to match one account, or run the command in a TTY.\n",
+        result.stderr,
+    );
 }
 
 test "Scenario: Given remove query deletes the final active account when running remove then active auth is deleted too" {
