@@ -217,11 +217,11 @@ Malformed or non-parseable `auth.json.bak.*` files are left in place for manual 
 If the removed account was the active one:
 
 - when other accounts still remain, `codex-auth` activates the remaining account with the best current usage score
-- `~/.codex/auth.json` is only rewritten or deleted when the current active auth file can be identified as the removed active account
+- `~/.codex/auth.json` is only rewritten or deleted when the current auth file is syncable and can be identified as the removed active account
 - when no accounts remain and the current active auth file matches the removed active account, `codex-auth` deletes `~/.codex/auth.json`
 - if the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise does not match the removed active account, `remove` leaves that file untouched
 
-For `remove --all`, the command clears all accounts tracked in `registry.json` and deletes any matching managed snapshots/backups. If the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise cannot be identified as one of those tracked accounts, `remove --all` leaves that file untouched.
+For `remove --all`, the command clears all accounts tracked in `registry.json` and deletes any matching managed snapshots/backups. If the current `~/.codex/auth.json` is syncable and its `record_key` matches one of those tracked accounts, `remove --all` deletes it even when `active_account_key` is null or stale. If the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise cannot be identified as one of those tracked accounts, `remove --all` leaves that file untouched.
 
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 

@@ -293,15 +293,34 @@ pub fn findMatchingAccounts(
     return matches;
 }
 
-fn currentAuthRecordKeyAlloc(allocator: std.mem.Allocator, codex_home: []const u8) !?[]u8 {
+const CurrentAuthState = struct {
+    record_key: ?[]u8,
+    syncable: bool,
+
+    fn deinit(self: *CurrentAuthState, allocator: std.mem.Allocator) void {
+        if (self.record_key) |key| allocator.free(key);
+    }
+};
+
+fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !CurrentAuthState {
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    const info = auth.parseAuthInfo(allocator, auth_path) catch return null;
+    const info = auth.parseAuthInfo(allocator, auth_path) catch return .{
+        .record_key = null,
+        .syncable = false,
+    };
     defer info.deinit(allocator);
 
-    const record_key = info.record_key orelse return null;
-    return try allocator.dupe(u8, record_key);
+    const record_key = if (info.record_key) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+
+    return .{
+        .record_key = record_key,
+        .syncable = info.email != null and info.record_key != null,
+    };
 }
 
 fn selectionContainsAccountKey(reg: *registry.Registry, indices: []const usize, account_key: []const u8) bool {
@@ -409,15 +428,19 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         null;
     defer if (current_active_account_key) |key| allocator.free(key);
 
-    const current_auth_record_key = try currentAuthRecordKeyAlloc(allocator, codex_home);
-    defer if (current_auth_record_key) |key| allocator.free(key);
+    var current_auth_state = try loadCurrentAuthState(allocator, codex_home);
+    defer current_auth_state.deinit(allocator);
 
     const active_removed = if (current_active_account_key) |key|
         selectionContainsAccountKey(&reg, selected.?, key)
     else
         false;
     const allow_auth_file_update = if (current_active_account_key) |key|
-        active_removed and current_auth_record_key != null and std.mem.eql(u8, current_auth_record_key.?, key)
+        active_removed and current_auth_state.syncable and current_auth_state.record_key != null and
+            std.mem.eql(u8, current_auth_state.record_key.?, key)
+    else if (opts.all)
+        current_auth_state.syncable and current_auth_state.record_key != null and
+            selectionContainsAccountKey(&reg, selected.?, current_auth_state.record_key.?)
     else
         false;
 
