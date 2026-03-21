@@ -155,6 +155,61 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     try std.testing.expectEqualStrings(gamma_auth, active_auth);
 }
 
+test "Scenario: Given stale active key with remaining accounts when reconciling after remove then it is treated as unset" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const gamma_key = try bdd.accountKeyForEmailAlloc(gpa, "gamma@example.com");
+    defer gpa.free(gamma_key);
+    try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
+    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
+    reg.active_account_activated_at_ms = 1;
+
+    const now = std.time.timestamp();
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[1].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .team,
+    };
+
+    try writeSnapshot(gpa, codex_home, "alpha@example.com", "plus");
+    try writeSnapshot(gpa, codex_home, "gamma@example.com", "team");
+
+    const stale_auth = try bdd.authJsonWithEmailPlan(gpa, "removed@example.com", "pro");
+    defer gpa.free(stale_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
+
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
+
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, gamma_key));
+
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth);
+    const gamma_auth = try bdd.authJsonWithEmailPlan(gpa, "gamma@example.com", "team");
+    defer gpa.free(gamma_auth);
+    try std.testing.expectEqualStrings(gamma_auth, active_auth);
+}
+
 test "Scenario: Given no remaining accounts when reconciling after remove then active auth is deleted" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

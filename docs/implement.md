@@ -223,6 +223,7 @@ If the removed account was the active one:
 - if the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise does not match the removed active account, `remove` leaves that file untouched
 
 For `remove --all`, the command clears all accounts tracked in `registry.json` and deletes any matching managed snapshots/backups. If the current `~/.codex/auth.json` is syncable and its `record_key` matches one of those tracked accounts, `remove --all` deletes it even when `active_account_key` is null or stale. If the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise cannot be identified as one of those tracked accounts, `remove --all` leaves that file untouched.
+During remove reconciliation, a dangling `active_account_key` is treated the same as an unset active account so the command can promote a remaining account or finish clearing `~/.codex/auth.json`.
 
 After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
 

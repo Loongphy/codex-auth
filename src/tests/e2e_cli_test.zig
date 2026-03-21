@@ -1315,6 +1315,55 @@ test "Scenario: Given remove all with tracked auth json and no active key when r
     try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
 }
 
+test "Scenario: Given remove all with tracked auth json and stale active key when running remove then auth json is deleted too" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+    const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "pro");
+    defer gpa.free(alpha_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = alpha_auth });
+
+    var reg = try registry.loadRegistry(gpa, codex_home);
+    defer reg.deinit(gpa);
+    if (reg.active_account_key) |key| {
+        gpa.free(key);
+    }
+    reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
+    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key == null);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+}
+
 test "Scenario: Given unsynced active auth when removing the active registry account then auth json is preserved" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

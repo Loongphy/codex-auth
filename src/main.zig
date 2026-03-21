@@ -80,12 +80,27 @@ pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list or target == .switch_account;
 }
 
+fn trackedActiveAccountKey(reg: *registry.Registry) ?[]const u8 {
+    const account_key = reg.active_account_key orelse return null;
+    if (registry.findAccountIndexByAccountKey(reg, account_key) == null) return null;
+    return account_key;
+}
+
+fn clearStaleActiveAccountKey(allocator: std.mem.Allocator, reg: *registry.Registry) void {
+    const account_key = reg.active_account_key orelse return;
+    if (registry.findAccountIndexByAccountKey(reg, account_key) != null) return;
+    allocator.free(account_key);
+    reg.active_account_key = null;
+    reg.active_account_activated_at_ms = null;
+}
+
 pub fn reconcileActiveAuthAfterRemove(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     allow_auth_file_update: bool,
 ) !void {
+    clearStaleActiveAccountKey(allocator, reg);
     if (reg.active_account_key != null) return;
 
     if (reg.accounts.items.len > 0) {
@@ -416,7 +431,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         removed_labels.deinit(allocator);
     }
 
-    const current_active_account_key = if (reg.active_account_key) |key|
+    const current_active_account_key = if (trackedActiveAccountKey(&reg)) |key|
         try allocator.dupe(u8, key)
     else
         null;
@@ -438,11 +453,17 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     else
         false;
 
-    if (active_removed and allow_auth_file_update) {
-        const replacement_account_key = try selectBestRemainingAccountKeyByUsageAlloc(allocator, &reg, selected.?);
-        defer if (replacement_account_key) |key| allocator.free(key);
-        if (replacement_account_key) |key| {
+    const replacement_account_key = if (active_removed)
+        try selectBestRemainingAccountKeyByUsageAlloc(allocator, &reg, selected.?)
+    else
+        null;
+    defer if (replacement_account_key) |key| allocator.free(key);
+
+    if (replacement_account_key) |key| {
+        if (allow_auth_file_update) {
             try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, &reg, key);
+        } else {
+            try registry.setActiveAccountKey(allocator, &reg, key);
         }
     }
 
