@@ -34,7 +34,7 @@ Each cycle:
 2. syncs the currently active `auth.json` into the registry
 3. refreshes missing account metadata from stored auth snapshots when needed
 4. tries to refresh usage from the newest local rollout event first
-5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute
+5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
 6. evaluates whether the active account should be switched
 7. writes `registry.json` only when state changed
 
@@ -48,10 +48,12 @@ The background watcher is intentionally not API-only, even when `api.usage = tru
 - API refresh remains useful as a slower fallback and calibration path when rollout data is missing or stale.
 - When `api.usage = false`, the watcher uses local rollout data only and makes no usage API requests.
 - When a new rollout event arrives but its `rate_limits` payload is `null`, `{}`, or otherwise lacks usable 5h/weekly windows, the watcher keeps the previous `last_usage` snapshot and relies on the API fallback path instead of overwriting usage with empty data.
+- The watcher resets the active-account API fallback cooldown when `active_account_key` changes, so a newly active account is not forced to wait behind the previous account's cooldown window.
 
 Local rollout attribution rules are unchanged:
 
 - only the newest `~/.codex/sessions/**/rollout-*.jsonl` file is considered
+- in watcher mode, the newest rollout file is cached in memory and rechecked cheaply between bounded full rescans, so large session trees are not fully walked every second
 - the last usable `token_count` event in that file is used
 - a newer `token_count` event with unusable `rate_limits` is still treated as a fresh signal for API fallback, but it does not overwrite the stored usage snapshot
 - the event is applied only when `event_timestamp_ms >= active_account_activated_at_ms`
@@ -87,7 +89,7 @@ Platform bootstrap:
 
 - Linux/WSL: `systemd --user` persistent service
 - macOS: `LaunchAgent` with `KeepAlive`
-- Windows: user scheduled task with an `ONLOGON` trigger and restart-on-failure settings for `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
+- Windows: user scheduled task with an `ONLOGON` trigger, restart-on-failure settings, and an unlimited execution time for `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
 
 Service install paths still resolve from the real user home directory.
 Foreground commands other than `help`, `version`, `status`, and `daemon` still reconcile the managed service definition after they complete.

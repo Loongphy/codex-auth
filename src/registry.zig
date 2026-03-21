@@ -134,6 +134,31 @@ pub fn cloneRolloutSignature(allocator: std.mem.Allocator, signature: RolloutSig
     };
 }
 
+pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitSnapshot) !RateLimitSnapshot {
+    var cloned_credits: ?CreditsSnapshot = null;
+    if (snapshot.credits) |credits| {
+        var cloned_balance: ?[]u8 = null;
+        if (credits.balance) |balance| {
+            cloned_balance = try allocator.dupe(u8, balance);
+        }
+        cloned_credits = .{
+            .has_credits = credits.has_credits,
+            .unlimited = credits.unlimited,
+            .balance = cloned_balance,
+        };
+    }
+    errdefer if (cloned_credits) |credits| {
+        if (credits.balance) |balance| allocator.free(balance);
+    };
+
+    return .{
+        .primary = snapshot.primary,
+        .secondary = snapshot.secondary,
+        .credits = cloned_credits,
+        .plan_type = snapshot.plan_type,
+    };
+}
+
 fn setRolloutSignature(
     allocator: std.mem.Allocator,
     target: *?RolloutSignature,

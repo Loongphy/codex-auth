@@ -15,6 +15,7 @@ const windows_helper_name = "codex-auth-auto.exe";
 const windows_task_trigger_kind = "LogonTrigger";
 const windows_task_restart_count = "999";
 const windows_task_restart_interval_xml = "PT1M";
+const windows_task_execution_time_limit_xml = "PT0S";
 const lock_file_name = "auto-switch.lock";
 const watch_poll_interval_ns = 1 * std.time.ns_per_s;
 const api_refresh_interval_ns = 60 * std.time.ns_per_s;
@@ -54,14 +55,26 @@ const CandidateScore = struct {
 
 pub const DaemonRefreshState = struct {
     last_api_refresh_at_ns: i128 = 0,
+    last_api_refresh_account_key: ?[]u8 = null,
     last_candidate_refresh_at_ns: i128 = 0,
     last_candidate_refresh_account_key: ?[]u8 = null,
     pending_bad_account_key: ?[]u8 = null,
     pending_bad_rollout: ?registry.RolloutSignature = null,
+    rollout_scan_cache: sessions.RolloutScanCache = .{},
 
     pub fn deinit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        self.clearApiRefresh(allocator);
         self.clearCandidateRefresh(allocator);
         self.clearPending(allocator);
+        self.rollout_scan_cache.deinit(allocator);
+    }
+
+    fn clearApiRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.last_api_refresh_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.last_api_refresh_account_key = null;
+        self.last_api_refresh_at_ns = 0;
     }
 
     fn clearCandidateRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
@@ -115,6 +128,18 @@ pub const DaemonRefreshState = struct {
             self.pending_bad_account_key = null;
         }
         self.pending_bad_rollout = try registry.cloneRolloutSignature(allocator, signature);
+    }
+
+    fn resetApiCooldownIfAccountChanged(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        active_account_key: []const u8,
+    ) !void {
+        if (self.last_api_refresh_account_key) |account_key| {
+            if (std.mem.eql(u8, account_key, active_account_key)) return;
+        }
+        self.clearApiRefresh(allocator);
+        self.last_api_refresh_account_key = try allocator.dupe(u8, active_account_key);
     }
 
     fn shouldRefreshCandidatesNow(
@@ -465,6 +490,7 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
 ) !bool {
     const account_key = reg.active_account_key orelse return false;
     refresh_state.clearPendingIfAccountChanged(allocator, account_key);
+    try refresh_state.resetApiCooldownIfAccountChanged(allocator, account_key);
 
     if (try refreshActiveUsageFromSessionsForDaemon(allocator, codex_home, reg, refresh_state)) {
         return true;
@@ -496,7 +522,7 @@ fn refreshActiveUsageFromSessionsForDaemon(
     reg: *registry.Registry,
     refresh_state: *DaemonRefreshState,
 ) !bool {
-    var latest_event = (sessions.scanLatestRolloutEventWithSource(allocator, codex_home) catch |err| switch (err) {
+    var latest_event = (sessions.scanLatestRolloutEventWithCache(allocator, codex_home, &refresh_state.rollout_scan_cache) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     }) orelse return false;
@@ -1063,7 +1089,7 @@ pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []co
     defer allocator.free(escaped_version);
     return try std.fmt.allocPrint(
         allocator,
-        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '--service-version {s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
+        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '--service-version {s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
         .{ escaped_helper_path, escaped_version, windows_task_restart_count, windows_task_name },
     );
 }
@@ -1071,7 +1097,7 @@ pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []co
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $restartNode = $xml.Task.Settings.RestartOnFailure; if ($null -eq $restartNode) {{ exit 5 }}; $restartCount = [string]$restartNode.Count; $restartInterval = [string]$restartNode.Interval; if ([string]::IsNullOrWhiteSpace($restartCount) -or [string]::IsNullOrWhiteSpace($restartInterval)) {{ exit 6 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval)",
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $restartNode = $xml.Task.Settings.RestartOnFailure; if ($null -eq $restartNode) {{ exit 5 }}; $restartCount = [string]$restartNode.Count; $restartInterval = [string]$restartNode.Interval; if ([string]::IsNullOrWhiteSpace($restartCount) -or [string]::IsNullOrWhiteSpace($restartInterval)) {{ exit 6 }}; $executionLimit = [string]$xml.Task.Settings.ExecutionTimeLimit; if ([string]::IsNullOrWhiteSpace($executionLimit)) {{ exit 7 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval + '|LIMIT:' + $executionLimit)",
         .{ windows_task_name, windows_task_name },
     );
 }
@@ -1226,8 +1252,8 @@ fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []c
 fn windowsExpectedTaskDefinitionFingerprint(allocator: std.mem.Allocator, action: []const u8) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
-        "{s}|TRIGGER:{s}|RESTART:{s},{s}",
-        .{ action, windows_task_trigger_kind, windows_task_restart_count, windows_task_restart_interval_xml },
+        "{s}|TRIGGER:{s}|RESTART:{s},{s}|LIMIT:{s}",
+        .{ action, windows_task_trigger_kind, windows_task_restart_count, windows_task_restart_interval_xml, windows_task_execution_time_limit_xml },
     );
 }
 

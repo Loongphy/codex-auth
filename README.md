@@ -226,9 +226,9 @@ The managed background worker is long-running on all supported platforms:
 
 - Linux/WSL: persistent `systemd --user` service
 - macOS: `LaunchAgent`
-- Windows: scheduled task that launches the long-running helper at logon, restarts it after failures, and also starts it immediately on enable
+- Windows: scheduled task that launches the long-running helper at logon, restarts it after failures, has no 72-hour execution cap, and also starts it immediately on enable
 
-The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. When `config api enable` is on, the usage API remains a slower fallback, and daemon-side candidate revalidation is throttled instead of running every second.
+The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. In watch mode it caches the newest rollout file between bounded full rescans so large `~/.codex/sessions` trees are not re-walked every second. When `config api enable` is on, the usage API remains a slower fallback, active-account API cooldown resets when the active account changes, and daemon-side candidate revalidation is throttled instead of running every second.
 
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or service drift.
 

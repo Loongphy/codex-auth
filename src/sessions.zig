@@ -76,6 +76,39 @@ const UsageCreditsJson = struct {
 
 const max_recent_rollout_files: usize = 1;
 const max_rollout_line_bytes: usize = 10 * 1024 * 1024;
+const rollout_full_rescan_interval_ns = 15 * std.time.ns_per_s;
+
+pub const RolloutScanCache = struct {
+    last_full_scan_at_ns: i128 = 0,
+    latest: ?LatestRolloutEvent = null,
+
+    pub fn deinit(self: *RolloutScanCache, allocator: std.mem.Allocator) void {
+        self.clear(allocator);
+    }
+
+    fn clear(self: *RolloutScanCache, allocator: std.mem.Allocator) void {
+        if (self.latest) |*latest| {
+            latest.deinit(allocator);
+        }
+        self.latest = null;
+        self.last_full_scan_at_ns = 0;
+    }
+
+    fn replace(self: *RolloutScanCache, allocator: std.mem.Allocator, latest: ?LatestRolloutEvent, scanned_at_ns: i128) void {
+        if (self.latest) |*cached| {
+            cached.deinit(allocator);
+        }
+        self.latest = latest;
+        self.last_full_scan_at_ns = scanned_at_ns;
+    }
+
+    fn cloneLatest(self: *const RolloutScanCache, allocator: std.mem.Allocator) !?LatestRolloutEvent {
+        if (self.latest) |latest| {
+            return try cloneLatestRolloutEvent(allocator, latest);
+        }
+        return null;
+    }
+};
 
 pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
     const latest = try scanLatestUsageWithSource(allocator, codex_home);
@@ -182,6 +215,39 @@ pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home
     return best;
 }
 
+pub fn scanLatestRolloutEventWithCache(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    cache: *RolloutScanCache,
+) !?LatestRolloutEvent {
+    const now_ns = std.time.nanoTimestamp();
+
+    if (cache.latest) |cached| {
+        const stat = std.fs.cwd().statFile(cached.path) catch |err| switch (err) {
+            error.FileNotFound => return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns),
+            else => return err,
+        };
+        const current_mtime: i64 = @intCast(stat.mtime);
+        if (current_mtime != cached.mtime) {
+            const reparsed = try scanFileForUsage(allocator, cached.path);
+            if (reparsed) |parsed| {
+                const updated = try latestRolloutEventFromParsedUsage(allocator, cached.path, current_mtime, parsed);
+                cache.replace(allocator, updated, cache.last_full_scan_at_ns);
+                return try cache.cloneLatest(allocator);
+            }
+            return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns);
+        }
+
+        if (cache.last_full_scan_at_ns != 0 and (now_ns - cache.last_full_scan_at_ns) < rollout_full_rescan_interval_ns) {
+            return try cache.cloneLatest(allocator);
+        }
+    } else if (cache.last_full_scan_at_ns != 0 and (now_ns - cache.last_full_scan_at_ns) < rollout_full_rescan_interval_ns) {
+        return null;
+    }
+
+    return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns);
+}
+
 fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsageEvent {
     return scanFileForUsageWithMode(allocator, path, true);
 }
@@ -247,6 +313,43 @@ fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep
         }
     }
     return last;
+}
+
+fn refreshRolloutScanCache(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    cache: *RolloutScanCache,
+    scanned_at_ns: i128,
+) !?LatestRolloutEvent {
+    const latest = try scanLatestRolloutEventWithSource(allocator, codex_home);
+    cache.replace(allocator, latest, scanned_at_ns);
+    return try cache.cloneLatest(allocator);
+}
+
+fn latestRolloutEventFromParsedUsage(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    mtime: i64,
+    parsed: ParsedUsageEvent,
+) !LatestRolloutEvent {
+    return .{
+        .path = try allocator.dupe(u8, path),
+        .mtime = mtime,
+        .event_timestamp_ms = parsed.event_timestamp_ms,
+        .snapshot = parsed.snapshot,
+    };
+}
+
+fn cloneLatestRolloutEvent(allocator: std.mem.Allocator, latest: LatestRolloutEvent) !LatestRolloutEvent {
+    return .{
+        .path = try allocator.dupe(u8, latest.path),
+        .mtime = latest.mtime,
+        .event_timestamp_ms = latest.event_timestamp_ms,
+        .snapshot = if (latest.snapshot) |snapshot|
+            try registry.cloneRateLimitSnapshot(allocator, snapshot)
+        else
+            null,
+    };
 }
 
 pub fn parseUsageLine(allocator: std.mem.Allocator, line: []const u8) ?registry.RateLimitSnapshot {

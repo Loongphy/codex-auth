@@ -573,6 +573,7 @@ test "Scenario: Given windows task register script when rendering then it config
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskTrigger -AtLogOn") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-ExecutionTimeLimit (New-TimeSpan -Seconds 0)") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
 }
 
@@ -584,10 +585,12 @@ test "Scenario: Given windows task match script when rendering then it validates
     try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "RestartOnFailure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "ExecutionTimeLimit") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "LocalName") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval + '|LIMIT:' + $executionLimit") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "|RESTART:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "|LIMIT:") != null);
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -1052,6 +1055,39 @@ test "Scenario: Given repeated bad rollout events within the daemon cooldown the
     try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot));
     try std.testing.expect(!(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot)));
     try std.testing.expectEqual(@as(usize, 1), daemon_api_fetch_count);
+}
+
+test "Scenario: Given the active daemon account changes during API cooldown then the new account refreshes immediately" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = true;
+    try bdd.appendAccount(gpa, &reg, "a@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "b@example.com", "", null);
+
+    const account_id_a = try bdd.accountKeyForEmailAlloc(gpa, "a@example.com");
+    defer gpa.free(account_id_a);
+    const account_id_b = try bdd.accountKeyForEmailAlloc(gpa, "b@example.com");
+    defer gpa.free(account_id_b);
+
+    try registry.setActiveAccountKey(gpa, &reg, account_id_a);
+
+    daemon_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot));
+    try std.testing.expectEqual(@as(usize, 1), daemon_api_fetch_count);
+
+    try registry.setActiveAccountKey(gpa, &reg, account_id_b);
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiSnapshot));
+    try std.testing.expectEqual(@as(usize, 2), daemon_api_fetch_count);
 }
 
 test "Scenario: Given api failure when returning to local refresh after switching accounts then the pre-switch rollout is not assigned to the new active account" {
