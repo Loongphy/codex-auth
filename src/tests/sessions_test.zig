@@ -404,6 +404,32 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     try std.testing.expectEqual(@as(i64, 1735689615000), latest.event_timestamp_ms);
 }
 
+test "scan latest rollout event cache rescans immediately after an empty result" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    var cache = sessions.RolloutScanCache{};
+    defer cache.deinit(gpa);
+
+    try std.testing.expect((try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) == null);
+    try std.testing.expect(cache.latest == null);
+    try std.testing.expect(cache.last_full_scan_at_ns != 0);
+
+    const first_line = try usageLineAlloc(gpa, "2025-01-01T00:00:16.000Z", 25.0);
+    defer gpa.free(first_line);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-after-empty.jsonl", .data = first_line });
+
+    var latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+    try std.testing.expectEqualStrings("rollout-after-empty.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689616000), latest.event_timestamp_ms);
+}
+
 test "scan latest usage accepts valid token_count lines above one megabyte" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

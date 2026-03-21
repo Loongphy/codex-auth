@@ -2469,7 +2469,8 @@ fn parseThresholdPercent(v: std.json.Value) ?u8 {
     return @as(u8, @intCast(raw));
 }
 
-pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
+pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {
+    var changed = false;
     for (reg.accounts.items) |*rec| {
         const path = resolveStrictAccountAuthPath(allocator, codex_home, rec.account_key) catch |err| switch (err) {
             error.FileNotFound => continue,
@@ -2502,9 +2503,12 @@ pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const
             std.log.warn("auth file record_key mismatch for {s}; skipping refresh", .{rec.email});
             continue;
         }
+        if (rec.plan != info.plan) changed = true;
+        if (rec.auth_mode != info.auth_mode) changed = true;
         rec.plan = info.plan;
         rec.auth_mode = info.auth_mode;
     }
+    return changed;
 }
 
 pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {

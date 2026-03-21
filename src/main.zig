@@ -107,8 +107,9 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         }
     }
     if (needs_refresh) {
-        try registry.refreshAccountsFromAuth(allocator, codex_home, &reg);
-        try registry.saveRegistry(allocator, codex_home, &reg);
+        if (try registry.refreshAccountsFromAuth(allocator, codex_home, &reg)) {
+            try registry.saveRegistry(allocator, codex_home, &reg);
+        }
     }
     try cli.printUsageApiRiskWarning(reg.api.usage);
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);

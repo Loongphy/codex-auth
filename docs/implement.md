@@ -6,6 +6,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - Release automation and CI workflow details live in [docs/release.md](./release.md).
 - The CLI binary version is defined in `src/version.zig` and must match the npm package version and any release tag version without the leading `v`.
+- Historical GitHub-release installs could place a standalone binary under `~/.local/bin`; this is separate from the npm package path and can shadow newer npm or local-build installs if left on `PATH`.
 
 ## File Layout
 
@@ -195,10 +196,14 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
 
 - ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <chatgpt_account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
-- Foreground API refresh updates only the current active account. During background auto-switch, if the current active account is below threshold and a switch is being considered, the watcher can also refresh candidate ChatGPT accounts from their stored `accounts/<account file key>.auth.json` snapshots before making the final switch decision.
-- In watcher mode, repeated candidate API revalidation for the same active account is throttled; the daemon does not re-fetch every candidate on every 1-second loop.
+- Foreground API refresh updates only the current active account. The background watcher keeps a daemon-local in-memory candidate index for non-active accounts and can refresh candidate ChatGPT accounts from their stored `accounts/<account file key>.auth.json` snapshots without reloading the whole candidate set every cycle.
+- In watcher mode, candidate freshness bookkeeping is runtime-only: the daemon keeps per-candidate last-checked timestamps in memory, does bounded top-candidate upkeep while the active account is healthy, and revalidates only the current heap top / next top candidates before a switch instead of re-fetching every candidate on every 1-second loop.
 - In watcher mode, active-account API fallback cooldown is scoped to the current active account; switching to a different active account resets that cooldown for the new account.
+- Watcher logs use compact `[local]`, `[api]`, `[decision]`, and `[switch]` tags.
+- Local rollout watcher logs print the actual window lengths from the snapshot first, then the local event timestamp, then the full rollout basename (including the UUID suffix); when the newest event has no usable usage windows the same `[local]` log line also adds `fallback-to-api`.
+- `config auto enable` prints a short usage-mode note after installing the watcher so the user can see whether auto-switch is currently running with API-backed usage or local-only fallback semantics.
 - API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
+- Watcher API logs are reduced to `refresh usage | status=...`, where `status` is either the HTTP status code, `NoUsageLimitsWindow`, `MissingAuth`, or the direct request error name.
 - In API-only mode, API failures do not overwrite the stored usage snapshot and do not fall back to local rollout files.
 - The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
 - The rollout scanner reads only the newest rollout file. Within that file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
@@ -213,6 +218,7 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 - In watcher mode, rollout scanning caches the newest rollout file between bounded full rescans so large `~/.codex/sessions` trees are not fully re-walked on every 1-second loop.
 - The free-plan `35%` real-time guard applies only when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window; weekly-only free accounts still switch based on the configured weekly threshold.
 - For auto-switch candidate scoring, free accounts that expose only a single weekly (`10080`-minute) window still remain eligible and use that weekly remaining percentage as their candidate score.
+- On Linux/WSL, watcher installation/removal now explicitly deletes the old `codex-auth-autoswitch.timer` unit file so legacy minute-timer installs do not continue to fire after migration to the watcher service.
 - `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
 - API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.

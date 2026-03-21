@@ -30,20 +30,21 @@ When enabled, managed services run the long-lived watcher mode:
 The watcher keeps a single process alive and runs roughly once per second.
 Each cycle:
 
-1. loads `registry.json`
-2. syncs the currently active `auth.json` into the registry
-3. refreshes missing account metadata from stored auth snapshots when needed
-4. tries to refresh usage from the newest local rollout event first
-5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
-6. evaluates whether the active account should be switched
-7. writes `registry.json` only when state changed
+1. keeps an in-memory candidate index for all non-active accounts, keyed by the same candidate score used for switching
+2. reloads `registry.json` only when the on-disk file changed, then rebuilds that in-memory index
+3. syncs the currently active `auth.json` into the in-memory registry when the active auth snapshot changed
+4. refreshes missing account metadata from stored auth snapshots when needed
+5. tries to refresh usage from the newest local rollout event first
+6. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
+7. keeps the candidate index warm with a bounded candidate upkeep pass instead of batch-refreshing every candidate
+8. if the active account should switch, revalidates only the top few stale candidates before making the final switch decision
+9. writes `registry.json` only when state changed
 
 The watcher also emits English-only service logs for debugging:
 
-- local rollout event captures when a fresh event is seen
-- API fallback attempts/results, including HTTP status codes when available
-- candidate refresh / final switch decisions
-- on Linux systemd services, these daemon log lines use syslog priority prefixes so `journalctl` can color warnings/errors automatically
+- logs use compact `[local]`, `[api]`, `[decision]`, and `[switch]` tags
+- local rollout captures show the parsed window labels first, then the local-time event timestamp, then the real rollout basename; when the newest local event has no usable usage windows the same `[local]` line also marks `fallback-to-api`
+- API refresh logs are reduced to `refresh usage | status=...`, where `status` is the HTTP status when available, `MissingAuth` when the active auth cannot call the ChatGPT usage API, or the direct transport error name such as `TimedOut` / `RequestFailed`
 
 `daemon --once` still exists for tests and one-shot validation, but the managed service path uses `daemon --watch`.
 
@@ -56,6 +57,7 @@ The background watcher is intentionally not API-only, even when `api.usage = tru
 - When `api.usage = false`, the watcher uses local rollout data only and makes no usage API requests.
 - When a new rollout event arrives but its `rate_limits` payload is `null`, `{}`, or otherwise lacks usable 5h/weekly windows, the watcher keeps the previous `last_usage` snapshot and relies on the API fallback path instead of overwriting usage with empty data.
 - The watcher resets the active-account API fallback cooldown when `active_account_key` changes, so a newly active account is not forced to wait behind the previous account's cooldown window.
+- API timeout and request-failure logs come from the same 5-second limit used by the underlying request path.
 
 Local rollout attribution rules are unchanged:
 
@@ -85,8 +87,10 @@ Candidate scoring is reset-aware:
 - if both 5h and weekly are known, the candidate score is the lower remaining percentage
 - if only one window is known, that window becomes the score
 - free accounts that expose only a single `10080`-minute weekly window remain eligible auto-switch candidates and use that weekly remaining percentage as their score
-- when `api.usage = true` and auto-switch is about to leave the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
-- in watcher mode, repeated candidate revalidation for the same active account is throttled instead of running on every 1-second loop
+- the watcher keeps that candidate score ordering in a daemon-local in-memory index; it is rebuilt on daemon start or whenever `registry.json` changes externally
+- when `api.usage = true`, watcher upkeep refreshes at most one stale top candidate per cycle while the current account is still healthy
+- when auto-switch is about to leave the current account, the watcher revalidates only the current heap top and then the next top candidates as needed, up to a small bounded budget, instead of refreshing every candidate
+- candidate freshness bookkeeping is daemon-local runtime state and is not persisted to `registry.json`
 - if no usage snapshot exists after that refresh step, the account is treated as fresh with score `100`
 - switching happens only when the best candidate scores strictly better than the current account
 
@@ -100,6 +104,8 @@ Platform bootstrap:
 
 Service install paths still resolve from the real user home directory.
 Foreground commands other than `help`, `version`, `status`, and `daemon` still reconcile the managed service definition after they complete.
+`config auto enable` also prints a short usage-mode note so the user can see whether switching is currently running with default API-backed usage data or local-only fallback semantics.
+When migrating from older Linux/WSL timer-based installs, enable/reconcile also removes the legacy `codex-auth-autoswitch.timer` unit file instead of leaving the old minute timer behind.
 
 ## Limits
 

@@ -27,7 +27,7 @@ After that, you can use `codex login` or `codex-auth login` to sign in and add a
 
 ## Install
 
-- npm:
+Install with npm:
 
 ```shell
 npm install -g @loongphy/codex-auth
@@ -41,24 +41,49 @@ npx @loongphy/codex-auth list
 
   npm packages currently support Linux x64, macOS x64, macOS arm64, and Windows x64.
 
-- Linux/macOS/WSL2:
+> [!NOTE]
+> Older Bash/PowerShell GitHub-release installs could leave a standalone `codex-auth` binary outside npm's install path.
+> Those legacy installs can shadow the npm package or a local source build, so remove them during migration.
+
+### Uninstall
+
+Remove the npm package:
 
 ```shell
-curl -fsSL https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.sh | bash
+npm uninstall -g @loongphy/codex-auth
 ```
 
-  The installer writes the install dir to your shell profile by default.
-  Supported profiles: `~/.bashrc`/`~/.bash_profile`/`~/.profile`, `~/.zshrc`/`~/.zprofile`, `~/.config/fish/config.fish`.
-  Use `--no-add-to-path` to skip profile updates.
+Remove old Bash-installer leftovers on Linux/macOS/WSL2:
 
-- Windows (PowerShell):
+```shell
+rm -f ~/.local/bin/codex-auth
+rm -f ~/.local/bin/codex-auth-auto
+sed -i '/# Added by codex-auth installer/,+1d' ~/.bashrc ~/.bash_profile ~/.profile ~/.zshrc ~/.zprofile 2>/dev/null || true
+```
+
+If you used fish:
+
+```shell
+sed -i '/# Added by codex-auth installer/,+3d' ~/.config/fish/config.fish 2>/dev/null || true
+```
+
+Remove old PowerShell-installer leftovers on Windows:
 
 ```powershell
-irm https://raw.githubusercontent.com/loongphy/codex-auth/main/scripts/install.ps1 | iex
+Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth.exe" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable(
+  "Path",
+  (($env:Path -split ';' | Where-Object { $_ -and $_ -ne "$env:LOCALAPPDATA\codex-auth\bin" }) -join ';'),
+  "User"
+)
 ```
 
-  The installer adds the install dir to current/user `PATH` by default.
-  Use `-NoAddToPath` to skip user `PATH` persistence.
+After cleanup, verify which binary is still active:
+
+```shell
+which codex-auth
+```
 
 ## Commands
 
@@ -202,6 +227,8 @@ codex-auth config auto enable
 codex-auth config auto disable
 ```
 
+`config auto enable` prints the current usage mode after installing the watcher, so you can immediately see whether auto-switch is running with default API-backed usage or local-only fallback semantics.
+
 Adjust thresholds:
 
 ```shell
@@ -217,7 +244,7 @@ When auto-switching is enabled, a long-running background watcher refreshes the 
 
 Candidate selection follows the current watcher behavior:
 
-- when `config api enable` is on and the watcher is about to move away from the current account, candidate ChatGPT accounts are refreshed from their stored auth snapshots before the final switch decision
+- when `config api enable` is on, the watcher keeps a daemon-local in-memory candidate index, does bounded top-candidate upkeep in the background, and revalidates only the best few stale candidates before a switch
 - in local-only mode, accounts without any usage snapshot are still treated as fresh candidates with full quota
 - when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window, free accounts use a stronger real-time 5h guard and switch no later than `35%` remaining even if the configured 5h threshold is lower
 - free accounts that expose only a single `10080`-minute weekly window are still eligible auto-switch candidates; that weekly remaining percentage is used as their candidate score
@@ -228,7 +255,7 @@ The managed background worker is long-running on all supported platforms:
 - macOS: `LaunchAgent`
 - Windows: scheduled task that launches the long-running helper at logon, restarts it after failures, has no 72-hour execution cap, and also starts it immediately on enable
 
-The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. In watch mode it caches the newest rollout file between bounded full rescans so large `~/.codex/sessions` trees are not re-walked every second. When `config api enable` is on, the usage API remains a slower fallback, active-account API cooldown resets when the active account changes, and daemon-side candidate revalidation is throttled instead of running every second.
+The watcher checks local rollout usage roughly once per second and prefers local rollout events over API polling. In watch mode it caches the newest rollout file between bounded full rescans so large `~/.codex/sessions` trees are not re-walked every second. When `config api enable` is on, the usage API remains a slower fallback, active-account API cooldown resets when the active account changes, and candidate revalidation is driven by a daemon-local in-memory candidate index instead of batch-refreshing every account on every loop.
 
 Successful foreground `codex-auth` commands also reconcile the managed auto-switch service, so a disabled config removes stale background units while an enabled background worker is refreshed onto the current binary after upgrades or service drift.
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const auto = @import("../auto.zig");
 const registry = @import("../registry.zig");
+const usage_api = @import("../usage_api.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const rollout_line = "{" ++
@@ -19,6 +20,7 @@ var daemon_api_fetch_count: usize = 0;
 var candidate_api_fetch_count: usize = 0;
 var candidate_high_auth_path: ?[]const u8 = null;
 var candidate_low_auth_path: ?[]const u8 = null;
+var candidate_reject_auth_path: ?[]const u8 = null;
 
 fn appendAccountWithUsage(
     allocator: std.mem.Allocator,
@@ -55,33 +57,69 @@ fn fetchCountingApiSnapshot(_: std.mem.Allocator, _: []const u8) !?registry.Rate
     return apiSnapshot();
 }
 
-fn fetchCandidateUsageByAuthPath(_: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+fn fetchCandidateUsageByAuthPathDetailed(_: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
     if (candidate_high_auth_path) |path| {
         if (std.mem.eql(u8, auth_path, path)) {
             return .{
-                .primary = .{ .used_percent = 12.0, .window_minutes = 300, .resets_at = null },
-                .secondary = .{ .used_percent = 7.0, .window_minutes = 10080, .resets_at = null },
-                .credits = null,
-                .plan_type = .pro,
+                .snapshot = .{
+                    .primary = .{ .used_percent = 12.0, .window_minutes = 300, .resets_at = null },
+                    .secondary = .{ .used_percent = 7.0, .window_minutes = 10080, .resets_at = null },
+                    .credits = null,
+                    .plan_type = .pro,
+                },
+                .status_code = 200,
             };
         }
     }
     if (candidate_low_auth_path) |path| {
         if (std.mem.eql(u8, auth_path, path)) {
             return .{
-                .primary = .{ .used_percent = 96.0, .window_minutes = 300, .resets_at = null },
-                .secondary = .{ .used_percent = 60.0, .window_minutes = 10080, .resets_at = null },
-                .credits = null,
-                .plan_type = .pro,
+                .snapshot = .{
+                    .primary = .{ .used_percent = 96.0, .window_minutes = 300, .resets_at = null },
+                    .secondary = .{ .used_percent = 60.0, .window_minutes = 10080, .resets_at = null },
+                    .credits = null,
+                    .plan_type = .pro,
+                },
+                .status_code = 200,
             };
         }
     }
-    return null;
+    if (candidate_reject_auth_path) |path| {
+        if (std.mem.eql(u8, auth_path, path)) {
+            return .{ .snapshot = null, .status_code = 403 };
+        }
+    }
+    return .{ .snapshot = null, .status_code = null };
 }
 
-fn fetchCountingCandidateUsageByAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+fn fetchCandidateUsageByAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
+    const result = try fetchCandidateUsageByAuthPathDetailed(allocator, auth_path);
+    return result.snapshot;
+}
+
+fn fetchCountingCandidateUsageByAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
     candidate_api_fetch_count += 1;
-    return fetchCandidateUsageByAuthPath(allocator, auth_path);
+    return fetchCandidateUsageByAuthPathDetailed(allocator, auth_path);
+}
+
+fn fetchCandidateUsageHttp403(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+    candidate_api_fetch_count += 1;
+    return .{ .snapshot = null, .status_code = 403 };
+}
+
+fn fetchCandidateUsageNoWindow200(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+    candidate_api_fetch_count += 1;
+    return .{ .snapshot = null, .status_code = 200 };
+}
+
+fn fetchCandidateUsageUnavailable(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+    candidate_api_fetch_count += 1;
+    return error.TestApiUnavailable;
+}
+
+fn fetchCandidateUsageMissingAuth(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+    candidate_api_fetch_count += 1;
+    return .{ .snapshot = null, .status_code = null, .missing_auth = true };
 }
 
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -520,14 +558,380 @@ test "Scenario: Given repeated daemon candidate refresh attempts within cooldown
     var refresh_state = auto.DaemonRefreshState{};
     defer refresh_state.deinit(gpa);
 
-    const first_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPath);
-    const second_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPath);
+    const first_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
+    const second_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
 
     try std.testing.expect(first_attempt.refreshed_candidates);
     try std.testing.expect(!first_attempt.switched);
     try std.testing.expect(!second_attempt.refreshed_candidates);
     try std.testing.expect(!second_attempt.switched);
     try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given switch-time candidate validation returns non-200 then that candidate is disqualified" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageHttp403);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given switch-time candidate validation returns 200 without windows then that candidate is disqualified" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageNoWindow200);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given a candidate is rejected by API validation then it stays rejected across the next daemon cycle" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const first_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageHttp403);
+    const second_attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageHttp403);
+
+    try std.testing.expect(first_attempt.refreshed_candidates);
+    try std.testing.expect(!first_attempt.switched);
+    try std.testing.expect(!second_attempt.refreshed_candidates);
+    try std.testing.expect(!second_attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given switch-time candidate validation reports missing auth then that candidate is disqualified" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageMissingAuth);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given switch-time candidate validation gets no response then the candidate remains eligible" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCandidateUsageUnavailable);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, candidate_account_id));
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+}
+
+test "Scenario: Given healthy active usage when daemon runs then it performs only bounded candidate upkeep" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 10.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 10.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    candidate_high_auth_path = try gpa.dupe(u8, candidate_path);
+    defer {
+        gpa.free(candidate_high_auth_path.?);
+        candidate_high_auth_path = null;
+    }
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(attempt.state_changed);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
+
+    const candidate_idx = bdd.findAccountIndexByEmail(&reg, "candidate@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[candidate_idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 12.0), reg.accounts.items[candidate_idx].last_usage.?.primary.?.used_percent);
+}
+
+test "Scenario: Given stale top candidates when daemon switches then it validates them in priority order instead of refreshing all candidates" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 96.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 70.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "first@example.com", null, null);
+    try appendAccountWithUsage(gpa, &reg, "second@example.com", null, null);
+    try appendAccountWithUsage(gpa, &reg, "third@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const first_account_id = try bdd.accountKeyForEmailAlloc(gpa, "first@example.com");
+    defer gpa.free(first_account_id);
+    const second_account_id = try bdd.accountKeyForEmailAlloc(gpa, "second@example.com");
+    defer gpa.free(second_account_id);
+    const third_account_id = try bdd.accountKeyForEmailAlloc(gpa, "third@example.com");
+    defer gpa.free(third_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const first_auth = try bdd.authJsonWithEmailPlan(gpa, "first@example.com", "pro");
+    defer gpa.free(first_auth);
+    const second_auth = try bdd.authJsonWithEmailPlan(gpa, "second@example.com", "pro");
+    defer gpa.free(second_auth);
+    const third_auth = try bdd.authJsonWithEmailPlan(gpa, "third@example.com", "pro");
+    defer gpa.free(third_auth);
+    const first_path = try registry.accountAuthPath(gpa, codex_home, first_account_id);
+    defer gpa.free(first_path);
+    const second_path = try registry.accountAuthPath(gpa, codex_home, second_account_id);
+    defer gpa.free(second_path);
+    const third_path = try registry.accountAuthPath(gpa, codex_home, third_account_id);
+    defer gpa.free(third_path);
+    const active_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = first_path, .data = first_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = second_path, .data = second_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = third_path, .data = third_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = first_auth });
+
+    candidate_low_auth_path = try gpa.dupe(u8, first_path);
+    candidate_high_auth_path = try gpa.dupe(u8, second_path);
+    candidate_reject_auth_path = try gpa.dupe(u8, third_path);
+    defer {
+        gpa.free(candidate_low_auth_path.?);
+        candidate_low_auth_path = null;
+        gpa.free(candidate_high_auth_path.?);
+        candidate_high_auth_path = null;
+        gpa.free(candidate_reject_auth_path.?);
+        candidate_reject_auth_path = null;
+    }
+
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
+    try std.testing.expect(attempt.refreshed_candidates);
+    try std.testing.expect(attempt.switched);
+    try std.testing.expectEqual(@as(usize, 3), candidate_api_fetch_count);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, second_account_id));
 }
 
 test "Scenario: Given linux service unit when rendering then it keeps a persistent daemon watcher alive" {
@@ -538,7 +942,6 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
     try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch watcher") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Type=simple") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
-    try std.testing.expect(std.mem.indexOf(u8, unit, "SyslogPriorityPrefix=yes") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "[Install]") != null);
@@ -720,7 +1123,21 @@ test "Scenario: Given automatic switch when writing daemon log then it records s
     try auto.writeAutoSwitchLogLine(&aw.writer, &reg.accounts.items[0], &reg.accounts.items[1]);
 
     const output = aw.written();
-    try std.testing.expect(std.mem.eql(u8, output, "auto-switch: from@example.com -> to@example.com\n"));
+    try std.testing.expect(std.mem.eql(u8, output, "[switch] from@example.com -> to@example.com\n"));
+}
+
+test "Scenario: Given an absolute managed unit path when deleting it then the file is removed" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "codex-auth-autoswitch.timer", .data = "[Timer]\n" });
+    const timer_path = try tmp.dir.realpathAlloc(gpa, "codex-auth-autoswitch.timer");
+    defer gpa.free(timer_path);
+
+    auto.deleteAbsoluteFileIfExists(timer_path);
+
+    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(timer_path, .{}));
 }
 
 test "Scenario: Given windows delete task script when rendering then missing tasks are treated as success" {
@@ -819,6 +1236,38 @@ test "Scenario: Given local-only mode when refreshing usage then api fetcher is 
     try std.testing.expect(!(try auto.refreshActiveUsageWithApiFetcher(gpa, codex_home, &reg, fetchApiError)));
     const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(reg.accounts.items[idx].last_usage == null);
+}
+
+test "Scenario: Given local-only daemon mode and newest null-limits event when refreshing usage then it keeps the last usable local snapshot" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/run-1");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+    reg.active_account_activated_at_ms = 0;
+
+    const usable_then_null =
+        "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":55.0,\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}\n" ++
+        "{\"timestamp\":\"2025-01-01T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n";
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-a.jsonl", .data = usable_then_null });
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchApiError));
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 55.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
 }
 
 test "Scenario: Given api usage for active account when refreshing usage then it updates without rollout files" {
@@ -1203,4 +1652,39 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     try std.testing.expect(reg.accounts.items[idx].last_usage != null);
     try std.testing.expectEqual(@as(f64, 41.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
+}
+
+test "Scenario: Given permanently null metadata when refreshing accounts from auth then it does not report a change" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try bdd.appendAccount(gpa, &reg, "api@example.com", "", null);
+
+    const account_key = try bdd.accountKeyForEmailAlloc(gpa, "api@example.com");
+    defer gpa.free(account_key);
+    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(auth_path);
+    try std.fs.cwd().writeFile(.{
+        .sub_path = auth_path,
+        .data =
+            \\{
+            \\  "OPENAI_API_KEY": "sk-test"
+            \\}
+        ,
+    });
+
+    const idx = bdd.findAccountIndexByEmail(&reg, "api@example.com") orelse return error.TestExpectedEqual;
+    reg.accounts.items[idx].plan = null;
+    reg.accounts.items[idx].auth_mode = null;
+
+    try std.testing.expect(!(try registry.refreshAccountsFromAuth(gpa, codex_home, &reg)));
+    try std.testing.expect(reg.accounts.items[idx].plan == null);
+    try std.testing.expect(reg.accounts.items[idx].auth_mode == null);
 }

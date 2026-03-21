@@ -241,8 +241,6 @@ pub fn scanLatestRolloutEventWithCache(
         if (cache.last_full_scan_at_ns != 0 and (now_ns - cache.last_full_scan_at_ns) < rollout_full_rescan_interval_ns) {
             return try cache.cloneLatest(allocator);
         }
-    } else if (cache.last_full_scan_at_ns != 0 and (now_ns - cache.last_full_scan_at_ns) < rollout_full_rescan_interval_ns) {
-        return null;
     }
 
     return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns);

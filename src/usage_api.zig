@@ -9,6 +9,7 @@ const request_timeout_secs: []const u8 = "5";
 pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
+    missing_auth: bool = false,
 };
 
 const UsageHttpResult = struct {
@@ -42,9 +43,9 @@ pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
 
-    if (info.auth_mode != .chatgpt) return .{ .snapshot = null, .status_code = null };
-    const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null };
-    const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null };
+    if (info.auth_mode != .chatgpt) return .{ .snapshot = null, .status_code = null, .missing_auth = true };
+    const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
+    const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
 
     return try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
 }
@@ -252,13 +253,17 @@ fn runCurlUsageCommand(
         .Exited => |exit_code| exit_code,
         else => {
             allocator.free(result.stdout);
-            return error.UsageCommandFailed;
+            return error.RequestFailed;
         },
     };
-    const parsed = parseCurlHttpOutput(result.stdout);
-    if (parsed == null and code != 0) {
+    if (code != 0) {
         allocator.free(result.stdout);
-        return error.UsageCommandFailed;
+        return curlTransportError(code);
+    }
+    const parsed = parseCurlHttpOutput(result.stdout);
+    if (parsed == null) {
+        allocator.free(result.stdout);
+        return error.CommandFailed;
     }
     if (parsed) |http| {
         const owned_body = try allocator.dupe(u8, http.body);
@@ -308,15 +313,26 @@ fn runPowerShellUsageCommand(
         .Exited => {},
         else => {
             allocator.free(result.stdout);
-            return error.UsageCommandFailed;
+            return error.RequestFailed;
         },
     }
     const parsed = parsePowerShellHttpOutput(allocator, result.stdout) orelse {
         allocator.free(result.stdout);
-        return error.UsageCommandFailed;
+        return error.CommandFailed;
     };
     allocator.free(result.stdout);
+    if (parsed.status_code == null and parsed.body.len == 0) {
+        allocator.free(parsed.body);
+        return error.RequestFailed;
+    }
     return parsed;
+}
+
+fn curlTransportError(exit_code: u8) anyerror {
+    return switch (exit_code) {
+        28 => error.TimedOut,
+        else => error.RequestFailed,
+    };
 }
 
 fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {

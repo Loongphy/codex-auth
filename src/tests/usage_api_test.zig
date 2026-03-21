@@ -79,3 +79,26 @@ test "parse usage api response without windows is ignored" {
     const snapshot = try usage_api.parseUsageResponse(gpa, body);
     try std.testing.expect(snapshot == null);
 }
+
+test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing auth" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "auth.json",
+        .data =
+            \\{
+            \\  "OPENAI_API_KEY": "sk-test"
+            \\}
+        ,
+    });
+
+    const auth_path = try tmp.dir.realpathAlloc(gpa, "auth.json");
+    defer gpa.free(auth_path);
+
+    const result = try usage_api.fetchUsageForAuthPathDetailed(gpa, auth_path);
+    try std.testing.expect(result.snapshot == null);
+    try std.testing.expect(result.status_code == null);
+    try std.testing.expect(result.missing_auth);
+}
