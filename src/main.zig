@@ -312,18 +312,45 @@ fn selectionContainsAccountKey(reg: *registry.Registry, indices: []const usize, 
     return false;
 }
 
+fn selectionContainsIndex(indices: []const usize, target: usize) bool {
+    for (indices) |idx| {
+        if (idx == target) return true;
+    }
+    return false;
+}
+
+fn selectBestRemainingAccountKeyByUsageAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    removed_indices: []const usize,
+) !?[]u8 {
+    if (reg.accounts.items.len == 0) return null;
+
+    const now = std.time.timestamp();
+    var best_idx: ?usize = null;
+    var best_score: i64 = -2;
+    var best_seen: i64 = -1;
+    for (reg.accounts.items, 0..) |rec, idx| {
+        if (selectionContainsIndex(removed_indices, idx)) continue;
+
+        const score = registry.usageScoreAt(rec.last_usage, now) orelse -1;
+        const seen = rec.last_usage_at orelse -1;
+        if (score > best_score or (score == best_score and seen > best_seen)) {
+            best_idx = idx;
+            best_score = score;
+            best_seen = seen;
+        }
+    }
+
+    if (best_idx) |idx| {
+        return try allocator.dupe(u8, reg.accounts.items[idx].account_key);
+    }
+    return null;
+}
+
 fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.RemoveOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-
-    const old_active_account_key = if (reg.active_account_key) |key|
-        try allocator.dupe(u8, key)
-    else
-        null;
-    defer if (old_active_account_key) |key| allocator.free(key);
-
-    const current_auth_record_key = try currentAuthRecordKeyAlloc(allocator, codex_home);
-    defer if (current_auth_record_key) |key| allocator.free(key);
 
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
@@ -376,14 +403,33 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         removed_emails.deinit(allocator);
     }
 
-    const active_removed = if (old_active_account_key) |key|
+    const current_active_account_key = if (reg.active_account_key) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+    defer if (current_active_account_key) |key| allocator.free(key);
+
+    const current_auth_record_key = try currentAuthRecordKeyAlloc(allocator, codex_home);
+    defer if (current_auth_record_key) |key| allocator.free(key);
+
+    const active_removed = if (current_active_account_key) |key|
         selectionContainsAccountKey(&reg, selected.?, key)
     else
         false;
-    const allow_auth_file_update = if (old_active_account_key) |key|
+    const allow_auth_file_update = if (opts.all)
+        true
+    else if (current_active_account_key) |key|
         active_removed and current_auth_record_key != null and std.mem.eql(u8, current_auth_record_key.?, key)
     else
         false;
+
+    if (active_removed and allow_auth_file_update) {
+        const replacement_account_key = try selectBestRemainingAccountKeyByUsageAlloc(allocator, &reg, selected.?);
+        defer if (replacement_account_key) |key| allocator.free(key);
+        if (replacement_account_key) |key| {
+            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, &reg, key);
+        }
+    }
 
     try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
     try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg, allow_auth_file_update);

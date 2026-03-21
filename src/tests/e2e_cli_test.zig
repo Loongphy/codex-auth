@@ -816,6 +816,78 @@ test "Scenario: Given active account removal with a replacement when running rem
     try std.testing.expectEqual(@as(usize, 0), try countAuthBackups(tmp.dir, ".codex/accounts"));
 }
 
+test "Scenario: Given auth json already points at another registry account when removing it then later sync does not recreate that deleted account" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try bdd.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+    const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
+    defer gpa.free(alpha_snapshot_path);
+    const beta_snapshot_path = try registry.accountAuthPath(gpa, codex_home, beta_key);
+    defer gpa.free(beta_snapshot_path);
+
+    const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "team");
+    defer gpa.free(alpha_auth);
+    const beta_auth = try bdd.authJsonWithEmailPlan(gpa, "beta@example.com", "plus");
+    defer gpa.free(beta_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = beta_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
+
+    const remove_result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "beta@" }, "");
+    defer gpa.free(remove_result.stdout);
+    defer gpa.free(remove_result.stderr);
+
+    try expectSuccess(remove_result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): beta@example.com\n", remove_result.stdout);
+    try std.testing.expectEqualStrings("", remove_result.stderr);
+
+    const auth_after_remove = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after_remove);
+    try std.testing.expectEqualStrings(alpha_auth, auth_after_remove);
+
+    var loaded_after_remove = try registry.loadRegistry(gpa, codex_home);
+    defer loaded_after_remove.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded_after_remove.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded_after_remove.accounts.items[0].email, "alpha@example.com"));
+    try std.testing.expect(loaded_after_remove.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded_after_remove.active_account_key.?, alpha_key));
+
+    const list_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    defer gpa.free(list_result.stdout);
+    defer gpa.free(list_result.stderr);
+
+    try expectSuccess(list_result);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "beta@example.com") == null);
+
+    var loaded_after_list = try registry.loadRegistry(gpa, codex_home);
+    defer loaded_after_list.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded_after_list.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded_after_list.accounts.items[0].email, "alpha@example.com"));
+}
+
 test "Scenario: Given remove query with no matches when running remove then it exits cleanly with one stderr line" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
