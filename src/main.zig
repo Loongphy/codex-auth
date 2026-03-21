@@ -8,6 +8,18 @@ const format = @import("format.zig");
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 
 pub fn main() !void {
+    var exit_code: u8 = 0;
+    runMain() catch |err| {
+        if (isHandledCliError(err)) {
+            exit_code = 1;
+        } else {
+            return err;
+        }
+    };
+    if (exit_code != 0) std.process.exit(exit_code);
+}
+
+fn runMain() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -34,13 +46,20 @@ pub fn main() !void {
         .login => |opts| try handleLogin(allocator, codex_home, opts),
         .import_auth => |opts| try handleImport(allocator, codex_home, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
-        .remove_account => |_| try handleRemove(allocator, codex_home),
+        .remove_account => |opts| try handleRemove(allocator, codex_home, opts),
         .clean => |_| try handleClean(allocator, codex_home),
     }
 
     if (shouldReconcileManagedService(cmd)) {
         try auto.reconcileManagedService(allocator, codex_home);
     }
+}
+
+fn isHandledCliError(err: anyerror) bool {
+    return err == error.AccountNotFound or
+        err == error.RemoveConfirmationUnavailable or
+        err == error.RemoveSelectionRequiresTty or
+        err == error.InvalidRemoveSelectionInput;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
@@ -59,6 +78,50 @@ pub const ForegroundUsageRefreshTarget = enum {
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list or target == .switch_account;
+}
+
+fn trackedActiveAccountKey(reg: *registry.Registry) ?[]const u8 {
+    const account_key = reg.active_account_key orelse return null;
+    if (registry.findAccountIndexByAccountKey(reg, account_key) == null) return null;
+    return account_key;
+}
+
+fn clearStaleActiveAccountKey(allocator: std.mem.Allocator, reg: *registry.Registry) void {
+    const account_key = reg.active_account_key orelse return;
+    if (registry.findAccountIndexByAccountKey(reg, account_key) != null) return;
+    allocator.free(account_key);
+    reg.active_account_key = null;
+    reg.active_account_activated_at_ms = null;
+}
+
+pub fn reconcileActiveAuthAfterRemove(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    allow_auth_file_update: bool,
+) !void {
+    clearStaleActiveAccountKey(allocator, reg);
+    if (reg.active_account_key != null) return;
+
+    if (reg.accounts.items.len > 0) {
+        const best_idx = registry.selectBestAccountIndexByUsage(reg) orelse 0;
+        const account_key = reg.accounts.items[best_idx].account_key;
+        if (allow_auth_file_update) {
+            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, account_key);
+        } else {
+            try registry.setActiveAccountKey(allocator, reg, account_key);
+        }
+        return;
+    }
+
+    if (!allow_auth_file_update) return;
+
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+    std.fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
 }
 
 pub const HelpConfig = struct {
@@ -208,6 +271,10 @@ fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 }
 
+fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {
+    for (items) |item| allocator.free(@constCast(item));
+}
+
 pub fn findMatchingAccounts(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -224,27 +291,189 @@ pub fn findMatchingAccounts(
     return matches;
 }
 
-fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+const CurrentAuthState = struct {
+    record_key: ?[]u8,
+    syncable: bool,
+    missing: bool,
+
+    fn deinit(self: *CurrentAuthState, allocator: std.mem.Allocator) void {
+        if (self.record_key) |key| allocator.free(key);
+    }
+};
+
+fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !CurrentAuthState {
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    std.fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{
+            .record_key = null,
+            .syncable = false,
+            .missing = true,
+        },
+        else => {},
+    };
+
+    const info = auth.parseAuthInfo(allocator, auth_path) catch return .{
+        .record_key = null,
+        .syncable = false,
+        .missing = false,
+    };
+    defer info.deinit(allocator);
+
+    const record_key = if (info.record_key) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+
+    return .{
+        .record_key = record_key,
+        .syncable = info.email != null and info.record_key != null,
+        .missing = false,
+    };
+}
+
+fn selectionContainsAccountKey(reg: *registry.Registry, indices: []const usize, account_key: []const u8) bool {
+    for (indices) |idx| {
+        if (idx >= reg.accounts.items.len) continue;
+        if (std.mem.eql(u8, reg.accounts.items[idx].account_key, account_key)) return true;
+    }
+    return false;
+}
+
+fn selectionContainsIndex(indices: []const usize, target: usize) bool {
+    for (indices) |idx| {
+        if (idx == target) return true;
+    }
+    return false;
+}
+
+fn selectBestRemainingAccountKeyByUsageAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    removed_indices: []const usize,
+) !?[]u8 {
+    if (reg.accounts.items.len == 0) return null;
+
+    const now = std.time.timestamp();
+    var best_idx: ?usize = null;
+    var best_score: i64 = -2;
+    var best_seen: i64 = -1;
+    for (reg.accounts.items, 0..) |rec, idx| {
+        if (selectionContainsIndex(removed_indices, idx)) continue;
+
+        const score = registry.usageScoreAt(rec.last_usage, now) orelse -1;
+        const seen = rec.last_usage_at orelse -1;
+        if (score > best_score or (score == best_score and seen > best_seen)) {
+            best_idx = idx;
+            best_score = score;
+            best_seen = seen;
+        }
+    }
+
+    if (best_idx) |idx| {
+        return try allocator.dupe(u8, reg.accounts.items[idx].account_key);
+    }
+    return null;
+}
+
+fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.RemoveOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
+
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .remove_account);
 
-    const selected = try cli.selectAccountsToRemove(allocator, &reg);
+    var selected: ?[]usize = null;
+    if (opts.all) {
+        selected = try allocator.alloc(usize, reg.accounts.items.len);
+        for (selected.?, 0..) |*slot, idx| slot.* = idx;
+    } else if (opts.query) |query| {
+        var matches = try findMatchingAccounts(allocator, &reg, query);
+        defer matches.deinit(allocator);
+
+        if (matches.items.len == 0) {
+            try cli.printAccountNotFoundError(query);
+            return error.AccountNotFound;
+        }
+
+        if (matches.items.len > 1) {
+            var matched_labels = try cli.buildRemoveLabels(allocator, &reg, matches.items);
+            defer {
+                freeOwnedStrings(allocator, matched_labels.items);
+                matched_labels.deinit(allocator);
+            }
+            if (!std.fs.File.stdin().isTty()) {
+                try cli.printRemoveConfirmationUnavailableError(matched_labels.items);
+                return error.RemoveConfirmationUnavailable;
+            }
+            if (!(try cli.confirmRemoveMatches(matched_labels.items))) return;
+        }
+
+        selected = try allocator.dupe(usize, matches.items);
+    } else {
+        selected = cli.selectAccountsToRemove(allocator, &reg) catch |err| switch (err) {
+            error.InvalidRemoveSelectionInput => {
+                try cli.printInvalidRemoveSelectionError();
+                return error.InvalidRemoveSelectionInput;
+            },
+            else => return err,
+        };
+    }
     if (selected == null) return;
     defer allocator.free(selected.?);
     if (selected.?.len == 0) return;
 
-    try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    if (reg.active_account_key == null and reg.accounts.items.len > 0) {
-        const best_idx = registry.selectBestAccountIndexByUsage(&reg) orelse 0;
-        const account_key = reg.accounts.items[best_idx].account_key;
-
-        try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
+    var removed_labels = try cli.buildRemoveLabels(allocator, &reg, selected.?);
+    defer {
+        freeOwnedStrings(allocator, removed_labels.items);
+        removed_labels.deinit(allocator);
     }
+
+    const current_active_account_key = if (trackedActiveAccountKey(&reg)) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+    defer if (current_active_account_key) |key| allocator.free(key);
+
+    var current_auth_state = try loadCurrentAuthState(allocator, codex_home);
+    defer current_auth_state.deinit(allocator);
+
+    const active_removed = if (current_active_account_key) |key|
+        selectionContainsAccountKey(&reg, selected.?, key)
+    else
+        false;
+    const allow_auth_file_update = if (current_active_account_key) |key|
+        active_removed and ((current_auth_state.syncable and current_auth_state.record_key != null and
+            std.mem.eql(u8, current_auth_state.record_key.?, key)) or current_auth_state.missing)
+    else if (current_auth_state.missing)
+        true
+    else if (opts.all)
+        current_auth_state.syncable and current_auth_state.record_key != null and
+            selectionContainsAccountKey(&reg, selected.?, current_auth_state.record_key.?)
+    else
+        false;
+
+    const replacement_account_key = if (active_removed)
+        try selectBestRemainingAccountKeyByUsageAlloc(allocator, &reg, selected.?)
+    else
+        null;
+    defer if (replacement_account_key) |key| allocator.free(key);
+
+    if (replacement_account_key) |key| {
+        if (allow_auth_file_update) {
+            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, &reg, key);
+        } else {
+            try registry.setActiveAccountKey(allocator, &reg, key);
+        }
+    }
+
+    try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
+    try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg, allow_auth_file_update);
     try registry.saveRegistry(allocator, codex_home, &reg);
+    try cli.printRemoveSummary(removed_labels.items);
 }
 
 fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {

@@ -44,7 +44,10 @@ pub const ImportOptions = struct {
     source: ImportSource,
 };
 pub const SwitchOptions = struct { query: ?[]u8 };
-pub const RemoveOptions = struct {};
+pub const RemoveOptions = struct {
+    query: ?[]u8,
+    all: bool,
+};
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
 pub const AutoThresholdOptions = struct {
@@ -167,8 +170,30 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
     }
 
     if (std.mem.eql(u8, cmd, "remove")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .remove_account = .{} };
+        var query: ?[]u8 = null;
+        var all = false;
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.eql(u8, arg, "--all")) {
+                if (all or query != null) {
+                    if (query) |q| allocator.free(q);
+                    return Command{ .help = {} };
+                }
+                all = true;
+                continue;
+            }
+            if (std.mem.startsWith(u8, arg, "-")) {
+                if (query) |q| allocator.free(q);
+                return Command{ .help = {} };
+            }
+            if (query != null or all) {
+                if (query) |q| allocator.free(q);
+                return Command{ .help = {} };
+            }
+            query = try allocator.dupe(u8, arg);
+        }
+        return Command{ .remove_account = .{ .query = query, .all = all } };
     }
 
     if (std.mem.eql(u8, cmd, "clean")) {
@@ -250,6 +275,9 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
         .switch_account => |*opts| {
             if (opts.query) |e| allocator.free(e);
         },
+        .remove_account => |*opts| {
+            if (opts.query) |q| allocator.free(q);
+        },
         else => {},
     }
 }
@@ -325,7 +353,7 @@ pub fn writeHelp(
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
         .{ .name = "switch [<query>]", .description = "Switch the active account" },
-        .{ .name = "remove", .description = "Remove one or more accounts" },
+        .{ .name = "remove [<query>|--all]", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -524,6 +552,115 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn printRemoveRequiresTtyError() !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" interactive remove requires a TTY.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Use `codex-auth remove <query>` or `codex-auth remove --all` instead.\n");
+    try out.flush();
+}
+
+pub fn printInvalidRemoveSelectionError() !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" invalid remove selection input.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Use numbers separated by commas or spaces, for example `1 2` or `1,2`.\n");
+    try out.flush();
+}
+
+pub fn buildRemoveLabels(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+) !std.ArrayList([]const u8) {
+    var labels = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (labels.items) |label| allocator.free(@constCast(label));
+        labels.deinit(allocator);
+    }
+
+    var display = try display_rows.buildDisplayRows(allocator, reg, indices);
+    defer display.deinit(allocator);
+
+    var current_header: ?[]const u8 = null;
+    for (display.rows) |row| {
+        if (row.account_index == null) {
+            current_header = row.account_cell;
+            continue;
+        }
+
+        const label = if (row.depth == 0 or current_header == null)
+            try allocator.dupe(u8, row.account_cell)
+        else
+            try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
+        try labels.append(allocator, label);
+    }
+    return labels;
+}
+
+fn writeMatchedAccountsListTo(out: *std.Io.Writer, labels: []const []const u8) !void {
+    try out.writeAll("Matched multiple accounts:\n");
+    for (labels) |label| {
+        try out.print("- {s}\n", .{label});
+    }
+}
+
+pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, labels: []const []const u8) !void {
+    try writeMatchedAccountsListTo(out, labels);
+    try out.writeAll("Confirm delete? [y/N]: ");
+}
+
+pub fn printRemoveConfirmationUnavailableError(labels: []const []const u8) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeMatchedAccountsListTo(out, labels);
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" multiple accounts match the query in non-interactive mode.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Refine the query to match one account, or run the command in a TTY.\n");
+    try out.flush();
+}
+
+pub fn confirmRemoveMatches(labels: []const []const u8) !bool {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeRemoveConfirmationTo(out, labels);
+    try out.flush();
+
+    var buf: [64]u8 = undefined;
+    const n = try std.fs.File.stdin().read(&buf);
+    const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
+    return line.len == 1 and (line[0] == 'y' or line[0] == 'Y');
+}
+
+pub fn writeRemoveSummaryTo(out: *std.Io.Writer, labels: []const []const u8) !void {
+    try out.print("Removed {d} account(s): ", .{labels.len});
+    for (labels, 0..) |label, idx| {
+        if (idx != 0) try out.writeAll(", ");
+        try out.writeAll(label);
+    }
+    try out.writeAll("\n");
+}
+
+pub fn printRemoveSummary(labels: []const []const u8) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeRemoveSummaryTo(out, labels);
+    try out.flush();
+}
+
 pub fn writeDeprecatedLoginAliasWarningTo(out: *std.Io.Writer, replacement: []const u8, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.bold_red);
     try out.writeAll("warning:");
@@ -593,7 +730,14 @@ pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Regis
     if (comptime builtin.os.tag == .windows) {
         return selectRemoveWithNumbers(allocator, reg);
     }
+    if (shouldUseNumberedRemoveSelector(false, std.fs.File.stdin().isTty())) {
+        return selectRemoveWithNumbers(allocator, reg);
+    }
     return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);
+}
+
+pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool) bool {
+    return is_windows or !stdin_is_tty;
 }
 
 fn isQuitInput(input: []const u8) bool {
@@ -813,6 +957,7 @@ fn selectRemoveWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry
     const n = try std.fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (line.len == 0) return null;
+    if (!isStrictRemoveSelectionLine(line)) return error.InvalidRemoveSelectionInput;
 
     var current: usize = 0;
     var in_number = false;
@@ -847,6 +992,14 @@ fn selectRemoveWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry
         idx += 1;
     }
     return selected;
+}
+
+fn isStrictRemoveSelectionLine(line: []const u8) bool {
+    for (line) |ch| {
+        if ((ch >= '0' and ch <= '9') or ch == ',' or ch == ' ' or ch == '\t') continue;
+        return false;
+    }
+    return true;
 }
 
 fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {

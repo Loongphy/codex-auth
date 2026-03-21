@@ -660,6 +660,59 @@ test "clean preserves account snapshots when registry is missing" {
     recover_file.close();
 }
 
+test "remove accounts deletes matching snapshots and auth backups only for removed records" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "remove@example.com", "", .plus, .chatgpt, 1));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 2));
+
+    const remove_account_key = try accountKeyForEmailAlloc(gpa, "remove@example.com");
+    defer gpa.free(remove_account_key);
+    const keep_account_key = try accountKeyForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, remove_account_key);
+
+    const remove_snapshot_path = try registry.accountAuthPath(gpa, codex_home, remove_account_key);
+    defer gpa.free(remove_snapshot_path);
+    const keep_snapshot_path = try registry.accountAuthPath(gpa, codex_home, keep_account_key);
+    defer gpa.free(keep_snapshot_path);
+
+    const remove_auth = try authJsonWithEmailPlan(gpa, "remove@example.com", "plus");
+    defer gpa.free(remove_auth);
+    const keep_auth = try authJsonWithEmailPlan(gpa, "keep@example.com", "team");
+    defer gpa.free(keep_auth);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = remove_snapshot_path, .data = remove_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = keep_snapshot_path, .data = keep_auth });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-010101", .data = remove_auth });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-020202", .data = keep_auth });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-030303", .data = "{not-json}" });
+
+    try registry.removeAccounts(gpa, codex_home, &reg, &[_]usize{0});
+
+    try std.testing.expectEqual(@as(usize, 1), reg.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].email, "keep@example.com"));
+    try std.testing.expect(reg.active_account_key == null);
+
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(remove_snapshot_path, .{}));
+    var keep_snapshot = try std.fs.cwd().openFile(keep_snapshot_path, .{});
+    keep_snapshot.close();
+
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/auth.json.bak.20260320-010101", .{}));
+    var keep_backup = try tmp.dir.openFile("accounts/auth.json.bak.20260320-020202", .{});
+    keep_backup.close();
+    var malformed_backup = try tmp.dir.openFile("accounts/auth.json.bak.20260320-030303", .{});
+    malformed_backup.close();
+}
+
 test "import auth path with single file keeps explicit alias" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

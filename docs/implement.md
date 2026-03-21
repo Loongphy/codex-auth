@@ -167,6 +167,46 @@ When switching:
 
 The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
+## Removing Accounts
+
+`remove` now supports three foreground modes:
+
+- Interactive: `codex-auth remove`
+- Query-driven: `codex-auth remove <query>`
+- Clear-all: `codex-auth remove --all`
+
+For query-driven removal, the target query is matched case-insensitively by:
+
+- alias fragment
+- email fragment
+
+If no accounts match, the command prints an error and exits non-zero.
+If exactly one account matches, it is removed immediately.
+If multiple accounts match in a TTY session, the command prints the matched account labels using the same display grouping as `list` and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
+If multiple accounts match and stdin is not a TTY, the command exits non-zero instead of reading the pipe as confirmation input; the user must refine the query or rerun it interactively.
+
+When an account is removed, `codex-auth` deletes both:
+
+- the account snapshot `accounts/<account file key>.auth.json`
+- any parseable `accounts/auth.json.bak.*` backup files whose auth `record_key` matches the removed account
+
+Malformed or non-parseable `auth.json.bak.*` files are left in place for manual cleanup or `codex-auth clean`.
+
+If the removed account was the active one:
+
+- when other accounts still remain, `codex-auth` activates the remaining account with the best current usage score
+- if `~/.codex/auth.json` is missing and another account remains, `remove` recreates it from the replacement account snapshot
+- `~/.codex/auth.json` is only rewritten or deleted when the current auth file is syncable and can be identified as the removed active account
+- when no accounts remain and the current active auth file matches the removed active account, `codex-auth` deletes `~/.codex/auth.json`
+- if the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise does not match the removed active account, `remove` leaves that file untouched
+
+For `remove --all`, the command clears all accounts tracked in `registry.json` and deletes any matching managed snapshots/backups. If the current `~/.codex/auth.json` is syncable and its `record_key` matches one of those tracked accounts, `remove --all` deletes it even when `active_account_key` is null or stale. If the current `~/.codex/auth.json` is malformed, unsyncable, or otherwise cannot be identified as one of those tracked accounts, `remove --all` leaves that file untouched.
+During remove reconciliation, a dangling `active_account_key` is treated the same as an unset active account so the command can promote a remaining account or finish clearing `~/.codex/auth.json`.
+
+After a successful deletion, stdout prints `Removed N account(s): ...` using the removed account emails in removal order.
+
+When `remove` is run without a query and stdin is not a TTY, the command falls back to the numbered selector and accepts only strict numeric selections like `1 2` or `1,2`; other piped input is rejected.
+
 ## Background Auto Switch
 
 The detailed runtime, thresholds, service model, and data-source priority rules for auto-switching now live in `docs/auto-switch.md`.

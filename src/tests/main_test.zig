@@ -1,6 +1,7 @@
 const std = @import("std");
 const main_mod = @import("../main.zig");
 const registry = @import("../registry.zig");
+const bdd = @import("bdd_helpers.zig");
 
 fn makeRegistry() registry.Registry {
     return .{
@@ -38,6 +39,16 @@ fn appendAccount(
         .last_usage_at = null,
         .last_local_rollout = null,
     });
+}
+
+fn writeSnapshot(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8, plan: []const u8) !void {
+    const account_key = try bdd.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(snapshot_path);
+    const auth_json = try bdd.authJsonWithEmailPlan(allocator, email, plan);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
 }
 
 test "Scenario: Given alias and email queries when finding matching accounts then both matching strategies still work" {
@@ -89,6 +100,136 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
+}
+
+test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const gamma_key = try bdd.accountKeyForEmailAlloc(gpa, "gamma@example.com");
+    defer gpa.free(gamma_key);
+    try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
+    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
+
+    const now = std.time.timestamp();
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[1].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .team,
+    };
+
+    try writeSnapshot(gpa, codex_home, "alpha@example.com", "plus");
+    try writeSnapshot(gpa, codex_home, "gamma@example.com", "team");
+
+    const stale_auth = try bdd.authJsonWithEmailPlan(gpa, "removed@example.com", "pro");
+    defer gpa.free(stale_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
+
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
+
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, gamma_key));
+
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth);
+    const gamma_auth = try bdd.authJsonWithEmailPlan(gpa, "gamma@example.com", "team");
+    defer gpa.free(gamma_auth);
+    try std.testing.expectEqualStrings(gamma_auth, active_auth);
+}
+
+test "Scenario: Given stale active key with remaining accounts when reconciling after remove then it is treated as unset" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const gamma_key = try bdd.accountKeyForEmailAlloc(gpa, "gamma@example.com");
+    defer gpa.free(gamma_key);
+    try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
+    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
+    reg.active_account_activated_at_ms = 1;
+
+    const now = std.time.timestamp();
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[1].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .team,
+    };
+
+    try writeSnapshot(gpa, codex_home, "alpha@example.com", "plus");
+    try writeSnapshot(gpa, codex_home, "gamma@example.com", "team");
+
+    const stale_auth = try bdd.authJsonWithEmailPlan(gpa, "removed@example.com", "pro");
+    defer gpa.free(stale_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
+
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
+
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, gamma_key));
+
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth);
+    const gamma_auth = try bdd.authJsonWithEmailPlan(gpa, "gamma@example.com", "team");
+    defer gpa.free(gamma_auth);
+    try std.testing.expectEqualStrings(gamma_auth, active_auth);
+}
+
+test "Scenario: Given no remaining accounts when reconciling after remove then active auth is deleted" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    const stale_auth = try bdd.authJsonWithEmailPlan(gpa, "removed@example.com", "pro");
+    defer gpa.free(stale_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
+
+    try main_mod.reconcileActiveAuthAfterRemove(gpa, codex_home, &reg, true);
+
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given newer registry schema when loading help config then default help settings are used" {

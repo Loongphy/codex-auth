@@ -83,6 +83,7 @@ After cleanup, verify which binary is still active:
 
 ```shell
 which codex-auth
+codex-auth --version
 ```
 
 ## Commands
