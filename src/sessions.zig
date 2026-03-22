@@ -334,6 +334,9 @@ fn latestRolloutEventFromParsedUsage(
     mtime: i64,
     parsed: ParsedUsageEvent,
 ) !LatestRolloutEvent {
+    errdefer if (parsed.snapshot) |*snapshot| {
+        registry.freeRateLimitSnapshot(allocator, snapshot);
+    };
     return .{
         .path = try allocator.dupe(u8, path),
         .mtime = mtime,
