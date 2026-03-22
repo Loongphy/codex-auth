@@ -1012,9 +1012,12 @@ fn refreshActiveUsageFromSessionsForDaemon(
                 else => return err,
             };
             if (latest_usage) |usable| {
+                var snapshot_consumed = false;
                 defer {
                     allocator.free(usable.path);
-                    registry.freeRateLimitSnapshot(allocator, &usable.snapshot);
+                    if (!snapshot_consumed) {
+                        registry.freeRateLimitSnapshot(allocator, &usable.snapshot);
+                    }
                 }
                 if (std.mem.eql(u8, usable.path, latest_event.path) and usable.event_timestamp_ms >= activated_at_ms) {
                     const usable_signature: registry.RolloutSignature = .{
@@ -1023,6 +1026,7 @@ fn refreshActiveUsageFromSessionsForDaemon(
                     };
                     if (!registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, usable_signature)) {
                         registry.updateUsage(allocator, reg, account_key, usable.snapshot);
+                        snapshot_consumed = true;
                         try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], usable.path, usable.event_timestamp_ms);
                         refresh_state.clearPending(allocator);
                         return true;
@@ -1691,7 +1695,9 @@ pub fn enableWithServiceHooksAndPreflight(
     // any managed artifacts before persisting the disabled rollback state.
     errdefer uninstaller(allocator, codex_home) catch {};
     try installer(allocator, codex_home, self_exe);
-    try printAutoEnableUsageNote(reg.api.usage);
+    printAutoEnableUsageNote(reg.api.usage) catch |err| {
+        std.log.warn("failed to print auto-enable usage note: {}", .{err});
+    };
 }
 
 fn printAutoEnableUsageNote(api_enabled: bool) !void {

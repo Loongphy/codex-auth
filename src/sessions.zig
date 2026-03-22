@@ -119,11 +119,15 @@ pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?r
 
 pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestUsage {
     var latest_rollout = (try scanLatestRolloutEventWithSource(allocator, codex_home)) orelse return null;
+    errdefer latest_rollout.deinit(allocator);
     if (!latest_rollout.hasUsableWindows()) {
         const latest_usable = try scanFileForLatestUsableUsage(allocator, latest_rollout.path);
         if (latest_usable == null) {
             latest_rollout.deinit(allocator);
             return null;
+        }
+        if (latest_rollout.snapshot) |*snapshot| {
+            registry.freeRateLimitSnapshot(allocator, snapshot);
         }
         return .{
             .path = latest_rollout.path,

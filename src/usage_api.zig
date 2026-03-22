@@ -248,32 +248,20 @@ fn runCurlUsageCommand(
         .max_output_bytes = 1024 * 1024,
     });
     defer allocator.free(result.stderr);
+    defer allocator.free(result.stdout);
 
     const code = switch (result.term) {
         .Exited => |exit_code| exit_code,
-        else => {
-            allocator.free(result.stdout);
-            return error.RequestFailed;
-        },
+        else => return error.RequestFailed,
     };
-    if (code != 0) {
-        allocator.free(result.stdout);
-        return curlTransportError(code);
-    }
-    const parsed = parseCurlHttpOutput(result.stdout);
-    if (parsed == null) {
-        allocator.free(result.stdout);
-        return error.CommandFailed;
-    }
-    if (parsed) |http| {
-        const owned_body = try allocator.dupe(u8, http.body);
-        allocator.free(result.stdout);
-        return .{
-            .body = owned_body,
-            .status_code = http.status_code,
-        };
-    }
-    return .{ .body = result.stdout, .status_code = null };
+    if (code != 0) return curlTransportError(code);
+
+    const parsed = parseCurlHttpOutput(result.stdout) orelse return error.CommandFailed;
+    const owned_body = try allocator.dupe(u8, parsed.body);
+    return .{
+        .body = owned_body,
+        .status_code = parsed.status_code,
+    };
 }
 
 fn runPowerShellUsageCommand(
@@ -358,9 +346,18 @@ fn parsePowerShellHttpOutput(allocator: std.mem.Allocator, output: []const u8) ?
     const encoded_body = std.mem.trim(u8, trimmed[0..newline_idx], " \r\t");
     const code_slice = std.mem.trim(u8, trimmed[newline_idx + 1 ..], " \r\t");
     const status = std.fmt.parseInt(u16, code_slice, 10) catch return null;
-    const decoded_body = std.base64.standard.Decoder.decodeAlloc(allocator, encoded_body) catch return null;
+    const decoded_body = decodeBase64Alloc(allocator, encoded_body) catch return null;
     return .{
         .body = decoded_body,
         .status_code = if (status == 0) null else status,
     };
+}
+
+fn decodeBase64Alloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    const decoder = std.base64.standard.Decoder;
+    const out_len = try decoder.calcSizeForSlice(input);
+    const buf = try allocator.alloc(u8, out_len);
+    errdefer allocator.free(buf);
+    try decoder.decode(buf, input);
+    return buf;
 }
