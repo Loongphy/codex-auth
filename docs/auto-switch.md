@@ -42,7 +42,7 @@ Each cycle:
 
 The watcher also emits English-only service logs for debugging:
 
-- logs use compact `[local]`, `[api]`, `[decision]`, and `[switch]` tags
+- logs use compact `[local]`, `[api]`, and `[switch]` tags
 - local rollout captures show the parsed window labels first, then the local-time event timestamp, then the real rollout basename; when the newest local event has no usable usage windows the same `[local]` line also marks `fallback-to-api`
 - API refresh logs are reduced to `refresh usage | status=...`, where `status` is the HTTP status when available, `MissingAuth` when the active auth cannot call the ChatGPT usage API, or the direct transport error name such as `TimedOut` / `RequestFailed`
 

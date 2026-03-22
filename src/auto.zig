@@ -58,6 +58,7 @@ const CandidateEntry = struct {
 const CandidateIndex = struct {
     heap: std.ArrayListUnmanaged(CandidateEntry) = .empty,
     positions: std.StringHashMapUnmanaged(usize) = .empty,
+    next_score_change_at: ?i64 = null,
 
     fn deinit(self: *CandidateIndex, allocator: std.mem.Allocator) void {
         self.heap.deinit(allocator);
@@ -76,6 +77,20 @@ const CandidateIndex = struct {
                 .account_key = rec.account_key,
                 .score = candidateScore(rec, now),
             });
+        }
+        self.refreshNextScoreChangeAt(reg, now);
+    }
+
+    fn rebuildIfScoreExpired(
+        self: *CandidateIndex,
+        allocator: std.mem.Allocator,
+        reg: *const registry.Registry,
+        now: i64,
+    ) !void {
+        if (self.next_score_change_at) |deadline| {
+            if (deadline <= now) {
+                try self.rebuild(allocator, reg, now);
+            }
         }
     }
 
@@ -111,12 +126,14 @@ const CandidateIndex = struct {
         if (reg.active_account_key) |active| {
             if (std.mem.eql(u8, active, account_key)) {
                 self.remove(account_key);
+                self.refreshNextScoreChangeAt(reg, now);
                 return;
             }
         }
 
         const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse {
             self.remove(account_key);
+            self.refreshNextScoreChangeAt(reg, now);
             return;
         };
         const entry: CandidateEntry = .{
@@ -126,9 +143,11 @@ const CandidateIndex = struct {
         if (self.positions.get(entry.account_key)) |heap_idx| {
             self.heap.items[heap_idx] = entry;
             self.restore(heap_idx);
+            self.refreshNextScoreChangeAt(reg, now);
             return;
         }
         try self.insert(allocator, entry);
+        self.refreshNextScoreChangeAt(reg, now);
     }
 
     fn handleActiveSwitch(
@@ -141,6 +160,22 @@ const CandidateIndex = struct {
     ) !void {
         self.remove(new_active_account_key);
         try self.upsertFromRegistry(allocator, reg, old_active_account_key, now);
+    }
+
+    fn refreshNextScoreChangeAt(self: *CandidateIndex, reg: *const registry.Registry, now: i64) void {
+        const active = reg.active_account_key;
+        var next_score_change_at: ?i64 = null;
+        for (reg.accounts.items) |*rec| {
+            if (active) |account_key| {
+                if (std.mem.eql(u8, rec.account_key, account_key)) continue;
+            }
+            next_score_change_at = earlierFutureTimestamp(
+                next_score_change_at,
+                candidateScoreChangeAt(rec.last_usage, now),
+                now,
+            );
+        }
+        self.next_score_change_at = next_score_change_at;
     }
 
     fn orderedKeys(self: *const CandidateIndex, allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
@@ -1006,6 +1041,9 @@ fn refreshActiveUsageFromSessionsForDaemon(
     const file_label = rolloutFileLabel(&file_buf, latest_event.path);
 
     if (!latest_event.hasUsableWindows()) {
+        if (refresh_state.pendingMatches(account_key, signature)) {
+            return false;
+        }
         if (!reg.api.usage) {
             const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
                 error.FileNotFound => return false,
@@ -1033,9 +1071,6 @@ fn refreshActiveUsageFromSessionsForDaemon(
                     }
                 }
             }
-        }
-        if (refresh_state.pendingMatches(account_key, signature)) {
-            return false;
         }
         emitTaggedDaemonLog(.warning, "local", "no usage limits window{s}fallback-to-api{s}event={s}{s}file={s}", .{
             fieldSeparator(),
@@ -1121,11 +1156,13 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     usage_fetcher: anytype,
 ) !AutoSwitchAttempt {
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
+    const now = std.time.timestamp();
     if (refresh_state.current_reg == null and refresh_state.candidate_index.heap.items.len == 0) {
-        try refresh_state.candidate_index.rebuild(allocator, reg, std.time.timestamp());
+        try refresh_state.candidate_index.rebuild(allocator, reg, now);
+    } else {
+        try refresh_state.candidate_index.rebuildIfScoreExpired(allocator, reg, now);
     }
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
-    const now = std.time.timestamp();
     const now_ns = std.time.nanoTimestamp();
     const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return .{
         .refreshed_candidates = false,
@@ -1187,14 +1224,6 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         };
         const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
         if (candidate.value <= current.value) {
-            emitTaggedDaemonLog(
-                .debug,
-                "decision",
-                "refreshed={s} -> stay",
-                .{
-                    if (refreshed_candidates) "yes" else "no",
-                },
-            );
             return .{
                 .refreshed_candidates = refreshed_candidates,
                 .state_changed = changed,
@@ -1204,14 +1233,6 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
 
         const previous_active_key = reg.accounts.items[active_idx].account_key;
         const next_active_key = reg.accounts.items[candidate_idx].account_key;
-        emitTaggedDaemonLog(
-            .notice,
-            "decision",
-            "refreshed={s} -> switch",
-            .{
-                if (refreshed_candidates) "yes" else "no",
-            },
-        );
         try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
         try refresh_state.candidate_index.handleActiveSwitch(
             allocator,
@@ -1241,14 +1262,6 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
     if (candidate.value <= current.value) {
-        emitTaggedDaemonLog(
-            .debug,
-            "decision",
-            "refreshed={s} -> stay",
-            .{
-                if (refreshed_candidates) "yes" else "no",
-            },
-        );
         return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
@@ -1258,14 +1271,6 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
 
     const previous_active_key = reg.accounts.items[active_idx].account_key;
     const next_active_key = reg.accounts.items[candidate_idx].account_key;
-    emitTaggedDaemonLog(
-        .notice,
-        "decision",
-        "refreshed={s} -> switch",
-        .{
-            if (refreshed_candidates) "yes" else "no",
-        },
-    );
     try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
     try refresh_state.candidate_index.handleActiveSwitch(
         allocator,
@@ -1314,28 +1319,12 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
     };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
     if (candidate.value <= current.value) {
-        emitTaggedDaemonLog(
-            .debug,
-            "decision",
-            "refreshed={s} -> stay",
-            .{
-                if (refreshed_candidates) "yes" else "no",
-            },
-        );
         return .{
             .refreshed_candidates = refreshed_candidates,
             .switched = false,
         };
     }
 
-    emitTaggedDaemonLog(
-        .notice,
-        "decision",
-        "refreshed={s} -> switch",
-        .{
-            if (refreshed_candidates) "yes" else "no",
-        },
-    );
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
     return .{ .refreshed_candidates = refreshed_candidates, .state_changed = true, .switched = true };
 }
@@ -1751,6 +1740,24 @@ fn candidateBetter(a: CandidateScore, b: CandidateScore) bool {
     if (a.value != b.value) return a.value > b.value;
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;
     return a.created_at > b.created_at;
+}
+
+fn candidateScoreChangeAt(usage: ?registry.RateLimitSnapshot, now: i64) ?i64 {
+    if (usage == null) return null;
+    var next_change_at: ?i64 = null;
+    if (usage.?.primary) |window| {
+        next_change_at = earlierFutureTimestamp(next_change_at, window.resets_at, now);
+    }
+    if (usage.?.secondary) |window| {
+        next_change_at = earlierFutureTimestamp(next_change_at, window.resets_at, now);
+    }
+    return next_change_at;
+}
+
+fn earlierFutureTimestamp(current: ?i64, candidate: ?i64, now: i64) ?i64 {
+    if (candidate == null or candidate.? <= now) return current;
+    if (current == null) return candidate.?;
+    return @min(current.?, candidate.?);
 }
 
 fn queryRuntimeState(allocator: std.mem.Allocator) RuntimeState {
@@ -2260,4 +2267,54 @@ fn escapeSystemdValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 
 fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return std.mem.replaceOwned(u8, allocator, input, "'", "''");
+}
+
+test "candidate index refreshes cached ranking after a reset window expires" {
+    const bdd = @import("tests/bdd_helpers.zig");
+    const gpa = std.testing.allocator;
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try bdd.appendAccount(gpa, &reg, "active@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "reset@example.com", "", null);
+    try bdd.appendAccount(gpa, &reg, "steady@example.com", "", null);
+
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    const reset_account_key = try bdd.accountKeyForEmailAlloc(gpa, "reset@example.com");
+    defer gpa.free(reset_account_key);
+    const steady_account_key = try bdd.accountKeyForEmailAlloc(gpa, "steady@example.com");
+    defer gpa.free(steady_account_key);
+
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const reset_idx = registry.findAccountIndexByAccountKey(&reg, reset_account_key) orelse return error.TestExpectedEqual;
+    reg.accounts.items[reset_idx].last_usage = .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = 1010 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+    };
+    reg.accounts.items[reset_idx].last_usage_at = 100;
+
+    const steady_idx = registry.findAccountIndexByAccountKey(&reg, steady_account_key) orelse return error.TestExpectedEqual;
+    reg.accounts.items[steady_idx].last_usage = .{
+        .primary = .{ .used_percent = 60.0, .window_minutes = 300, .resets_at = null },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+    };
+    reg.accounts.items[steady_idx].last_usage_at = 50;
+
+    var index = CandidateIndex{};
+    defer index.deinit(gpa);
+
+    try index.rebuild(gpa, &reg, 1000);
+    try std.testing.expect(index.best() != null);
+    try std.testing.expect(std.mem.eql(u8, index.best().?.account_key, steady_account_key));
+
+    try index.rebuildIfScoreExpired(gpa, &reg, 1011);
+    try std.testing.expect(index.best() != null);
+    try std.testing.expect(std.mem.eql(u8, index.best().?.account_key, reset_account_key));
 }

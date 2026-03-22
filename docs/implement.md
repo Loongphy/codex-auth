@@ -239,7 +239,7 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 - Foreground API refresh updates only the current active account. The background watcher keeps a daemon-local in-memory candidate index for non-active accounts and can refresh candidate ChatGPT accounts from their stored `accounts/<account file key>.auth.json` snapshots without reloading the whole candidate set every cycle.
 - In watcher mode, candidate freshness bookkeeping is runtime-only: the daemon keeps per-candidate last-checked timestamps in memory, does bounded top-candidate upkeep while the active account is healthy, and revalidates only the current heap top / next top candidates before a switch instead of re-fetching every candidate on every 1-second loop.
 - In watcher mode, active-account API fallback cooldown is scoped to the current active account; switching to a different active account resets that cooldown for the new account.
-- Watcher logs use compact `[local]`, `[api]`, `[decision]`, and `[switch]` tags.
+- Watcher logs use compact `[local]`, `[api]`, and `[switch]` tags.
 - Local rollout watcher logs print the actual window lengths from the snapshot first, then the local event timestamp, then the full rollout basename (including the UUID suffix); when the newest event has no usable usage windows the same `[local]` log line also adds `fallback-to-api`.
 - `config auto enable` prints a short usage-mode note after installing the watcher so the user can see whether auto-switch is currently running with API-backed usage or local-only fallback semantics.
 - API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
