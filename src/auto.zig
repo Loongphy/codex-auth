@@ -1041,36 +1041,20 @@ fn refreshActiveUsageFromSessionsForDaemon(
     const file_label = rolloutFileLabel(&file_buf, latest_event.path);
 
     if (!latest_event.hasUsableWindows()) {
+        if (try applyLatestUsableSnapshotFromRolloutFile(
+            allocator,
+            reg,
+            account_key,
+            idx,
+            latest_event.path,
+            latest_event.mtime,
+            activated_at_ms,
+        )) {
+            refresh_state.clearPending(allocator);
+            return true;
+        }
         if (refresh_state.pendingMatches(account_key, signature)) {
             return false;
-        }
-        if (!reg.api.usage) {
-            const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
-                error.FileNotFound => return false,
-                else => return err,
-            };
-            if (latest_usage) |usable| {
-                var snapshot_consumed = false;
-                defer {
-                    allocator.free(usable.path);
-                    if (!snapshot_consumed) {
-                        registry.freeRateLimitSnapshot(allocator, &usable.snapshot);
-                    }
-                }
-                if (std.mem.eql(u8, usable.path, latest_event.path) and usable.event_timestamp_ms >= activated_at_ms) {
-                    const usable_signature: registry.RolloutSignature = .{
-                        .path = usable.path,
-                        .event_timestamp_ms = usable.event_timestamp_ms,
-                    };
-                    if (!registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, usable_signature)) {
-                        registry.updateUsage(allocator, reg, account_key, usable.snapshot);
-                        snapshot_consumed = true;
-                        try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], usable.path, usable.event_timestamp_ms);
-                        refresh_state.clearPending(allocator);
-                        return true;
-                    }
-                }
-            }
         }
         emitTaggedDaemonLog(.warning, "local", "no usage limits window{s}fallback-to-api{s}event={s}{s}file={s}", .{
             fieldSeparator(),
@@ -1096,6 +1080,46 @@ fn refreshActiveUsageFromSessionsForDaemon(
     latest_event.snapshot = null;
     try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest_event.path, latest_event.event_timestamp_ms);
     refresh_state.clearPending(allocator);
+    return true;
+}
+
+fn applyLatestUsableSnapshotFromRolloutFile(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    idx: usize,
+    rollout_path: []const u8,
+    rollout_mtime: i64,
+    activated_at_ms: i64,
+) !bool {
+    const latest_usage = sessions.scanLatestUsableUsageInFile(allocator, rollout_path, rollout_mtime) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    if (latest_usage == null) return false;
+
+    var usable = latest_usage.?;
+    var snapshot_consumed = false;
+    defer {
+        allocator.free(usable.path);
+        if (!snapshot_consumed) {
+            registry.freeRateLimitSnapshot(allocator, &usable.snapshot);
+        }
+    }
+
+    if (usable.event_timestamp_ms < activated_at_ms) return false;
+
+    const usable_signature: registry.RolloutSignature = .{
+        .path = usable.path,
+        .event_timestamp_ms = usable.event_timestamp_ms,
+    };
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, usable_signature)) {
+        return false;
+    }
+
+    registry.updateUsage(allocator, reg, account_key, usable.snapshot);
+    snapshot_consumed = true;
+    try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], usable.path, usable.event_timestamp_ms);
     return true;
 }
 
@@ -1484,8 +1508,8 @@ fn refreshDaemonCandidateUsageByKeyWithFetcher(
 
     if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) {
         try refresh_state.markCandidateChecked(allocator, account_key, now_ns);
-        try refresh_state.markCandidateRejected(allocator, account_key);
-        return .{ .visited = true, .disqualify_for_switch = true };
+        refresh_state.clearCandidateRejected(account_key);
+        return .{ .visited = true };
     }
 
     const auth_path = registry.accountAuthPath(allocator, codex_home, account_key) catch {

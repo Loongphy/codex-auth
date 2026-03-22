@@ -121,20 +121,13 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
     var latest_rollout = (try scanLatestRolloutEventWithSource(allocator, codex_home)) orelse return null;
     errdefer latest_rollout.deinit(allocator);
     if (!latest_rollout.hasUsableWindows()) {
-        const latest_usable = try scanFileForLatestUsableUsage(allocator, latest_rollout.path);
+        const latest_usable = try scanLatestUsableUsageInFile(allocator, latest_rollout.path, latest_rollout.mtime);
         if (latest_usable == null) {
             latest_rollout.deinit(allocator);
             return null;
         }
-        if (latest_rollout.snapshot) |*snapshot| {
-            registry.freeRateLimitSnapshot(allocator, snapshot);
-        }
-        return .{
-            .path = latest_rollout.path,
-            .mtime = latest_rollout.mtime,
-            .event_timestamp_ms = latest_usable.?.event_timestamp_ms,
-            .snapshot = latest_usable.?.snapshot.?,
-        };
+        latest_rollout.deinit(allocator);
+        return latest_usable;
     }
 
     const snapshot = latest_rollout.snapshot.?;
@@ -143,6 +136,27 @@ pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []con
         .path = latest_rollout.path,
         .mtime = latest_rollout.mtime,
         .event_timestamp_ms = latest_rollout.event_timestamp_ms,
+        .snapshot = snapshot,
+    };
+}
+
+pub fn scanLatestUsableUsageInFile(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    mtime: i64,
+) !?LatestUsage {
+    var latest_usable = (try scanFileForLatestUsableUsage(allocator, path)) orelse return null;
+    errdefer if (latest_usable.snapshot) |*snapshot| {
+        registry.freeRateLimitSnapshot(allocator, snapshot);
+    };
+
+    const owned_path = try allocator.dupe(u8, path);
+    const snapshot = latest_usable.snapshot.?;
+    latest_usable.snapshot = null;
+    return .{
+        .path = owned_path,
+        .mtime = mtime,
+        .event_timestamp_ms = latest_usable.event_timestamp_ms,
         .snapshot = snapshot,
     };
 }
