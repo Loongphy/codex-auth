@@ -376,6 +376,10 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
     try tmp.dir.makePath("sessions/2025/01/01");
+    const first_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
+    defer gpa.free(first_path);
+    const second_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-b.jsonl" });
+    defer gpa.free(second_path);
 
     const first_line = try usageLineAlloc(gpa, "2025-01-01T00:00:14.000Z", 20.0);
     defer gpa.free(first_line);
@@ -383,6 +387,8 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     defer gpa.free(newer_line);
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-a.jsonl", .data = first_line });
+    const base_time = std.time.nanoTimestamp();
+    try updateFileTimes(first_path, base_time, base_time);
 
     var cache = sessions.RolloutScanCache{};
     defer cache.deinit(gpa);
@@ -392,6 +398,7 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
 
     try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-b.jsonl", .data = newer_line });
+    try updateFileTimes(second_path, base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
 
     latest.deinit(gpa);
     latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
