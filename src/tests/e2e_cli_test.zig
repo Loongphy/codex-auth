@@ -421,6 +421,85 @@ test "Scenario: Given single-file import missing email when running import then 
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "  ✗ skipped   token_bob.wilson.alpha@email.com: MissingEmail\n") != null);
 }
 
+test "Scenario: Given purge with no recoverable active auth when running import then it activates the first rebuilt account and backs up auth json" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex/accounts");
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const zed_auth = try bdd.authJsonWithEmailPlan(gpa, "zed@example.com", "team");
+    defer gpa.free(zed_auth);
+    const zed_key = try bdd.accountKeyForEmailAlloc(gpa, "zed@example.com");
+    defer gpa.free(zed_key);
+    const zed_snapshot_path = try registry.accountAuthPath(gpa, codex_home, zed_key);
+    defer gpa.free(zed_snapshot_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = zed_snapshot_path, .data = zed_auth });
+
+    const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "plus");
+    defer gpa.free(alpha_auth);
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
+    defer gpa.free(alpha_snapshot_path);
+    try std.fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+
+    const stale_auth = "{\"broken\":true}";
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = stale_auth });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", "--purge" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Import Summary: 2 imported, 0 updated, 0 skipped (total 2 files)\n") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth);
+    try std.testing.expectEqualStrings(alpha_auth, active_auth);
+
+    try std.testing.expectEqual(@as(usize, 1), try countAuthBackups(tmp.dir, ".codex/accounts"));
+
+    var backup_name: ?[]u8 = null;
+    defer if (backup_name) |name| gpa.free(name);
+
+    var accounts = try tmp.dir.openDir(".codex/accounts", .{ .iterate = true });
+    defer accounts.close();
+    var it = accounts.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
+        backup_name = try gpa.dupe(u8, entry.name);
+        break;
+    }
+    try std.testing.expect(backup_name != null);
+
+    const backup_rel = try std.fs.path.join(gpa, &[_][]const u8{ ".codex", "accounts", backup_name.? });
+    defer gpa.free(backup_rel);
+    var backup_file = try tmp.dir.openFile(backup_rel, .{});
+    defer backup_file.close();
+    const backup_contents = try backup_file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(backup_contents);
+    try std.testing.expectEqualStrings(stale_auth, backup_contents);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, alpha_key));
+}
+
 test "Scenario: Given directory import with new updated and invalid files when running import then stdout and stderr split the report" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

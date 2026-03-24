@@ -495,6 +495,86 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
     snapshot.close();
 }
 
+test "Scenario: Given purge without a recoverable active auth when rebuilding then it activates the first sorted account and backs up the previous auth" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const zed_auth = try authJsonWithEmailPlan(gpa, "zed@example.com", "team");
+    defer gpa.free(zed_auth);
+    const zed_record_key = try accountKeyForEmailAlloc(gpa, "zed@example.com");
+    defer gpa.free(zed_record_key);
+    const zed_snapshot_path = try registry.accountAuthPath(gpa, codex_home, zed_record_key);
+    defer gpa.free(zed_snapshot_path);
+    const zed_snapshot_rel = try std.fs.path.relative(gpa, codex_home, zed_snapshot_path);
+    defer gpa.free(zed_snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = zed_snapshot_rel, .data = zed_auth });
+
+    const alpha_auth = try authJsonWithEmailPlan(gpa, "alpha@example.com", "plus");
+    defer gpa.free(alpha_auth);
+    const alpha_record_key = try accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_record_key);
+    const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_record_key);
+    defer gpa.free(alpha_snapshot_path);
+    const alpha_snapshot_rel = try std.fs.path.relative(gpa, codex_home, alpha_snapshot_path);
+    defer gpa.free(alpha_snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = alpha_snapshot_rel, .data = alpha_auth });
+
+    const stale_auth = "{\"broken\":true}";
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = stale_auth });
+
+    var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, null, null);
+    defer report.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 2), report.imported);
+    try std.testing.expectEqual(@as(usize, 0), report.updated);
+    try std.testing.expectEqual(@as(usize, 0), report.skipped);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, alpha_record_key));
+
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+    var active_file = try std.fs.cwd().openFile(active_auth_path, .{});
+    defer active_file.close();
+    const active_auth = try active_file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(active_auth);
+    try std.testing.expectEqualStrings(alpha_auth, active_auth);
+
+    var backup_name: ?[]u8 = null;
+    defer if (backup_name) |name| gpa.free(name);
+
+    var accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
+    defer accounts.close();
+    var it = accounts.iterate();
+    var backup_count: usize = 0;
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
+        backup_count += 1;
+        if (backup_name == null) {
+            backup_name = try gpa.dupe(u8, entry.name);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), backup_count);
+    try std.testing.expect(backup_name != null);
+
+    const backup_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", backup_name.? });
+    defer gpa.free(backup_rel);
+    var backup_file = try tmp.dir.openFile(backup_rel, .{});
+    defer backup_file.close();
+    const backup_contents = try backup_file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(backup_contents);
+    try std.testing.expectEqualStrings(stale_auth, backup_contents);
+}
+
 test "Scenario: Given purge without path and an empty snapshot when rebuilding then it reports malformed json and still imports valid backups" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

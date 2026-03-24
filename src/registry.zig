@@ -754,6 +754,9 @@ pub fn purgeRegistryFromImportSource(
     }
 
     sortAccountsByEmail(&reg);
+    if (reg.active_account_key == null and reg.accounts.items.len > 0) {
+        try activateAccountByKey(allocator, codex_home, &reg, reg.accounts.items[0].account_key);
+    }
     try saveRegistry(allocator, codex_home, &reg);
     return report;
 }
