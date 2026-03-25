@@ -19,9 +19,19 @@ fn colorEnabled() bool {
     return std.fs.File.stdout().isTty();
 }
 
-fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
-    if (registry.resolvePlan(rec)) |p| return @tagName(p);
-    return missing;
+fn planDisplayAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord, missing: []const u8) ![]u8 {
+    if (registry.resolvePlan(rec)) |p| {
+        const tag = @tagName(p);
+        if (p == .team or p == .enterprise or p == .business) {
+            if (rec.chatgpt_account_id.len >= 8) {
+                return std.fmt.allocPrint(allocator, "{s} ({s})", .{ tag, rec.chatgpt_account_id[0..8] });
+            } else {
+                return std.fmt.allocPrint(allocator, "{s} ({s})", .{ tag, rec.chatgpt_account_id });
+            }
+        }
+        return allocator.dupe(u8, tag);
+    }
+    return allocator.dupe(u8, missing);
 }
 
 pub fn printAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, fmt: cli.OutputFormat) !void {
@@ -58,7 +68,8 @@ fn printAccountsTable(reg: *registry.Registry) !void {
         widths[0] = @max(widths[0], row.account_cell.len + indent);
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = planDisplay(&rec, "-");
+            const plan = try planDisplayAlloc(std.heap.page_allocator, &rec, "-");
+            defer std.heap.page_allocator.free(plan);
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const rate_5h_str = try formatRateLimitFullAlloc(rate_5h);
@@ -112,7 +123,8 @@ fn printAccountsTable(reg: *registry.Registry) !void {
     for (display.rows) |row| {
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = planDisplay(&rec, "-");
+            const plan = try planDisplayAlloc(std.heap.page_allocator, &rec, "-");
+            defer std.heap.page_allocator.free(plan);
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const rate_5h_str = try formatRateLimitUiAlloc(rate_5h, widths[2]);
@@ -194,7 +206,8 @@ fn printAccountsCsv(reg: *registry.Registry) !void {
         const account_key = rec.account_key;
         const chatgpt_account_id = rec.chatgpt_account_id;
         const chatgpt_user_id = rec.chatgpt_user_id;
-        const plan = planDisplay(&rec, "");
+        const plan = try planDisplayAlloc(std.heap.page_allocator, &rec, "");
+        defer std.heap.page_allocator.free(plan);
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
         const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
         const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
@@ -218,7 +231,8 @@ fn printAccountsCompact(reg: *registry.Registry) !void {
     for (reg.accounts.items) |rec| {
         const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
         const email = rec.email;
-        const plan = planDisplay(&rec, "-");
+        const plan = try planDisplayAlloc(std.heap.page_allocator, &rec, "-");
+        defer std.heap.page_allocator.free(plan);
         const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
         const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
         const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);

@@ -1577,7 +1577,7 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         changed = true;
     }
 
-    if (!std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
+    if (reg.accounts.items[idx].email.len == 0 or !std.mem.eql(u8, reg.accounts.items[idx].email, email)) {
         const new_email = try allocator.dupe(u8, email);
         allocator.free(reg.accounts.items[idx].email);
         reg.accounts.items[idx].email = new_email;
