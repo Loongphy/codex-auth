@@ -164,7 +164,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Run `codex-auth <command> --help` for command-specific usage and examples.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Run `codex-auth <command> --help` for command-specific usage details.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
@@ -181,7 +181,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
 }
 
-test "Scenario: Given command help when rendering then usage and examples are shown" {
+test "Scenario: Given simple command help when rendering then examples are omitted" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -190,8 +190,22 @@ test "Scenario: Given command help when rendering then usage and examples are sh
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth list\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
+}
+
+test "Scenario: Given complex command help when rendering then examples are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeCommandHelp(&aw.writer, false, .import_auth);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth import") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {

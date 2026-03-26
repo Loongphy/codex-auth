@@ -536,7 +536,7 @@ pub fn writeHelp(
     try out.writeAll("Notes:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
-    try out.writeAll("  Run `codex-auth <command> --help` for command-specific usage and examples.\n");
+    try out.writeAll("  Run `codex-auth <command> --help` for command-specific usage details.\n");
     try out.writeAll("  `config api enable` may trigger OpenAI account restrictions or suspension in some environments.\n");
 }
 
@@ -598,8 +598,10 @@ pub fn writeCommandHelp(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) 
     try writeCommandHelpHeader(out, use_color, topic);
     try out.writeAll("\n");
     try writeUsageSection(out, topic);
-    try out.writeAll("\n");
-    try writeExamplesSection(out, topic);
+    if (commandHelpHasExamples(topic)) {
+        try out.writeAll("\n\n");
+        try writeExamplesSection(out, topic);
+    }
 }
 
 fn writeCommandHelpHeader(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
@@ -628,7 +630,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
 fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
     return switch (topic) {
         .top_level => "Command-line account management for Codex.",
-        .list => "List available accounts in the default table view.",
+        .list => "List available accounts.",
         .status => "Show auto-switch, service, and usage API status.",
         .login => "Run `codex login`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
@@ -637,6 +639,13 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
+    };
+}
+
+fn commandHelpHasExamples(topic: HelpTopic) bool {
+    return switch (topic) {
+        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        else => false,
     };
 }
 
