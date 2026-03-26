@@ -255,7 +255,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "legacy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, email) != null);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
