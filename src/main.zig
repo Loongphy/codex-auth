@@ -1,10 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const account_name_api = @import("account_name_api.zig");
 const cli = @import("cli.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
+const io_util = @import("io_util.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 
@@ -13,6 +15,20 @@ const AccountNameFetchFn = *const fn (
     access_token: []const u8,
     account_id: ?[]const u8,
 ) anyerror!account_name_api.FetchResult;
+
+const account_name_bootstrap_parallel_limit: usize = if (builtin.is_test) 1 else 2;
+
+const AccountNameBootstrapJob = struct {
+    chatgpt_user_id: []u8,
+    auth_path: []u8,
+    fetch_result: ?account_name_api.FetchResult = null,
+
+    fn deinit(self: *const AccountNameBootstrapJob, allocator: std.mem.Allocator) void {
+        allocator.free(self.chatgpt_user_id);
+        allocator.free(self.auth_path);
+        if (self.fetch_result) |result| result.deinit(std.heap.page_allocator);
+    }
+};
 
 pub fn main() !void {
     var exit_code: u8 = 0;
@@ -175,6 +191,124 @@ fn defaultAccountNameFetcher(
     );
 }
 
+fn writeAccountNameBootstrapNotice() !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.writeAll("Syncing Team account names. This may take a few seconds...\n");
+    try out.flush();
+}
+
+fn findAccountNameBootstrapJobIndexByUserId(
+    jobs: []const AccountNameBootstrapJob,
+    chatgpt_user_id: []const u8,
+) ?usize {
+    for (jobs, 0..) |job, idx| {
+        if (std.mem.eql(u8, job.chatgpt_user_id, chatgpt_user_id)) return idx;
+    }
+    return null;
+}
+
+fn shouldBootstrapAccountNameForRecord(rec: *const registry.AccountRecord) bool {
+    const plan = registry.resolvePlan(rec) orelse return false;
+    return plan == .team and rec.account_name == null;
+}
+
+fn collectAccountNameBootstrapJobs(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !std.ArrayList(AccountNameBootstrapJob) {
+    var jobs = std.ArrayList(AccountNameBootstrapJob).empty;
+    errdefer {
+        for (jobs.items) |*job| job.deinit(allocator);
+        jobs.deinit(allocator);
+    }
+
+    for (reg.accounts.items) |rec| {
+        if (!shouldBootstrapAccountNameForRecord(&rec)) continue;
+        if (findAccountNameBootstrapJobIndexByUserId(jobs.items, rec.chatgpt_user_id) != null) continue;
+
+        const auth_path = registry.accountAuthPath(allocator, codex_home, rec.account_key) catch continue;
+        var keep_auth_path = false;
+        defer if (!keep_auth_path) allocator.free(auth_path);
+
+        var info = auth.parseAuthInfo(allocator, auth_path) catch continue;
+        defer info.deinit(allocator);
+        if (info.auth_mode != .chatgpt) continue;
+        if (info.access_token == null) continue;
+        const info_user_id = info.chatgpt_user_id orelse continue;
+        if (!std.mem.eql(u8, info_user_id, rec.chatgpt_user_id)) continue;
+
+        const chatgpt_user_id = try allocator.dupe(u8, rec.chatgpt_user_id);
+        errdefer allocator.free(chatgpt_user_id);
+
+        try jobs.append(allocator, .{
+            .chatgpt_user_id = chatgpt_user_id,
+            .auth_path = auth_path,
+            .fetch_result = null,
+        });
+        keep_auth_path = true;
+    }
+
+    return jobs;
+}
+
+fn runAccountNameBootstrapJob(job: *AccountNameBootstrapJob, fetcher: AccountNameFetchFn) void {
+    const allocator = std.heap.page_allocator;
+    var info = auth.parseAuthInfo(allocator, job.auth_path) catch return;
+    defer info.deinit(allocator);
+    if (info.auth_mode != .chatgpt) return;
+    const access_token = info.access_token orelse return;
+    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch return;
+    job.fetch_result = result;
+}
+
+fn runAccountNameBootstrapJobs(jobs: []AccountNameBootstrapJob, fetcher: AccountNameFetchFn) void {
+    var next_idx: usize = 0;
+    while (next_idx < jobs.len) {
+        var handles: [account_name_bootstrap_parallel_limit]std.Thread = undefined;
+        var spawned: usize = 0;
+        const batch_end = @min(next_idx + account_name_bootstrap_parallel_limit, jobs.len);
+        while (next_idx < batch_end) : (next_idx += 1) {
+            handles[spawned] = std.Thread.spawn(.{}, runAccountNameBootstrapJob, .{ &jobs[next_idx], fetcher }) catch {
+                runAccountNameBootstrapJob(&jobs[next_idx], fetcher);
+                continue;
+            };
+            spawned += 1;
+        }
+        for (handles[0..spawned]) |handle| handle.join();
+    }
+}
+
+pub fn bootstrapTeamAccountNamesOnFirstRun(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    if (reg.account_name_bootstrap_done) return false;
+    reg.account_name_bootstrap_done = true;
+
+    var jobs = try collectAccountNameBootstrapJobs(allocator, codex_home, reg);
+    defer {
+        for (jobs.items) |*job| job.deinit(allocator);
+        jobs.deinit(allocator);
+    }
+    if (jobs.items.len == 0) return true;
+
+    try writeAccountNameBootstrapNotice();
+    runAccountNameBootstrapJobs(jobs.items, fetcher);
+
+    for (jobs.items) |*job| {
+        const fetch_result = job.fetch_result orelse continue;
+        const entries = fetch_result.entries orelse continue;
+        _ = try registry.applyAccountNamesForUser(allocator, reg, job.chatgpt_user_id, entries);
+    }
+
+    return true;
+}
+
 fn maybeRefreshAccountNamesForAuthInfo(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -331,6 +465,9 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
             try registry.saveRegistry(allocator, codex_home, &reg);
         }
     }
+    if (try bootstrapTeamAccountNamesOnFirstRun(allocator, codex_home, &reg, defaultAccountNameFetcher)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
+    }
     if (try refreshAccountNamesForList(allocator, codex_home, &reg, defaultAccountNameFetcher)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
@@ -349,6 +486,9 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
+    if (try bootstrapTeamAccountNamesOnFirstRun(allocator, codex_home, &reg, defaultAccountNameFetcher)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
+    }
 
     const email = info.email orelse return error.MissingEmail;
     _ = email;
@@ -407,6 +547,9 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    if (try bootstrapTeamAccountNamesOnFirstRun(allocator, codex_home, &reg, defaultAccountNameFetcher)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
+    }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .switch_account);
 
     var selected_account_key: ?[]const u8 = null;
@@ -455,8 +598,13 @@ pub fn findMatchingAccounts(
 ) !std.ArrayList(usize) {
     var matches = std.ArrayList(usize).empty;
     for (reg.accounts.items, 0..) |*rec, idx| {
-        if (std.ascii.indexOfIgnoreCase(rec.email, query) != null or
-            (rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null))
+        const matches_email = std.ascii.indexOfIgnoreCase(rec.email, query) != null;
+        const matches_alias = rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null;
+        const matches_name = if (rec.account_name) |name|
+            name.len != 0 and std.ascii.indexOfIgnoreCase(name, query) != null
+        else
+            false;
+        if (matches_email or matches_alias or matches_name)
         {
             try matches.append(allocator, idx);
         }

@@ -10,11 +10,22 @@ const primary_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
 const secondary_account_id = "518a44d9-ba75-4bad-87e5-ae9377042960";
 const primary_record_key = shared_user_id ++ "::" ++ primary_account_id;
 const secondary_record_key = shared_user_id ++ "::" ++ secondary_account_id;
+const second_user_id = "user-bM3QpTa5vN2zL8eXk9Ds1HfR";
+const second_team_account_id = "a4021fa5-998b-4774-989f-784fa69c367b";
+const second_free_account_id = "58250000-8b17-4ff0-8e00-000000000001";
+const second_team_record_key = second_user_id ++ "::" ++ second_team_account_id;
+const second_free_record_key = second_user_id ++ "::" ++ second_free_account_id;
+const plus_only_record_key = "user-j9V2tYh3mQ8nLp0rD4sK7wXc::6f7787aa-25d0-40ec-a2f7-d8ea9915c8d4";
 
 var mock_account_name_fetch_count: usize = 0;
+var bootstrap_mock_fetch_count: usize = 0;
 
 fn resetMockAccountNameFetcher() void {
     mock_account_name_fetch_count = 0;
+}
+
+fn resetBootstrapMockAccountNameFetcher() void {
+    bootstrap_mock_fetch_count = 0;
 }
 
 fn makeRegistry() registry.Registry {
@@ -22,6 +33,7 @@ fn makeRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
+        .account_name_bootstrap_done = false,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
@@ -123,6 +135,23 @@ fn writeActiveAuthWithIds(
     try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
+fn writeAccountSnapshotWithIds(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    record_key: []const u8,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !void {
+    const snapshot_path = try registry.accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(snapshot_path);
+
+    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
+}
+
 fn mockAccountNameFetcher(
     allocator: std.mem.Allocator,
     access_token: []const u8,
@@ -156,13 +185,64 @@ fn mockAccountNameFetcher(
     };
 }
 
-test "Scenario: Given alias and email queries when finding matching accounts then both matching strategies still work" {
+fn bootstrapMockAccountNameFetcher(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_name_api.FetchResult {
+    _ = access_token;
+    bootstrap_mock_fetch_count += 1;
+    const requested_account_id = account_id orelse return .{
+        .entries = null,
+        .status_code = 200,
+    };
+
+    if (std.mem.eql(u8, requested_account_id, primary_account_id)) {
+        const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
+        errdefer allocator.free(entries);
+        entries[0] = .{
+            .account_id = try allocator.dupe(u8, primary_account_id),
+            .account_name = try allocator.dupe(u8, "Primary Workspace"),
+        };
+        errdefer entries[0].deinit(allocator);
+        entries[1] = .{
+            .account_id = try allocator.dupe(u8, secondary_account_id),
+            .account_name = try allocator.dupe(u8, "Backup Workspace"),
+        };
+        errdefer entries[1].deinit(allocator);
+        return .{ .entries = entries, .status_code = 200 };
+    }
+
+    if (std.mem.eql(u8, requested_account_id, second_team_account_id)) {
+        const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
+        errdefer allocator.free(entries);
+        entries[0] = .{
+            .account_id = try allocator.dupe(u8, second_team_account_id),
+            .account_name = try allocator.dupe(u8, "Ops Workspace"),
+        };
+        errdefer entries[0].deinit(allocator);
+        entries[1] = .{
+            .account_id = try allocator.dupe(u8, second_free_account_id),
+            .account_name = try allocator.dupe(u8, "Free Workspace"),
+        };
+        errdefer entries[1].deinit(allocator);
+        return .{ .entries = entries, .status_code = 200 };
+    }
+
+    return .{
+        .entries = null,
+        .status_code = 200,
+    };
+}
+
+test "Scenario: Given alias, email, and account name queries when finding matching accounts then all matching strategies work" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
     try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
     try appendAccount(gpa, &reg, "user-Z9Y8X7W6V5U4::518a44d9-ba75-4bad-87e5-ae9377042960", "other@example.com", "", .plus);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Ops Workspace");
 
     var alias_matches = try main_mod.findMatchingAccounts(gpa, &reg, "work");
     defer alias_matches.deinit(gpa);
@@ -173,6 +253,11 @@ test "Scenario: Given alias and email queries when finding matching accounts the
     defer email_matches.deinit(gpa);
     try std.testing.expect(email_matches.items.len == 1);
     try std.testing.expect(email_matches.items[0] == 1);
+
+    var name_matches = try main_mod.findMatchingAccounts(gpa, &reg, "workspace");
+    defer name_matches.deinit(gpa);
+    try std.testing.expect(name_matches.items.len == 1);
+    try std.testing.expect(name_matches.items[0] == 1);
 }
 
 test "Scenario: Given account_id query when finding matching accounts then it is ignored for switch lookup" {
@@ -335,6 +420,60 @@ test "Scenario: Given list refresh with missing active-user account names when r
     resetMockAccountNameFetcher();
     try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+}
+
+test "Scenario: Given first-run bootstrap with missing team names across users when running bootstrap then it fetches once per team user and only once" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "team-a@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "team-a@example.com", "", .team);
+    try appendAccount(gpa, &reg, second_team_record_key, "team-b@example.com", "", .team);
+    try appendAccount(gpa, &reg, second_free_record_key, "team-b@example.com", "", .free);
+    try appendAccount(gpa, &reg, plus_only_record_key, "plus-only@example.com", "", .plus);
+
+    try writeAccountSnapshotWithIds(
+        gpa,
+        codex_home,
+        primary_record_key,
+        "team-a@example.com",
+        "team",
+        shared_user_id,
+        primary_account_id,
+    );
+    try writeAccountSnapshotWithIds(
+        gpa,
+        codex_home,
+        second_team_record_key,
+        "team-b@example.com",
+        "team",
+        second_user_id,
+        second_team_account_id,
+    );
+
+    resetBootstrapMockAccountNameFetcher();
+    const changed = try main_mod.bootstrapTeamAccountNamesOnFirstRun(gpa, codex_home, &reg, bootstrapMockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expect(reg.account_name_bootstrap_done);
+    try std.testing.expectEqual(@as(usize, 2), bootstrap_mock_fetch_count);
+
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[2].account_name.?, "Ops Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[3].account_name.?, "Free Workspace"));
+    try std.testing.expect(reg.accounts.items[4].account_name == null);
+
+    resetBootstrapMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.bootstrapTeamAccountNamesOnFirstRun(gpa, codex_home, &reg, bootstrapMockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), bootstrap_mock_fetch_count);
 }
 
 test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {

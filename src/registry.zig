@@ -80,6 +80,7 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_key: ?[]u8,
     active_account_activated_at_ms: ?i64,
+    account_name_bootstrap_done: bool,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: std.ArrayList(AccountRecord),
@@ -1935,6 +1936,7 @@ fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
+        .account_name_bootstrap_done = false,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
@@ -2205,6 +2207,12 @@ fn loadLegacyRegistryV2(
             else => {},
         }
     }
+    if (root_obj.get("account_name_bootstrap_done")) |v| {
+        switch (v) {
+            .bool => |flag| reg.account_name_bootstrap_done = flag,
+            else => {},
+        }
+    }
 
     if (root_obj.get("accounts")) |v| {
         switch (v) {
@@ -2256,6 +2264,12 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
         reg.active_account_activated_at_ms = readInt(v);
     } else if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
+    }
+    if (root_obj.get("account_name_bootstrap_done")) |v| {
+        switch (v) {
+            .bool => |flag| reg.account_name_bootstrap_done = flag,
+            else => {},
+        }
     }
 
     if (root_obj.get("accounts")) |v| {
@@ -2430,6 +2444,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_key = reg.active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
+        .account_name_bootstrap_done = reg.account_name_bootstrap_done,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
         .accounts = reg.accounts.items,
@@ -2452,6 +2467,7 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
+    account_name_bootstrap_done: bool,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: []const AccountRecord,
