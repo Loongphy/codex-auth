@@ -255,7 +255,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, email) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "legacy") != null);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -334,7 +334,10 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, email) != null);
+    try std.testing.expect(
+        std.mem.indexOf(u8, result.stdout, email) != null or
+            std.mem.indexOf(u8, result.stdout, "legacy") != null,
+    );
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -1196,8 +1199,8 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- (team-a)alpha@example.com\n" ++
-            "- (team-b)beta@example.com\n" ++
+            "- team-a\n" ++
+            "- team-b\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,

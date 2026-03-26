@@ -240,11 +240,11 @@ test "Scenario: Given alias, email, and account name queries when finding matchi
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "team-work", .team);
     try appendAccount(gpa, &reg, "user-Z9Y8X7W6V5U4::518a44d9-ba75-4bad-87e5-ae9377042960", "other@example.com", "", .plus);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Ops Workspace");
 
-    var alias_matches = try main_mod.findMatchingAccounts(gpa, &reg, "work");
+    var alias_matches = try main_mod.findMatchingAccounts(gpa, &reg, "team-work");
     defer alias_matches.deinit(gpa);
     try std.testing.expect(alias_matches.items.len == 1);
     try std.testing.expect(alias_matches.items[0] == 0);

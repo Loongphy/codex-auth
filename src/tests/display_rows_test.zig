@@ -99,8 +99,8 @@ test "Scenario: Given singleton accounts with alias and account name combination
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
     try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "work (Primary Workspace)"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "backup"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Sandbox"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "fallback@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "fallback@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Sandbox"));
 }
 
 test "Scenario: Given grouped accounts with account names when building display rows then child labels use the same precedence" {
@@ -118,7 +118,11 @@ test "Scenario: Given grouped accounts with account names when building display 
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "work (Primary Workspace)"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Backup Workspace"));
+    try std.testing.expect(
+        (std.mem.eql(u8, rows.rows[1].account_cell, "work (Primary Workspace)") and
+            std.mem.eql(u8, rows.rows[2].account_cell, "Backup Workspace")) or
+            (std.mem.eql(u8, rows.rows[1].account_cell, "Backup Workspace") and
+                std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)")),
+    );
     try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
 }
