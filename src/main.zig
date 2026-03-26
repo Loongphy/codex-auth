@@ -7,6 +7,8 @@ const auto = @import("auto.zig");
 const format = @import("format.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
+const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
+const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
@@ -103,6 +105,14 @@ pub const ForegroundUsageRefreshTarget = enum {
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list or target == .switch_account;
+}
+
+fn isAccountNameRefreshOnlyMode() bool {
+    return std.process.hasNonEmptyEnvVarConstant(account_name_refresh_only_env);
+}
+
+fn isBackgroundAccountNameRefreshDisabled() bool {
+    return std.process.hasNonEmptyEnvVarConstant(disable_background_account_name_refresh_env);
 }
 
 fn trackedActiveAccountKey(reg: *registry.Registry) ?[]const u8 {
@@ -270,6 +280,42 @@ pub fn refreshAccountNamesForList(
     return try refreshAccountNamesForActiveAuth(allocator, codex_home, reg, fetcher);
 }
 
+fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
+    var env_map = std.process.getEnvMap(allocator) catch |err| {
+        std.log.warn("background account metadata refresh skipped: {s}", .{@errorName(err)});
+        return;
+    };
+    defer env_map.deinit();
+
+    try env_map.put(account_name_refresh_only_env, "1");
+    try env_map.put(disable_background_account_name_refresh_env, "1");
+    try env_map.put(skip_service_reconcile_env, "1");
+
+    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    defer allocator.free(self_exe);
+
+    var child = std.process.Child.init(&[_][]const u8{ self_exe, "list" }, allocator);
+    child.env_map = &env_map;
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.create_no_window = true;
+    try child.spawn();
+}
+
+fn maybeSpawnBackgroundAccountNameRefresh(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+) void {
+    if (isBackgroundAccountNameRefreshDisabled()) return;
+    const active_user_id = registry.activeChatgptUserId(reg) orelse return;
+    if (!registry.shouldFetchTeamAccountNamesForUser(reg, active_user_id)) return;
+
+    spawnBackgroundAccountNameRefresh(allocator) catch |err| {
+        std.log.warn("background account metadata refresh skipped: {s}", .{@errorName(err)});
+    };
+}
+
 pub fn refreshAccountNamesAfterImport(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -354,6 +400,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (try refreshAccountNamesForList(allocator, codex_home, &reg, defaultAccountFetcher)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    if (isAccountNameRefreshOnlyMode()) return;
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
     try format.printAccounts(&reg);
 }
@@ -453,8 +500,8 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     const account_key = selected_account_key.?;
 
     try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
-    _ = try refreshAccountNamesAfterSwitch(allocator, codex_home, &reg, defaultAccountFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
+    maybeSpawnBackgroundAccountNameRefresh(allocator, &reg);
 }
 
 fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ConfigOptions) !void {

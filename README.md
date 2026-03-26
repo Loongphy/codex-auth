@@ -134,6 +134,8 @@ codex-auth switch
 
 Before the picker opens, the current active account's usage is refreshed once so the selected row is not stale. The newly selected account is not refreshed after the switch completes.
 
+If grouped Team `account_name` metadata still needs syncing, that refresh is scheduled in the background after the switch is already saved, so `codex-auth switch` can return immediately.
+
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 
 Non-interactive: fuzzy match by email or alias.
@@ -263,7 +265,7 @@ codex-auth config api disable
 
 Changing `config api` updates `registry.json` immediately. `api enable` is shown as API mode and `api disable` is shown as local mode.
 
-Implementation details are documented in [`docs/auto-switch.md`](docs/auto-switch.md).
+Implementation details are documented in [`docs/auto-switch.md`](docs/auto-switch.md) and [`docs/api-refresh.md`](docs/api-refresh.md).
 
 ## Q&A
 

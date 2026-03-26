@@ -117,6 +117,20 @@ fn makeAccountRecord(
     };
 }
 
+fn setRecordIds(
+    allocator: std.mem.Allocator,
+    rec: *registry.AccountRecord,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !void {
+    allocator.free(rec.chatgpt_user_id);
+    rec.chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id);
+    allocator.free(rec.chatgpt_account_id);
+    rec.chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id);
+    allocator.free(rec.account_key);
+    rec.account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+}
+
 fn countBackups(dir: std.fs.Dir, prefix: []const u8) !usize {
     var count: usize = 0;
     var it = dir.iterate();
@@ -328,6 +342,39 @@ test "applyAccountNamesForUser preserves existing account_name when replacement 
     );
     try std.testing.expect(reg.accounts.items[0].account_name != null);
     try std.testing.expectEqualStrings("Primary Workspace", reg.accounts.items[0].account_name.?);
+}
+
+test "applyAccountNamesForUser updates same-email team records for a different active user" {
+    const gpa = std.testing.allocator;
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var team = try makeAccountRecord(gpa, "same@example.com", "", .team, .chatgpt, 1);
+    try setRecordIds(gpa, &team, "user-team", "acct-team");
+    team.account_name = try gpa.dupe(u8, "Legacy Workspace");
+    try reg.accounts.append(gpa, team);
+
+    var plus = try makeAccountRecord(gpa, "same@example.com", "", .plus, .chatgpt, 2);
+    try setRecordIds(gpa, &plus, "user-plus", "acct-plus");
+    try reg.accounts.append(gpa, plus);
+
+    var other = try makeAccountRecord(gpa, "other@example.com", "", .team, .chatgpt, 3);
+    try setRecordIds(gpa, &other, "user-other", "acct-other");
+    other.account_name = try gpa.dupe(u8, "Unrelated Workspace");
+    try reg.accounts.append(gpa, other);
+
+    var entry = account_api.AccountEntry{
+        .account_id = try gpa.dupe(u8, "acct-team"),
+        .account_name = try gpa.dupe(u8, "Primary Workspace"),
+    };
+    defer entry.deinit(gpa);
+
+    const entries = [_]account_api.AccountEntry{entry};
+    const changed = try registry.applyAccountNamesForUser(gpa, &reg, "user-plus", &entries);
+    try std.testing.expect(changed);
+    try std.testing.expectEqualStrings("Primary Workspace", reg.accounts.items[0].account_name.?);
+    try std.testing.expect(reg.accounts.items[1].account_name == null);
+    try std.testing.expectEqualStrings("Unrelated Workspace", reg.accounts.items[2].account_name.?);
 }
 
 test "registry save/load round-trips api.account false" {

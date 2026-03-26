@@ -1778,20 +1778,22 @@ fn isTeamAccount(rec: *const AccountRecord) bool {
     return plan == .team;
 }
 
-fn emailHasMultipleAccounts(reg: *const Registry, email: []const u8) bool {
-    var count: usize = 0;
+fn userOwnsEmail(reg: *const Registry, chatgpt_user_id: []const u8, email: []const u8) bool {
     for (reg.accounts.items) |rec| {
-        if (!std.mem.eql(u8, rec.email, email)) continue;
-        count += 1;
-        if (count > 1) return true;
+        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+        if (std.mem.eql(u8, rec.email, email)) return true;
     }
     return false;
 }
 
+fn inAccountNameRefreshScope(reg: *const Registry, chatgpt_user_id: []const u8, rec: *const AccountRecord) bool {
+    return std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id) or userOwnsEmail(reg, chatgpt_user_id, rec.email);
+}
+
 pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
     for (reg.accounts.items) |rec| {
-        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
-        if (!hasStoredAccountName(&rec)) return true;
+        if (!inAccountNameRefreshScope(reg, chatgpt_user_id, &rec)) continue;
+        if (isTeamAccount(&rec) and !hasStoredAccountName(&rec)) return true;
     }
     return false;
 }
@@ -1800,15 +1802,11 @@ pub fn shouldFetchTeamAccountNamesForUser(reg: *const Registry, chatgpt_user_id:
     var account_count: usize = 0;
     var has_team_account = false;
     var has_missing_team_account_name = false;
-    var has_grouped_email = false;
 
     for (reg.accounts.items) |rec| {
-        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+        if (!inAccountNameRefreshScope(reg, chatgpt_user_id, &rec)) continue;
 
         account_count += 1;
-        if (!has_grouped_email and emailHasMultipleAccounts(reg, rec.email)) {
-            has_grouped_email = true;
-        }
         if (!isTeamAccount(&rec)) continue;
 
         has_team_account = true;
@@ -1818,7 +1816,7 @@ pub fn shouldFetchTeamAccountNamesForUser(reg: *const Registry, chatgpt_user_id:
     }
 
     if (!has_team_account or !has_missing_team_account_name) return false;
-    return account_count > 1 or has_grouped_email;
+    return account_count > 1;
 }
 
 pub fn activeChatgptUserId(reg: *Registry) ?[]const u8 {
@@ -1835,15 +1833,18 @@ pub fn applyAccountNamesForUser(
 ) !bool {
     var changed = false;
     for (reg.accounts.items) |*rec| {
-        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+        if (!inAccountNameRefreshScope(reg, chatgpt_user_id, rec)) continue;
 
         var account_name: ?[]const u8 = null;
+        var matched = false;
         for (entries) |entry| {
             if (!std.mem.eql(u8, rec.chatgpt_account_id, entry.account_id)) continue;
             account_name = entry.account_name;
+            matched = true;
             break;
         }
 
+        if (!matched and !isTeamAccount(rec) and !hasStoredAccountName(rec)) continue;
         if (try replaceOptionalStringAlloc(allocator, &rec.account_name, account_name)) {
             changed = true;
         }

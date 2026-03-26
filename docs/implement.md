@@ -1,6 +1,6 @@
 # Implementation Details
 
-This document describes how `codex-auth` stores accounts, synchronizes auth files, and refreshes metadata. The tool reads and writes local files under `~/.codex`, and for ChatGPT-auth usage refresh it can call the ChatGPT usage endpoint for the current active account.
+This document describes how `codex-auth` stores accounts, synchronizes auth files, and manages local state under `~/.codex`. Outbound API refresh rules, endpoint contracts, and grouped account-name sync examples now live in [docs/api-refresh.md](./api-refresh.md).
 
 ## Packaging and Release
 
@@ -167,6 +167,8 @@ When switching:
 
 The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
 
+Grouped account-name metadata refresh, when needed, is scheduled after the switch has already been saved so the command can return immediately; see [docs/api-refresh.md](./api-refresh.md).
+
 ## Removing Accounts
 
 `remove` now supports three foreground modes:
@@ -230,21 +232,14 @@ This document keeps only the cross-reference points that matter to the rest of t
 
 ## Usage and Rate Limits
 
-Foreground usage refresh is active-account-only and depends on `api.usage`:
+Detailed API-backed refresh behavior now lives in [docs/api-refresh.md](./api-refresh.md). This section keeps only the local-state and rollout rules that interact with the rest of the implementation.
 
-1. If `api.usage = true`, foreground refresh tries only the ChatGPT usage API with the current active `~/.codex/auth.json`.
+Foreground usage refresh still depends on `api.usage`:
+
+1. If `api.usage = true`, the API contract and timing rules are defined in [docs/api-refresh.md](./api-refresh.md).
 2. If `api.usage = false`, read only the newest `~/.codex/sessions/**/rollout-*.jsonl` file by `mtime`.
 
-- ChatGPT API refresh sends `Authorization: Bearer <tokens.access_token>` and `ChatGPT-Account-Id: <chatgpt_account_id>` to `https://chatgpt.com/backend-api/wham/usage`.
-- Foreground API refresh updates only the current active account. The background watcher keeps a daemon-local in-memory candidate index for non-active accounts and can refresh candidate ChatGPT accounts from their stored `accounts/<account file key>.auth.json` snapshots without reloading the whole candidate set every cycle.
-- In watcher mode, candidate freshness bookkeeping is runtime-only: the daemon keeps per-candidate last-checked timestamps in memory, does bounded top-candidate upkeep while the active account is healthy, and revalidates only the current heap top / next top candidates before a switch instead of re-fetching every candidate on every 1-second loop.
-- In watcher mode, active-account API fallback cooldown is scoped to the current active account; switching to a different active account resets that cooldown for the new account.
-- Watcher logs use compact `[local]`, `[api]`, and `[switch]` tags.
 - Local rollout watcher logs print the actual window lengths from the snapshot first, then the local event timestamp, then the full rollout basename (including the UUID suffix); when the newest event has no usable usage windows the same `[local]` log line also adds `fallback-to-api`.
-- `config auto enable` prints a short usage-mode note after installing the watcher so the user can see whether auto-switch is currently running with API-backed usage or local-only fallback semantics.
-- API refresh writes a new snapshot only when the fetched snapshot differs from the stored one; unchanged API responses do not rewrite `registry.json`.
-- Watcher API logs are reduced to `refresh usage | status=...`, where `status` is either the HTTP status code, `NoUsageLimitsWindow`, `MissingAuth`, or the direct request error name.
-- In API-only mode, API failures do not overwrite the stored usage snapshot and do not fall back to local rollout files.
 - The rollout scanner looks for `type:"event_msg"` and `payload.type:"token_count"`.
 - The rollout scanner reads only the newest rollout file. Within that file, it uses the last `token_count` event whose `rate_limits` payload is a parseable object.
 - If the newest rollout file has no usable `rate_limits` payload (for example `rate_limits: null` on every `token_count` event), refresh does not overwrite the account's existing stored usage snapshot.
@@ -253,14 +248,11 @@ Foreground usage refresh is active-account-only and depends on `api.usage`:
 - Rate limits are mapped by `window_minutes`: `300` → 5h, `10080` → weekly (fallback to primary/secondary).
 - If `resets_at` is in the past, the UI shows `100%`.
 - `last_usage_at` stores the last time a newly observed snapshot was written; identical API refreshes leave it unchanged.
-- `list` and `switch` use the foreground active-account refresh path.
 - The background auto-switch watcher has its own near-real-time refresh strategy; see `docs/auto-switch.md`.
 - In watcher mode, rollout scanning caches the newest rollout file between bounded full rescans so large `~/.codex/sessions` trees are not fully re-walked on every 1-second loop.
 - The free-plan `35%` real-time guard applies only when the 5h trigger comes from an actual 300-minute window or an unlabeled primary window; weekly-only free accounts still switch based on the configured weekly threshold.
 - For auto-switch candidate scoring, free accounts that expose only a single weekly (`10080`-minute) window still remain eligible and use that weekly remaining percentage as their candidate score.
 - On Linux/WSL, watcher installation/removal now explicitly deletes the old `codex-auth-autoswitch.timer` unit file so legacy minute-timer installs do not continue to fire after migration to the watcher service.
-- `switch` refreshes only the current active account before the selection/switch step; it does not refresh the newly selected account after the switch completes.
-- API refresh does not mutate any local rollout attribution state.
 - The rollout files still do not expose a stable account identity, so local-session ownership remains activation-window based rather than identity based.
 
 Current registry/account field roles:

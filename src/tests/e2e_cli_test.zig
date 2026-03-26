@@ -76,6 +76,7 @@ fn runCliWithIsolatedHome(
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try std.process.Child.run(.{
         .allocator = allocator,
@@ -106,6 +107,7 @@ fn runCliWithIsolatedHomeAndStdin(
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     var child = std.process.Child.init(argv.items, allocator);
     child.cwd = project_root;

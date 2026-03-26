@@ -9,6 +9,7 @@ const bdd = @import("bdd_helpers.zig");
 const shared_user_id = "user-ESYgcy2QkOGZc0NoxSlFCeVT";
 const primary_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
 const secondary_account_id = "518a44d9-ba75-4bad-87e5-ae9377042960";
+const tertiary_account_id = "a4021fa5-998b-4774-989f-784fa69c367b";
 const primary_record_key = shared_user_id ++ "::" ++ primary_account_id;
 const secondary_record_key = shared_user_id ++ "::" ++ secondary_account_id;
 const standalone_team_user_id = "user-q2Lm6Nx8Vc4Rb7Ty1Hp9JkDs";
@@ -232,7 +233,7 @@ test "Scenario: Given team name fetch candidates when checking grouped-account p
 
     try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, shared_user_id));
     try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-team"));
-    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-plus"));
+    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-plus"));
     try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
     try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-plus-only"));
 }
@@ -438,6 +439,36 @@ test "Scenario: Given list refresh with missing active-user account names when r
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+}
+
+test "Scenario: Given list refresh with same-email team names missing under a different active user when refreshing metadata then it updates the team records" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, "user-email-team::" ++ primary_account_id, "same-email@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-email-team::" ++ secondary_account_id, "same-email@example.com", "", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
+    try appendAccount(gpa, &reg, "user-email-plus::" ++ tertiary_account_id, "same-email@example.com", "", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, "user-email-plus::" ++ tertiary_account_id);
+    try writeActiveAuthWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", tertiary_account_id);
+
+    resetMockAccountNameFetcher();
+    const changed = try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+    try std.testing.expect(reg.accounts.items[2].account_name == null);
 
     resetMockAccountNameFetcher();
     try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
