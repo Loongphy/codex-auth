@@ -30,6 +30,7 @@ fn appendAccount(
         .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
         .created_at = 1,
@@ -77,4 +78,46 @@ test "Scenario: Given grouped accounts with aliases when building display rows t
     try std.testing.expect(rows.rows.len == 3);
     try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "backup") or std.mem.eql(u8, rows.rows[1].account_cell, "work"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "backup") or std.mem.eql(u8, rows.rows[2].account_cell, "work"));
+}
+
+test "Scenario: Given singleton accounts with alias and account name combinations when building display rows then preferred labels are used" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-A::acct-1", "alias-name@example.com", "work", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
+    try appendAccount(gpa, &reg, "user-B::acct-2", "alias-only@example.com", "backup", .team);
+    try appendAccount(gpa, &reg, "user-C::acct-3", "name-only@example.com", "", .team);
+    reg.accounts.items[2].account_name = try gpa.dupe(u8, "Sandbox");
+    try appendAccount(gpa, &reg, "user-D::acct-4", "fallback@example.com", "", .team);
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "work (Primary Workspace)"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "backup"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Sandbox"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "fallback@example.com"));
+}
+
+test "Scenario: Given grouped accounts with account names when building display rows then child labels use the same precedence" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Backup Workspace");
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::a4021fa5-998b-4774-989f-784fa69c367b", "user@example.com", "", .plus);
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "work (Primary Workspace)"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Backup Workspace"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
 }

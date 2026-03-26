@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const account_name_api = @import("account_name_api.zig");
 const c_time = @cImport({
     @cInclude("time.h");
 });
@@ -59,6 +60,7 @@ pub const AccountRecord = struct {
     chatgpt_user_id: []u8,
     email: []u8,
     alias: []u8,
+    account_name: ?[]u8,
     plan: ?PlanType,
     auth_mode: ?AuthMode,
     created_at: i64,
@@ -105,6 +107,7 @@ fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) vo
     allocator.free(rec.chatgpt_user_id);
     allocator.free(rec.email);
     allocator.free(rec.alias);
+    if (rec.account_name) |account_name| allocator.free(account_name);
     if (rec.last_local_rollout) |*sig| freeRolloutSignature(allocator, sig);
     if (rec.last_usage) |*u| {
         freeRateLimitSnapshot(allocator, u);
@@ -223,6 +226,21 @@ fn optionalStringEqual(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
     return std.mem.eql(u8, a.?, b.?);
+}
+
+fn cloneOptionalStringAlloc(allocator: std.mem.Allocator, value: ?[]const u8) !?[]u8 {
+    return if (value) |text| try allocator.dupe(u8, text) else null;
+}
+
+fn replaceOptionalStringAlloc(
+    allocator: std.mem.Allocator,
+    target: *?[]u8,
+    value: ?[]const u8,
+) !bool {
+    if (optionalStringEqual(target.*, value)) return false;
+    if (target.*) |existing| allocator.free(existing);
+    target.* = try cloneOptionalStringAlloc(allocator, value);
+    return true;
 }
 
 fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
@@ -1742,6 +1760,44 @@ pub fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_prima
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
 }
 
+pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
+    for (reg.accounts.items) |rec| {
+        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+        if (rec.account_name == null) return true;
+    }
+    return false;
+}
+
+pub fn activeChatgptUserId(reg: *Registry) ?[]const u8 {
+    const active_account_key = reg.active_account_key orelse return null;
+    const idx = findAccountIndexByAccountKey(reg, active_account_key) orelse return null;
+    return reg.accounts.items[idx].chatgpt_user_id;
+}
+
+pub fn applyAccountNamesForUser(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    chatgpt_user_id: []const u8,
+    entries: []const account_name_api.AccountNameEntry,
+) !bool {
+    var changed = false;
+    for (reg.accounts.items) |*rec| {
+        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+
+        var account_name: ?[]const u8 = null;
+        for (entries) |entry| {
+            if (!std.mem.eql(u8, rec.chatgpt_account_id, entry.account_id)) continue;
+            account_name = entry.account_name;
+            break;
+        }
+
+        if (try replaceOptionalStringAlloc(allocator, &rec.account_name, account_name)) {
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 pub fn activateAccountByKey(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -1802,6 +1858,7 @@ pub fn accountFromAuth(
         .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,
         .alias = owned_alias,
+        .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
         .created_at = std.time.timestamp(),
@@ -1824,19 +1881,26 @@ fn recordFreshness(rec: *const AccountRecord) i64 {
 }
 
 fn mergeAccountRecord(allocator: std.mem.Allocator, dest: *AccountRecord, incoming: AccountRecord) void {
-    if (recordFreshness(&incoming) > recordFreshness(dest)) {
+    var merged_incoming = incoming;
+    if (recordFreshness(&merged_incoming) > recordFreshness(dest)) {
+        if (merged_incoming.account_name == null and dest.account_name != null) {
+            merged_incoming.account_name = cloneOptionalStringAlloc(allocator, dest.account_name) catch unreachable;
+        }
         freeAccountRecord(allocator, dest);
-        dest.* = incoming;
+        dest.* = merged_incoming;
         return;
     }
-    if (incoming.alias.len != 0 and dest.alias.len == 0) {
-        const replacement = allocator.dupe(u8, incoming.alias) catch allocator.dupe(u8, "") catch unreachable;
+    if (merged_incoming.alias.len != 0 and dest.alias.len == 0) {
+        const replacement = allocator.dupe(u8, merged_incoming.alias) catch allocator.dupe(u8, "") catch unreachable;
         allocator.free(dest.alias);
         dest.alias = replacement;
     }
-    if (dest.plan == null) dest.plan = incoming.plan;
-    if (dest.auth_mode == null) dest.auth_mode = incoming.auth_mode;
-    freeAccountRecord(allocator, &incoming);
+    if (dest.account_name == null and merged_incoming.account_name != null) {
+        dest.account_name = cloneOptionalStringAlloc(allocator, merged_incoming.account_name) catch unreachable;
+    }
+    if (dest.plan == null) dest.plan = merged_incoming.plan;
+    if (dest.auth_mode == null) dest.auth_mode = merged_incoming.auth_mode;
+    freeAccountRecord(allocator, &merged_incoming);
 }
 
 pub fn upsertAccount(allocator: std.mem.Allocator, reg: *Registry, record: AccountRecord) !void {
@@ -1946,6 +2010,7 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         },
         .email = try normalizeEmailAlloc(allocator, email),
         .alias = try allocator.dupe(u8, alias),
+        .account_name = try parseOptionalStoredStringAlloc(allocator, obj.get("account_name")),
         .plan = null,
         .auth_mode = null,
         .created_at = readInt(obj.get("created_at")) orelse std.time.timestamp(),
@@ -1975,6 +2040,16 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         rec.last_local_rollout = parseRolloutSignature(allocator, v);
     }
     return rec;
+}
+
+fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
+    const text = switch (value orelse return null) {
+        .string => |s| s,
+        .null => return null,
+        else => return null,
+    };
+    if (text.len == 0) return null;
+    return try allocator.dupe(u8, text);
 }
 
 fn maybeCopyFile(src: []const u8, dest: []const u8) !void {
@@ -2059,6 +2134,7 @@ fn migrateLegacyRecord(
         .chatgpt_user_id = try allocator.dupe(u8, info.chatgpt_user_id orelse return error.MissingChatgptUserId),
         .email = try allocator.dupe(u8, legacy.email),
         .alias = try allocator.dupe(u8, legacy.alias),
+        .account_name = null,
         .plan = info.plan orelse legacy.plan,
         .auth_mode = info.auth_mode,
         .created_at = legacy.created_at,

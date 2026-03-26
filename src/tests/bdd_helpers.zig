@@ -213,6 +213,7 @@ pub fn appendAccount(
         .chatgpt_user_id = owned_chatgpt_user_id,
         .email = owned_email,
         .alias = owned_alias,
+        .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
         .created_at = std.time.timestamp(),

@@ -219,6 +219,7 @@ fn appendCustomAccount(
         .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
         .created_at = std.time.timestamp(),

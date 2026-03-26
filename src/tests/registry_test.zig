@@ -105,6 +105,7 @@ fn makeAccountRecord(
         .chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
         .plan = plan,
         .auth_mode = auth_mode,
         .created_at = created_at,
@@ -192,6 +193,102 @@ test "registry save/load" {
     try std.testing.expect(loaded.accounts.items[0].last_local_rollout != null);
     try std.testing.expectEqual(@as(i64, 1735689600000), loaded.accounts.items[0].last_local_rollout.?.event_timestamp_ms);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].last_local_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
+    try std.testing.expect(loaded.accounts.items[0].account_name == null);
+}
+
+test "registry load defaults missing account_name field to null" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 3,
+        \\  "active_account_key": null,
+        \\  "accounts": [
+        \\    {
+        \\      "account_key": "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "chatgpt_user_id": "user-ESYgcy2QkOGZc0NoxSlFCeVT",
+        \\      "email": "a@b.com",
+        \\      "alias": "work",
+        \\      "plan": "pro",
+        \\      "auth_mode": "chatgpt",
+        \\      "created_at": 1,
+        \\      "last_used_at": null,
+        \\      "last_usage_at": null
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(loaded.accounts.items[0].account_name == null);
+}
+
+test "registry save/load round-trips account_name null" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "a@b.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try bdd.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account_name\": null") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.accounts.items[0].account_name == null);
+}
+
+test "registry save/load round-trips account_name string" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var rec = try makeAccountRecord(gpa, "a@b.com", "work", .pro, .chatgpt, 1);
+    rec.account_name = try gpa.dupe(u8, "abcd");
+    try reg.accounts.append(gpa, rec);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try bdd.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account_name\": \"abcd\"") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.accounts.items[0].account_name != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "abcd"));
 }
 
 test "registry load defaults missing auto threshold fields" {

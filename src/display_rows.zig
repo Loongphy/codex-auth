@@ -154,8 +154,7 @@ fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
 }
 
 fn singletonAccountCellAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord) ![]u8 {
-    if (rec.alias.len == 0) return allocator.dupe(u8, rec.email);
-    return std.fmt.allocPrint(allocator, "({s}){s}", .{ rec.alias, rec.email });
+    return buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
 }
 
 fn groupedAccountCellAlloc(
@@ -165,8 +164,6 @@ fn groupedAccountCellAlloc(
     account_idx: usize,
 ) ![]u8 {
     const rec = &reg.accounts.items[account_idx];
-    if (rec.alias.len != 0) return allocator.dupe(u8, rec.alias);
-
     const base = displayPlan(rec);
     var total_same: usize = 0;
     var ordinal: usize = 1;
@@ -181,6 +178,33 @@ fn groupedAccountCellAlloc(
         }
     }
 
-    if (total_same <= 1) return allocator.dupe(u8, base);
-    return std.fmt.allocPrint(allocator, "{s} #{d}", .{ base, ordinal });
+    const fallback = if (total_same <= 1)
+        try allocator.dupe(u8, base)
+    else
+        try std.fmt.allocPrint(allocator, "{s} #{d}", .{ base, ordinal });
+    defer allocator.free(fallback);
+
+    return buildPreferredAccountLabelAlloc(allocator, rec, fallback);
+}
+
+pub fn buildPreferredAccountLabelAlloc(
+    allocator: std.mem.Allocator,
+    rec: *const registry.AccountRecord,
+    fallback: []const u8,
+) ![]u8 {
+    const alias = if (rec.alias.len != 0) rec.alias else null;
+    const account_name = normalizedAccountName(rec);
+
+    if (alias != null and account_name != null) {
+        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, account_name.? });
+    }
+    if (alias != null) return allocator.dupe(u8, alias.?);
+    if (account_name != null) return allocator.dupe(u8, account_name.?);
+    return allocator.dupe(u8, fallback);
+}
+
+fn normalizedAccountName(rec: *const registry.AccountRecord) ?[]const u8 {
+    const account_name = rec.account_name orelse return null;
+    if (account_name.len == 0) return null;
+    return account_name;
 }

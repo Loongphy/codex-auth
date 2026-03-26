@@ -1,4 +1,5 @@
 const std = @import("std");
+const account_name_api = @import("account_name_api.zig");
 const cli = @import("cli.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
@@ -6,6 +7,12 @@ const auto = @import("auto.zig");
 const format = @import("format.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
+
+const AccountNameFetchFn = *const fn (
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) anyerror!account_name_api.FetchResult;
 
 pub fn main() !void {
     var exit_code: u8 = 0;
@@ -155,6 +162,156 @@ fn maybeRefreshForegroundUsage(
     }
 }
 
+fn defaultAccountNameFetcher(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_name_api.FetchResult {
+    return try account_name_api.fetchAccountNamesForTokenDetailed(
+        allocator,
+        account_name_api.default_account_name_endpoint,
+        access_token,
+        account_id,
+    );
+}
+
+fn maybeRefreshAccountNamesForAuthInfo(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    info: *const auth.AuthInfo,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    const chatgpt_user_id = info.chatgpt_user_id orelse return false;
+    if (!registry.hasMissingAccountNameForUser(reg, chatgpt_user_id)) return false;
+    const access_token = info.access_token orelse return false;
+
+    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+        std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer result.deinit(allocator);
+
+    const entries = result.entries orelse return false;
+    return try registry.applyAccountNamesForUser(allocator, reg, chatgpt_user_id, entries);
+}
+
+fn loadActiveAuthInfoForAccountNames(allocator: std.mem.Allocator, codex_home: []const u8) !?auth.AuthInfo {
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    return auth.parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => null,
+        else => {
+            std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+            return null;
+        },
+    };
+}
+
+fn refreshAccountNamesForActiveAuth(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
+    if (!registry.hasMissingAccountNameForUser(reg, active_user_id)) return false;
+
+    var info = (try loadActiveAuthInfoForAccountNames(allocator, codex_home)) orelse return false;
+    defer info.deinit(allocator);
+    return try maybeRefreshAccountNamesForAuthInfo(allocator, reg, &info, fetcher);
+}
+
+pub fn refreshAccountNamesAfterLogin(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    info: *const auth.AuthInfo,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    return try maybeRefreshAccountNamesForAuthInfo(allocator, reg, info, fetcher);
+}
+
+pub fn refreshAccountNamesAfterSwitch(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    return try refreshAccountNamesForActiveAuth(allocator, codex_home, reg, fetcher);
+}
+
+pub fn refreshAccountNamesForList(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    return try refreshAccountNamesForActiveAuth(allocator, codex_home, reg, fetcher);
+}
+
+pub fn refreshAccountNamesAfterImport(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    purge: bool,
+    render_kind: registry.ImportRenderKind,
+    info: ?*const auth.AuthInfo,
+    fetcher: AccountNameFetchFn,
+) !bool {
+    if (purge or render_kind != .single_file or info == null) return false;
+    return try maybeRefreshAccountNamesForAuthInfo(allocator, reg, info.?, fetcher);
+}
+
+fn loadSingleFileImportAuthInfo(
+    allocator: std.mem.Allocator,
+    opts: cli.ImportOptions,
+) !?auth.AuthInfo {
+    if (opts.purge or opts.auth_path == null) return null;
+
+    return switch (opts.source) {
+        .standard => auth.parseAuthInfo(allocator, opts.auth_path.?) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                return null;
+            },
+        },
+        .cpa => blk: {
+            var file = std.fs.cwd().openFile(opts.auth_path.?, .{}) catch |err| {
+                std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                return null;
+            };
+            defer file.close();
+
+            const data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                    return null;
+                },
+            };
+            defer allocator.free(data);
+
+            const converted = auth.convertCpaAuthJson(allocator, data) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                    return null;
+                },
+            };
+            defer allocator.free(converted);
+
+            break :blk auth.parseAuthInfoData(allocator, converted) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                    return null;
+                },
+            };
+        },
+    };
+}
+
 fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
     _ = opts;
     var reg = try registry.loadRegistry(allocator, codex_home);
@@ -173,6 +330,9 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         if (try registry.refreshAccountsFromAuth(allocator, codex_home, &reg)) {
             try registry.saveRegistry(allocator, codex_home, &reg);
         }
+    }
+    if (try refreshAccountNamesForList(allocator, codex_home, &reg, defaultAccountNameFetcher)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
     try format.printAccounts(allocator, &reg, .table);
@@ -202,6 +362,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
     try registry.setActiveAccountKey(allocator, &reg, record_key);
+    _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountNameFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -222,6 +383,18 @@ fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     };
     defer report.deinit(allocator);
     if (report.appliedCount() > 0) {
+        if (report.render_kind == .single_file) {
+            var imported_info = try loadSingleFileImportAuthInfo(allocator, opts);
+            defer if (imported_info) |*info| info.deinit(allocator);
+            _ = try refreshAccountNamesAfterImport(
+                allocator,
+                &reg,
+                opts.purge,
+                report.render_kind,
+                if (imported_info) |*info| info else null,
+                defaultAccountNameFetcher,
+            );
+        }
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try cli.printImportReport(&report);
@@ -260,6 +433,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     const account_key = selected_account_key.?;
 
     try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
+    _ = try refreshAccountNamesAfterSwitch(allocator, codex_home, &reg, defaultAccountNameFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -500,6 +674,7 @@ fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
 test {
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");
+    _ = @import("tests/account_name_api_test.zig");
     _ = @import("tests/usage_api_test.zig");
     _ = @import("tests/auto_test.zig");
     _ = @import("tests/registry_test.zig");

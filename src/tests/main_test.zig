@@ -1,7 +1,21 @@
 const std = @import("std");
+const account_name_api = @import("../account_name_api.zig");
+const auth_mod = @import("../auth.zig");
 const main_mod = @import("../main.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
+
+const shared_user_id = "user-ESYgcy2QkOGZc0NoxSlFCeVT";
+const primary_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
+const secondary_account_id = "518a44d9-ba75-4bad-87e5-ae9377042960";
+const primary_record_key = shared_user_id ++ "::" ++ primary_account_id;
+const secondary_record_key = shared_user_id ++ "::" ++ secondary_account_id;
+
+var mock_account_name_fetch_count: usize = 0;
+
+fn resetMockAccountNameFetcher() void {
+    mock_account_name_fetch_count = 0;
+}
 
 fn makeRegistry() registry.Registry {
     return .{
@@ -31,6 +45,7 @@ fn appendAccount(
         .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
         .created_at = 1,
@@ -49,6 +64,96 @@ fn writeSnapshot(allocator: std.mem.Allocator, codex_home: []const u8, email: []
     const auth_json = try bdd.authJsonWithEmailPlan(allocator, email, plan);
     defer allocator.free(auth_json);
     try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
+}
+
+fn authJsonWithIds(
+    allocator: std.mem.Allocator,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) ![]u8 {
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+    );
+    defer allocator.free(payload);
+
+    const header_b64 = try bdd.b64url(allocator, header);
+    defer allocator.free(header_b64);
+    const payload_b64 = try bdd.b64url(allocator, payload);
+    defer allocator.free(payload_b64);
+    const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ header_b64, ".", payload_b64, ".sig" });
+    defer allocator.free(jwt);
+
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"access-{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, jwt },
+    );
+}
+
+fn parseAuthInfoWithIds(
+    allocator: std.mem.Allocator,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !auth_mod.AuthInfo {
+    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    return try auth_mod.parseAuthInfoData(allocator, auth_json);
+}
+
+fn writeActiveAuthWithIds(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !void {
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+}
+
+fn mockAccountNameFetcher(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_name_api.FetchResult {
+    _ = access_token;
+    _ = account_id;
+    mock_account_name_fetch_count += 1;
+
+    const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
+    errdefer allocator.free(entries);
+
+    entries[0] = .{
+        .account_id = try allocator.dupe(u8, primary_account_id),
+        .account_name = try allocator.dupe(u8, "Primary Workspace"),
+    };
+    errdefer {
+        entries[0].deinit(allocator);
+    }
+    entries[1] = .{
+        .account_id = try allocator.dupe(u8, secondary_account_id),
+        .account_name = try allocator.dupe(u8, "Backup Workspace"),
+    };
+    errdefer {
+        entries[1].deinit(allocator);
+    }
+
+    return .{
+        .entries = entries,
+        .status_code = 200,
+    };
 }
 
 test "Scenario: Given alias and email queries when finding matching accounts then both matching strategies still work" {
@@ -100,6 +205,136 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
+}
+
+test "Scenario: Given login with missing account names when refreshing metadata then it issues at most one request" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+
+    var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
+    defer info.deinit(gpa);
+
+    resetMockAccountNameFetcher();
+    const changed = try main_mod.refreshAccountNamesAfterLogin(gpa, &reg, &info, mockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+}
+
+test "Scenario: Given switched account with missing account names when refreshing metadata then it issues at most one request" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    resetMockAccountNameFetcher();
+    const changed = try main_mod.refreshAccountNamesAfterSwitch(gpa, codex_home, &reg, mockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+}
+
+test "Scenario: Given single-file import with missing account names when refreshing metadata then it issues at most one request" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+
+    var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
+    defer info.deinit(gpa);
+
+    resetMockAccountNameFetcher();
+    const changed = try main_mod.refreshAccountNamesAfterImport(gpa, &reg, false, .single_file, &info, mockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+}
+
+test "Scenario: Given directory import or purge when refreshing account names then it issues zero requests" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+
+    var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
+    defer info.deinit(gpa);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterImport(gpa, &reg, false, .scanned, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterImport(gpa, &reg, true, .single_file, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+}
+
+test "Scenario: Given list refresh when only other users have missing account names then it skips the request" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Backup Workspace");
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+}
+
+test "Scenario: Given list refresh with missing active-user account names when refreshing metadata then it issues one request" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    resetMockAccountNameFetcher();
+    const changed = try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher);
+    try std.testing.expect(changed);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
 test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {
