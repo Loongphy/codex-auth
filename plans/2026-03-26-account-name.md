@@ -1,138 +1,123 @@
 ---
 name: account-name
-description: Persist ChatGPT account names from accounts/check, show them in list/switch, and keep request volume low by fetching only for ambiguous Team groupings
+description: Finalized account-name sync behavior for accounts/check parsing, registry persistence, refresh policy, and list/switch/remove display rules
 ---
 
-# Plan
+# Account Name Sync
 
-Add stored `account_name` metadata to registry records, fetch it from `accounts/check` with the minimal three-header request shape, and surface it in `list` and `switch` with alias-first display precedence.
+This document records the shipped behavior for ChatGPT `account_name` sync and display.
 
-## Progress
-- [x] Create the dedicated worktree and lock execution to this plan file.
-- [x] Extend the registry model and persistence for `account_name`.
-- [x] Add the `accounts/check` metadata fetcher and align request headers with `wham/usage`.
-- [x] Wire refresh behavior into `login`, `switch`, single-file `import`, and `list`.
-- [x] Update shared display labels for `list` and `switch`.
-- [x] Add parser, registry compatibility, flow, and display tests.
-- [x] Run relevant Zig tests and `zig build run -- list`.
-- [x] Restrict account fetches to ambiguous Team groupings only.
-- [x] Remove first-run bootstrap and its persisted marker.
-- [x] Split API config into `api.usage` and `api.account`, with `config api enable|disable` toggling both.
+## Final Result
 
-## Summary
-- Keep `registry.json` at schema `3`; this is an additive field only.
-- Add `account_name: ?[]u8` to each account record.
-- Treat missing or null names as `null`; do not use `""` as a stored default.
-- Add `api.account: bool` alongside `api.usage: bool` in `registry.json`.
-- Use the same minimal header rule for both APIs:
+- `registry.AccountRecord` stores `account_name: ?[]u8`.
+- `registry.json` stays on schema `3`.
+- `api` config is split into:
+  - `api.usage`
+  - `api.account`
+- Missing `api.account` or `api.usage` fields are backfilled from the sibling flag on load.
+- `account_name` is persisted as either a string or `null`.
+
+## Real Account Identity Format
+
+- The runtime account identity is `account_key = "<chatgpt_user_id>::<chatgpt_account_id>"`.
+- Real keys look like `user-opaque-id::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf`.
+- `registry.json` stores the plain `account_key`.
+- Snapshot files under `~/.codex/accounts` use a URL-safe base64 encoding of `account_key`, then append `.auth.json`.
+- Encoding is required because `account_key` contains `:` and is not always filename-safe.
+
+## Accounts Check Payload
+
+- Endpoint:
+  - `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27`
+- Request headers:
   - `Authorization: Bearer <token>`
-  - `ChatGPT-Account-Id: <account_id>` only when available
+  - `ChatGPT-Account-Id: <account_id>` when present
   - `User-Agent: codex-auth`
-- Remove `Accept-Encoding: identity` from the current usage API implementation.
-- Keep missing-name lazy refresh behavior only; do not run a first-foreground bootstrap.
-
-## Requirements
-- Parse `accounts/check` from:
+- Parsed fields:
   - `accounts.<non-default>.account.account_id`
   - `accounts.<non-default>.account.name`
-- Ignore:
+- Ignored fields:
   - `accounts.default`
   - `account_ordering`
   - all other payload fields
-- Normalize `name: null` or `name: ""` to `account_name = null`.
+- Real payload shape uses the `chatgpt_account_id` as the `accounts` map key.
+- `default` is only the web default-selection entry and is not treated as a real account row.
+- `account_ordering` may contain only real account IDs and is currently ignored by parsing.
+- `name: null` and `name: ""` are both normalized to `account_name = null`.
+
+## Refresh Policy
+
+- Refresh is disabled when `api.account == false`.
+- Refresh requires a usable auth context with:
+  - `access_token`
+  - `chatgpt_user_id`
+- Refresh scope is broader than a single user ID:
+  - records owned by the same `chatgpt_user_id`
+  - plus records on emails also owned by that user
+- This means a same-email plus/free account can trigger refresh for same-email team records.
+- A refresh is eligible only when the scoped records satisfy all of these:
+  - there is more than one scoped account
+  - at least one scoped Team account exists
+  - at least one scoped Team account still has a missing `account_name`
 - Refresh timing:
-  - after `login`
-  - after `switch`
-  - after single-file `import`
-  - during `list`, only if the active user still has any `account_name == null`
-- Refresh eligibility:
-  - only when `api.account == true`
-  - only when the relevant `chatgpt_user_id` belongs to an ambiguous grouping
-  - a grouping is ambiguous when either:
-    - the user has multiple accounts, or
-    - one of the user's emails appears on multiple accounts
-  - only Team users with at least one missing `account_name` qualify
-- Do not refresh during directory import or `import --purge`.
-- Do not trigger `accounts/check` from the `wham/usage` refresh path.
+  - `login`: inline refresh after auth is available
+  - single-file `import`: inline refresh from the imported auth
+  - `list`: inline refresh for the active auth
+  - `switch`: activate and save first, then spawn a background `list` process in account-name-refresh-only mode
+- No account-name refresh runs during:
+  - directory import
+  - `import --purge`
 
-## Data model / API changes
-- Extend `registry.AccountRecord` with `account_name: ?[]u8`.
-- Old registries without that field must load successfully with `account_name = null`.
-- New saves must always emit `account_name` as either a string or `null`.
-- Add a dedicated account fetcher module or helper, separate from `usage_api` parsing.
-- `accounts/check` request contract:
-  - method: `GET`
-  - URL: `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27`
-  - headers:
-    - `Authorization: Bearer <token>`
-    - `ChatGPT-Account-Id: <account_id>` when present
-    - `User-Agent: codex-auth`
-- `wham/usage` request contract should be aligned to the same header policy.
+## Apply Rules
 
-## Display behavior
-- Use one shared label builder for both `list` and `switch`.
-- Label precedence:
+- Returned entries are matched by `chatgpt_account_id`.
+- Matching scoped records receive the returned `account_name`.
+- Scoped Team records missing from the response are cleared to `null`.
+- Scoped non-Team records with no stored `account_name` stay unchanged when no entry matches.
+- Scoped non-Team records with a stale stored `account_name` are cleared if the response does not include them.
+- Records outside the refresh scope are left unchanged.
+- Request failures and parse failures are non-fatal:
+  - the command still succeeds
+  - stored metadata is left as-is
+
+## Display Rules
+
+- `list` and `switch` share the same display-row builder.
+- Rows are grouped by `email` within the rendered subset, not the full registry.
+- Singleton rule:
+  - if the rendered subset contains exactly one account for an email, the row is singleton
+  - singleton rows display the email directly
+- Grouped rule:
+  - the email becomes a header row
+  - child rows use the preferred label builder
+- Preferred label precedence for grouped child rows:
   - alias + account name => `alias (account_name)`
   - alias only => `alias`
   - account name only => `account_name`
-  - neither => current fallback behavior
-- Apply the same precedence to singleton rows, grouped child rows, and switch-picker rows.
+  - neither => plan fallback such as `team`, `plus`, or `team #2`
+- `remove` keeps email context even for singleton rows:
+  - plain singleton email stays `email`
+  - singleton alias/name rows are rendered as `email / preferred-label`
 
-## Refresh and metadata behavior
-- General rule: at most one `accounts/check` request per command, and only if the relevant active/imported user still has at least one null `account_name`.
-- `login`:
-  - after login succeeds and the active auth is ready, fetch once if that user has missing names
-- `switch`:
-  - after the target snapshot becomes active, fetch once if that user has missing names
-- Single-file `import`:
-  - use the imported auth context directly
-  - fetch once only if that imported user has missing names
-- Directory import and `import --purge`:
-  - never fetch names during the batch
-  - leave names null until a later `list`, `switch`, or `login`
-- After a successful fetch:
-  - update only records whose `chatgpt_user_id` matches the auth used for the request
-  - set `account_name` for returned account IDs
-  - clear `account_name` to `null` for same-user records that were not returned
-  - leave other users unchanged
-- On request or parse failure:
-  - keep command success behavior unchanged
-  - keep stored values unchanged
+## Validation Coverage
 
-## Testing and validation
-- Add parser tests for:
-  - one real account plus `default`
-  - multiple non-default accounts
-  - `name: null`
-  - `name: ""`
-  - malformed / HTML response treated as non-fatal failure
-- Add registry compatibility tests for:
-  - loading old registry data without `account_name`
-  - round-tripping `account_name: null`
-  - round-tripping `account_name: "abcd"`
-- Add flow tests for:
-  - standalone Team accounts keep email fallback labels and do not trigger account fetches
-  - grouped Team users trigger at most one metadata request per command
-  - `api.account = false` prevents account fetches across `login`, `switch`, `list`, and single-file `import`
-  - `login` issues at most one metadata request on missing-name records
-  - `switch` issues at most one metadata request on missing-name records
-  - single-file import issues at most one metadata request on missing-name records
-  - directory import and purge issue zero metadata requests
-  - `list` issues one metadata request only when the active user still has missing names
-- Add registry compatibility tests for:
-  - `api.account` defaulting to `true` when absent
-  - round-tripping `api.account: false`
-- Add display tests for:
-  - alias + account name
-  - alias only
-  - account name only
-  - neither
-- Run:
-  - relevant Zig tests
+- Parser coverage:
+  - ignores `default`
+  - accepts UUID-style account keys in the `accounts` object
+  - keeps multiple non-default accounts
+  - normalizes personal-account `name: null`
+  - normalizes personal-account `name: ""`
+  - treats malformed HTML as a non-fatal failure
+- Registry coverage:
+  - old registries load with `account_name = null`
+  - `account_name` round-trips for `null` and string values
+  - `api.account` round-trips and backfills correctly
+  - same-email scoped updates apply to related Team records
+- Display coverage:
+  - singleton rows keep email labels
+  - singleton/grouped behavior is decided from the rendered subset
+  - grouped child rows keep alias/account-name precedence
+  - remove labels preserve email context for singleton alias/name rows
+- Command validation:
   - `zig build run -- list`
 
-## Assumptions
-- `ChatGPT-Account-Id` is the required addition for `accounts/check`.
-- Minimal three-header requests are sufficient for both `accounts/check` and `wham/usage`.
-- Missing-name-only refresh is the preferred low-risk policy because account names rarely change.
-- Skipping batch-import refresh is the right tradeoff for latency and request-volume control.

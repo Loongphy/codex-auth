@@ -736,8 +736,8 @@ test "Scenario: Given singleton aliases from different emails when building remo
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A::acct-1", "alpha@example.com", "work", .team);
-    try appendAccount(gpa, &reg, "user-B::acct-2", "beta@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "work", .team);
 
     const indices = [_]usize{ 0, 1 };
     var labels = try cli.buildRemoveLabels(gpa, &reg, &indices);
@@ -756,9 +756,9 @@ test "Scenario: Given singleton account names from different emails when buildin
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A::acct-1", "alpha@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "", .team);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Workspace");
-    try appendAccount(gpa, &reg, "user-B::acct-2", "beta@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "", .team);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Workspace");
 
     const indices = [_]usize{ 0, 1 };

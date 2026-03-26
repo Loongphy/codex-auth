@@ -85,9 +85,9 @@ test "Scenario: Given same-email accounts filtered down to one row when building
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A::acct-1", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
-    try appendAccount(gpa, &reg, "user-A::acct-2", "user@example.com", "", .plus);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::a4021fa5-998b-4774-989f-784fa69c367b", "user@example.com", "", .plus);
 
     var grouped_rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer grouped_rows.deinit(gpa);
@@ -108,12 +108,12 @@ test "Scenario: Given singleton accounts with alias and account name combination
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A::acct-1", "alias-name@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alias-name@example.com", "work", .team);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
-    try appendAccount(gpa, &reg, "user-B::acct-2", "alias-only@example.com", "backup", .team);
-    try appendAccount(gpa, &reg, "user-C::acct-3", "name-only@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "alias-only@example.com", "backup", .team);
+    try appendAccount(gpa, &reg, "user-2RbFk6NsQ8vLp3XtJmW7CyHa::a4021fa5-998b-4774-989f-784fa69c367b", "name-only@example.com", "", .team);
     reg.accounts.items[2].account_name = try gpa.dupe(u8, "Sandbox");
-    try appendAccount(gpa, &reg, "user-D::acct-4", "fallback@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-9TwHs4KmP7xNc2LdVrQ6BjYe::d8f0f19d-7b6f-4db8-b7a8-07b9fbf5774a", "fallback@example.com", "", .team);
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);
@@ -130,11 +130,11 @@ test "Scenario: Given mixed singleton and grouped accounts when building display
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-SOLO::acct-1", "solo@example.com", "solo", .team);
+    try appendAccount(gpa, &reg, "user-6JpMv8XrT3nLc9QsHbW4DyKa::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "solo@example.com", "solo", .team);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Solo Workspace");
-    try appendAccount(gpa, &reg, "user-GROUP::acct-2", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-1ZdKr5NtV8mQx3LsHpW7CyFb::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "work", .team);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Primary Workspace");
-    try appendAccount(gpa, &reg, "user-GROUP::acct-3", "user@example.com", "", .plus);
+    try appendAccount(gpa, &reg, "user-1ZdKr5NtV8mQx3LsHpW7CyFb::a4021fa5-998b-4774-989f-784fa69c367b", "user@example.com", "", .plus);
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);

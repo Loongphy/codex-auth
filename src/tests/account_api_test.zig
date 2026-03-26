@@ -26,14 +26,14 @@ test "parse account names response ignores default and keeps one real account" {
         \\        "name": "Default"
         \\      }
         \\    },
-        \\    "team-1": {
+        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
         \\      "account": {
         \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\        "name": "Primary Workspace"
         \\      }
         \\    }
         \\  },
-        \\  "account_ordering": ["default", "team-1"]
+        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
         \\}
     ;
 
@@ -52,19 +52,23 @@ test "parse account names response keeps multiple non-default accounts" {
     const body =
         \\{
         \\  "accounts": {
-        \\    "team-1": {
+        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
         \\      "account": {
         \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\        "name": "Primary Workspace"
         \\      }
         \\    },
-        \\    "team-2": {
+        \\    "518a44d9-ba75-4bad-87e5-ae9377042960": {
         \\      "account": {
         \\        "account_id": "518a44d9-ba75-4bad-87e5-ae9377042960",
         \\        "name": "Backup Workspace"
         \\      }
         \\    }
-        \\  }
+        \\  },
+        \\  "account_ordering": [
+        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\    "518a44d9-ba75-4bad-87e5-ae9377042960"
+        \\  ]
         \\}
     ;
 
@@ -81,18 +85,19 @@ test "parse account names response keeps multiple non-default accounts" {
     try std.testing.expect(std.mem.eql(u8, backup.account_name.?, "Backup Workspace"));
 }
 
-test "parse account names response normalizes null names to null" {
+test "parse personal account response keeps null name as null" {
     const gpa = std.testing.allocator;
     const body =
         \\{
         \\  "accounts": {
-        \\    "team-1": {
+        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
         \\      "account": {
         \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\        "name": null
         \\      }
         \\    }
-        \\  }
+        \\  },
+        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
         \\}
     ;
 
@@ -104,18 +109,19 @@ test "parse account names response normalizes null names to null" {
     try std.testing.expect(entries.?[0].account_name == null);
 }
 
-test "parse account names response normalizes empty names to null" {
+test "parse personal account response normalizes empty name to null" {
     const gpa = std.testing.allocator;
     const body =
         \\{
         \\  "accounts": {
-        \\    "team-1": {
+        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
         \\      "account": {
         \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
         \\        "name": ""
         \\      }
         \\    }
-        \\  }
+        \\  },
+        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
         \\}
     ;
 
