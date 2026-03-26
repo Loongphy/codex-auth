@@ -80,7 +80,30 @@ test "Scenario: Given grouped accounts with aliases when building display rows t
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "backup") or std.mem.eql(u8, rows.rows[2].account_cell, "work"));
 }
 
-test "Scenario: Given singleton accounts with alias and account name combinations when building display rows then preferred labels are used" {
+test "Scenario: Given same-email accounts filtered down to one row when building display rows then singleton is decided from the rendered subset" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-A::acct-1", "user@example.com", "work", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
+    try appendAccount(gpa, &reg, "user-A::acct-2", "user@example.com", "", .plus);
+
+    var grouped_rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer grouped_rows.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 3), grouped_rows.rows.len);
+    try std.testing.expect(grouped_rows.rows[0].account_index == null);
+    try std.testing.expect(std.mem.eql(u8, grouped_rows.rows[0].account_cell, "user@example.com"));
+
+    const indices = [_]usize{0};
+    var singleton_rows = try display_rows.buildDisplayRows(gpa, &reg, &indices);
+    defer singleton_rows.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), singleton_rows.rows.len);
+    try std.testing.expect(singleton_rows.rows[0].account_index != null);
+    try std.testing.expect(std.mem.eql(u8, singleton_rows.rows[0].account_cell, "user@example.com"));
+}
+
+test "Scenario: Given singleton accounts with alias and account name combinations when building display rows then email labels are preserved" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -96,10 +119,32 @@ test "Scenario: Given singleton accounts with alias and account name combination
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "work (Primary Workspace)"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "backup"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "alias-name@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "alias-only@example.com"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "fallback@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Sandbox"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "name-only@example.com"));
+}
+
+test "Scenario: Given mixed singleton and grouped accounts when building display rows then singleton rows keep email while grouped rows keep preferred labels" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-SOLO::acct-1", "solo@example.com", "solo", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Solo Workspace");
+    try appendAccount(gpa, &reg, "user-GROUP::acct-2", "user@example.com", "work", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Primary Workspace");
+    try appendAccount(gpa, &reg, "user-GROUP::acct-3", "user@example.com", "", .plus);
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo@example.com"));
+    try std.testing.expect(rows.rows[1].account_index == null);
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "user@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
 }
 
 test "Scenario: Given grouped accounts with account names when building display rows then child labels use the same precedence" {

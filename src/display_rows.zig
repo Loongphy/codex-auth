@@ -154,7 +154,7 @@ fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
 }
 
 fn singletonAccountCellAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord) ![]u8 {
-    return buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
+    return allocator.dupe(u8, rec.email);
 }
 
 fn groupedAccountCellAlloc(

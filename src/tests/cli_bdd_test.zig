@@ -751,6 +751,28 @@ test "Scenario: Given singleton aliases from different emails when building remo
     try std.testing.expectEqualStrings("beta@example.com / work", labels.items[1]);
 }
 
+test "Scenario: Given singleton account names from different emails when building remove labels then each label keeps email context" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-A::acct-1", "alpha@example.com", "", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Workspace");
+    try appendAccount(gpa, &reg, "user-B::acct-2", "beta@example.com", "", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Workspace");
+
+    const indices = [_]usize{ 0, 1 };
+    var labels = try cli.buildRemoveLabels(gpa, &reg, &indices);
+    defer {
+        for (labels.items) |label| gpa.free(@constCast(label));
+        labels.deinit(gpa);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), labels.items.len);
+    try std.testing.expectEqualStrings("alpha@example.com / Workspace", labels.items[0]);
+    try std.testing.expectEqualStrings("beta@example.com / Workspace", labels.items[1]);
+}
+
 test "Scenario: Given selector environment when deciding remove UI then non-tty or windows use the numbered selector" {
     try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, false));
     try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true));
