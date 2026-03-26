@@ -1234,6 +1234,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = false,
+        .api_account_enabled = false,
     });
 
     const output = aw.written();
@@ -1241,6 +1242,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account: disabled") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
 }
 
@@ -1255,10 +1257,12 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = true,
+        .api_account_enabled = true,
     });
 
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account: api") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") == null);
 }

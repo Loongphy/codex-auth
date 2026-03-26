@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const account_name_api = @import("account_name_api.zig");
+const account_api = @import("account_api.zig");
 const c_time = @cImport({
     @cInclude("time.h");
 });
@@ -52,6 +52,7 @@ pub const AutoSwitchConfig = struct {
 
 pub const ApiConfig = struct {
     usage: bool = true,
+    account: bool = true,
 };
 
 pub const AccountRecord = struct {
@@ -80,7 +81,6 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_key: ?[]u8,
     active_account_activated_at_ms: ?i64,
-    account_name_bootstrap_done: bool,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: std.ArrayList(AccountRecord),
@@ -1761,12 +1761,57 @@ pub fn resolveRateWindow(usage: ?RateLimitSnapshot, minutes: i64, fallback_prima
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
 }
 
+fn hasStoredAccountName(rec: *const AccountRecord) bool {
+    const account_name = rec.account_name orelse return false;
+    return account_name.len != 0;
+}
+
+fn isTeamAccount(rec: *const AccountRecord) bool {
+    const plan = resolvePlan(rec) orelse return false;
+    return plan == .team;
+}
+
+fn emailHasMultipleAccounts(reg: *const Registry, email: []const u8) bool {
+    var count: usize = 0;
+    for (reg.accounts.items) |rec| {
+        if (!std.mem.eql(u8, rec.email, email)) continue;
+        count += 1;
+        if (count > 1) return true;
+    }
+    return false;
+}
+
 pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
     for (reg.accounts.items) |rec| {
         if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
-        if (rec.account_name == null) return true;
+        if (!hasStoredAccountName(&rec)) return true;
     }
     return false;
+}
+
+pub fn shouldFetchTeamAccountNamesForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
+    var account_count: usize = 0;
+    var has_team_account = false;
+    var has_missing_team_account_name = false;
+    var has_grouped_email = false;
+
+    for (reg.accounts.items) |rec| {
+        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+
+        account_count += 1;
+        if (!has_grouped_email and emailHasMultipleAccounts(reg, rec.email)) {
+            has_grouped_email = true;
+        }
+        if (!isTeamAccount(&rec)) continue;
+
+        has_team_account = true;
+        if (!hasStoredAccountName(&rec)) {
+            has_missing_team_account_name = true;
+        }
+    }
+
+    if (!has_team_account or !has_missing_team_account_name) return false;
+    return account_count > 1 or has_grouped_email;
 }
 
 pub fn activeChatgptUserId(reg: *Registry) ?[]const u8 {
@@ -1779,7 +1824,7 @@ pub fn applyAccountNamesForUser(
     allocator: std.mem.Allocator,
     reg: *Registry,
     chatgpt_user_id: []const u8,
-    entries: []const account_name_api.AccountNameEntry,
+    entries: []const account_api.AccountEntry,
 ) !bool {
     var changed = false;
     for (reg.accounts.items) |*rec| {
@@ -1936,7 +1981,6 @@ fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .account_name_bootstrap_done = false,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
@@ -2207,13 +2251,6 @@ fn loadLegacyRegistryV2(
             else => {},
         }
     }
-    if (root_obj.get("account_name_bootstrap_done")) |v| {
-        switch (v) {
-            .bool => |flag| reg.account_name_bootstrap_done = flag,
-            else => {},
-        }
-    }
-
     if (root_obj.get("accounts")) |v| {
         switch (v) {
             .array => |arr| {
@@ -2265,13 +2302,6 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     } else if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
     }
-    if (root_obj.get("account_name_bootstrap_done")) |v| {
-        switch (v) {
-            .bool => |flag| reg.account_name_bootstrap_done = flag,
-            else => {},
-        }
-    }
-
     if (root_obj.get("accounts")) |v| {
         switch (v) {
             .array => |arr| {
@@ -2444,7 +2474,6 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_key = reg.active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
-        .account_name_bootstrap_done = reg.account_name_bootstrap_done,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
         .accounts = reg.accounts.items,
@@ -2467,7 +2496,6 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
-    account_name_bootstrap_done: bool,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: []const AccountRecord,
@@ -2541,6 +2569,12 @@ fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
     if (obj.get("usage")) |usage| {
         switch (usage) {
             .bool => |flag| cfg.usage = flag,
+            else => {},
+        }
+    }
+    if (obj.get("account")) |account| {
+        switch (account) {
+            .bool => |flag| cfg.account = flag,
             else => {},
         }
     }

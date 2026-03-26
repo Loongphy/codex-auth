@@ -58,10 +58,10 @@ pub const AutoOptions = union(enum) {
     action: AutoAction,
     configure: AutoThresholdOptions,
 };
-pub const ApiUsageAction = enum { enable, disable };
+pub const ApiAction = enum { enable, disable };
 pub const ConfigOptions = union(enum) {
     auto_switch: AutoOptions,
-    api_usage: ApiUsageAction,
+    api: ApiAction,
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
@@ -246,8 +246,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         if (std.mem.eql(u8, scope, "api")) {
             if (args.len != 4) return Command{ .help = {} };
             const action = std.mem.sliceTo(args[3], 0);
-            if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .api_usage = .enable } };
-            if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .api_usage = .disable } };
+            if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .api = .enable } };
+            if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .api = .disable } };
         }
 
         return Command{ .help = {} };
@@ -323,6 +323,14 @@ pub fn writeHelp(
     );
 
     if (use_color) try out.writeAll(ansi.bold);
+    try out.writeAll("Account API:");
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.print(
+        " {s}\n\n",
+        .{if (api_cfg.account) "ON" else "OFF"},
+    );
+
+    if (use_color) try out.writeAll(ansi.bold);
     try out.writeAll("Commands:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
@@ -348,8 +356,8 @@ pub fn writeHelp(
         .{ .name = "auto enable", .description = "Enable background auto-switching" },
         .{ .name = "auto disable", .description = "Disable background auto-switching" },
         .{ .name = "auto --5h <percent> [--weekly <percent>]", .description = "Configure auto-switch thresholds" },
-        .{ .name = "api enable", .description = "Enable usage API mode" },
-        .{ .name = "api disable", .description = "Enable local-only mode" },
+        .{ .name = "api enable", .description = "Enable usage and account APIs" },
+        .{ .name = "api disable", .description = "Disable usage and account APIs" },
     };
     const parent_indent: usize = 2;
     const child_indent: usize = parent_indent + 4;

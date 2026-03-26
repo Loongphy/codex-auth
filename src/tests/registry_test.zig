@@ -85,7 +85,6 @@ fn makeEmptyRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .account_name_bootstrap_done = false,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
@@ -184,18 +183,24 @@ test "registry save/load" {
 
     try registry.saveRegistry(gpa, codex_home, &reg);
 
+    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try bdd.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
     try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
     try std.testing.expect(loaded.accounts.items[0].last_local_rollout != null);
     try std.testing.expectEqual(@as(i64, 1735689600000), loaded.accounts.items[0].last_local_rollout.?.event_timestamp_ms);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].last_local_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
-    try std.testing.expect(!loaded.account_name_bootstrap_done);
 }
 
 test "registry load defaults missing account_name field to null" {
@@ -235,7 +240,6 @@ test "registry load defaults missing account_name field to null" {
 
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
-    try std.testing.expect(!loaded.account_name_bootstrap_done);
 }
 
 test "registry save/load round-trips account_name null" {
@@ -294,7 +298,7 @@ test "registry save/load round-trips account_name string" {
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "abcd"));
 }
 
-test "registry save/load round-trips account_name_bootstrap_done true" {
+test "registry save/load round-trips api.account false" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -305,21 +309,16 @@ test "registry save/load round-trips account_name_bootstrap_done true" {
 
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
-    reg.account_name_bootstrap_done = true;
+    reg.api.account = false;
 
     const rec = try makeAccountRecord(gpa, "a@b.com", "work", .pro, .chatgpt, 1);
     try reg.accounts.append(gpa, rec);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
-    defer gpa.free(registry_path);
-    const saved = try bdd.readFileAlloc(gpa, registry_path);
-    defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account_name_bootstrap_done\": true") != null);
-
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expect(loaded.account_name_bootstrap_done);
+    try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(!loaded.api.account);
 }
 
 test "registry load defaults missing auto threshold fields" {
@@ -350,6 +349,7 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms == null);
 }
 

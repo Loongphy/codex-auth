@@ -147,12 +147,14 @@ test "Scenario: Given help when rendering then login and compatibility notes are
     auto_cfg.threshold_5h_percent = 12;
     auto_cfg.threshold_weekly_percent = 8;
     api_cfg.usage = true;
+    api_cfg.account = true;
 
     try cli.writeHelp(&aw.writer, false, &auto_cfg, &api_cfg);
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Account API: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`codex-auth config api disable`") == null);
@@ -309,7 +311,7 @@ test "Scenario: Given config api enable when parsing then api action is preserve
 
     switch (cmd) {
         .config => |opts| switch (opts) {
-            .api_usage => |action| try std.testing.expect(action == .enable),
+            .api => |action| try std.testing.expect(action == .enable),
             else => return error.TestExpectedEqual,
         },
         else => return error.TestExpectedEqual,
@@ -324,7 +326,7 @@ test "Scenario: Given config api disable when parsing then api disable action is
 
     switch (cmd) {
         .config => |opts| switch (opts) {
-            .api_usage => |action| try std.testing.expect(action == .disable),
+            .api => |action| try std.testing.expect(action == .disable),
             else => return error.TestExpectedEqual,
         },
         else => return error.TestExpectedEqual,

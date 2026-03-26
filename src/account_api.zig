@@ -1,20 +1,20 @@
 const std = @import("std");
 const chatgpt_http = @import("chatgpt_http.zig");
 
-pub const default_account_name_endpoint = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+pub const default_account_endpoint = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
 
-pub const AccountNameEntry = struct {
+pub const AccountEntry = struct {
     account_id: []u8,
     account_name: ?[]u8,
 
-    pub fn deinit(self: *const AccountNameEntry, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const AccountEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.account_id);
         if (self.account_name) |name| allocator.free(name);
     }
 };
 
 pub const FetchResult = struct {
-    entries: ?[]AccountNameEntry,
+    entries: ?[]AccountEntry,
     status_code: ?u16,
 
     pub fn deinit(self: *const FetchResult, allocator: std.mem.Allocator) void {
@@ -25,7 +25,7 @@ pub const FetchResult = struct {
     }
 };
 
-pub fn fetchAccountNamesForTokenDetailed(
+pub fn fetchAccountsForTokenDetailed(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     access_token: []const u8,
@@ -41,12 +41,12 @@ pub fn fetchAccountNamesForTokenDetailed(
     }
 
     return .{
-        .entries = try parseAccountNamesResponse(allocator, http_result.body),
+        .entries = try parseAccountsResponse(allocator, http_result.body),
         .status_code = http_result.status_code,
     };
 }
 
-pub fn parseAccountNamesResponse(allocator: std.mem.Allocator, body: []const u8) !?[]AccountNameEntry {
+pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[]AccountEntry {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return null,
@@ -63,7 +63,7 @@ pub fn parseAccountNamesResponse(allocator: std.mem.Allocator, body: []const u8)
         else => return null,
     };
 
-    var entries = std.ArrayList(AccountNameEntry).empty;
+    var entries = std.ArrayList(AccountEntry).empty;
     errdefer {
         for (entries.items) |*entry| entry.deinit(allocator);
         entries.deinit(allocator);

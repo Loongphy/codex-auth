@@ -1,6 +1,7 @@
 const std = @import("std");
-const account_name_api = @import("../account_name_api.zig");
+const account_api = @import("../account_api.zig");
 const auth_mod = @import("../auth.zig");
+const display_rows = @import("../display_rows.zig");
 const main_mod = @import("../main.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -10,22 +11,14 @@ const primary_account_id = "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf";
 const secondary_account_id = "518a44d9-ba75-4bad-87e5-ae9377042960";
 const primary_record_key = shared_user_id ++ "::" ++ primary_account_id;
 const secondary_record_key = shared_user_id ++ "::" ++ secondary_account_id;
-const second_user_id = "user-bM3QpTa5vN2zL8eXk9Ds1HfR";
-const second_team_account_id = "a4021fa5-998b-4774-989f-784fa69c367b";
-const second_free_account_id = "58250000-8b17-4ff0-8e00-000000000001";
-const second_team_record_key = second_user_id ++ "::" ++ second_team_account_id;
-const second_free_record_key = second_user_id ++ "::" ++ second_free_account_id;
-const plus_only_record_key = "user-j9V2tYh3mQ8nLp0rD4sK7wXc::6f7787aa-25d0-40ec-a2f7-d8ea9915c8d4";
+const standalone_team_user_id = "user-q2Lm6Nx8Vc4Rb7Ty1Hp9JkDs";
+const standalone_team_account_id = "29a9c0cb-e840-45ec-97bf-d6c5f7e0f55b";
+const standalone_team_record_key = standalone_team_user_id ++ "::" ++ standalone_team_account_id;
 
 var mock_account_name_fetch_count: usize = 0;
-var bootstrap_mock_fetch_count: usize = 0;
 
 fn resetMockAccountNameFetcher() void {
     mock_account_name_fetch_count = 0;
-}
-
-fn resetBootstrapMockAccountNameFetcher() void {
-    bootstrap_mock_fetch_count = 0;
 }
 
 fn makeRegistry() registry.Registry {
@@ -33,7 +26,6 @@ fn makeRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .account_name_bootstrap_done = false,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
@@ -135,33 +127,16 @@ fn writeActiveAuthWithIds(
     try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
-fn writeAccountSnapshotWithIds(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    record_key: []const u8,
-    email: []const u8,
-    plan: []const u8,
-    chatgpt_user_id: []const u8,
-    chatgpt_account_id: []const u8,
-) !void {
-    const snapshot_path = try registry.accountAuthPath(allocator, codex_home, record_key);
-    defer allocator.free(snapshot_path);
-
-    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
-    defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
-}
-
 fn mockAccountNameFetcher(
     allocator: std.mem.Allocator,
     access_token: []const u8,
     account_id: ?[]const u8,
-) !account_name_api.FetchResult {
+) !account_api.FetchResult {
     _ = access_token;
     _ = account_id;
     mock_account_name_fetch_count += 1;
 
-    const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
+    const entries = try allocator.alloc(account_api.AccountEntry, 2);
     errdefer allocator.free(entries);
 
     entries[0] = .{
@@ -181,56 +156,6 @@ fn mockAccountNameFetcher(
 
     return .{
         .entries = entries,
-        .status_code = 200,
-    };
-}
-
-fn bootstrapMockAccountNameFetcher(
-    allocator: std.mem.Allocator,
-    access_token: []const u8,
-    account_id: ?[]const u8,
-) !account_name_api.FetchResult {
-    _ = access_token;
-    bootstrap_mock_fetch_count += 1;
-    const requested_account_id = account_id orelse return .{
-        .entries = null,
-        .status_code = 200,
-    };
-
-    if (std.mem.eql(u8, requested_account_id, primary_account_id)) {
-        const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
-        errdefer allocator.free(entries);
-        entries[0] = .{
-            .account_id = try allocator.dupe(u8, primary_account_id),
-            .account_name = try allocator.dupe(u8, "Primary Workspace"),
-        };
-        errdefer entries[0].deinit(allocator);
-        entries[1] = .{
-            .account_id = try allocator.dupe(u8, secondary_account_id),
-            .account_name = try allocator.dupe(u8, "Backup Workspace"),
-        };
-        errdefer entries[1].deinit(allocator);
-        return .{ .entries = entries, .status_code = 200 };
-    }
-
-    if (std.mem.eql(u8, requested_account_id, second_team_account_id)) {
-        const entries = try allocator.alloc(account_name_api.AccountNameEntry, 2);
-        errdefer allocator.free(entries);
-        entries[0] = .{
-            .account_id = try allocator.dupe(u8, second_team_account_id),
-            .account_name = try allocator.dupe(u8, "Ops Workspace"),
-        };
-        errdefer entries[0].deinit(allocator);
-        entries[1] = .{
-            .account_id = try allocator.dupe(u8, second_free_account_id),
-            .account_name = try allocator.dupe(u8, "Free Workspace"),
-        };
-        errdefer entries[1].deinit(allocator);
-        return .{ .entries = entries, .status_code = 200 };
-    }
-
-    return .{
-        .entries = null,
         .status_code = 200,
     };
 }
@@ -279,7 +204,7 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = null,
     } } } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api_usage = .enable } }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api = .enable } }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
@@ -290,6 +215,103 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
+}
+
+test "Scenario: Given team name fetch candidates when checking grouped-account policy then only ambiguous team users qualify" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "same-user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "same-user@example.com", "", .free);
+    try appendAccount(gpa, &reg, "user-email-team::acct-email-team", "same-email@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-email-plus::acct-email-plus", "same-email@example.com", "", .plus);
+    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-plus-only::acct-plus-a", "plus-only@example.com", "", .plus);
+    try appendAccount(gpa, &reg, "user-plus-only::acct-plus-b", "plus-only-alt@example.com", "", .plus);
+
+    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, shared_user_id));
+    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-team"));
+    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-plus"));
+    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
+    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-plus-only"));
+}
+
+test "Scenario: Given a standalone team account when building display rows and refreshing names then it keeps the email label and skips requests" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, standalone_team_record_key);
+    try writeActiveAuthWithIds(gpa, codex_home, "solo-team@example.com", "team", standalone_team_user_id, standalone_team_account_id);
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), rows.rows.len);
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo-team@example.com"));
+    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
+
+    var info = try parseAuthInfoWithIds(gpa, "solo-team@example.com", "team", standalone_team_user_id, standalone_team_account_id);
+    defer info.deinit(gpa);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterLogin(gpa, &reg, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterImport(gpa, &reg, false, .single_file, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterSwitch(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+    try std.testing.expect(reg.accounts.items[0].account_name == null);
+}
+
+test "Scenario: Given grouped team accounts with account api disabled when refreshing names then every entry point skips requests" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    reg.api.account = false;
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
+    defer info.deinit(gpa);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterLogin(gpa, &reg, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterImport(gpa, &reg, false, .single_file, &info, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesAfterSwitch(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
+
+    resetMockAccountNameFetcher();
+    try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
+    try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
 test "Scenario: Given login with missing account names when refreshing metadata then it issues at most one request" {
@@ -420,60 +442,6 @@ test "Scenario: Given list refresh with missing active-user account names when r
     resetMockAccountNameFetcher();
     try std.testing.expect(!(try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher)));
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
-}
-
-test "Scenario: Given first-run bootstrap with missing team names across users when running bootstrap then it fetches once per team user and only once" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "team-a@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "team-a@example.com", "", .team);
-    try appendAccount(gpa, &reg, second_team_record_key, "team-b@example.com", "", .team);
-    try appendAccount(gpa, &reg, second_free_record_key, "team-b@example.com", "", .free);
-    try appendAccount(gpa, &reg, plus_only_record_key, "plus-only@example.com", "", .plus);
-
-    try writeAccountSnapshotWithIds(
-        gpa,
-        codex_home,
-        primary_record_key,
-        "team-a@example.com",
-        "team",
-        shared_user_id,
-        primary_account_id,
-    );
-    try writeAccountSnapshotWithIds(
-        gpa,
-        codex_home,
-        second_team_record_key,
-        "team-b@example.com",
-        "team",
-        second_user_id,
-        second_team_account_id,
-    );
-
-    resetBootstrapMockAccountNameFetcher();
-    const changed = try main_mod.bootstrapTeamAccountNamesOnFirstRun(gpa, codex_home, &reg, bootstrapMockAccountNameFetcher);
-    try std.testing.expect(changed);
-    try std.testing.expect(reg.account_name_bootstrap_done);
-    try std.testing.expectEqual(@as(usize, 2), bootstrap_mock_fetch_count);
-
-    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
-    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
-    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[2].account_name.?, "Ops Workspace"));
-    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[3].account_name.?, "Free Workspace"));
-    try std.testing.expect(reg.accounts.items[4].account_name == null);
-
-    resetBootstrapMockAccountNameFetcher();
-    try std.testing.expect(!(try main_mod.bootstrapTeamAccountNamesOnFirstRun(gpa, codex_home, &reg, bootstrapMockAccountNameFetcher)));
-    try std.testing.expectEqual(@as(usize, 0), bootstrap_mock_fetch_count);
 }
 
 test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {

@@ -318,6 +318,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
     try std.testing.expectEqual(@as(u8, 12), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 7), loaded.auto_switch.threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
 
     const active_account_key = try accountKeyForEmailAlloc(gpa, "active@example.com");
@@ -386,6 +387,7 @@ test "Scenario: Given purge with newer schema registry when rebuilding then auto
     try std.testing.expectEqual(@as(u8, 18), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 6), loaded.auto_switch.threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 }
 
 test "Scenario: Given purge with malformed registry when rebuilding then auto and api config are recovered best effort" {
@@ -431,6 +433,7 @@ test "Scenario: Given purge with malformed registry when rebuilding then auto an
     try std.testing.expectEqual(@as(u8, 13), loaded.auto_switch.threshold_5h_percent);
     try std.testing.expectEqual(@as(u8, 4), loaded.auto_switch.threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 }
 
 test "Scenario: Given purge without path when rebuilding then it scans account snapshots and ignores registry metadata files" {

@@ -1,6 +1,6 @@
 ---
 name: account-name
-description: Persist ChatGPT account names from accounts/check, show them in list/switch, and keep request volume low by fetching only when metadata is missing
+description: Persist ChatGPT account names from accounts/check, show them in list/switch, and keep request volume low by fetching only for ambiguous Team groupings
 ---
 
 # Plan
@@ -15,21 +15,21 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
 - [x] Update shared display labels for `list` and `switch`.
 - [x] Add parser, registry compatibility, flow, and display tests.
 - [x] Run relevant Zig tests and `zig build run -- list`.
-- [x] Add one-time foreground bootstrap for missing Team account names after upgrade.
-- [x] Persist bootstrap completion in `registry.json` and keep old registries compatible.
-- [x] Add first-run stdout notice and Team-user deduped fetch fan-out (parallel limit 2).
+- [x] Restrict account fetches to ambiguous Team groupings only.
+- [x] Remove first-run bootstrap and its persisted marker.
+- [x] Split API config into `api.usage` and `api.account`, with `config api enable|disable` toggling both.
 
 ## Summary
 - Keep `registry.json` at schema `3`; this is an additive field only.
 - Add `account_name: ?[]u8` to each account record.
-- Add `account_name_bootstrap_done: bool` at registry root to gate one-time upgrade bootstrap.
 - Treat missing or null names as `null`; do not use `""` as a stored default.
+- Add `api.account: bool` alongside `api.usage: bool` in `registry.json`.
 - Use the same minimal header rule for both APIs:
   - `Authorization: Bearer <token>`
   - `ChatGPT-Account-Id: <account_id>` only when available
   - `User-Agent: codex-auth`
 - Remove `Accept-Encoding: identity` from the current usage API implementation.
-- Keep missing-name lazy refresh behavior, plus one-time blocking bootstrap for Team users on first foreground run.
+- Keep missing-name lazy refresh behavior only; do not run a first-foreground bootstrap.
 
 ## Requirements
 - Parse `accounts/check` from:
@@ -41,15 +41,17 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
   - all other payload fields
 - Normalize `name: null` or `name: ""` to `account_name = null`.
 - Refresh timing:
-  - one-time bootstrap on foreground `list`, `switch`, or `login` when `account_name_bootstrap_done == false`
-  - bootstrap targets users that have at least one Team account with `account_name == null`
-  - bootstrap dedupes by `chatgpt_user_id` and may issue multiple requests (one per user) with max parallelism 2
-  - bootstrap failures are non-fatal and do not block command success
-  - bootstrap prints a stdout notice before the blocking fetch pass starts
   - after `login`
   - after `switch`
   - after single-file `import`
   - during `list`, only if the active user still has any `account_name == null`
+- Refresh eligibility:
+  - only when `api.account == true`
+  - only when the relevant `chatgpt_user_id` belongs to an ambiguous grouping
+  - a grouping is ambiguous when either:
+    - the user has multiple accounts, or
+    - one of the user's emails appears on multiple accounts
+  - only Team users with at least one missing `account_name` qualify
 - Do not refresh during directory import or `import --purge`.
 - Do not trigger `accounts/check` from the `wham/usage` refresh path.
 
@@ -57,7 +59,7 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
 - Extend `registry.AccountRecord` with `account_name: ?[]u8`.
 - Old registries without that field must load successfully with `account_name = null`.
 - New saves must always emit `account_name` as either a string or `null`.
-- Add a dedicated account-name fetcher module or helper, separate from `usage_api` parsing.
+- Add a dedicated account fetcher module or helper, separate from `usage_api` parsing.
 - `accounts/check` request contract:
   - method: `GET`
   - URL: `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27`
@@ -77,8 +79,7 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
 - Apply the same precedence to singleton rows, grouped child rows, and switch-picker rows.
 
 ## Refresh and metadata behavior
-- General rule after bootstrap: at most one `accounts/check` request per command, and only if the relevant active/imported user still has at least one null `account_name`.
-- One-time bootstrap exception: on first foreground run (`list`/`switch`/`login`) after upgrade, allow one request per eligible Team user (`chatgpt_user_id` deduped), with max parallelism 2.
+- General rule: at most one `accounts/check` request per command, and only if the relevant active/imported user still has at least one null `account_name`.
 - `login`:
   - after login succeeds and the active auth is ready, fetch once if that user has missing names
 - `switch`:
@@ -97,8 +98,6 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
 - On request or parse failure:
   - keep command success behavior unchanged
   - keep stored values unchanged
-- Bootstrap completion:
-  - set `account_name_bootstrap_done = true` after the one-time bootstrap attempt, so later commands return to lazy-refresh behavior.
 
 ## Testing and validation
 - Add parser tests for:
@@ -112,15 +111,17 @@ Add stored `account_name` metadata to registry records, fetch it from `accounts/
   - round-tripping `account_name: null`
   - round-tripping `account_name: "abcd"`
 - Add flow tests for:
-  - one-time bootstrap requests once per eligible Team user (deduped by `chatgpt_user_id`) and does not rerun after completion
+  - standalone Team accounts keep email fallback labels and do not trigger account fetches
+  - grouped Team users trigger at most one metadata request per command
+  - `api.account = false` prevents account fetches across `login`, `switch`, `list`, and single-file `import`
   - `login` issues at most one metadata request on missing-name records
   - `switch` issues at most one metadata request on missing-name records
   - single-file import issues at most one metadata request on missing-name records
   - directory import and purge issue zero metadata requests
   - `list` issues one metadata request only when the active user still has missing names
 - Add registry compatibility tests for:
-  - loading old registry data without `account_name_bootstrap_done` (defaults false)
-  - round-tripping `account_name_bootstrap_done: true`
+  - `api.account` defaulting to `true` when absent
+  - round-tripping `api.account: false`
 - Add display tests for:
   - alias + account name
   - alias only

@@ -31,6 +31,7 @@ pub const Status = struct {
     threshold_5h_percent: u8,
     threshold_weekly_percent: u8,
     api_usage_enabled: bool,
+    api_account_enabled: bool,
 };
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
@@ -513,6 +514,7 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
         .api_usage_enabled = reg.api.usage,
+        .api_account_enabled = reg.api.account,
     };
 }
 
@@ -539,6 +541,10 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
 
     try out.writeAll("usage: ");
     try out.writeAll(if (status.api_usage_enabled) "api" else "local");
+    try out.writeAll("\n");
+
+    try out.writeAll("account: ");
+    try out.writeAll(if (status.api_account_enabled) "api" else "disabled");
     try out.writeAll("\n");
 
     try out.flush();
@@ -725,11 +731,12 @@ pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, c
     }
 }
 
-pub fn handleApiUsageCommand(allocator: std.mem.Allocator, codex_home: []const u8, action: cli.ApiUsageAction) !void {
+pub fn handleApiCommand(allocator: std.mem.Allocator, codex_home: []const u8, action: cli.ApiAction) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     const enabled = action == .enable;
     reg.api.usage = enabled;
+    reg.api.account = enabled;
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 

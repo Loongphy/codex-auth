@@ -1,14 +1,14 @@
 const std = @import("std");
-const account_name_api = @import("../account_name_api.zig");
+const account_api = @import("../account_api.zig");
 
-fn findEntryByAccountId(entries: []const account_name_api.AccountNameEntry, account_id: []const u8) ?*const account_name_api.AccountNameEntry {
+fn findEntryByAccountId(entries: []const account_api.AccountEntry, account_id: []const u8) ?*const account_api.AccountEntry {
     for (entries) |*entry| {
         if (std.mem.eql(u8, entry.account_id, account_id)) return entry;
     }
     return null;
 }
 
-fn freeEntries(allocator: std.mem.Allocator, entries: ?[]account_name_api.AccountNameEntry) void {
+fn freeEntries(allocator: std.mem.Allocator, entries: ?[]account_api.AccountEntry) void {
     if (entries) |owned_entries| {
         for (owned_entries) |*entry| entry.deinit(allocator);
         allocator.free(owned_entries);
@@ -37,7 +37,7 @@ test "parse account names response ignores default and keeps one real account" {
         \\}
     ;
 
-    const entries = try account_name_api.parseAccountNamesResponse(gpa, body);
+    const entries = try account_api.parseAccountsResponse(gpa, body);
     defer freeEntries(gpa, entries);
 
     try std.testing.expect(entries != null);
@@ -68,7 +68,7 @@ test "parse account names response keeps multiple non-default accounts" {
         \\}
     ;
 
-    const entries = try account_name_api.parseAccountNamesResponse(gpa, body);
+    const entries = try account_api.parseAccountsResponse(gpa, body);
     defer freeEntries(gpa, entries);
 
     try std.testing.expect(entries != null);
@@ -96,7 +96,7 @@ test "parse account names response normalizes null names to null" {
         \\}
     ;
 
-    const entries = try account_name_api.parseAccountNamesResponse(gpa, body);
+    const entries = try account_api.parseAccountsResponse(gpa, body);
     defer freeEntries(gpa, entries);
 
     try std.testing.expect(entries != null);
@@ -119,7 +119,7 @@ test "parse account names response normalizes empty names to null" {
         \\}
     ;
 
-    const entries = try account_name_api.parseAccountNamesResponse(gpa, body);
+    const entries = try account_api.parseAccountsResponse(gpa, body);
     defer freeEntries(gpa, entries);
 
     try std.testing.expect(entries != null);
@@ -129,6 +129,6 @@ test "parse account names response normalizes empty names to null" {
 
 test "parse account names response treats malformed html as non-fatal failure" {
     const gpa = std.testing.allocator;
-    const result = try account_name_api.parseAccountNamesResponse(gpa, "<html>not json</html>");
+    const result = try account_api.parseAccountsResponse(gpa, "<html>not json</html>");
     try std.testing.expect(result == null);
 }
