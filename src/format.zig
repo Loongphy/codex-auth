@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
-const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
 const c = @cImport({
@@ -24,14 +23,8 @@ fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const 
     return missing;
 }
 
-pub fn printAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, fmt: cli.OutputFormat) !void {
-    switch (fmt) {
-        .table => try printAccountsTable(reg),
-        .json => try printAccountsJson(reg),
-        .csv => try printAccountsCsv(reg),
-        .compact => try printAccountsCompact(reg),
-    }
-    _ = allocator;
+pub fn printAccounts(reg: *registry.Registry) !void {
+    try printAccountsTable(reg);
 }
 
 fn printAccountsTable(reg: *registry.Registry) !void {
@@ -167,82 +160,6 @@ fn printAccountsTable(reg: *registry.Registry) !void {
     try out.flush();
 }
 
-fn printAccountsJson(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    const dump = RegistryOut{
-        .schema_version = reg.schema_version,
-        .active_account_key = reg.active_account_key,
-        .auto_switch = reg.auto_switch,
-        .api = reg.api,
-        .accounts = reg.accounts.items,
-    };
-    try std.json.Stringify.value(dump, .{ .whitespace = .indent_2 }, out);
-    try out.writeAll("\n");
-    try out.flush();
-}
-
-fn printAccountsCsv(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try out.writeAll("active,account_key,chatgpt_account_id,chatgpt_user_id,email,plan,limit_5h,limit_weekly,last_used\n");
-    for (reg.accounts.items) |rec| {
-        const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
-        const email = rec.email;
-        const account_key = rec.account_key;
-        const chatgpt_account_id = rec.chatgpt_account_id;
-        const chatgpt_user_id = rec.chatgpt_user_id;
-        const plan = planDisplay(&rec, "");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last = if (rec.last_used_at) |t| try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{t}) else "";
-        defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
-        try out.print(
-            "{s},{s},{s},{s},{s},{s},{s},{s},{s}\n",
-            .{ if (active) "1" else "0", account_key, chatgpt_account_id, chatgpt_user_id, email, plan, rate_5h_str, rate_week_str, last },
-        );
-    }
-    try out.flush();
-}
-
-fn printAccountsCompact(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    for (reg.accounts.items) |rec| {
-        const active = if (reg.active_account_key) |k| std.mem.eql(u8, k, rec.account_key) else false;
-        const email = rec.email;
-        const plan = planDisplay(&rec, "-");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last = if (rec.last_used_at) |t| try formatTimestampAlloc(t) else "-";
-        defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
-        try out.print(
-            "{s}{s} ({s}) 5h:{s} week:{s} last:{s}\n",
-            .{ if (active) "* " else "  ", email, plan, rate_5h_str, rate_week_str, last },
-        );
-    }
-    try out.flush();
-}
-
-const RegistryOut = struct {
-    schema_version: u32,
-    active_account_key: ?[]const u8,
-    auto_switch: registry.AutoSwitchConfig,
-    api: registry.ApiConfig,
-    accounts: []const registry.AccountRecord,
-};
-
 fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
     if (usage == null) return null;
     if (usage.?.primary) |p| {
@@ -252,20 +169,6 @@ fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_
         if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
     }
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
-}
-
-fn formatRateLimitStatusAlloc(window: ?registry.RateLimitWindow) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
-    const reset_at = window.?.resets_at.?;
-    if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
-    }
-    const remaining = remainingPercent(window.?.used_percent);
-    const time_str = try formatResetTimeAlloc(reset_at, now);
-    defer std.heap.page_allocator.free(time_str);
-    return std.fmt.allocPrint(std.heap.page_allocator, "{d}% {s}", .{ remaining, time_str });
 }
 
 const ResetParts = struct {
@@ -665,27 +568,6 @@ fn truncateAlloc(value: []const u8, max_len: usize) ![]u8 {
     if (max_len == 0) return try std.fmt.allocPrint(std.heap.page_allocator, "", .{});
     if (max_len == 1) return try std.fmt.allocPrint(std.heap.page_allocator, ".", .{});
     return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0 .. max_len - 1]});
-}
-
-fn formatTimestampAlloc(ts: i64) ![]u8 {
-    if (ts < 0) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(ts, &tm)) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    }
-
-    const year = @as(u32, @intCast(tm.tm_year + 1900));
-    const month = @as(u32, @intCast(tm.tm_mon + 1));
-    const day = @as(u32, @intCast(tm.tm_mday));
-    const hour = @as(u32, @intCast(tm.tm_hour));
-    const min = @as(u32, @intCast(tm.tm_min));
-    const sec = @as(u32, @intCast(tm.tm_sec));
-
-    return std.fmt.allocPrint(
-        std.heap.page_allocator,
-        "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}",
-        .{ year, month, day, hour, min, sec },
-    );
 }
 
 test "printTableRow handles long cells without underflow" {

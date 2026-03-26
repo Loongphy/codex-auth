@@ -36,7 +36,6 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 - If `registry.json` is empty and `~/.codex/auth.json` exists, the tool auto-imports it into `accounts/<account file key>.auth.json`.
 - If the registry is empty and there is no `auth.json`, `list` shows no accounts; use `codex-auth login` or `codex-auth import`.
-- `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
 
 ## Registry Compatibility
 

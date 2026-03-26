@@ -31,11 +31,8 @@ fn stderrColorEnabled() bool {
     return std.fs.File.stderr().isTty();
 }
 
-pub const OutputFormat = enum { table, json, csv, compact };
-
 pub const ListOptions = struct {};
-pub const LoginInvocation = enum { login, add_alias };
-pub const LoginOptions = struct { invocation: LoginInvocation };
+pub const LoginOptions = struct {};
 pub const ImportSource = enum { standard, cpa };
 pub const ImportOptions = struct {
     auth_path: ?[]u8,
@@ -65,6 +62,18 @@ pub const ConfigOptions = union(enum) {
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
+pub const HelpTopic = enum {
+    top_level,
+    list,
+    status,
+    login,
+    import_auth,
+    switch_account,
+    remove_account,
+    clean,
+    config,
+    daemon,
+};
 
 pub const Command = union(enum) {
     list: ListOptions,
@@ -77,30 +86,60 @@ pub const Command = union(enum) {
     status: void,
     daemon: DaemonOptions,
     version: void,
-    help: void,
+    help: HelpTopic,
 };
 
-pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Command {
-    if (args.len < 2) return Command{ .help = {} };
+pub const UsageError = struct {
+    topic: HelpTopic,
+    message: []u8,
+};
+
+pub const ParseResult = union(enum) {
+    command: Command,
+    usage_error: UsageError,
+};
+
+pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !ParseResult {
+    if (args.len < 2) return .{ .command = .{ .help = .top_level } };
     const cmd = std.mem.sliceTo(args[1], 0);
 
+    if (isHelpFlag(cmd)) {
+        if (args.len > 2) {
+            return usageErrorResult(allocator, .top_level, "unexpected argument after `{s}`: `{s}`.", .{
+                cmd,
+                std.mem.sliceTo(args[2], 0),
+            });
+        }
+        return .{ .command = .{ .help = .top_level } };
+    }
+
+    if (std.mem.eql(u8, cmd, "help")) {
+        return try parseHelpArgs(allocator, args[2..]);
+    }
+
     if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .version = {} };
+        if (args.len > 2) {
+            return usageErrorResult(allocator, .top_level, "unexpected argument after `{s}`: `{s}`.", .{
+                cmd,
+                std.mem.sliceTo(args[2], 0),
+            });
+        }
+        return .{ .command = .{ .version = {} } };
     }
 
     if (std.mem.eql(u8, cmd, "list")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .list = .{} };
+        return try parseSimpleCommandArgs(allocator, "list", .list, .{ .list = .{} }, args[2..]);
     }
 
-    if (std.mem.eql(u8, cmd, "login") or std.mem.eql(u8, cmd, "add")) {
-        if (args.len > 2) return Command{ .help = {} };
-        const invocation: LoginInvocation = if (std.mem.eql(u8, cmd, "add")) .add_alias else .login;
-        return Command{ .login = .{ .invocation = invocation } };
+    if (std.mem.eql(u8, cmd, "login")) {
+        return try parseSimpleCommandArgs(allocator, "login", .login, .{ .login = .{} }, args[2..]);
     }
 
     if (std.mem.eql(u8, cmd, "import")) {
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .import_auth } };
+        }
+
         var auth_path: ?[]u8 = null;
         var alias: ?[]u8 = null;
         var purge = false;
@@ -108,68 +147,86 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--alias") and i + 1 < args.len) {
-                if (alias) |a| allocator.free(a);
+            if (std.mem.eql(u8, arg, "--alias")) {
+                if (i + 1 >= args.len) {
+                    freeImportOptions(allocator, auth_path, alias);
+                    return usageErrorResult(allocator, .import_auth, "missing value for `--alias`.", .{});
+                }
+                if (alias != null) {
+                    freeImportOptions(allocator, auth_path, alias);
+                    return usageErrorResult(allocator, .import_auth, "duplicate `--alias` for `import`.", .{});
+                }
                 alias = try allocator.dupe(u8, std.mem.sliceTo(args[i + 1], 0));
                 i += 1;
             } else if (std.mem.eql(u8, arg, "--purge")) {
+                if (purge) {
+                    freeImportOptions(allocator, auth_path, alias);
+                    return usageErrorResult(allocator, .import_auth, "duplicate `--purge` for `import`.", .{});
+                }
                 purge = true;
             } else if (std.mem.eql(u8, arg, "--cpa")) {
                 if (source == .cpa) {
-                    if (auth_path) |p| allocator.free(p);
-                    if (alias) |a| allocator.free(a);
-                    return Command{ .help = {} };
+                    freeImportOptions(allocator, auth_path, alias);
+                    return usageErrorResult(allocator, .import_auth, "duplicate `--cpa` for `import`.", .{});
                 }
                 source = .cpa;
+            } else if (isHelpFlag(arg)) {
+                freeImportOptions(allocator, auth_path, alias);
+                return usageErrorResult(allocator, .import_auth, "`--help` must be used by itself for `import`.", .{});
             } else if (std.mem.startsWith(u8, arg, "-")) {
-                if (auth_path) |p| allocator.free(p);
-                if (alias) |a| allocator.free(a);
-                return Command{ .help = {} };
+                freeImportOptions(allocator, auth_path, alias);
+                return usageErrorResult(allocator, .import_auth, "unknown flag `{s}` for `import`.", .{arg});
             } else {
                 if (auth_path != null) {
-                    if (auth_path) |p| allocator.free(p);
-                    if (alias) |a| allocator.free(a);
-                    return Command{ .help = {} };
+                    freeImportOptions(allocator, auth_path, alias);
+                    return usageErrorResult(allocator, .import_auth, "unexpected extra path `{s}` for `import`.", .{arg});
                 }
                 auth_path = try allocator.dupe(u8, arg);
             }
         }
         if (purge and source == .cpa) {
-            if (auth_path) |p| allocator.free(p);
-            if (alias) |a| allocator.free(a);
-            return Command{ .help = {} };
+            freeImportOptions(allocator, auth_path, alias);
+            return usageErrorResult(allocator, .import_auth, "`--purge` cannot be combined with `--cpa`.", .{});
         }
         if (auth_path == null and !purge and source == .standard) {
-            if (alias) |a| allocator.free(a);
-            return Command{ .help = {} };
+            freeImportOptions(allocator, auth_path, alias);
+            return usageErrorResult(allocator, .import_auth, "`import` requires a path unless `--purge` or `--cpa` is used.", .{});
         }
-        return Command{ .import_auth = .{
+        return .{ .command = .{ .import_auth = .{
             .auth_path = auth_path,
             .alias = alias,
             .purge = purge,
             .source = source,
-        } };
+        } } };
     }
 
     if (std.mem.eql(u8, cmd, "switch")) {
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .switch_account } };
+        }
+
         var query: ?[]u8 = null;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
             if (std.mem.startsWith(u8, arg, "-")) {
                 if (query) |e| allocator.free(e);
-                return Command{ .help = {} };
+                return usageErrorResult(allocator, .switch_account, "unknown flag `{s}` for `switch`.", .{arg});
             }
             if (query != null) {
                 if (query) |e| allocator.free(e);
-                return Command{ .help = {} };
+                return usageErrorResult(allocator, .switch_account, "unexpected extra query `{s}` for `switch`.", .{arg});
             }
             query = try allocator.dupe(u8, arg);
         }
-        return Command{ .switch_account = .{ .query = query } };
+        return .{ .command = .{ .switch_account = .{ .query = query } } };
     }
 
     if (std.mem.eql(u8, cmd, "remove")) {
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .remove_account } };
+        }
+
         var query: ?[]u8 = null;
         var all = false;
         var i: usize = 2;
@@ -178,43 +235,50 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
             if (std.mem.eql(u8, arg, "--all")) {
                 if (all or query != null) {
                     if (query) |q| allocator.free(q);
-                    return Command{ .help = {} };
+                    return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
                 }
                 all = true;
                 continue;
             }
             if (std.mem.startsWith(u8, arg, "-")) {
                 if (query) |q| allocator.free(q);
-                return Command{ .help = {} };
+                return usageErrorResult(allocator, .remove_account, "unknown flag `{s}` for `remove`.", .{arg});
             }
             if (query != null or all) {
                 if (query) |q| allocator.free(q);
-                return Command{ .help = {} };
+                if (all) {
+                    return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
+                }
+                return usageErrorResult(allocator, .remove_account, "unexpected extra selector `{s}` for `remove`.", .{arg});
             }
             query = try allocator.dupe(u8, arg);
         }
-        return Command{ .remove_account = .{ .query = query, .all = all } };
+        return .{ .command = .{ .remove_account = .{ .query = query, .all = all } } };
     }
 
     if (std.mem.eql(u8, cmd, "clean")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .clean = .{} };
+        return try parseSimpleCommandArgs(allocator, "clean", .clean, .{ .clean = .{} }, args[2..]);
     }
 
     if (std.mem.eql(u8, cmd, "status")) {
-        if (args.len > 2) return Command{ .help = {} };
-        return Command{ .status = {} };
+        return try parseSimpleCommandArgs(allocator, "status", .status, .{ .status = {} }, args[2..]);
     }
 
     if (std.mem.eql(u8, cmd, "config")) {
-        if (args.len < 3) return Command{ .help = {} };
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .config } };
+        }
+        if (args.len < 3) return usageErrorResult(allocator, .config, "`config` requires a section.", .{});
         const scope = std.mem.sliceTo(args[2], 0);
 
         if (std.mem.eql(u8, scope, "auto")) {
+            if (args.len == 4 and isHelpFlag(std.mem.sliceTo(args[3], 0))) {
+                return .{ .command = .{ .help = .config } };
+            }
             if (args.len == 4) {
                 const action = std.mem.sliceTo(args[3], 0);
-                if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .auto_switch = .{ .action = .enable } } };
-                if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .auto_switch = .{ .action = .disable } } };
+                if (std.mem.eql(u8, action, "enable")) return .{ .command = .{ .config = .{ .auto_switch = .{ .action = .enable } } } };
+                if (std.mem.eql(u8, action, "disable")) return .{ .command = .{ .config = .{ .auto_switch = .{ .action = .disable } } } };
             }
 
             var threshold_5h_percent: ?u8 = null;
@@ -222,51 +286,74 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Comm
             var i: usize = 3;
             while (i < args.len) : (i += 1) {
                 const arg = std.mem.sliceTo(args[i], 0);
-                if (std.mem.eql(u8, arg, "--5h") and i + 1 < args.len) {
-                    if (threshold_5h_percent != null) return Command{ .help = {} };
-                    threshold_5h_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                if (std.mem.eql(u8, arg, "--5h")) {
+                    if (i + 1 >= args.len) return usageErrorResult(allocator, .config, "missing value for `--5h`.", .{});
+                    if (threshold_5h_percent != null) return usageErrorResult(allocator, .config, "duplicate `--5h` for `config auto`.", .{});
+                    threshold_5h_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse
+                        return usageErrorResult(allocator, .config, "`--5h` must be an integer from 1 to 100.", .{});
                     i += 1;
                     continue;
                 }
-                if (std.mem.eql(u8, arg, "--weekly") and i + 1 < args.len) {
-                    if (threshold_weekly_percent != null) return Command{ .help = {} };
-                    threshold_weekly_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse return Command{ .help = {} };
+                if (std.mem.eql(u8, arg, "--weekly")) {
+                    if (i + 1 >= args.len) return usageErrorResult(allocator, .config, "missing value for `--weekly`.", .{});
+                    if (threshold_weekly_percent != null) return usageErrorResult(allocator, .config, "duplicate `--weekly` for `config auto`.", .{});
+                    threshold_weekly_percent = parsePercentArg(std.mem.sliceTo(args[i + 1], 0)) orelse
+                        return usageErrorResult(allocator, .config, "`--weekly` must be an integer from 1 to 100.", .{});
                     i += 1;
                     continue;
                 }
-                return Command{ .help = {} };
+                if (std.mem.eql(u8, arg, "enable") or std.mem.eql(u8, arg, "disable")) {
+                    return usageErrorResult(allocator, .config, "`config auto` cannot mix actions with threshold flags.", .{});
+                }
+                return usageErrorResult(allocator, .config, "unknown argument `{s}` for `config auto`.", .{arg});
             }
-            if (threshold_5h_percent == null and threshold_weekly_percent == null) return Command{ .help = {} };
-            return Command{ .config = .{ .auto_switch = .{ .configure = .{
+            if (threshold_5h_percent == null and threshold_weekly_percent == null) {
+                return usageErrorResult(allocator, .config, "`config auto` requires an action or threshold flags.", .{});
+            }
+            return .{ .command = .{ .config = .{ .auto_switch = .{ .configure = .{
                 .threshold_5h_percent = threshold_5h_percent,
                 .threshold_weekly_percent = threshold_weekly_percent,
-            } } } };
+            } } } } };
         }
 
         if (std.mem.eql(u8, scope, "api")) {
-            if (args.len != 4) return Command{ .help = {} };
+            if (args.len == 4 and isHelpFlag(std.mem.sliceTo(args[3], 0))) {
+                return .{ .command = .{ .help = .config } };
+            }
+            if (args.len != 4) return usageErrorResult(allocator, .config, "`config api` requires `enable` or `disable`.", .{});
             const action = std.mem.sliceTo(args[3], 0);
-            if (std.mem.eql(u8, action, "enable")) return Command{ .config = .{ .api = .enable } };
-            if (std.mem.eql(u8, action, "disable")) return Command{ .config = .{ .api = .disable } };
+            if (std.mem.eql(u8, action, "enable")) return .{ .command = .{ .config = .{ .api = .enable } } };
+            if (std.mem.eql(u8, action, "disable")) return .{ .command = .{ .config = .{ .api = .disable } } };
+            return usageErrorResult(allocator, .config, "unknown action `{s}` for `config api`.", .{action});
         }
 
-        return Command{ .help = {} };
+        return usageErrorResult(allocator, .config, "unknown config section `{s}`.", .{scope});
     }
 
     if (std.mem.eql(u8, cmd, "daemon")) {
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .daemon } };
+        }
         if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[2], 0), "--watch")) {
-            return Command{ .daemon = .{ .mode = .watch } };
+            return .{ .command = .{ .daemon = .{ .mode = .watch } } };
         }
         if (args.len == 3 and std.mem.eql(u8, std.mem.sliceTo(args[2], 0), "--once")) {
-            return Command{ .daemon = .{ .mode = .once } };
+            return .{ .command = .{ .daemon = .{ .mode = .once } } };
         }
-        return Command{ .help = {} };
+        return usageErrorResult(allocator, .daemon, "`daemon` requires `--watch` or `--once`.", .{});
     }
 
-    return Command{ .help = {} };
+    return usageErrorResult(allocator, .top_level, "unknown command `{s}`.", .{cmd});
 }
 
-pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
+pub fn freeParseResult(allocator: std.mem.Allocator, result: *ParseResult) void {
+    switch (result.*) {
+        .command => |*cmd| freeCommand(allocator, cmd),
+        .usage_error => |*usage_err| allocator.free(usage_err.message),
+    }
+}
+
+fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
     switch (cmd.*) {
         .import_auth => |*opts| {
             if (opts.auth_path) |path| allocator.free(path);
@@ -280,6 +367,73 @@ pub fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
         },
         else => {},
     }
+}
+
+fn isHelpFlag(arg: []const u8) bool {
+    return std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h");
+}
+
+fn usageErrorResult(
+    allocator: std.mem.Allocator,
+    topic: HelpTopic,
+    comptime fmt: []const u8,
+    args: anytype,
+) !ParseResult {
+    return .{ .usage_error = .{
+        .topic = topic,
+        .message = try std.fmt.allocPrint(allocator, fmt, args),
+    } };
+}
+
+fn parseSimpleCommandArgs(
+    allocator: std.mem.Allocator,
+    command_name: []const u8,
+    topic: HelpTopic,
+    command: Command,
+    rest: []const [:0]const u8,
+) !ParseResult {
+    if (rest.len == 0) return .{ .command = command };
+    if (rest.len == 1 and isHelpFlag(std.mem.sliceTo(rest[0], 0))) {
+        return .{ .command = .{ .help = topic } };
+    }
+    const arg = std.mem.sliceTo(rest[0], 0);
+    if (std.mem.startsWith(u8, arg, "-")) {
+        return usageErrorResult(allocator, topic, "unknown flag `{s}` for `{s}`.", .{ arg, command_name });
+    }
+    return usageErrorResult(allocator, topic, "unexpected argument `{s}` for `{s}`.", .{ arg, command_name });
+}
+
+fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !ParseResult {
+    if (rest.len == 0) return .{ .command = .{ .help = .top_level } };
+    if (rest.len > 1) {
+        return usageErrorResult(allocator, .top_level, "unexpected argument after `help`: `{s}`.", .{
+            std.mem.sliceTo(rest[1], 0),
+        });
+    }
+
+    const topic = helpTopicForName(std.mem.sliceTo(rest[0], 0)) orelse
+        return usageErrorResult(allocator, .top_level, "unknown help topic `{s}`.", .{
+            std.mem.sliceTo(rest[0], 0),
+        });
+    return .{ .command = .{ .help = topic } };
+}
+
+fn helpTopicForName(name: []const u8) ?HelpTopic {
+    if (std.mem.eql(u8, name, "list")) return .list;
+    if (std.mem.eql(u8, name, "status")) return .status;
+    if (std.mem.eql(u8, name, "login")) return .login;
+    if (std.mem.eql(u8, name, "import")) return .import_auth;
+    if (std.mem.eql(u8, name, "switch")) return .switch_account;
+    if (std.mem.eql(u8, name, "remove")) return .remove_account;
+    if (std.mem.eql(u8, name, "clean")) return .clean;
+    if (std.mem.eql(u8, name, "config")) return .config;
+    if (std.mem.eql(u8, name, "daemon")) return .daemon;
+    return null;
+}
+
+fn freeImportOptions(allocator: std.mem.Allocator, auth_path: ?[]u8, alias: ?[]u8) void {
+    if (auth_path) |path| allocator.free(path);
+    if (alias) |value| allocator.free(value);
 }
 
 pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const registry.ApiConfig) !void {
@@ -390,7 +544,7 @@ pub fn writeHelp(
     try out.writeAll("Notes:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.writeAll("\n\n");
-    try out.writeAll("  `add` is accepted as a deprecated alias for `login` and will be removed in the next release.\n");
+    try out.writeAll("  Run `codex-auth <command> --help` for command-specific usage details.\n");
     try out.writeAll("  `config api enable` may trigger OpenAI account restrictions or suspension in some environments.\n");
 }
 
@@ -438,6 +592,176 @@ fn writeHelpEntry(
 
     try out.writeAll(description);
     try out.writeAll("\n");
+}
+
+pub fn printCommandHelp(topic: HelpTopic) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeCommandHelp(out, colorEnabled(), topic);
+    try out.flush();
+}
+
+pub fn writeCommandHelp(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
+    try writeCommandHelpHeader(out, use_color, topic);
+    try out.writeAll("\n");
+    try writeUsageSection(out, topic);
+    if (commandHelpHasExamples(topic)) {
+        try out.writeAll("\n\n");
+        try writeExamplesSection(out, topic);
+    }
+}
+
+fn writeCommandHelpHeader(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
+    if (use_color) try out.writeAll(ansi.bold);
+    try out.print("codex-auth {s}", .{commandNameForTopic(topic)});
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.writeAll("\n");
+    try out.print("{s}\n", .{commandDescriptionForTopic(topic)});
+}
+
+fn commandNameForTopic(topic: HelpTopic) []const u8 {
+    return switch (topic) {
+        .top_level => "",
+        .list => "list",
+        .status => "status",
+        .login => "login",
+        .import_auth => "import",
+        .switch_account => "switch",
+        .remove_account => "remove",
+        .clean => "clean",
+        .config => "config",
+        .daemon => "daemon",
+    };
+}
+
+fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
+    return switch (topic) {
+        .top_level => "Command-line account management for Codex.",
+        .list => "List available accounts.",
+        .status => "Show auto-switch, service, and usage API status.",
+        .login => "Run `codex login`, then add the current account.",
+        .import_auth => "Import auth files or rebuild the registry.",
+        .switch_account => "Switch the active account interactively or by query.",
+        .remove_account => "Remove one or more accounts.",
+        .clean => "Delete backup and stale files under accounts/.",
+        .config => "Manage auto-switch and usage API configuration.",
+        .daemon => "Run the background auto-switch daemon.",
+    };
+}
+
+fn commandHelpHasExamples(topic: HelpTopic) bool {
+    return switch (topic) {
+        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        else => false,
+    };
+}
+
+fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
+    try out.writeAll("Usage:\n");
+    switch (topic) {
+        .top_level => {
+            try out.writeAll("  codex-auth <command>\n");
+            try out.writeAll("  codex-auth --help\n");
+            try out.writeAll("  codex-auth help <command>\n");
+        },
+        .list => try out.writeAll("  codex-auth list\n"),
+        .status => try out.writeAll("  codex-auth status\n"),
+        .login => try out.writeAll("  codex-auth login\n"),
+        .import_auth => {
+            try out.writeAll("  codex-auth import <path> [--alias <alias>]\n");
+            try out.writeAll("  codex-auth import --cpa [<path>] [--alias <alias>]\n");
+            try out.writeAll("  codex-auth import --purge [<path>]\n");
+        },
+        .switch_account => {
+            try out.writeAll("  codex-auth switch\n");
+            try out.writeAll("  codex-auth switch <query>\n");
+        },
+        .remove_account => {
+            try out.writeAll("  codex-auth remove\n");
+            try out.writeAll("  codex-auth remove <query>\n");
+            try out.writeAll("  codex-auth remove --all\n");
+        },
+        .clean => try out.writeAll("  codex-auth clean\n"),
+        .config => {
+            try out.writeAll("  codex-auth config auto enable\n");
+            try out.writeAll("  codex-auth config auto disable\n");
+            try out.writeAll("  codex-auth config auto --5h <percent> [--weekly <percent>]\n");
+            try out.writeAll("  codex-auth config auto --weekly <percent>\n");
+            try out.writeAll("  codex-auth config api enable\n");
+            try out.writeAll("  codex-auth config api disable\n");
+        },
+        .daemon => {
+            try out.writeAll("  codex-auth daemon --watch\n");
+            try out.writeAll("  codex-auth daemon --once\n");
+        },
+    }
+}
+
+fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
+    try out.writeAll("Examples:\n");
+    switch (topic) {
+        .top_level => {
+            try out.writeAll("  codex-auth list\n");
+            try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
+            try out.writeAll("  codex-auth config auto enable\n");
+        },
+        .list => try out.writeAll("  codex-auth list\n"),
+        .status => try out.writeAll("  codex-auth status\n"),
+        .login => try out.writeAll("  codex-auth login\n"),
+        .import_auth => {
+            try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
+            try out.writeAll("  codex-auth import --cpa /path/to/token.json --alias work\n");
+            try out.writeAll("  codex-auth import --purge\n");
+        },
+        .switch_account => {
+            try out.writeAll("  codex-auth switch\n");
+            try out.writeAll("  codex-auth switch john@example.com\n");
+        },
+        .remove_account => {
+            try out.writeAll("  codex-auth remove\n");
+            try out.writeAll("  codex-auth remove john@example.com\n");
+            try out.writeAll("  codex-auth remove --all\n");
+        },
+        .clean => try out.writeAll("  codex-auth clean\n"),
+        .config => {
+            try out.writeAll("  codex-auth config auto --5h 12 --weekly 8\n");
+            try out.writeAll("  codex-auth config api enable\n");
+        },
+        .daemon => {
+            try out.writeAll("  codex-auth daemon --watch\n");
+            try out.writeAll("  codex-auth daemon --once\n");
+        },
+    }
+}
+
+pub fn printUsageError(usage_err: *const UsageError) !void {
+    var buffer: [2048]u8 = undefined;
+    var writer = std.fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" {s}\n\n", .{usage_err.message});
+    try writeUsageSection(out, usage_err.topic);
+    try out.writeAll("\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.print(" Run `{s}` for examples.\n", .{helpCommandForTopic(usage_err.topic)});
+    try out.flush();
+}
+
+fn helpCommandForTopic(topic: HelpTopic) []const u8 {
+    return switch (topic) {
+        .top_level => "codex-auth --help",
+        .list => "codex-auth list --help",
+        .status => "codex-auth status --help",
+        .login => "codex-auth login --help",
+        .import_auth => "codex-auth import --help",
+        .switch_account => "codex-auth switch --help",
+        .remove_account => "codex-auth remove --help",
+        .clean => "codex-auth clean --help",
+        .config => "codex-auth config --help",
+        .daemon => "codex-auth daemon --help",
+    };
 }
 
 pub fn printVersion() !void {
@@ -505,19 +829,6 @@ pub fn writeImportReport(
         );
         try out.flush();
     }
-}
-
-pub fn warnDeprecatedLoginAlias(opts: LoginOptions) void {
-    if (opts.invocation != .add_alias) return;
-    writeDeprecatedLoginAliasWarning("codex-auth login", stderrColorEnabled()) catch {};
-}
-
-fn writeDeprecatedLoginAliasWarning(replacement: []const u8, use_color: bool) !void {
-    var buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
-    const out = &writer.interface;
-    try writeDeprecatedLoginAliasWarningTo(out, replacement, use_color);
-    try out.flush();
 }
 
 pub fn writeErrorPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
@@ -649,21 +960,6 @@ pub fn printRemoveSummary(labels: []const []const u8) !void {
     const out = stdout.out();
     try writeRemoveSummaryTo(out, labels);
     try out.flush();
-}
-
-pub fn writeDeprecatedLoginAliasWarningTo(out: *std.Io.Writer, replacement: []const u8, use_color: bool) !void {
-    if (use_color) try out.writeAll(ansi.bold_red);
-    try out.writeAll("warning:");
-    if (use_color) try out.writeAll(ansi.reset);
-    try out.writeAll(" ");
-    if (use_color) try out.writeAll(ansi.bold);
-    try out.writeAll("`add`");
-    if (use_color) try out.writeAll(ansi.reset);
-    try out.writeAll(" is deprecated; use ");
-    if (use_color) try out.writeAll(ansi.bold_green);
-    try out.print("`{s}`", .{replacement});
-    if (use_color) try out.writeAll(ansi.reset);
-    try out.writeAll("\n");
 }
 
 fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void {

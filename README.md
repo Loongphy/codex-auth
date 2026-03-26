@@ -98,8 +98,6 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 | `codex-auth remove` | Remove accounts with interactive multi-select |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
-> `codex-auth add` is still accepted as a deprecated alias for `codex-auth login`.
-
 ### Import
 
 | Command | Description |
