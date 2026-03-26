@@ -55,6 +55,12 @@ pub const ApiConfig = struct {
     account: bool = true,
 };
 
+const ApiConfigParseResult = struct {
+    has_object: bool = false,
+    has_usage: bool = false,
+    has_account: bool = false,
+};
+
 pub const AccountRecord = struct {
     account_key: []u8,
     chatgpt_account_id: []u8,
@@ -2347,6 +2353,11 @@ fn usesLegacyVersionField(root_obj: std.json.ObjectMap) bool {
 
 fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     if (root_obj.get("last_attributed_rollout") != null) return true;
+    if (root_obj.get("api")) |v| {
+        if (apiConfigNeedsRewrite(v)) return true;
+    } else {
+        return true;
+    }
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
 }
 
@@ -2563,22 +2574,45 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
 }
 
 fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
+    _ = parseApiConfigDetailed(cfg, v);
+}
+
+fn apiConfigNeedsRewrite(v: std.json.Value) bool {
+    var cfg = defaultApiConfig();
+    const result = parseApiConfigDetailed(&cfg, v);
+    return !result.has_object or !result.has_usage or !result.has_account;
+}
+
+fn parseApiConfigDetailed(cfg: *ApiConfig, v: std.json.Value) ApiConfigParseResult {
     const obj = switch (v) {
         .object => |o| o,
-        else => return,
+        else => return .{},
     };
+    var result = ApiConfigParseResult{ .has_object = true };
     if (obj.get("usage")) |usage| {
         switch (usage) {
-            .bool => |flag| cfg.usage = flag,
+            .bool => |flag| {
+                cfg.usage = flag;
+                result.has_usage = true;
+            },
             else => {},
         }
     }
     if (obj.get("account")) |account| {
         switch (account) {
-            .bool => |flag| cfg.account = flag,
+            .bool => |flag| {
+                cfg.account = flag;
+                result.has_account = true;
+            },
             else => {},
         }
     }
+    if (result.has_usage and !result.has_account) {
+        cfg.account = cfg.usage;
+    } else if (result.has_account and !result.has_usage) {
+        cfg.usage = cfg.account;
+    }
+    return result;
 }
 
 fn parseRolloutSignature(allocator: std.mem.Allocator, v: std.json.Value) ?RolloutSignature {
