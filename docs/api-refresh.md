@@ -39,7 +39,8 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
 - `list` refreshes in the foreground for the current active scope when that scope still has missing Team `account_name` values.
-- `switch` saves the selected account first, then schedules a best-effort background refresh so the command can exit immediately without waiting for `accounts/check`.
+- `switch` saves the selected account first, then schedules a best-effort background refresh for the newly active scope so the command can exit immediately without waiting for `accounts/check`.
+- `switch` does not start that background refresh when `api.account = false`.
 
 At most one `accounts/check` request is attempted per refresh path.
 
@@ -100,3 +101,5 @@ Then:
 - `team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
 
 The same grouped-scope rule also applies after `switch`, but the refresh runs in the background after the switch is already saved.
+
+The background `switch` refresh re-loads the latest `registry.json` after `accounts/check` returns, then applies only the grouped `account_name` result onto that latest registry state before saving.

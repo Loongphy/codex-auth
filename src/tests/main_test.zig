@@ -17,9 +17,13 @@ const standalone_team_account_id = "29a9c0cb-e840-45ec-97bf-d6c5f7e0f55b";
 const standalone_team_record_key = standalone_team_user_id ++ "::" ++ standalone_team_account_id;
 
 var mock_account_name_fetch_count: usize = 0;
+var mutate_registry_during_account_fetch = false;
+var mutate_registry_codex_home: ?[]const u8 = null;
 
 fn resetMockAccountNameFetcher() void {
     mock_account_name_fetch_count = 0;
+    mutate_registry_during_account_fetch = false;
+    mutate_registry_codex_home = null;
 }
 
 fn makeRegistry() registry.Registry {
@@ -159,6 +163,23 @@ fn mockAccountNameFetcher(
         .entries = entries,
         .status_code = 200,
     };
+}
+
+fn mockAccountNameFetcherWithRegistryMutation(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_api.FetchResult {
+    if (mutate_registry_during_account_fetch) {
+        const codex_home = mutate_registry_codex_home orelse return error.TestExpectedEqual;
+        var reg = try registry.loadRegistry(allocator, codex_home);
+        defer reg.deinit(allocator);
+        reg.api.usage = false;
+        reg.api.account = false;
+        try registry.saveRegistry(allocator, codex_home, &reg);
+    }
+
+    return try mockAccountNameFetcher(allocator, access_token, account_id);
 }
 
 test "Scenario: Given alias, email, and account name queries when finding matching accounts then all matching strategies work" {
@@ -315,6 +336,19 @@ test "Scenario: Given grouped team accounts with account api disabled when refre
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
+test "Scenario: Given grouped team accounts with account api disabled when checking switch background refresh then it is skipped" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    reg.api.account = false;
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    try std.testing.expect(!main_mod.shouldScheduleBackgroundAccountNameRefresh(&reg));
+}
+
 test "Scenario: Given login with missing account names when refreshing metadata then it issues at most one request" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
@@ -355,6 +389,36 @@ test "Scenario: Given switched account with missing account names when refreshin
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
+}
+
+test "Scenario: Given api disabled while background account-name refresh is in flight when it finishes then the latest api config is preserved" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    resetMockAccountNameFetcher();
+    mutate_registry_during_account_fetch = true;
+    mutate_registry_codex_home = codex_home;
+    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcherWithRegistryMutation);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(!loaded.api.usage);
+    try std.testing.expect(loaded.accounts.items[0].account_name == null);
+    try std.testing.expect(loaded.accounts.items[1].account_name == null);
 }
 
 test "Scenario: Given single-file import with missing account names when refreshing metadata then it issues at most one request" {

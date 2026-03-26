@@ -63,7 +63,9 @@ This document records the shipped behavior for ChatGPT `account_name` sync and d
   - `login`: inline refresh after auth is available
   - single-file `import`: inline refresh from the imported auth
   - `list`: inline refresh for the active auth
-  - `switch`: activate and save first, then spawn a background `list` process in account-name-refresh-only mode
+  - `switch`: activate and save first, then spawn a background account-name-only refresh for the newly active scope
+- Background switch refresh is skipped when `api.account == false`.
+- Background switch refresh re-loads the latest registry after `accounts/check` returns, then applies only the refreshed `account_name` result before saving.
 - No account-name refresh runs during:
   - directory import
   - `import --purge`
@@ -120,4 +122,3 @@ This document records the shipped behavior for ChatGPT `account_name` sync and d
   - remove labels preserve email context for singleton alias/name rows
 - Command validation:
   - `zig build run -- list`
-
