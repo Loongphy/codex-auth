@@ -898,10 +898,13 @@ pub fn buildRemoveLabels(
             continue;
         }
 
-        const label = if (row.depth == 0 or current_header == null)
-            try allocator.dupe(u8, row.account_cell)
-        else
-            try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
+        const label = if (row.depth == 0 or current_header == null) blk: {
+            const rec = &reg.accounts.items[row.account_index.?];
+            if (std.mem.eql(u8, row.account_cell, rec.email)) {
+                break :blk try allocator.dupe(u8, row.account_cell);
+            }
+            break :blk try std.fmt.allocPrint(allocator, "{s} / {s}", .{ rec.email, row.account_cell });
+        } else try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
         try labels.append(allocator, label);
     }
     return labels;

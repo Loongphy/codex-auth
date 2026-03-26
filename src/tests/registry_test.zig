@@ -1,4 +1,5 @@
 const std = @import("std");
+const account_api = @import("../account_api.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
@@ -296,6 +297,37 @@ test "registry save/load round-trips account_name string" {
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items[0].account_name != null);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "abcd"));
+}
+
+test "applyAccountNamesForUser preserves existing account_name when replacement allocation fails" {
+    const gpa = std.testing.allocator;
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var rec = try makeAccountRecord(gpa, "a@b.com", "work", .pro, .chatgpt, 1);
+    rec.account_name = try gpa.dupe(u8, "Primary Workspace");
+    try reg.accounts.append(gpa, rec);
+
+    var entry = account_api.AccountEntry{
+        .account_id = try gpa.dupe(u8, reg.accounts.items[0].chatgpt_account_id),
+        .account_name = try gpa.dupe(u8, "Ops Workspace"),
+    };
+    defer entry.deinit(gpa);
+
+    var failing_allocator = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    const entries = [_]account_api.AccountEntry{entry};
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        registry.applyAccountNamesForUser(
+            failing_allocator.allocator(),
+            &reg,
+            reg.accounts.items[0].chatgpt_user_id,
+            &entries,
+        ),
+    );
+    try std.testing.expect(reg.accounts.items[0].account_name != null);
+    try std.testing.expectEqualStrings("Primary Workspace", reg.accounts.items[0].account_name.?);
 }
 
 test "registry save/load round-trips api.account false" {

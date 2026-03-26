@@ -2,6 +2,45 @@ const std = @import("std");
 const cli = @import("../cli.zig");
 const registry = @import("../registry.zig");
 
+fn makeRegistry() registry.Registry {
+    return .{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+}
+
+fn appendAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    record_key: []const u8,
+    email: []const u8,
+    alias: []const u8,
+    plan: registry.PlanType,
+) !void {
+    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const chatgpt_user_id = record_key[0..sep];
+    const chatgpt_account_id = record_key[sep + 2 ..];
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
+        .plan = plan,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
 fn expectHelp(result: cli.ParseResult, topic: cli.HelpTopic) !void {
     switch (result) {
         .command => |cmd| switch (cmd) {
@@ -690,6 +729,26 @@ test "Scenario: Given multiple matched accounts when rendering confirmation then
             "Confirm delete? [y/N]: ",
         aw.written(),
     );
+}
+
+test "Scenario: Given singleton aliases from different emails when building remove labels then each label keeps email context" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-A::acct-1", "alpha@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-B::acct-2", "beta@example.com", "work", .team);
+
+    const indices = [_]usize{ 0, 1 };
+    var labels = try cli.buildRemoveLabels(gpa, &reg, &indices);
+    defer {
+        for (labels.items) |label| gpa.free(@constCast(label));
+        labels.deinit(gpa);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), labels.items.len);
+    try std.testing.expectEqualStrings("alpha@example.com / work", labels.items[0]);
+    try std.testing.expectEqualStrings("beta@example.com / work", labels.items[1]);
 }
 
 test "Scenario: Given selector environment when deciding remove UI then non-tty or windows use the numbered selector" {

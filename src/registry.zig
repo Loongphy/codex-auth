@@ -239,8 +239,9 @@ fn replaceOptionalStringAlloc(
     value: ?[]const u8,
 ) !bool {
     if (optionalStringEqual(target.*, value)) return false;
+    const replacement = try cloneOptionalStringAlloc(allocator, value);
     if (target.*) |existing| allocator.free(existing);
-    target.* = try cloneOptionalStringAlloc(allocator, value);
+    target.* = replacement;
     return true;
 }
 
