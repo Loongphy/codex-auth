@@ -6,6 +6,10 @@
 
 After modifying any `.zig` file, always run `zig build run -- list` to verify the changes work correctly.
 
+# Execution Isolation
+
+- Run tests, review commands, and other side-effecting tooling from an isolated directory under `/tmp/<task-name>` with `HOME=/tmp/<task-name>`.
+
 # Zig API Discovery
 
 - Do not guess Zig APIs from memory or from examples targeting other Zig versions.
