@@ -90,7 +90,7 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
         .threshold_weekly_percent = null,
     } } } }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api_usage = .enable } }));
-    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = {} }));
+    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = .top_level }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));

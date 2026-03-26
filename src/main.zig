@@ -10,7 +10,9 @@ const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 pub fn main() !void {
     var exit_code: u8 = 0;
     runMain() catch |err| {
-        if (isHandledCliError(err)) {
+        if (err == error.InvalidCliUsage) {
+            exit_code = 2;
+        } else if (isHandledCliError(err)) {
             exit_code = 1;
         } else {
             return err;
@@ -27,31 +29,47 @@ fn runMain() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    var cmd = try cli.parseArgs(allocator, args);
-    defer cli.freeCommand(allocator, &cmd);
+    var parsed = try cli.parseArgs(allocator, args);
+    defer cli.freeParseResult(allocator, &parsed);
 
-    const codex_home = try registry.resolveCodexHome(allocator);
-    defer allocator.free(codex_home);
+    const cmd = switch (parsed) {
+        .command => |command| command,
+        .usage_error => |usage_err| {
+            try cli.printUsageError(&usage_err);
+            return error.InvalidCliUsage;
+        },
+    };
+
+    const needs_codex_home = switch (cmd) {
+        .version => false,
+        .help => |topic| topic == .top_level,
+        else => true,
+    };
+    const codex_home = if (needs_codex_home) try registry.resolveCodexHome(allocator) else null;
+    defer if (codex_home) |path| allocator.free(path);
 
     switch (cmd) {
         .version => try cli.printVersion(),
-        .help => try handleHelp(allocator, codex_home),
-        .status => try auto.printStatus(allocator, codex_home),
-        .daemon => |opts| switch (opts.mode) {
-            .watch => try auto.runDaemon(allocator, codex_home),
-            .once => try auto.runDaemonOnce(allocator, codex_home),
+        .help => |topic| switch (topic) {
+            .top_level => try handleTopLevelHelp(allocator, codex_home.?),
+            else => try cli.printCommandHelp(topic),
         },
-        .config => |opts| try handleConfig(allocator, codex_home, opts),
-        .list => |opts| try handleList(allocator, codex_home, opts),
-        .login => |opts| try handleLogin(allocator, codex_home, opts),
-        .import_auth => |opts| try handleImport(allocator, codex_home, opts),
-        .switch_account => |opts| try handleSwitch(allocator, codex_home, opts),
-        .remove_account => |opts| try handleRemove(allocator, codex_home, opts),
-        .clean => |_| try handleClean(allocator, codex_home),
+        .status => try auto.printStatus(allocator, codex_home.?),
+        .daemon => |opts| switch (opts.mode) {
+            .watch => try auto.runDaemon(allocator, codex_home.?),
+            .once => try auto.runDaemonOnce(allocator, codex_home.?),
+        },
+        .config => |opts| try handleConfig(allocator, codex_home.?, opts),
+        .list => |opts| try handleList(allocator, codex_home.?, opts),
+        .login => |opts| try handleLogin(allocator, codex_home.?, opts),
+        .import_auth => |opts| try handleImport(allocator, codex_home.?, opts),
+        .switch_account => |opts| try handleSwitch(allocator, codex_home.?, opts),
+        .remove_account => |opts| try handleRemove(allocator, codex_home.?, opts),
+        .clean => |_| try handleClean(allocator, codex_home.?),
     }
 
     if (shouldReconcileManagedService(cmd)) {
-        try auto.reconcileManagedService(allocator, codex_home);
+        try auto.reconcileManagedService(allocator, codex_home.?);
     }
 }
 
@@ -175,11 +193,11 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         }
     }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
-    try format.printAccounts(allocator, &reg, .table);
+    try format.printAccounts(&reg);
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
-    cli.warnDeprecatedLoginAlias(opts);
+    _ = opts;
     try cli.runCodexLogin(allocator);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
@@ -475,7 +493,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     try cli.printRemoveSummary(removed_labels.items);
 }
 
-fn handleHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+fn handleTopLevelHelp(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const help_cfg = loadHelpConfig(allocator, codex_home);
     try cli.printHelp(&help_cfg.auto_switch, &help_cfg.api);
 }
