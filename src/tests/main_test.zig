@@ -104,6 +104,37 @@ fn authJsonWithIds(
     );
 }
 
+fn authJsonWithIdsAndLastRefresh(
+    allocator: std.mem.Allocator,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+    access_token: []const u8,
+    last_refresh: []const u8,
+) ![]u8 {
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+    );
+    defer allocator.free(payload);
+
+    const header_b64 = try bdd.b64url(allocator, header);
+    defer allocator.free(header_b64);
+    const payload_b64 = try bdd.b64url(allocator, payload);
+    defer allocator.free(payload_b64);
+    const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ header_b64, ".", payload_b64, ".sig" });
+    defer allocator.free(jwt);
+
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}},\"last_refresh\":\"{s}\"}}",
+        .{ access_token, chatgpt_account_id, jwt, last_refresh },
+    );
+}
+
 fn parseAuthInfoWithIds(
     allocator: std.mem.Allocator,
     email: []const u8,
@@ -147,6 +178,35 @@ fn writeAccountSnapshotWithIds(
     defer allocator.free(auth_path);
 
     const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+}
+
+fn writeAccountSnapshotWithIdsAndLastRefresh(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+    access_token: []const u8,
+    last_refresh: []const u8,
+) !void {
+    const account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    defer allocator.free(account_key);
+
+    const auth_path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(auth_path);
+
+    const auth_json = try authJsonWithIdsAndLastRefresh(
+        allocator,
+        email,
+        plan,
+        chatgpt_user_id,
+        chatgpt_account_id,
+        access_token,
+        last_refresh,
+    );
     defer allocator.free(auth_json);
     try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
@@ -198,6 +258,15 @@ fn mockAccountNameFetcherWithRegistryMutation(
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
+    return try mockAccountNameFetcher(allocator, access_token, account_id);
+}
+
+fn mockAccountNameFetcherRequiringFreshToken(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_api.FetchResult {
+    if (!std.mem.eql(u8, access_token, "fresh-token")) return error.Unauthorized;
     return try mockAccountNameFetcher(allocator, access_token, account_id);
 }
 
@@ -474,6 +543,50 @@ test "Scenario: Given grouped stored snapshots without active auth when running 
 
     resetMockAccountNameFetcher();
     try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
+}
+
+test "Scenario: Given grouped stored snapshots with multiple tokens when running background account-name refresh then it prefers the newest last_refresh" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeAccountSnapshotWithIdsAndLastRefresh(
+        gpa,
+        codex_home,
+        "user@example.com",
+        "team",
+        shared_user_id,
+        primary_account_id,
+        "stale-token",
+        "2026-03-20T00:00:00Z",
+    );
+    try writeAccountSnapshotWithIdsAndLastRefresh(
+        gpa,
+        codex_home,
+        "user@example.com",
+        "team",
+        shared_user_id,
+        secondary_account_id,
+        "fresh-token",
+        "2026-03-21T00:00:00Z",
+    );
+
+    resetMockAccountNameFetcher();
+    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcherRequiringFreshToken);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);

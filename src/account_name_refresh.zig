@@ -17,6 +17,12 @@ fn hasCandidate(candidates: []const Candidate, chatgpt_user_id: []const u8) bool
     return false;
 }
 
+fn candidateIsNewer(candidate: *const auth.AuthInfo, best: *const auth.AuthInfo) bool {
+    const candidate_refresh = candidate.last_refresh orelse return false;
+    const best_refresh = best.last_refresh orelse return true;
+    return std.mem.order(u8, candidate_refresh, best_refresh) == .gt;
+}
+
 pub fn collectCandidates(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -48,6 +54,9 @@ pub fn loadStoredAuthInfoForUser(
     reg: *registry.Registry,
     chatgpt_user_id: []const u8,
 ) !?auth.AuthInfo {
+    var best_info: ?auth.AuthInfo = null;
+    errdefer if (best_info) |*info| info.deinit(allocator);
+
     for (reg.accounts.items) |rec| {
         if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
         if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
@@ -68,8 +77,21 @@ pub fn loadStoredAuthInfoForUser(
             owned_info.deinit(allocator);
             continue;
         }
-        return info;
+
+        if (best_info == null) {
+            best_info = info;
+            continue;
+        }
+
+        if (candidateIsNewer(&info, &best_info.?)) {
+            var previous = best_info.?;
+            previous.deinit(allocator);
+            best_info = info;
+        } else {
+            var rejected = info;
+            rejected.deinit(allocator);
+        }
     }
 
-    return null;
+    return best_info;
 }
