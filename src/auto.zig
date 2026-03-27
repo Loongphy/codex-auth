@@ -1,4 +1,6 @@
 const std = @import("std");
+const account_api = @import("account_api.zig");
+const auth = @import("auth.zig");
 const builtin = @import("builtin");
 const c_time = @cImport({
     @cInclude("time.h");
@@ -242,6 +244,8 @@ const CandidateIndex = struct {
 pub const DaemonRefreshState = struct {
     last_api_refresh_at_ns: i128 = 0,
     last_api_refresh_account_key: ?[]u8 = null,
+    last_account_name_refresh_at_ns: i128 = 0,
+    last_account_name_refresh_account_key: ?[]u8 = null,
     pending_bad_account_key: ?[]u8 = null,
     pending_bad_rollout: ?registry.RolloutSignature = null,
     current_reg: ?registry.Registry = null,
@@ -254,6 +258,7 @@ pub const DaemonRefreshState = struct {
 
     pub fn deinit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
         self.clearApiRefresh(allocator);
+        self.clearAccountNameRefresh(allocator);
         self.clearPending(allocator);
         if (self.current_reg) |*reg| {
             self.candidate_index.deinit(allocator);
@@ -275,6 +280,14 @@ pub const DaemonRefreshState = struct {
         }
         self.last_api_refresh_account_key = null;
         self.last_api_refresh_at_ns = 0;
+    }
+
+    fn clearAccountNameRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.last_account_name_refresh_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.last_account_name_refresh_account_key = null;
+        self.last_account_name_refresh_at_ns = 0;
     }
 
     fn clearPending(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
@@ -332,6 +345,18 @@ pub const DaemonRefreshState = struct {
         }
         self.clearApiRefresh(allocator);
         self.last_api_refresh_account_key = try allocator.dupe(u8, active_account_key);
+    }
+
+    fn resetAccountNameCooldownIfAccountChanged(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        active_account_key: []const u8,
+    ) !void {
+        if (self.last_account_name_refresh_account_key) |account_key| {
+            if (std.mem.eql(u8, account_key, active_account_key)) return;
+        }
+        self.clearAccountNameRefresh(allocator);
+        self.last_account_name_refresh_account_key = try allocator.dupe(u8, active_account_key);
     }
 
     fn currentRegistry(self: *DaemonRefreshState) *registry.Registry {
@@ -805,6 +830,87 @@ pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void
 
 pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
     return refreshActiveUsageWithApiFetcher(allocator, codex_home, reg, usage_api.fetchActiveUsage);
+}
+
+fn fetchActiveAccountNames(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_api.FetchResult {
+    return try account_api.fetchAccountsForTokenDetailed(
+        allocator,
+        account_api.default_account_endpoint,
+        access_token,
+        account_id,
+    );
+}
+
+fn loadActiveAuthInfoForAccountNameRefresh(allocator: std.mem.Allocator, codex_home: []const u8) !?auth.AuthInfo {
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    return auth.parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => null,
+        else => {
+            std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+            return null;
+        },
+    };
+}
+
+fn refreshActiveAccountNamesForDaemon(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+) !bool {
+    return refreshActiveAccountNamesForDaemonWithFetcher(
+        allocator,
+        codex_home,
+        reg,
+        refresh_state,
+        fetchActiveAccountNames,
+    );
+}
+
+pub fn refreshActiveAccountNamesForDaemonWithFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    fetcher: anytype,
+) !bool {
+    if (!reg.auto_switch.enabled) return false;
+    if (!reg.api.account) return false;
+    const account_key = reg.active_account_key orelse return false;
+    try refresh_state.resetAccountNameCooldownIfAccountChanged(allocator, account_key);
+
+    const chatgpt_user_id = registry.activeChatgptUserId(reg) orelse return false;
+    if (!registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id)) return false;
+
+    const now_ns = std.time.nanoTimestamp();
+    if (refresh_state.last_account_name_refresh_at_ns != 0 and
+        (now_ns - refresh_state.last_account_name_refresh_at_ns) < api_refresh_interval_ns)
+    {
+        return false;
+    }
+
+    var info = (try loadActiveAuthInfoForAccountNameRefresh(allocator, codex_home)) orelse return false;
+    defer info.deinit(allocator);
+    const access_token = info.access_token orelse return false;
+    const auth_user_id = info.chatgpt_user_id orelse return false;
+    if (!std.mem.eql(u8, auth_user_id, chatgpt_user_id)) return false;
+
+    refresh_state.last_account_name_refresh_at_ns = now_ns;
+    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+        std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer result.deinit(allocator);
+
+    const entries = result.entries orelse return false;
+    return try registry.applyAccountNamesForUser(allocator, reg, chatgpt_user_id, entries);
 }
 
 pub fn refreshActiveUsageWithApiFetcher(
@@ -1595,7 +1701,12 @@ fn resolve5hTriggerWindow(usage: ?registry.RateLimitSnapshot) Resolved5hWindow {
     return .{ .window = null, .allow_free_guard = false };
 }
 
-fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
+fn daemonCycleWithAccountNameFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    refresh_state: *DaemonRefreshState,
+    account_name_fetcher: anytype,
+) !bool {
     const reg = try refresh_state.ensureRegistryLoaded(allocator, codex_home);
     if (!reg.auto_switch.enabled) return false;
 
@@ -1622,6 +1733,9 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_sta
         changed = true;
     }
 
+    if (try refreshActiveAccountNamesForDaemonWithFetcher(allocator, codex_home, reg, refresh_state, account_name_fetcher)) {
+        changed = true;
+    }
     if (try refreshActiveUsageForDaemon(allocator, codex_home, reg, refresh_state)) {
         changed = true;
     }
@@ -1648,6 +1762,19 @@ fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_sta
         try refresh_state.refreshTrackedFileMtims(allocator, codex_home);
     }
     return true;
+}
+
+fn daemonCycle(allocator: std.mem.Allocator, codex_home: []const u8, refresh_state: *DaemonRefreshState) !bool {
+    return daemonCycleWithAccountNameFetcher(allocator, codex_home, refresh_state, fetchActiveAccountNames);
+}
+
+pub fn daemonCycleWithAccountNameFetcherForTest(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    refresh_state: *DaemonRefreshState,
+    account_name_fetcher: anytype,
+) !bool {
+    return daemonCycleWithAccountNameFetcher(allocator, codex_home, refresh_state, account_name_fetcher);
 }
 
 fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {

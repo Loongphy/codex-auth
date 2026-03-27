@@ -112,7 +112,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 |---------|-------------|
 | `codex-auth config auto enable\|disable` | Enable or disable background auto-switching |
 | `codex-auth config auto [--5h <%>] [--weekly <%>]` | Set auto-switch thresholds |
-| `codex-auth config api enable\|disable` | Enable or disable both usage refresh and account-name refresh API calls |
+| `codex-auth config api enable\|disable` | Enable or disable both usage refresh and team name refresh API calls |
 
 ---
 
@@ -133,8 +133,6 @@ codex-auth switch
 ```
 
 Before the picker opens, the current active account's usage is refreshed once so the selected row is not stale. The newly selected account is not refreshed after the switch completes.
-
-If grouped Team `account_name` metadata still needs syncing, that refresh is scheduled in the background after the switch is already saved, so `codex-auth switch` can return immediately.
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 
@@ -265,8 +263,6 @@ codex-auth config api disable
 
 Changing `config api` updates `registry.json` immediately. `api enable` is shown as API mode and `api disable` is shown as local mode.
 
-Implementation details are documented in [`docs/auto-switch.md`](docs/auto-switch.md) and [`docs/api-refresh.md`](docs/api-refresh.md).
-
 ## Q&A
 
 ### Why is my usage limit not refreshing?
@@ -339,8 +335,8 @@ This project is provided as-is and use is at your own risk.
 **Usage Data Refresh Source:**
 `codex-auth` supports two sources for refreshing account usage/usage limit information:
 
-1. **API (default):** When `config api enable` is on, the tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and grouped-account name refresh.
-2. **Local-only:** When `config api disable` is on, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips account-name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
+1. **API (default):** When `config api enable` is on, the tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and team name refresh.
+2. **Local-only:** When `config api disable` is on, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips team name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
 
 **API Call Declaration:**
-By enabling API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers, including `https://chatgpt.com/backend-api/wham/usage` for quota information and `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27` for grouped-account metadata. This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.
+By enabling API(`codex-auth config api enable`), this tool will send your ChatGPT access token to OpenAI's servers, including `https://chatgpt.com/backend-api/wham/usage` for usage limit and `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27` for team name. This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.

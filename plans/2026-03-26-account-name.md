@@ -64,6 +64,7 @@ This document records the shipped behavior for ChatGPT `account_name` sync and d
   - single-file `import`: inline refresh from the imported auth
   - `list`: inline refresh for the active auth
   - `switch`: activate and save first, then spawn a background account-name-only refresh for the newly active scope
+  - `daemon`: when auto-switch is enabled, each daemon cycle also checks the active scope and refreshes missing Team names in the background watcher
 - Background switch refresh is skipped when `api.account == false`.
 - Background switch refresh re-loads the latest registry after `accounts/check` returns, then applies only the refreshed `account_name` result before saving.
 - No account-name refresh runs during:
