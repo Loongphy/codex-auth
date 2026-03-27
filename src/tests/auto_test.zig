@@ -334,7 +334,7 @@ test "Scenario: Given auto-switch daemon with only another user missing grouped 
     try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[3].account_name.?);
 }
 
-test "Scenario: Given auto-switch daemon with same-email team names and only a stored plus snapshot when it runs then it updates the team records" {
+test "Scenario: Given auto-switch daemon with grouped team names and only a stored plus snapshot for the same user when it runs then it updates the team records" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -352,14 +352,14 @@ test "Scenario: Given auto-switch daemon with same-email team names and only a s
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Active Workspace");
     try appendGroupedAccount(gpa, &reg, "user-active", "acct-active-b", "active@example.com", .team);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Active Backup");
-    try appendGroupedAccount(gpa, &reg, "user-email-team", daemon_primary_account_id, "same-email@example.com", .team);
-    try appendGroupedAccount(gpa, &reg, "user-email-team", daemon_secondary_account_id, "same-email@example.com", .team);
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_primary_account_id, "group@example.com", .team);
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_secondary_account_id, "group@example.com", .team);
     reg.accounts.items[3].account_name = try gpa.dupe(u8, "Old Backup Workspace");
-    try appendGroupedAccount(gpa, &reg, "user-email-plus", "acct-plus", "same-email@example.com", .plus);
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, "acct-plus", "group@example.com", .plus);
     try registry.setActiveAccountKey(gpa, &reg, reg.accounts.items[0].account_key);
     try registry.saveRegistry(gpa, codex_home, &reg);
     try writeActiveAuthWithIds(gpa, codex_home, "active@example.com", "team", "user-active", "acct-active-a");
-    try writeAccountSnapshotWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", "acct-plus");
+    try writeAccountSnapshotWithIds(gpa, codex_home, "group@example.com", "plus", daemon_grouped_user_id, "acct-plus");
 
     resetDaemonAccountNameFetcher();
     var refresh_state = auto.DaemonRefreshState{};

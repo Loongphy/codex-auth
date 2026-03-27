@@ -1,5 +1,14 @@
 ## Review Notes
 
+## Account Model
+
+`chatgpt_user_id` is the primary user identity for account-name sync.
+
+- One `chatgpt_user_id` represents one user.
+- A user can have multiple workspace `chatgpt_account_id` values.
+- Those workspace records can cover personal and Team workspaces under the same email.
+- We do not treat "same email but different `chatgpt_user_id`" as the grouping rule for this flow.
+
 ### P2
 
 Rejected for the reported downgrade scenario.
@@ -32,10 +41,10 @@ Simpler direction:
 
 - let both `list` and `switch` trigger the same detached background refresh
 - make that background refresh scan registry snapshots instead of re-reading the current `auth.json`
-- for each user scope that still has grouped Team accounts missing `account_name`, load a stored ChatGPT snapshot token and call the account API once
+- for each `chatgpt_user_id` scope that still has grouped Team accounts missing `account_name`, load a stored ChatGPT snapshot token and call the account API once
 - apply returned names by `account_id` against the latest registry state
 
-Same-email grouped accounts are allowed to resolve to the same `account_name`. In that case, duplicate child labels are acceptable, and we do not need to preserve the old grouped fallback labels such as `team #1` and `team #2` once a synced `account_name` is available.
+Multiple workspace records under the same `chatgpt_user_id` are allowed to resolve to the same `account_name`. In that case, duplicate child labels are acceptable, and we do not need to preserve the old grouped fallback labels such as `team #1` and `team #2` once a synced `account_name` is available.
 
 Example:
 

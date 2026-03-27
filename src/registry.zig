@@ -1778,16 +1778,9 @@ fn isTeamAccount(rec: *const AccountRecord) bool {
     return plan == .team;
 }
 
-fn userOwnsEmail(reg: *const Registry, chatgpt_user_id: []const u8, email: []const u8) bool {
-    for (reg.accounts.items) |rec| {
-        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
-        if (std.mem.eql(u8, rec.email, email)) return true;
-    }
-    return false;
-}
-
 fn inAccountNameRefreshScope(reg: *const Registry, chatgpt_user_id: []const u8, rec: *const AccountRecord) bool {
-    return std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id) or userOwnsEmail(reg, chatgpt_user_id, rec.email);
+    _ = reg;
+    return std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id);
 }
 
 pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {

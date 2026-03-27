@@ -63,9 +63,10 @@ Grouped account-name refresh always operates on one `chatgpt_user_id` scope at a
 That scope includes:
 
 - all records with the same `chatgpt_user_id`
-- all records whose email matches any email owned by that user
 
-This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it shares an email grouping with Team records.
+`chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those workspaces can include personal and Team records under the same email.
+
+This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it belongs to the same `chatgpt_user_id` as Team records.
 
 `accounts/check` is attempted only when:
 

@@ -344,18 +344,18 @@ test "applyAccountNamesForUser preserves existing account_name when replacement 
     try std.testing.expectEqualStrings("Primary Workspace", reg.accounts.items[0].account_name.?);
 }
 
-test "applyAccountNamesForUser updates same-email team records for a different active user" {
+test "applyAccountNamesForUser updates same-user records across personal and team workspaces" {
     const gpa = std.testing.allocator;
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
 
     var team = try makeAccountRecord(gpa, "same@example.com", "", .team, .chatgpt, 1);
-    try setRecordIds(gpa, &team, "user-team", "acct-team");
+    try setRecordIds(gpa, &team, "user-shared", "acct-team");
     team.account_name = try gpa.dupe(u8, "Legacy Workspace");
     try reg.accounts.append(gpa, team);
 
     var plus = try makeAccountRecord(gpa, "same@example.com", "", .plus, .chatgpt, 2);
-    try setRecordIds(gpa, &plus, "user-plus", "acct-plus");
+    try setRecordIds(gpa, &plus, "user-shared", "acct-plus");
     try reg.accounts.append(gpa, plus);
 
     var other = try makeAccountRecord(gpa, "other@example.com", "", .team, .chatgpt, 3);
@@ -370,7 +370,7 @@ test "applyAccountNamesForUser updates same-email team records for a different a
     defer entry.deinit(gpa);
 
     const entries = [_]account_api.AccountEntry{entry};
-    const changed = try registry.applyAccountNamesForUser(gpa, &reg, "user-plus", &entries);
+    const changed = try registry.applyAccountNamesForUser(gpa, &reg, "user-shared", &entries);
     try std.testing.expect(changed);
     try std.testing.expectEqualStrings("Primary Workspace", reg.accounts.items[0].account_name.?);
     try std.testing.expect(reg.accounts.items[1].account_name == null);

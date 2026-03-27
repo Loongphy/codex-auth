@@ -338,15 +338,11 @@ test "Scenario: Given team name fetch candidates when checking grouped-account p
 
     try appendAccount(gpa, &reg, primary_record_key, "same-user@example.com", "", .team);
     try appendAccount(gpa, &reg, secondary_record_key, "same-user@example.com", "", .free);
-    try appendAccount(gpa, &reg, "user-email-team::acct-email-team", "same-email@example.com", "", .team);
-    try appendAccount(gpa, &reg, "user-email-plus::acct-email-plus", "same-email@example.com", "", .plus);
     try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .team);
     try appendAccount(gpa, &reg, "user-plus-only::acct-plus-a", "plus-only@example.com", "", .plus);
     try appendAccount(gpa, &reg, "user-plus-only::acct-plus-b", "plus-only-alt@example.com", "", .plus);
 
     try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, shared_user_id));
-    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-team"));
-    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, "user-email-plus"));
     try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
     try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-plus-only"));
 }
@@ -602,7 +598,7 @@ test "Scenario: Given grouped stored snapshots with multiple tokens when running
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
 }
 
-test "Scenario: Given same-email grouped team names with only a stored plus snapshot when running background account-name refresh then it updates the team records" {
+test "Scenario: Given grouped team names with only a stored plus snapshot for the same user when running background account-name refresh then it updates the team records" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -612,12 +608,12 @@ test "Scenario: Given same-email grouped team names with only a stored plus snap
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, "user-email-team::" ++ primary_account_id, "same-email@example.com", "", .team);
-    try appendAccount(gpa, &reg, "user-email-team::" ++ secondary_account_id, "same-email@example.com", "", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ primary_account_id, "same-user@example.com", "", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ secondary_account_id, "same-user@example.com", "", .team);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
-    try appendAccount(gpa, &reg, "user-email-plus::" ++ tertiary_account_id, "same-email@example.com", "", .plus);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id, "same-user@example.com", "", .plus);
     try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeAccountSnapshotWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", tertiary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "same-user@example.com", "plus", shared_user_id, tertiary_account_id);
 
     resetMockAccountNameFetcher();
     try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
@@ -719,7 +715,7 @@ test "Scenario: Given list refresh with missing active-user account names when r
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
-test "Scenario: Given list refresh with same-email team names missing under a different active user when refreshing metadata then it updates the team records" {
+test "Scenario: Given list refresh with team names missing under the same user when refreshing metadata then it updates the team records" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -729,12 +725,12 @@ test "Scenario: Given list refresh with same-email team names missing under a di
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, "user-email-team::" ++ primary_account_id, "same-email@example.com", "", .team);
-    try appendAccount(gpa, &reg, "user-email-team::" ++ secondary_account_id, "same-email@example.com", "", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ primary_account_id, "same-user@example.com", "", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ secondary_account_id, "same-user@example.com", "", .team);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
-    try appendAccount(gpa, &reg, "user-email-plus::" ++ tertiary_account_id, "same-email@example.com", "", .plus);
-    try registry.setActiveAccountKey(gpa, &reg, "user-email-plus::" ++ tertiary_account_id);
-    try writeActiveAuthWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", tertiary_account_id);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id, "same-user@example.com", "", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id);
+    try writeActiveAuthWithIds(gpa, codex_home, "same-user@example.com", "plus", shared_user_id, tertiary_account_id);
 
     resetMockAccountNameFetcher();
     expected_mock_account_name_fetch_account_id = tertiary_account_id;

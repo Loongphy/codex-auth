@@ -51,10 +51,10 @@ This document records the shipped behavior for ChatGPT `account_name` sync and d
 - Refresh requires a usable auth context with:
   - `access_token`
   - `chatgpt_user_id`
-- Refresh scope is broader than a single user ID:
-  - records owned by the same `chatgpt_user_id`
-  - plus records on emails also owned by that user
-- This means a same-email plus/free account can trigger refresh for same-email team records.
+  - `chatgpt_account_id`
+- Refresh scope is one `chatgpt_user_id`.
+- One `chatgpt_user_id` represents one user and may contain multiple workspace `chatgpt_account_id` values.
+- This means a plus/free workspace can trigger refresh for Team workspaces only when they belong to the same `chatgpt_user_id`.
 - A refresh is eligible only when the scoped records satisfy all of these:
   - there is more than one scoped account
   - at least one scoped Team account exists
@@ -115,7 +115,7 @@ This document records the shipped behavior for ChatGPT `account_name` sync and d
   - old registries load with `account_name = null`
   - `account_name` round-trips for `null` and string values
   - `api.account` round-trips and backfills correctly
-  - same-email scoped updates apply to related Team records
+  - same-user scoped updates apply to related Team records
 - Display coverage:
   - singleton rows keep email labels
   - singleton/grouped behavior is decided from the rendered subset
