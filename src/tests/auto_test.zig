@@ -20,6 +20,7 @@ const empty_rate_limits_rollout_line = "{" ++
 var daemon_api_fetch_count: usize = 0;
 var candidate_api_fetch_count: usize = 0;
 var daemon_account_name_fetch_count: usize = 0;
+var daemon_account_name_fetch_registry_rewrite_codex_home: ?[]const u8 = null;
 var candidate_high_auth_path: ?[]const u8 = null;
 var candidate_low_auth_path: ?[]const u8 = null;
 var candidate_reject_auth_path: ?[]const u8 = null;
@@ -102,17 +103,10 @@ fn writeActiveAuthWithIds(
 
 fn resetDaemonAccountNameFetcher() void {
     daemon_account_name_fetch_count = 0;
+    daemon_account_name_fetch_registry_rewrite_codex_home = null;
 }
 
-fn fetchGroupedAccountNames(
-    allocator: std.mem.Allocator,
-    access_token: []const u8,
-    account_id: ?[]const u8,
-) !account_api.FetchResult {
-    _ = access_token;
-    _ = account_id;
-    daemon_account_name_fetch_count += 1;
-
+fn buildGroupedAccountNamesFetchResult(allocator: std.mem.Allocator) !account_api.FetchResult {
     const entries = try allocator.alloc(account_api.AccountEntry, 2);
     errdefer allocator.free(entries);
 
@@ -131,6 +125,36 @@ fn fetchGroupedAccountNames(
         .entries = entries,
         .status_code = 200,
     };
+}
+
+fn fetchGroupedAccountNames(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_api.FetchResult {
+    _ = access_token;
+    _ = account_id;
+    daemon_account_name_fetch_count += 1;
+
+    return buildGroupedAccountNamesFetchResult(allocator);
+}
+
+fn fetchGroupedAccountNamesAfterConcurrentUsageDisable(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: ?[]const u8,
+) !account_api.FetchResult {
+    _ = access_token;
+    _ = account_id;
+    daemon_account_name_fetch_count += 1;
+
+    const codex_home = daemon_account_name_fetch_registry_rewrite_codex_home orelse return error.TestMissingCodexHome;
+    var latest = try registry.loadRegistry(allocator, codex_home);
+    defer latest.deinit(allocator);
+    latest.api.usage = false;
+    try registry.saveRegistry(allocator, codex_home, &latest);
+
+    return buildGroupedAccountNamesFetchResult(allocator);
 }
 
 test "Scenario: Given auto-switch daemon with missing grouped account names when it detects the active scope then it refreshes and saves them" {
@@ -204,6 +228,49 @@ test "Scenario: Given auto-switch disabled when account names are missing then t
         fetchGroupedAccountNames,
     )));
     try std.testing.expectEqual(@as(usize, 0), daemon_account_name_fetch_count);
+}
+
+test "Scenario: Given daemon account-name refresh when registry changes during fetch then it merges onto the latest registry" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+    reg.api.account = true;
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_primary_account_id, "group@example.com", .team);
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_secondary_account_id, "group@example.com", .team);
+    try registry.setActiveAccountKey(gpa, &reg, reg.accounts.items[0].account_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeActiveAuthWithIds(gpa, codex_home, "group@example.com", "team", daemon_grouped_user_id, daemon_primary_account_id);
+
+    const rewrite_codex_home = try gpa.dupe(u8, codex_home);
+    defer gpa.free(rewrite_codex_home);
+    resetDaemonAccountNameFetcher();
+    daemon_account_name_fetch_registry_rewrite_codex_home = rewrite_codex_home;
+    defer daemon_account_name_fetch_registry_rewrite_codex_home = null;
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+    try std.testing.expect(try auto.daemonCycleWithAccountNameFetcherForTest(
+        gpa,
+        codex_home,
+        &refresh_state,
+        fetchGroupedAccountNamesAfterConcurrentUsageDisable,
+    ));
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), daemon_account_name_fetch_count);
+    try std.testing.expect(!loaded.api.usage);
+    try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[0].account_name.?);
+    try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[1].account_name.?);
 }
 
 fn appendAccountWithUsage(

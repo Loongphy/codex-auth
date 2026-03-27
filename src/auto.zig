@@ -859,6 +859,23 @@ fn loadActiveAuthInfoForAccountNameRefresh(allocator: std.mem.Allocator, codex_h
     };
 }
 
+fn applyDaemonAccountNameEntriesToLatestRegistry(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    chatgpt_user_id: []const u8,
+    entries: []const account_api.AccountEntry,
+) !bool {
+    var latest = try registry.loadRegistry(allocator, codex_home);
+    defer latest.deinit(allocator);
+
+    if (!latest.auto_switch.enabled or !latest.api.account) return false;
+    if (!registry.shouldFetchTeamAccountNamesForUser(&latest, chatgpt_user_id)) return false;
+    if (!try registry.applyAccountNamesForUser(allocator, &latest, chatgpt_user_id, entries)) return false;
+
+    try registry.saveRegistry(allocator, codex_home, &latest);
+    return true;
+}
+
 fn refreshActiveAccountNamesForDaemon(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -910,7 +927,7 @@ pub fn refreshActiveAccountNamesForDaemonWithFetcher(
     defer result.deinit(allocator);
 
     const entries = result.entries orelse return false;
-    return try registry.applyAccountNamesForUser(allocator, reg, chatgpt_user_id, entries);
+    return try applyDaemonAccountNameEntriesToLatestRegistry(allocator, codex_home, chatgpt_user_id, entries);
 }
 
 pub fn refreshActiveUsageWithApiFetcher(
@@ -1707,7 +1724,7 @@ fn daemonCycleWithAccountNameFetcher(
     refresh_state: *DaemonRefreshState,
     account_name_fetcher: anytype,
 ) !bool {
-    const reg = try refresh_state.ensureRegistryLoaded(allocator, codex_home);
+    var reg = try refresh_state.ensureRegistryLoaded(allocator, codex_home);
     if (!reg.auto_switch.enabled) return false;
 
     var changed = false;
@@ -1733,9 +1750,19 @@ fn daemonCycleWithAccountNameFetcher(
         changed = true;
     }
 
+    if (changed) {
+        try registry.saveRegistry(allocator, codex_home, reg);
+        try refresh_state.refreshTrackedFileMtims(allocator, codex_home);
+        changed = false;
+    }
+
     if (try refreshActiveAccountNamesForDaemonWithFetcher(allocator, codex_home, reg, refresh_state, account_name_fetcher)) {
         changed = true;
     }
+    try refresh_state.reloadRegistryStateIfChanged(allocator, codex_home);
+    reg = refresh_state.currentRegistry();
+    if (!reg.auto_switch.enabled) return true;
+
     if (try refreshActiveUsageForDaemon(allocator, codex_home, reg, refresh_state)) {
         changed = true;
     }
