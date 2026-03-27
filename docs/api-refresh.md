@@ -19,7 +19,7 @@ This document is the single source of truth for outbound ChatGPT API refresh beh
 - URL: `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27`
 - headers:
   - `Authorization: Bearer <tokens.access_token>`
-  - `ChatGPT-Account-Id: <chatgpt_account_id>` when present
+  - `ChatGPT-Account-Id: <chatgpt_account_id>`
   - `User-Agent: codex-auth`
 
 The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` and `name: ""` are both normalized to `account_name = null`.
@@ -38,16 +38,20 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 ## Account Name Refresh Rules
 
 - `api.account = true` is required.
+- A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
 - `list` schedules a detached background refresh after rendering.
 - `switch` saves the selected account first, then schedules the same detached background refresh so the command can exit immediately without waiting for `accounts/check`.
 - those `list` and `switch` background refreshes scan all registry-backed grouped scopes, not just the current `auth.json` scope.
 - the auto-switch daemon uses the same grouped-scope scan during each cycle when `auto_switch.enabled = true`.
-- `list`, `switch`, and daemon refreshes load access tokens from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
+- `list`, `switch`, and daemon refreshes load the request auth context from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
+- when multiple stored ChatGPT snapshots exist for one grouped scope, background and daemon refreshes pick the snapshot with the newest `last_refresh`.
+- stored snapshots without a usable `access_token` or `chatgpt_account_id` are skipped.
 - `list`, `switch`, and daemon refreshes do not backfill missing `plan` or `auth_mode` from stored snapshots before deciding whether a grouped Team scope qualifies.
 
 At most one `accounts/check` request is attempted per grouped user scope in a given refresh pass.
+Request failures and unparseable responses are non-fatal and leave stored `account_name` values unchanged.
 
 ## Refresh Scope
 

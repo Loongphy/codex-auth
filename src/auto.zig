@@ -836,7 +836,7 @@ pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, 
 fn fetchActiveAccountNames(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     return try account_api.fetchAccountsForTokenDetailed(
         allocator,
@@ -923,12 +923,13 @@ pub fn refreshActiveAccountNamesForDaemonWithFetcher(
         defer info.deinit(allocator);
 
         const access_token = info.access_token orelse continue;
+        const chatgpt_account_id = info.chatgpt_account_id orelse continue;
         if (!attempted) {
             refresh_state.last_account_name_refresh_at_ns = now_ns;
             attempted = true;
         }
 
-        const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+        const result = fetcher(allocator, access_token, chatgpt_account_id) catch |err| {
             std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
             continue;
         };

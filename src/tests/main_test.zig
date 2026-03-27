@@ -19,11 +19,13 @@ const standalone_team_record_key = standalone_team_user_id ++ "::" ++ standalone
 var mock_account_name_fetch_count: usize = 0;
 var mutate_registry_during_account_fetch = false;
 var mutate_registry_codex_home: ?[]const u8 = null;
+var expected_mock_account_name_fetch_account_id: ?[]const u8 = null;
 
 fn resetMockAccountNameFetcher() void {
     mock_account_name_fetch_count = 0;
     mutate_registry_during_account_fetch = false;
     mutate_registry_codex_home = null;
+    expected_mock_account_name_fetch_account_id = null;
 }
 
 fn makeRegistry() registry.Registry {
@@ -214,10 +216,12 @@ fn writeAccountSnapshotWithIdsAndLastRefresh(
 fn mockAccountNameFetcher(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     _ = access_token;
-    _ = account_id;
+    if (expected_mock_account_name_fetch_account_id) |expected_account_id| {
+        if (!std.mem.eql(u8, account_id, expected_account_id)) return error.TestUnexpectedAccountId;
+    }
     mock_account_name_fetch_count += 1;
 
     const entries = try allocator.alloc(account_api.AccountEntry, 2);
@@ -247,7 +251,7 @@ fn mockAccountNameFetcher(
 fn mockAccountNameFetcherWithRegistryMutation(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     if (mutate_registry_during_account_fetch) {
         const codex_home = mutate_registry_codex_home orelse return error.TestExpectedEqual;
@@ -264,7 +268,7 @@ fn mockAccountNameFetcherWithRegistryMutation(
 fn mockAccountNameFetcherRequiringFreshToken(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     if (!std.mem.eql(u8, access_token, "fresh-token")) return error.Unauthorized;
     return try mockAccountNameFetcher(allocator, access_token, account_id);
@@ -465,6 +469,7 @@ test "Scenario: Given login with missing account names when refreshing metadata 
     defer info.deinit(gpa);
 
     resetMockAccountNameFetcher();
+    expected_mock_account_name_fetch_account_id = primary_account_id;
     const changed = try main_mod.refreshAccountNamesAfterLogin(gpa, &reg, &info, mockAccountNameFetcher);
     try std.testing.expect(changed);
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
@@ -488,6 +493,7 @@ test "Scenario: Given switched account with missing account names when refreshin
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
     resetMockAccountNameFetcher();
+    expected_mock_account_name_fetch_account_id = primary_account_id;
     const changed = try main_mod.refreshAccountNamesAfterSwitch(gpa, codex_home, &reg, mockAccountNameFetcher);
     try std.testing.expect(changed);
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
@@ -586,6 +592,7 @@ test "Scenario: Given grouped stored snapshots with multiple tokens when running
     );
 
     resetMockAccountNameFetcher();
+    expected_mock_account_name_fetch_account_id = secondary_account_id;
     try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcherRequiringFreshToken);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -700,6 +707,7 @@ test "Scenario: Given list refresh with missing active-user account names when r
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
     resetMockAccountNameFetcher();
+    expected_mock_account_name_fetch_account_id = primary_account_id;
     const changed = try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher);
     try std.testing.expect(changed);
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
@@ -729,6 +737,7 @@ test "Scenario: Given list refresh with same-email team names missing under a di
     try writeActiveAuthWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", tertiary_account_id);
 
     resetMockAccountNameFetcher();
+    expected_mock_account_name_fetch_account_id = tertiary_account_id;
     const changed = try main_mod.refreshAccountNamesForList(gpa, codex_home, &reg, mockAccountNameFetcher);
     try std.testing.expect(changed);
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);

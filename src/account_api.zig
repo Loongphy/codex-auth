@@ -29,7 +29,7 @@ pub fn fetchAccountsForTokenDetailed(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !FetchResult {
     const http_result = try chatgpt_http.runGetJsonCommand(allocator, endpoint, access_token, account_id);
     defer allocator.free(http_result.body);

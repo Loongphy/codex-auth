@@ -14,7 +14,7 @@ const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROU
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) anyerror!account_api.FetchResult;
 
 pub fn main() !void {
@@ -194,7 +194,7 @@ fn maybeRefreshForegroundUsage(
 fn defaultAccountFetcher(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     return try account_api.fetchAccountsForTokenDetailed(
         allocator,
@@ -213,8 +213,9 @@ fn maybeRefreshAccountNamesForAuthInfo(
     const chatgpt_user_id = info.chatgpt_user_id orelse return false;
     if (!shouldRefreshTeamAccountNamesForUserScope(reg, chatgpt_user_id)) return false;
     const access_token = info.access_token orelse return false;
+    const chatgpt_account_id = info.chatgpt_account_id orelse return false;
 
-    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+    const result = fetcher(allocator, access_token, chatgpt_account_id) catch |err| {
         std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
         return false;
     };
@@ -339,7 +340,8 @@ pub fn runBackgroundAccountNameRefresh(
         defer info.deinit(allocator);
 
         const access_token = info.access_token orelse continue;
-        const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+        const chatgpt_account_id = info.chatgpt_account_id orelse continue;
+        const result = fetcher(allocator, access_token, chatgpt_account_id) catch |err| {
             std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
             continue;
         };

@@ -17,7 +17,7 @@ pub fn runGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !HttpResult {
     return if (builtin.os.tag == .windows)
         runPowerShellGetJsonCommand(allocator, endpoint, access_token, account_id)
@@ -29,15 +29,12 @@ fn runCurlGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !HttpResult {
     const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
-    const account_header = if (account_id) |value|
-        try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{value})
-    else
-        null;
-    defer if (account_header) |header| allocator.free(header);
+    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    defer allocator.free(account_header);
 
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(allocator);
@@ -56,9 +53,7 @@ fn runCurlGetJsonCommand(
         "-H",
         authorization,
     });
-    if (account_header) |header| {
-        try argv.appendSlice(allocator, &.{ "-H", header });
-    }
+    try argv.appendSlice(allocator, &.{ "-H", account_header });
     try argv.appendSlice(allocator, &.{
         "-H",
         "User-Agent: codex-auth",
@@ -90,21 +85,15 @@ fn runPowerShellGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !HttpResult {
     const escaped_token = try escapePowerShellSingleQuoted(allocator, access_token);
     defer allocator.free(escaped_token);
-    const escaped_account_id = if (account_id) |value|
-        try escapePowerShellSingleQuoted(allocator, value)
-    else
-        null;
-    defer if (escaped_account_id) |value| allocator.free(value);
+    const escaped_account_id = try escapePowerShellSingleQuoted(allocator, account_id);
+    defer allocator.free(escaped_account_id);
     const escaped_endpoint = try escapePowerShellSingleQuoted(allocator, endpoint);
     defer allocator.free(escaped_endpoint);
-    const account_header_fragment = if (escaped_account_id) |value|
-        try std.fmt.allocPrint(allocator, "'ChatGPT-Account-Id' = '{s}'; ", .{value})
-    else
-        try allocator.dupe(u8, "");
+    const account_header_fragment = try std.fmt.allocPrint(allocator, "'ChatGPT-Account-Id' = '{s}'; ", .{escaped_account_id});
     defer allocator.free(account_header_fragment);
 
     const script = try std.fmt.allocPrint(

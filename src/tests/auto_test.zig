@@ -149,7 +149,7 @@ fn buildGroupedAccountNamesFetchResult(allocator: std.mem.Allocator) !account_ap
 fn fetchGroupedAccountNames(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     _ = access_token;
     _ = account_id;
@@ -161,7 +161,7 @@ fn fetchGroupedAccountNames(
 fn fetchGroupedAccountNamesAfterConcurrentUsageDisable(
     allocator: std.mem.Allocator,
     access_token: []const u8,
-    account_id: ?[]const u8,
+    account_id: []const u8,
 ) !account_api.FetchResult {
     _ = access_token;
     _ = account_id;
