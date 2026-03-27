@@ -11,6 +11,7 @@ pub const current_schema_version: u32 = 3;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
+pub const account_name_refresh_lock_file_name = "account-name-refresh.lock";
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -555,6 +556,7 @@ fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
 fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
     if (std.mem.eql(u8, entry_name, "registry.json")) return true;
     if (std.mem.eql(u8, entry_name, "auto-switch.lock")) return true;
+    if (std.mem.eql(u8, entry_name, account_name_refresh_lock_file_name)) return true;
     if (std.mem.eql(u8, entry_name, "backups")) return true;
     return isAllowedCurrentSnapshot(reg, entry_name);
 }

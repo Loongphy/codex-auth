@@ -871,6 +871,7 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.3", .data = "a3" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.1", .data = "r1" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.2", .data = "r2" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/" ++ registry.account_name_refresh_lock_file_name, .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = keep_rel_path, .data = "keep" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .data = "legacy" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/notes.txt", .data = "junk" });
@@ -890,6 +891,8 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try std.testing.expect(try countBackups(accounts, "registry.json") == 0);
     var kept = try tmp.dir.openFile(keep_rel_path, .{});
     kept.close();
+    var refresh_lock = try tmp.dir.openFile("accounts/" ++ registry.account_name_refresh_lock_file_name, .{});
+    refresh_lock.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/notes.txt", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/tmpdir/old.txt", .{}));

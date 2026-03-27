@@ -16,6 +16,10 @@ const AccountFetchFn = *const fn (
     access_token: []const u8,
     account_id: []const u8,
 ) anyerror!account_api.FetchResult;
+const BackgroundRefreshLockAcquirer = *const fn (
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+) anyerror!?account_name_refresh.BackgroundRefreshLock;
 
 pub fn main() !void {
     var exit_code: u8 = 0;
@@ -317,6 +321,23 @@ pub fn runBackgroundAccountNameRefresh(
     codex_home: []const u8,
     fetcher: AccountFetchFn,
 ) !void {
+    return try runBackgroundAccountNameRefreshWithLockAcquirer(
+        allocator,
+        codex_home,
+        fetcher,
+        account_name_refresh.BackgroundRefreshLock.acquire,
+    );
+}
+
+fn runBackgroundAccountNameRefreshWithLockAcquirer(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    fetcher: AccountFetchFn,
+    lock_acquirer: BackgroundRefreshLockAcquirer,
+) !void {
+    var refresh_lock = (try lock_acquirer(allocator, codex_home)) orelse return;
+    defer refresh_lock.release();
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     var candidates = try account_name_refresh.collectCandidates(allocator, &reg);
@@ -797,6 +818,44 @@ fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
         },
     );
     try out.flush();
+}
+
+test "background account-name refresh returns early when another refresh holds the lock" {
+    const TestState = struct {
+        var fetch_count: usize = 0;
+
+        fn lockUnavailable(_: std.mem.Allocator, _: []const u8) !?account_name_refresh.BackgroundRefreshLock {
+            return null;
+        }
+
+        fn unexpectedFetcher(
+            allocator: std.mem.Allocator,
+            access_token: []const u8,
+            account_id: []const u8,
+        ) !account_api.FetchResult {
+            _ = allocator;
+            _ = access_token;
+            _ = account_id;
+            fetch_count += 1;
+            return error.TestUnexpectedFetch;
+        }
+    };
+
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    TestState.fetch_count = 0;
+    try runBackgroundAccountNameRefreshWithLockAcquirer(
+        gpa,
+        codex_home,
+        TestState.unexpectedFetcher,
+        TestState.lockUnavailable,
+    );
+    try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
