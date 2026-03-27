@@ -1,5 +1,6 @@
 const std = @import("std");
 const account_api = @import("account_api.zig");
+const account_name_refresh = @import("account_name_refresh.zig");
 const auth = @import("auth.zig");
 const builtin = @import("builtin");
 const c_time = @cImport({
@@ -845,20 +846,6 @@ fn fetchActiveAccountNames(
     );
 }
 
-fn loadActiveAuthInfoForAccountNameRefresh(allocator: std.mem.Allocator, codex_home: []const u8) !?auth.AuthInfo {
-    const auth_path = try registry.activeAuthPath(allocator, codex_home);
-    defer allocator.free(auth_path);
-
-    return auth.parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        error.FileNotFound => null,
-        else => {
-            std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
-            return null;
-        },
-    };
-}
-
 fn applyDaemonAccountNameEntriesToLatestRegistry(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -903,9 +890,6 @@ pub fn refreshActiveAccountNamesForDaemonWithFetcher(
     const account_key = reg.active_account_key orelse return false;
     try refresh_state.resetAccountNameCooldownIfAccountChanged(allocator, account_key);
 
-    const chatgpt_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id)) return false;
-
     const now_ns = std.time.nanoTimestamp();
     if (refresh_state.last_account_name_refresh_at_ns != 0 and
         (now_ns - refresh_state.last_account_name_refresh_at_ns) < api_refresh_interval_ns)
@@ -913,21 +897,50 @@ pub fn refreshActiveAccountNamesForDaemonWithFetcher(
         return false;
     }
 
-    var info = (try loadActiveAuthInfoForAccountNameRefresh(allocator, codex_home)) orelse return false;
-    defer info.deinit(allocator);
-    const access_token = info.access_token orelse return false;
-    const auth_user_id = info.chatgpt_user_id orelse return false;
-    if (!std.mem.eql(u8, auth_user_id, chatgpt_user_id)) return false;
+    var candidates = try account_name_refresh.collectCandidates(allocator, reg);
+    defer {
+        for (candidates.items) |*candidate| candidate.deinit(allocator);
+        candidates.deinit(allocator);
+    }
+    if (candidates.items.len == 0) return false;
 
-    refresh_state.last_account_name_refresh_at_ns = now_ns;
-    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
-        std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
-        return false;
-    };
-    defer result.deinit(allocator);
+    var attempted = false;
+    var changed = false;
 
-    const entries = result.entries orelse return false;
-    return try applyDaemonAccountNameEntriesToLatestRegistry(allocator, codex_home, chatgpt_user_id, entries);
+    for (candidates.items) |candidate| {
+        var latest = try registry.loadRegistry(allocator, codex_home);
+        defer latest.deinit(allocator);
+
+        if (!latest.auto_switch.enabled or !latest.api.account) continue;
+        if (!registry.shouldFetchTeamAccountNamesForUser(&latest, candidate.chatgpt_user_id)) continue;
+
+        var info = (try account_name_refresh.loadStoredAuthInfoForUser(
+            allocator,
+            codex_home,
+            &latest,
+            candidate.chatgpt_user_id,
+        )) orelse continue;
+        defer info.deinit(allocator);
+
+        const access_token = info.access_token orelse continue;
+        if (!attempted) {
+            refresh_state.last_account_name_refresh_at_ns = now_ns;
+            attempted = true;
+        }
+
+        const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+            std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+            continue;
+        };
+        defer result.deinit(allocator);
+
+        const entries = result.entries orelse continue;
+        if (try applyDaemonAccountNameEntriesToLatestRegistry(allocator, codex_home, candidate.chatgpt_user_id, entries)) {
+            changed = true;
+        }
+    }
+
+    return changed;
 }
 
 pub fn refreshActiveUsageWithApiFetcher(

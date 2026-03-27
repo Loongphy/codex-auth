@@ -28,26 +28,32 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 - `api.usage = true`: foreground refresh uses the usage API.
 - `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- `list` refreshes the current active account before rendering.
-- `switch` refreshes the current active account before showing the picker so the currently selected row is not stale.
+- `list` refreshes only the current active account before rendering.
+- `switch` refreshes only the current active account before showing the picker so the currently selected row is not stale.
 - `switch` does not refresh usage for the newly selected account after the switch completes.
-- The background auto-switch watcher has its own runtime strategy; see [docs/auto-switch.md](./auto-switch.md).
+- the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
+- the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
+- the daemon usage paths are cooldown-limited; see [docs/auto-switch.md](./auto-switch.md) for the broader runtime loop
 
 ## Account Name Refresh Rules
 
 - `api.account = true` is required.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
-- `list` refreshes in the foreground for the current active scope when that scope still has missing Team `account_name` values.
-- `switch` saves the selected account first, then schedules a best-effort background refresh for the newly active scope so the command can exit immediately without waiting for `accounts/check`.
-- `switch` does not start that background refresh when `api.account = false`.
-- the auto-switch daemon also refreshes the current active scope when `auto_switch.enabled = true` and that scope still has missing Team `account_name` values
+- `list` schedules a detached background refresh after rendering.
+- `switch` saves the selected account first, then schedules the same detached background refresh so the command can exit immediately without waiting for `accounts/check`.
+- those `list` and `switch` background refreshes scan all registry-backed grouped scopes, not just the current `auth.json` scope.
+- the auto-switch daemon uses the same grouped-scope scan during each cycle when `auto_switch.enabled = true`.
+- `list`, `switch`, and daemon refreshes load access tokens from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
 
-At most one `accounts/check` request is attempted per refresh path.
+At most one `accounts/check` request is attempted per grouped user scope in a given refresh pass.
 
 ## Refresh Scope
 
-The grouped account-name refresh scope is anchored on the current active or imported `chatgpt_user_id`.
+Grouped account-name refresh always operates on one `chatgpt_user_id` scope at a time.
+
+- `login` and single-file `import` start from the just-parsed auth info
+- `list`, `switch`, and daemon refreshes scan registry-backed grouped scopes and refresh each qualifying scope independently
 
 That scope includes:
 
@@ -101,6 +107,4 @@ Then:
 - `team #1` is filled with `Prod Workspace`
 - `team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
 
-The same grouped-scope rule also applies after `switch`, but the refresh runs in the background after the switch is already saved.
-
-The background `switch` refresh re-loads the latest `registry.json` after `accounts/check` returns, then applies only the grouped `account_name` result onto that latest registry state before saving.
+The same grouped-scope rule also applies to detached `list` / `switch` refreshes and to the auto-switch daemon. Those paths re-load the latest `registry.json` before applying each grouped `account_name` update so concurrent registry changes are preserved.

@@ -101,6 +101,25 @@ fn writeActiveAuthWithIds(
     try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
+fn writeAccountSnapshotWithIds(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !void {
+    const account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    defer allocator.free(account_key);
+
+    const auth_path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(auth_path);
+
+    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+}
+
 fn resetDaemonAccountNameFetcher() void {
     daemon_account_name_fetch_count = 0;
     daemon_account_name_fetch_registry_rewrite_codex_home = null;
@@ -271,6 +290,93 @@ test "Scenario: Given daemon account-name refresh when registry changes during f
     try std.testing.expect(!loaded.api.usage);
     try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[0].account_name.?);
     try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[1].account_name.?);
+}
+
+test "Scenario: Given auto-switch daemon with only another user missing grouped account names when it runs then it refreshes that stored scope too" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = false;
+    reg.api.account = true;
+    try appendGroupedAccount(gpa, &reg, "user-active", "acct-active-a", "active@example.com", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Active Workspace");
+    try appendGroupedAccount(gpa, &reg, "user-active", "acct-active-b", "active@example.com", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Active Backup");
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_primary_account_id, "group@example.com", .team);
+    try appendGroupedAccount(gpa, &reg, daemon_grouped_user_id, daemon_secondary_account_id, "group@example.com", .team);
+    try registry.setActiveAccountKey(gpa, &reg, reg.accounts.items[0].account_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeActiveAuthWithIds(gpa, codex_home, "active@example.com", "team", "user-active", "acct-active-a");
+    try writeAccountSnapshotWithIds(gpa, codex_home, "group@example.com", "team", daemon_grouped_user_id, daemon_primary_account_id);
+
+    resetDaemonAccountNameFetcher();
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+    try std.testing.expect(try auto.daemonCycleWithAccountNameFetcherForTest(
+        gpa,
+        codex_home,
+        &refresh_state,
+        fetchGroupedAccountNames,
+    ));
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), daemon_account_name_fetch_count);
+    try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[2].account_name.?);
+    try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[3].account_name.?);
+}
+
+test "Scenario: Given auto-switch daemon with same-email team names and only a stored plus snapshot when it runs then it updates the team records" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = false;
+    reg.api.account = true;
+    try appendGroupedAccount(gpa, &reg, "user-active", "acct-active-a", "active@example.com", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Active Workspace");
+    try appendGroupedAccount(gpa, &reg, "user-active", "acct-active-b", "active@example.com", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Active Backup");
+    try appendGroupedAccount(gpa, &reg, "user-email-team", daemon_primary_account_id, "same-email@example.com", .team);
+    try appendGroupedAccount(gpa, &reg, "user-email-team", daemon_secondary_account_id, "same-email@example.com", .team);
+    reg.accounts.items[3].account_name = try gpa.dupe(u8, "Old Backup Workspace");
+    try appendGroupedAccount(gpa, &reg, "user-email-plus", "acct-plus", "same-email@example.com", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, reg.accounts.items[0].account_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeActiveAuthWithIds(gpa, codex_home, "active@example.com", "team", "user-active", "acct-active-a");
+    try writeAccountSnapshotWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", "acct-plus");
+
+    resetDaemonAccountNameFetcher();
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+    try std.testing.expect(try auto.daemonCycleWithAccountNameFetcherForTest(
+        gpa,
+        codex_home,
+        &refresh_state,
+        fetchGroupedAccountNames,
+    ));
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), daemon_account_name_fetch_count);
+    try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[2].account_name.?);
+    try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[3].account_name.?);
+    try std.testing.expect(loaded.accounts.items[4].account_name == null);
 }
 
 fn appendAccountWithUsage(
