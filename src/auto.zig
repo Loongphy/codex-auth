@@ -367,6 +367,9 @@ pub const DaemonRefreshState = struct {
     fn ensureRegistryLoaded(self: *DaemonRefreshState, allocator: std.mem.Allocator, codex_home: []const u8) !*registry.Registry {
         if (self.current_reg == null) {
             try self.reloadRegistryState(allocator, codex_home);
+            // Force the first daemon cycle to sync auth.json into accounts/ snapshots
+            // before grouped account-name refresh looks for stored auth contexts.
+            self.auth_mtime_ns = -1;
         } else {
             try self.reloadRegistryStateIfChanged(allocator, codex_home);
         }

@@ -40,8 +40,10 @@ pub fn collectCandidates(
         if (hasCandidate(candidates.items, rec.chatgpt_user_id)) continue;
         if (!registry.shouldFetchTeamAccountNamesForUser(reg, rec.chatgpt_user_id)) continue;
 
+        const duped_id = try allocator.dupe(u8, rec.chatgpt_user_id);
+        errdefer allocator.free(duped_id);
         try candidates.append(allocator, .{
-            .chatgpt_user_id = try allocator.dupe(u8, rec.chatgpt_user_id),
+            .chatgpt_user_id = duped_id,
         });
     }
 
