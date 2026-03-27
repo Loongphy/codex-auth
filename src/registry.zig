@@ -2694,48 +2694,6 @@ fn parseThresholdPercent(v: std.json.Value) ?u8 {
     return @as(u8, @intCast(raw));
 }
 
-pub fn refreshAccountsFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {
-    var changed = false;
-    for (reg.accounts.items) |*rec| {
-        const path = resolveStrictAccountAuthPath(allocator, codex_home, rec.account_key) catch |err| switch (err) {
-            error.FileNotFound => continue,
-            else => return err,
-        };
-        defer allocator.free(path);
-        const info = try @import("auth.zig").parseAuthInfo(allocator, path);
-        defer info.deinit(allocator);
-        const email = info.email orelse {
-            std.log.warn("auth file missing email for {s}; skipping refresh", .{rec.email});
-            continue;
-        };
-        const chatgpt_account_id = info.chatgpt_account_id orelse {
-            std.log.warn("auth file missing account_id for {s}; skipping refresh", .{rec.email});
-            continue;
-        };
-        const record_key = info.record_key orelse {
-            std.log.warn("auth file missing record key for {s}; skipping refresh", .{rec.email});
-            continue;
-        };
-        if (!std.mem.eql(u8, email, rec.email)) {
-            std.log.warn("auth file email mismatch for {s}; skipping refresh", .{rec.email});
-            continue;
-        }
-        if (!std.mem.eql(u8, chatgpt_account_id, rec.chatgpt_account_id)) {
-            std.log.warn("auth file account_id mismatch for {s}; skipping refresh", .{rec.email});
-            continue;
-        }
-        if (!std.mem.eql(u8, record_key, rec.account_key)) {
-            std.log.warn("auth file record_key mismatch for {s}; skipping refresh", .{rec.email});
-            continue;
-        }
-        if (rec.plan != info.plan) changed = true;
-        if (rec.auth_mode != info.auth_mode) changed = true;
-        rec.plan = info.plan;
-        rec.auth_mode = info.auth_mode;
-    }
-    return changed;
-}
-
 pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {
     if (reg.accounts.items.len != 0) return false;
 

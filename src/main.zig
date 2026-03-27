@@ -456,18 +456,6 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    var needs_refresh = false;
-    for (reg.accounts.items) |rec| {
-        if (rec.plan == null or rec.auth_mode == null) {
-            needs_refresh = true;
-            break;
-        }
-    }
-    if (needs_refresh) {
-        if (try registry.refreshAccountsFromAuth(allocator, codex_home, &reg)) {
-            try registry.saveRegistry(allocator, codex_home, &reg);
-        }
-    }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
     try format.printAccounts(&reg);
     maybeSpawnBackgroundAccountNameRefresh(allocator, &reg);

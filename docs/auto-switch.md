@@ -33,12 +33,11 @@ Each cycle:
 1. keeps an in-memory candidate index for all non-active accounts, keyed by the same candidate score used for switching
 2. reloads `registry.json` only when the on-disk file changed, then rebuilds that in-memory index
 3. syncs the currently active `auth.json` into the in-memory registry when the active auth snapshot changed
-4. refreshes missing account metadata from stored auth snapshots when needed
-5. tries to refresh usage from the newest local rollout event first
-6. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
-7. keeps the candidate index warm with a bounded candidate upkeep pass instead of batch-refreshing every candidate
-8. if the active account should switch, revalidates only the top few stale candidates before making the final switch decision
-9. writes `registry.json` only when state changed
+4. tries to refresh usage from the newest local rollout event first
+5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
+6. keeps the candidate index warm with a bounded candidate upkeep pass instead of batch-refreshing every candidate
+7. if the active account should switch, revalidates only the top few stale candidates before making the final switch decision
+8. writes `registry.json` only when state changed
 
 The watcher also emits English-only service logs for debugging:
 

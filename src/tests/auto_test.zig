@@ -2116,38 +2116,3 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     try std.testing.expectEqual(@as(f64, 41.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(i64, 777), reg.accounts.items[idx].last_usage_at.?);
 }
-
-test "Scenario: Given permanently null metadata when refreshing accounts from auth then it does not report a change" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-
-    var reg = bdd.makeEmptyRegistry();
-    defer reg.deinit(gpa);
-    try bdd.appendAccount(gpa, &reg, "api@example.com", "", null);
-
-    const account_key = try bdd.accountKeyForEmailAlloc(gpa, "api@example.com");
-    defer gpa.free(account_key);
-    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
-    defer gpa.free(auth_path);
-    try std.fs.cwd().writeFile(.{
-        .sub_path = auth_path,
-        .data =
-        \\{
-        \\  "OPENAI_API_KEY": "sk-test"
-        \\}
-        ,
-    });
-
-    const idx = bdd.findAccountIndexByEmail(&reg, "api@example.com") orelse return error.TestExpectedEqual;
-    reg.accounts.items[idx].plan = null;
-    reg.accounts.items[idx].auth_mode = null;
-
-    try std.testing.expect(!(try registry.refreshAccountsFromAuth(gpa, codex_home, &reg)));
-    try std.testing.expect(reg.accounts.items[idx].plan == null);
-    try std.testing.expect(reg.accounts.items[idx].auth_mode == null);
-}

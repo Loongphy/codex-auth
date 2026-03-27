@@ -45,6 +45,7 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - those `list` and `switch` background refreshes scan all registry-backed grouped scopes, not just the current `auth.json` scope.
 - the auto-switch daemon uses the same grouped-scope scan during each cycle when `auto_switch.enabled = true`.
 - `list`, `switch`, and daemon refreshes load access tokens from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
+- `list`, `switch`, and daemon refreshes do not backfill missing `plan` or `auth_mode` from stored snapshots before deciding whether a grouped Team scope qualifies.
 
 At most one `accounts/check` request is attempted per grouped user scope in a given refresh pass.
 

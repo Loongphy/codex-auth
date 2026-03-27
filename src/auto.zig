@@ -1745,24 +1745,6 @@ fn daemonCycleWithAccountNameFetcher(
         changed = true;
     }
 
-    var needs_refresh = false;
-    for (reg.accounts.items) |rec| {
-        if (rec.plan == null or rec.auth_mode == null) {
-            needs_refresh = true;
-            break;
-        }
-    }
-    if (needs_refresh) {
-        const metadata_changed = try registry.refreshAccountsFromAuth(allocator, codex_home, reg);
-        if (!metadata_changed) {
-            needs_refresh = false;
-        }
-    }
-    if (needs_refresh) {
-        try refresh_state.rebuildCandidateState(allocator);
-        changed = true;
-    }
-
     if (changed) {
         try registry.saveRegistry(allocator, codex_home, reg);
         try refresh_state.refreshTrackedFileMtims(allocator, codex_home);
