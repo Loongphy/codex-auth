@@ -132,6 +132,25 @@ fn writeActiveAuthWithIds(
     try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
+fn writeAccountSnapshotWithIds(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    email: []const u8,
+    plan: []const u8,
+    chatgpt_user_id: []const u8,
+    chatgpt_account_id: []const u8,
+) !void {
+    const account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    defer allocator.free(account_key);
+
+    const auth_path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(auth_path);
+
+    const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
+    defer allocator.free(auth_json);
+    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+}
+
 fn mockAccountNameFetcher(
     allocator: std.mem.Allocator,
     access_token: []const u8,
@@ -349,6 +368,22 @@ test "Scenario: Given grouped team accounts with account api disabled when check
     try std.testing.expect(!main_mod.shouldScheduleBackgroundAccountNameRefresh(&reg));
 }
 
+test "Scenario: Given only another user has missing grouped team names when checking background refresh then it is still scheduled" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Backup Workspace");
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER-A", "other@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER-B", "other@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    try std.testing.expect(main_mod.shouldScheduleBackgroundAccountNameRefresh(&reg));
+}
+
 test "Scenario: Given login with missing account names when refreshing metadata then it issues at most one request" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
@@ -405,6 +440,7 @@ test "Scenario: Given api disabled while background account-name refresh is in f
     try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
     resetMockAccountNameFetcher();
@@ -419,6 +455,59 @@ test "Scenario: Given api disabled while background account-name refresh is in f
     try std.testing.expect(!loaded.api.usage);
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
     try std.testing.expect(loaded.accounts.items[1].account_name == null);
+}
+
+test "Scenario: Given grouped stored snapshots without active auth when running background account-name refresh then it updates the missing names" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    resetMockAccountNameFetcher();
+    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
+}
+
+test "Scenario: Given same-email grouped team names with only a stored plus snapshot when running background account-name refresh then it updates the team records" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, "user-email-team::" ++ primary_account_id, "same-email@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-email-team::" ++ secondary_account_id, "same-email@example.com", "", .team);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
+    try appendAccount(gpa, &reg, "user-email-plus::" ++ tertiary_account_id, "same-email@example.com", "", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "same-email@example.com", "plus", "user-email-plus", tertiary_account_id);
+
+    resetMockAccountNameFetcher();
+    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
+    try std.testing.expect(loaded.accounts.items[2].account_name == null);
 }
 
 test "Scenario: Given single-file import with missing account names when refreshing metadata then it issues at most one request" {

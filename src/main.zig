@@ -283,9 +283,58 @@ fn shouldRefreshTeamAccountNamesForUserScope(reg: *registry.Registry, chatgpt_us
     return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
 }
 
+const BackgroundAccountNameRefreshCandidate = struct {
+    chatgpt_user_id: []u8,
+
+    fn deinit(self: *const BackgroundAccountNameRefreshCandidate, allocator: std.mem.Allocator) void {
+        allocator.free(self.chatgpt_user_id);
+    }
+};
+
+fn hasBackgroundAccountNameRefreshCandidate(
+    candidates: []const BackgroundAccountNameRefreshCandidate,
+    chatgpt_user_id: []const u8,
+) bool {
+    for (candidates) |candidate| {
+        if (std.mem.eql(u8, candidate.chatgpt_user_id, chatgpt_user_id)) return true;
+    }
+    return false;
+}
+
+fn collectBackgroundAccountNameRefreshCandidates(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+) !std.ArrayList(BackgroundAccountNameRefreshCandidate) {
+    var candidates = std.ArrayList(BackgroundAccountNameRefreshCandidate).empty;
+    errdefer {
+        for (candidates.items) |*candidate| candidate.deinit(allocator);
+        candidates.deinit(allocator);
+    }
+
+    if (!reg.api.account) return candidates;
+
+    for (reg.accounts.items) |rec| {
+        if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
+        if (hasBackgroundAccountNameRefreshCandidate(candidates.items, rec.chatgpt_user_id)) continue;
+        if (!registry.shouldFetchTeamAccountNamesForUser(reg, rec.chatgpt_user_id)) continue;
+
+        try candidates.append(allocator, .{
+            .chatgpt_user_id = try allocator.dupe(u8, rec.chatgpt_user_id),
+        });
+    }
+
+    return candidates;
+}
+
 pub fn shouldScheduleBackgroundAccountNameRefresh(reg: *registry.Registry) bool {
-    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    return shouldRefreshTeamAccountNamesForUserScope(reg, active_user_id);
+    if (!reg.api.account) return false;
+
+    for (reg.accounts.items) |rec| {
+        if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
+        if (registry.shouldFetchTeamAccountNamesForUser(reg, rec.chatgpt_user_id)) return true;
+    }
+
+    return false;
 }
 
 fn applyAccountNameRefreshEntriesToLatestRegistry(
@@ -304,29 +353,75 @@ fn applyAccountNameRefreshEntriesToLatestRegistry(
     return true;
 }
 
+fn loadStoredAuthInfoForBackgroundAccountNameRefresh(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    chatgpt_user_id: []const u8,
+) !?auth.AuthInfo {
+    for (reg.accounts.items) |rec| {
+        if (!std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id)) continue;
+        if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
+
+        const auth_path = try registry.accountAuthPath(allocator, codex_home, rec.account_key);
+        defer allocator.free(auth_path);
+
+        const info = auth.parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.FileNotFound => continue,
+            else => {
+                std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+                continue;
+            },
+        };
+        if (info.access_token == null) {
+            var owned_info = info;
+            owned_info.deinit(allocator);
+            continue;
+        }
+        return info;
+    }
+
+    return null;
+}
+
 pub fn runBackgroundAccountNameRefresh(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     fetcher: AccountFetchFn,
 ) !void {
-    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return;
-    defer info.deinit(allocator);
-
-    const chatgpt_user_id = info.chatgpt_user_id orelse return;
-    const access_token = info.access_token orelse return;
-
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
-    if (!shouldRefreshTeamAccountNamesForUserScope(&reg, chatgpt_user_id)) return;
+    var candidates = try collectBackgroundAccountNameRefreshCandidates(allocator, &reg);
+    defer {
+        for (candidates.items) |*candidate| candidate.deinit(allocator);
+        candidates.deinit(allocator);
+    }
 
-    const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
-        std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
-        return;
-    };
-    defer result.deinit(allocator);
+    for (candidates.items) |candidate| {
+        var latest = try registry.loadRegistry(allocator, codex_home);
+        defer latest.deinit(allocator);
 
-    const entries = result.entries orelse return;
-    _ = try applyAccountNameRefreshEntriesToLatestRegistry(allocator, codex_home, chatgpt_user_id, entries);
+        if (!shouldRefreshTeamAccountNamesForUserScope(&latest, candidate.chatgpt_user_id)) continue;
+
+        var info = (try loadStoredAuthInfoForBackgroundAccountNameRefresh(
+            allocator,
+            codex_home,
+            &latest,
+            candidate.chatgpt_user_id,
+        )) orelse continue;
+        defer info.deinit(allocator);
+
+        const access_token = info.access_token orelse continue;
+        const result = fetcher(allocator, access_token, info.chatgpt_account_id) catch |err| {
+            std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
+            continue;
+        };
+        defer result.deinit(allocator);
+
+        const entries = result.entries orelse continue;
+        _ = try applyAccountNameRefreshEntriesToLatestRegistry(allocator, codex_home, candidate.chatgpt_user_id, entries);
+    }
 }
 
 fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
@@ -447,11 +542,9 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
             try registry.saveRegistry(allocator, codex_home, &reg);
         }
     }
-    if (try refreshAccountNamesForList(allocator, codex_home, &reg, defaultAccountFetcher)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
-    }
     try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
     try format.printAccounts(&reg);
+    maybeSpawnBackgroundAccountNameRefresh(allocator, &reg);
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
