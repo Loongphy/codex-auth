@@ -291,24 +291,6 @@ Upgrade notes:
 - If you are upgrading from `v0.1.x` to the latest `v0.2.x`, API usage refresh is enabled by default.
 - If you previously used an early `v0.2` prerelease/test build and `status` still shows `usage: local`, run `codex-auth config api enable` once to switch back to API mode.
 
-### How to import tokens from cli-proxy-api?
-
-The CLI imports flat cli-proxy-api / CPA JSON files directly:
-
-```shell
-codex-auth import --cpa                  # default source: ~/.cli-proxy-api
-codex-auth import --cpa /path/to/cpa-dir # scans direct child .json files
-```
-
-Each CPA file is converted in memory to the standard auth snapshot shape before it is written into `~/.codex/accounts/`. Missing or empty `refresh_token` values are skipped as `MissingRefreshToken`.
-
-After import, switch if needed:
-
-```shell
-codex-auth import --cpa
-codex-auth switch
-```
-
 Verify with:
 
 ```shell
