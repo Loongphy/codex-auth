@@ -12,6 +12,7 @@ pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
 pub const account_name_refresh_lock_file_name = "account-name-refresh.lock";
+pub const AutoSwitchPolicy = enum { threshold, auto };
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -47,6 +48,7 @@ pub const RolloutSignature = struct {
 
 pub const AutoSwitchConfig = struct {
     enabled: bool = false,
+    policy: AutoSwitchPolicy = .threshold,
     threshold_5h_percent: u8 = default_auto_switch_threshold_5h_percent,
     threshold_weekly_percent: u8 = default_auto_switch_threshold_weekly_percent,
 };
@@ -2520,6 +2522,12 @@ fn parsePlanType(s: []const u8) ?PlanType {
     return .unknown;
 }
 
+fn parseAutoSwitchPolicy(s: []const u8) ?AutoSwitchPolicy {
+    if (std.mem.eql(u8, s, "threshold")) return .threshold;
+    if (std.mem.eql(u8, s, "auto")) return .auto;
+    return null;
+}
+
 fn parseAuthMode(s: []const u8) ?AuthMode {
     if (std.mem.eql(u8, s, "chatgpt")) return .chatgpt;
     if (std.mem.eql(u8, s, "apikey")) return .apikey;
@@ -2554,6 +2562,14 @@ fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.
     if (obj.get("enabled")) |enabled| {
         switch (enabled) {
             .bool => |flag| cfg.enabled = flag,
+            else => {},
+        }
+    }
+    if (obj.get("policy")) |policy| {
+        switch (policy) {
+            .string => |value| if (parseAutoSwitchPolicy(value)) |parsed| {
+                cfg.policy = parsed;
+            },
             else => {},
         }
     }
