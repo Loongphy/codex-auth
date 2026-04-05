@@ -8,6 +8,7 @@ const c_time = @cImport({
 });
 const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
+const opencode_sync = @import("opencode_sync.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
 const usage_api = @import("usage_api.zig");
@@ -1309,6 +1310,20 @@ pub fn maybeAutoSwitchWithUsageFetcher(
     return maybeAutoSwitchWithUsageFetcherAndRefreshState(allocator, codex_home, reg, null, usage_fetcher);
 }
 
+fn tryRefreshRunningOpencodeAfterSwitch(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *const registry.Registry,
+) void {
+    opencode_sync.sync(allocator, codex_home, reg) catch |err| {
+        std.log.warn("opencode file sync skipped after auto-switch: {s}", .{@errorName(err)});
+        return;
+    };
+    opencode_sync.refreshRunningServers(allocator, codex_home, reg) catch |err| {
+        std.log.warn("opencode runtime refresh skipped after auto-switch: {s}", .{@errorName(err)});
+    };
+}
+
 pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -1395,6 +1410,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         const previous_active_key = reg.accounts.items[active_idx].account_key;
         const next_active_key = reg.accounts.items[candidate_idx].account_key;
         try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
+        tryRefreshRunningOpencodeAfterSwitch(allocator, codex_home, reg);
         try refresh_state.candidate_index.handleActiveSwitch(
             allocator,
             reg,
@@ -1433,6 +1449,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     const previous_active_key = reg.accounts.items[active_idx].account_key;
     const next_active_key = reg.accounts.items[candidate_idx].account_key;
     try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
+    tryRefreshRunningOpencodeAfterSwitch(allocator, codex_home, reg);
     try refresh_state.candidate_index.handleActiveSwitch(
         allocator,
         reg,
@@ -1487,6 +1504,7 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
     }
 
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
+    tryRefreshRunningOpencodeAfterSwitch(allocator, codex_home, reg);
     return .{ .refreshed_candidates = refreshed_candidates, .state_changed = true, .switched = true };
 }
 

@@ -6,6 +6,7 @@ const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
+const opencode_sync = @import("opencode_sync.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
@@ -82,6 +83,19 @@ fn runMain() !void {
         .clean => |_| try handleClean(allocator, codex_home.?),
     }
 
+    if (shouldSyncOpencode(cmd)) {
+        var reg = try registry.loadRegistry(allocator, codex_home.?);
+        defer reg.deinit(allocator);
+        opencode_sync.sync(allocator, codex_home.?, &reg) catch |err| {
+            std.log.warn("opencode file sync skipped: {s}", .{@errorName(err)});
+        };
+        if (shouldRefreshRunningOpencode(cmd)) {
+            opencode_sync.refreshRunningServers(allocator, codex_home.?, &reg) catch |err| {
+                std.log.warn("opencode runtime refresh skipped: {s}", .{@errorName(err)});
+            };
+        }
+    }
+
     if (shouldReconcileManagedService(cmd)) {
         try auto.reconcileManagedService(allocator, codex_home.?);
     }
@@ -100,6 +114,20 @@ pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     return switch (cmd) {
         .help, .version, .status, .daemon => false,
         else => true,
+    };
+}
+
+fn shouldSyncOpencode(cmd: cli.Command) bool {
+    return switch (cmd) {
+        .list, .login, .import_auth, .switch_account, .remove_account => true,
+        else => false,
+    };
+}
+
+fn shouldRefreshRunningOpencode(cmd: cli.Command) bool {
+    return switch (cmd) {
+        .login, .import_auth, .switch_account, .remove_account => true,
+        else => false,
     };
 }
 
@@ -580,6 +608,9 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     try registry.activateAccountByKey(allocator, codex_home, &reg, account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
+    const selected_idx = registry.findAccountIndexByAccountKey(&reg, account_key) orelse unreachable;
+    const selected_rec = &reg.accounts.items[selected_idx];
+    try cli.printSwitchSuccess(selected_rec.email, selected_rec.alias, selected_rec.account_name);
     maybeSpawnBackgroundAccountNameRefresh(allocator, &reg);
 }
 

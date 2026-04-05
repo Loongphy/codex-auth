@@ -1001,6 +1001,23 @@ pub fn printRemoveSummary(labels: []const []const u8) !void {
     try out.flush();
 }
 
+pub fn printSwitchSuccess(email: []const u8, alias: []const u8, account_name: ?[]const u8) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.print("Switched active account to {s}", .{email});
+    if (alias.len != 0) {
+        try out.print(" (alias: {s})", .{alias});
+    }
+    if (account_name) |name| {
+        if (name.len != 0) {
+            try out.print(" [{s}]", .{name});
+        }
+    }
+    try out.writeAll(".\n");
+    try out.flush();
+}
+
 fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void {
     var buffer: [512]u8 = undefined;
     var writer = std.fs.File.stderr().writer(&buffer);
