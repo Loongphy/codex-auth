@@ -245,6 +245,14 @@ fn codexHomeAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".codex" });
 }
 
+fn opencodeAuthPathAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".local", "share", "opencode", "auth.json" });
+}
+
+fn opencodeAccountsPathAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".config", "opencode", "codex-accounts.json" });
+}
+
 fn countAuthBackups(dir: std.fs.Dir, rel_path: []const u8) !usize {
     var accounts = try dir.openDir(rel_path, .{ .iterate = true });
     defer accounts.close();
@@ -1315,6 +1323,86 @@ test "Scenario: Given auth json already points at another registry account when 
     defer loaded_after_list.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded_after_list.accounts.items.len);
     try std.testing.expect(std.mem.eql(u8, loaded_after_list.accounts.items[0].email, "alpha@example.com"));
+}
+
+test "Scenario: Given opencode auth files when switching accounts then opencode oauth files are updated too" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const alpha_key = try bdd.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try bdd.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+
+    const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
+    defer gpa.free(alpha_snapshot_path);
+    const beta_snapshot_path = try registry.accountAuthPath(gpa, codex_home, beta_key);
+    defer gpa.free(beta_snapshot_path);
+
+    const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "team");
+    defer gpa.free(alpha_auth);
+    const beta_auth = try bdd.authJsonWithEmailPlan(gpa, "beta@example.com", "plus");
+    defer gpa.free(beta_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = alpha_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
+
+    try tmp.dir.makePath(".local/share/opencode");
+    try tmp.dir.makePath(".config/opencode");
+    try tmp.dir.writeFile(.{
+        .sub_path = ".local/share/opencode/auth.json",
+        .data =
+            "{\n" ++
+            "  \"google\": {\n" ++
+            "    \"type\": \"api\",\n" ++
+            "    \"key\": \"keep-me\"\n" ++
+            "  },\n" ++
+            "  \"openai\": {\n" ++
+            "    \"type\": \"oauth\",\n" ++
+            "    \"refresh\": \"old-refresh\",\n" ++
+            "    \"access\": \"old-access\",\n" ++
+            "    \"expires\": 1,\n" ++
+            "    \"accountId\": \"old-account\"\n" ++
+            "  }\n" ++
+            "}\n",
+    });
+
+    const switch_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "switch", "beta@" });
+    defer gpa.free(switch_result.stdout);
+    defer gpa.free(switch_result.stderr);
+    try expectSuccess(switch_result);
+
+    const opencode_auth_path = try opencodeAuthPathAlloc(gpa, home_root);
+    defer gpa.free(opencode_auth_path);
+    const opencode_auth = try bdd.readFileAlloc(gpa, opencode_auth_path);
+    defer gpa.free(opencode_auth);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_auth, "\"google\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_auth, "access-beta@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_auth, "old-access") == null);
+
+    const opencode_accounts_path = try opencodeAccountsPathAlloc(gpa, home_root);
+    defer gpa.free(opencode_accounts_path);
+    const opencode_accounts = try bdd.readFileAlloc(gpa, opencode_accounts_path);
+    defer gpa.free(opencode_accounts);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_accounts, "\"activeIndex\": 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_accounts, "beta@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, opencode_accounts, "\"importedFrom\"") != null);
 }
 
 test "Scenario: Given remove query with no matches when running remove then it exits cleanly with one stderr line" {
