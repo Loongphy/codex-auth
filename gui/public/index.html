@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Auth Control Room</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-title">
+          <p class="eyebrow">Desktop Control Panel</p>
+          <h1>Codex Auth</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="refresh-button" class="button button-primary" type="button">Refresh</button>
+          <button id="reload-button" class="button button-secondary" type="button">Reload</button>
+          <button id="clean-button" class="button button-secondary" type="button">Clean Backups</button>
+        </div>
+      </header>
+
+      <section class="panel summary-panel">
+        <div class="summary-main">
+          <div class="summary-copy">
+            <p class="section-label">Active account</p>
+            <h2 id="summary-title">Loading…</h2>
+            <p id="summary-meta" class="summary-meta"></p>
+          </div>
+          <div id="status-chips" class="chip-row"></div>
+        </div>
+        <div id="summary-stats" class="summary-stats"></div>
+      </section>
+
+      <main class="workspace">
+        <aside class="sidebar">
+          <section class="panel compact-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-label">Login</p>
+                <h3>Account auth</h3>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="login-browser-button" class="button button-primary" type="button">Browser Login</button>
+              <button id="login-device-button" class="button button-secondary" type="button">Device Auth</button>
+            </div>
+            <p class="hint">These run the same underlying `codex-auth login` flows from the app.</p>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-label">Import</p>
+                <h3>Standard auth</h3>
+              </div>
+            </div>
+            <form id="upload-form" class="compact-form">
+              <label class="field">
+                <span>Upload JSON</span>
+                <input id="upload-file" type="file" accept=".json" required>
+              </label>
+              <label class="field">
+                <span>Alias</span>
+                <input id="upload-alias" type="text" placeholder="personal">
+              </label>
+              <button class="button button-primary" type="submit">Import File</button>
+            </form>
+            <form id="path-form" class="compact-form section-break">
+              <label class="field field-wide">
+                <span>File or folder path</span>
+                <input id="import-path" type="text" placeholder="/path/to/auth.json or /exports">
+              </label>
+              <label class="field">
+                <span>Alias</span>
+                <input id="path-alias" type="text" placeholder="team">
+              </label>
+              <button class="button button-secondary" type="submit">Import Path</button>
+            </form>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-label">Advanced import</p>
+                <h3>CPA and rebuild</h3>
+              </div>
+            </div>
+            <form id="cpa-form" class="compact-form">
+              <label class="field field-wide">
+                <span>CPA path</span>
+                <input id="cpa-path" type="text" placeholder="blank uses ~/.cli-proxy-api">
+              </label>
+              <label class="field">
+                <span>Alias</span>
+                <input id="cpa-alias" type="text" placeholder="optional">
+              </label>
+              <button class="button button-secondary" type="submit">Import CPA</button>
+            </form>
+            <form id="purge-form" class="compact-form section-break">
+              <label class="field field-wide">
+                <span>Purge source path</span>
+                <input id="purge-path" type="text" placeholder="blank uses ~/.codex/accounts">
+              </label>
+              <button class="button button-secondary" type="submit">Rebuild Registry</button>
+            </form>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-label">Config</p>
+                <h3>Switch behavior</h3>
+              </div>
+            </div>
+            <div class="toggle-grid">
+              <label class="toggle">
+                <input id="auto-switch-toggle" type="checkbox">
+                <span>Auto-switch</span>
+              </label>
+              <label class="toggle">
+                <input id="api-toggle" type="checkbox">
+                <span>Usage APIs</span>
+              </label>
+            </div>
+            <form id="threshold-form" class="compact-form section-break">
+              <label class="field">
+                <span>5h %</span>
+                <input id="threshold-5h" name="threshold5h" type="number" min="1" max="100" required>
+              </label>
+              <label class="field">
+                <span>Weekly %</span>
+                <input id="threshold-weekly" name="thresholdWeekly" type="number" min="1" max="100" required>
+              </label>
+              <button class="button button-secondary" type="submit">Save</button>
+            </form>
+          </section>
+
+          <section class="panel compact-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="section-label">Maintenance</p>
+                <h3>Registry cleanup</h3>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="remove-all-button" class="button button-danger" type="button">Remove All</button>
+            </div>
+            <p class="hint" id="codex-home"></p>
+          </section>
+        </aside>
+
+        <section class="content">
+          <section class="panel accounts-panel">
+            <div class="panel-heading panel-heading-dense">
+              <div>
+                <p class="section-label">Accounts</p>
+                <h3>Saved registry</h3>
+              </div>
+              <label class="field field-search">
+                <span>Filter</span>
+                <input id="search-input" type="search" placeholder="email, alias, team, key">
+              </label>
+            </div>
+            <div class="accounts-toolbar">
+              <div id="account-count" class="muted"></div>
+            </div>
+            <div class="table-wrap">
+              <table class="accounts-table">
+                <thead>
+                  <tr>
+                    <th>Account</th>
+                    <th>Plan</th>
+                    <th>5h</th>
+                    <th>Weekly</th>
+                    <th>Used</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="accounts-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel log-panel">
+            <div class="panel-heading panel-heading-dense">
+              <div>
+                <p class="section-label">Activity</p>
+                <h3>Command output</h3>
+              </div>
+            </div>
+            <div id="message-banner" class="message-banner hidden"></div>
+            <pre id="action-log" class="action-log">Waiting for activity…</pre>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

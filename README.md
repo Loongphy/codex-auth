@@ -41,6 +41,43 @@ npx @loongphy/codex-auth list
 
   npm packages currently support Linux x64, macOS x64, macOS arm64, Windows x64, and Windows arm64.
 
+## GUI
+
+This repo now includes a local browser GUI for account management. From the project root:
+
+```shell
+npm run gui
+```
+
+The server opens a local dashboard and will use a built repo binary when available, build with Zig when `zig` is installed, or fall back to an existing `codex-auth` on your `PATH`. From there you can:
+
+- inspect accounts and the active session
+- switch or remove accounts
+- import auth JSON files
+- refresh usage data
+- change auto-switch and API settings
+
+The GUI still uses the existing CLI logic underneath, so the browser stays in sync with the same `~/.codex` data the terminal commands use.
+
+## Electron App
+
+There is also a local Electron desktop wrapper for the dashboard:
+
+```shell
+npm install
+npm run desktop
+```
+
+That opens the same account dashboard in a native desktop window instead of your browser. Internally, the Electron app starts the local GUI server for you and loads it inside the app window.
+
+The desktop app exposes the main account-management flows directly in GUI form, including:
+
+- login and device-auth login
+- standard auth import, CPA import, and registry rebuild (`import --purge`)
+- account switching and removal
+- auto-switch and API configuration
+- backup cleanup
+
 > [!NOTE]
 > If you only installed `@loongphy/codex-auth` with npm, you do not need any legacy cleanup steps.
 > Older Bash/PowerShell GitHub-release installs could leave a standalone `codex-auth` binary outside npm's install path.

@@ -1,0 +1,16 @@
+<svg width="1080" height="760" viewBox="0 0 1080 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="760" fill="#F6EFE4"/>
+  <circle cx="196" cy="156" r="220" fill="#E6B08A" fill-opacity="0.22"/>
+  <circle cx="912" cy="112" r="198" fill="#7CB7AA" fill-opacity="0.24"/>
+  <circle cx="918" cy="640" r="230" fill="#D18A5E" fill-opacity="0.16"/>
+  <rect x="66" y="58" width="948" height="644" rx="44" fill="#FFF9F2" fill-opacity="0.92"/>
+  <rect x="66" y="58" width="948" height="644" rx="44" stroke="#D8CABA"/>
+  <text x="112" y="170" fill="#1F2530" font-size="72" font-family="Georgia, serif" font-weight="700">Codex Auth</text>
+  <text x="114" y="228" fill="#5E6674" font-size="28" font-family="Arial, sans-serif">Drop the app into Applications to install the desktop switcher.</text>
+  <rect x="124" y="294" width="318" height="234" rx="28" fill="#F5E8D8"/>
+  <rect x="634" y="294" width="318" height="234" rx="28" fill="#E8F2EF"/>
+  <path d="M488 410H596" stroke="#D07A49" stroke-width="22" stroke-linecap="round"/>
+  <path d="M556 366L600 410L556 454" stroke="#D07A49" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="170" y="566" fill="#1F2530" font-size="26" font-family="Arial, sans-serif" font-weight="700">OpenAI account switcher</text>
+  <text x="680" y="566" fill="#1F2530" font-size="26" font-family="Arial, sans-serif" font-weight="700">Applications folder</text>
+</svg>
