@@ -27,6 +27,7 @@ const requestedPort = Number(process.env.PORT || 4318);
 let cachedBinaryPath = null;
 let buildingBinaryPromise = null;
 let cachedRunner = null;
+let hydratedProcessEnvPromise = null;
 const commandAvailability = new Map();
 
 const mimeTypes = {
@@ -47,6 +48,54 @@ function resolveCodexHome() {
 
 function resolveRegistryPath() {
   return path.join(resolveCodexHome(), "accounts", "registry.json");
+}
+
+function splitPathEntries(value) {
+  if (!value) {
+    return [];
+  }
+  return value.split(path.delimiter).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function mergePathEntries(...sources) {
+  const merged = [];
+  const seen = new Set();
+  for (const source of sources) {
+    const entries = Array.isArray(source) ? source : splitPathEntries(source);
+    for (const entry of entries) {
+      const key = isWindows ? entry.toLowerCase() : entry;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+  return merged.join(path.delimiter);
+}
+
+function likelyUserBinDirs() {
+  if (isWindows) {
+    const dirs = [];
+    if (process.env.APPDATA) {
+      dirs.push(path.join(process.env.APPDATA, "npm"));
+    }
+    return dirs;
+  }
+
+  const home = resolveHome();
+  return [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/opt/local/bin",
+    "/opt/local/sbin",
+    path.join(home, ".local", "bin"),
+    path.join(home, ".npm-global", "bin"),
+    path.join(home, ".yarn", "bin"),
+    path.join(home, ".cargo", "bin")
+  ];
 }
 
 async function exists(targetPath) {
@@ -130,6 +179,53 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+async function readLoginShellPath() {
+  if (isWindows) {
+    return "";
+  }
+
+  const shellPath = process.env.SHELL;
+  if (!shellPath || !path.isAbsolute(shellPath)) {
+    return "";
+  }
+
+  const marker = "__CODEX_AUTH_PATH__";
+  const command = `printf '${marker}%s${marker}' "$PATH"`;
+  for (const args of [["-lc", command], ["-c", command]]) {
+    try {
+      const result = await runCommand(shellPath, args, { cwd: resolveHome() });
+      if (result.code !== 0) {
+        continue;
+      }
+      const start = result.stdout.indexOf(marker);
+      const end = result.stdout.lastIndexOf(marker);
+      if (start === -1 || end === -1 || end <= start) {
+        continue;
+      }
+      return result.stdout.slice(start + marker.length, end).trim();
+    } catch {
+      // Keep the app usable even if the user's shell setup is unusual.
+    }
+  }
+
+  return "";
+}
+
+async function ensureProcessPathHydrated() {
+  if (!hydratedProcessEnvPromise) {
+    hydratedProcessEnvPromise = (async () => {
+      const shellPath = await readLoginShellPath();
+      const mergedPath = mergePathEntries(shellPath, process.env.PATH || "", likelyUserBinDirs());
+      if (mergedPath) {
+        process.env.PATH = mergedPath;
+      }
+      return process.env;
+    })();
+  }
+
+  return hydratedProcessEnvPromise;
+}
+
 async function ensureBinary() {
   if (cachedBinaryPath && await exists(cachedBinaryPath)) {
     return cachedBinaryPath;
@@ -177,6 +273,8 @@ async function commandOnPath(command) {
 }
 
 async function ensureRunner() {
+  await ensureProcessPathHydrated();
+
   if (cachedRunner) {
     return cachedRunner;
   }

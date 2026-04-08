@@ -1,6 +1,6 @@
 {
   "name": "@loongphy/codex-auth",
-  "version": "0.2.3-alpha.2",
+  "version": "0.2.3-alpha.3",
   "description": "CLI for switching Codex accounts",
   "main": "gui/electron/main.cjs",
   "productName": "Codex Auth",
@@ -23,11 +23,11 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@loongphy/codex-auth-linux-x64": "0.2.3-alpha.2",
-    "@loongphy/codex-auth-darwin-x64": "0.2.3-alpha.2",
-    "@loongphy/codex-auth-darwin-arm64": "0.2.3-alpha.2",
-    "@loongphy/codex-auth-win32-x64": "0.2.3-alpha.2",
-    "@loongphy/codex-auth-win32-arm64": "0.2.3-alpha.2"
+    "@loongphy/codex-auth-linux-x64": "0.2.3-alpha.3",
+    "@loongphy/codex-auth-darwin-x64": "0.2.3-alpha.3",
+    "@loongphy/codex-auth-darwin-arm64": "0.2.3-alpha.3",
+    "@loongphy/codex-auth-win32-x64": "0.2.3-alpha.3",
+    "@loongphy/codex-auth-win32-arm64": "0.2.3-alpha.3"
   },
   "scripts": {
     "assets:mac": "bash scripts/macos/build-assets.sh",
