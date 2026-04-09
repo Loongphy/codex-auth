@@ -3,6 +3,13 @@ zig-out/
 .zig-cache/
 dist/
 *.tgz
+node_modules/
+
+# Local macOS packaging outputs
+.DS_Store
+build/*.png
+build/*.icns
+build/icon.iconset/
 
 # IDE/Editor
 .idea/

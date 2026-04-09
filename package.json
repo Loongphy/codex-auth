@@ -2,6 +2,9 @@
   "name": "@loongphy/codex-auth",
   "version": "0.2.3-alpha.3",
   "description": "CLI for switching Codex accounts",
+  "main": "gui/electron/main.cjs",
+  "productName": "Codex Auth",
+  "author": "Loongphy",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,8 +30,72 @@
     "@loongphy/codex-auth-win32-arm64": "0.2.3-alpha.3"
   },
   "scripts": {
+    "assets:mac": "bash scripts/macos/build-assets.sh",
+    "desktop": "electron .",
+    "desktop:smoke": "electron . --smoke-test",
+    "dist": "npm run assets:mac && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg",
+    "dist:dir": "npm run assets:mac && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir",
+    "gui": "node gui/server.mjs --open",
     "check:versions": "node scripts/npm/check-versions.mjs",
     "stage:npm": "node scripts/npm/stage-packages.mjs"
+  },
+  "devDependencies": {
+    "cross-env": "10.1.0",
+    "electron": "41.0.3",
+    "electron-builder": "26.8.1"
+  },
+  "build": {
+    "appId": "com.loongphy.codex-auth.desktop",
+    "productName": "Codex Auth",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@loongphy/**/bin/*"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "gui/**/*",
+      "node_modules/@loongphy/**/*",
+      "package.json",
+      "LICENSE",
+      "README.md"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "icon": "build/icon.icns"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "background": "build/dmg-background.png",
+      "icon": "build/icon.icns",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 150,
+          "y": 190
+        },
+        {
+          "x": 390,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
   },
   "publishConfig": {
     "access": "public"
