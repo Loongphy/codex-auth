@@ -31,6 +31,7 @@ pub const RuntimeState = enum { running, stopped, unknown };
 pub const Status = struct {
     enabled: bool,
     runtime: RuntimeState,
+    policy: registry.AutoSwitchPolicy,
     threshold_5h_percent: u8,
     threshold_weekly_percent: u8,
     api_usage_enabled: bool,
@@ -53,10 +54,26 @@ const CandidateScore = struct {
 
 const candidate_upkeep_refresh_limit: usize = 1;
 const candidate_switch_validation_limit: usize = 3;
+const auto_policy_min_5h_hours: f64 = 0.25;
+const auto_policy_min_weekly_hours: f64 = 1.0;
+const auto_policy_reserve_5h_fraction: f64 = 0.20;
+const auto_policy_reserve_weekly_fraction: f64 = 0.10;
+const auto_policy_dead_fraction: f64 = 0.01;
+const auto_policy_missing_reset_hours: f64 = 1_000_000_000.0;
 
 const CandidateEntry = struct {
     account_key: []const u8,
     score: CandidateScore,
+};
+
+const AutoPolicyCandidateScore = struct {
+    tier: u8,
+    primary: f64,
+    secondary: f64,
+    health: f64,
+    burn: f64,
+    last_usage_at: i64,
+    created_at: i64,
 };
 
 const CandidateIndex = struct {
@@ -540,6 +557,7 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
     return .{
         .enabled = reg.auto_switch.enabled,
         .runtime = queryRuntimeState(allocator),
+        .policy = reg.auto_switch.policy,
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
         .api_usage_enabled = reg.api.usage,
@@ -559,6 +577,10 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
 
     try out.writeAll("service: ");
     try out.writeAll(@tagName(status.runtime));
+    try out.writeAll("\n");
+
+    try out.writeAll("policy: ");
+    try out.writeAll(@tagName(status.policy));
     try out.writeAll("\n");
 
     try out.writeAll("thresholds: ");
@@ -1261,6 +1283,9 @@ fn applyLatestUsableSnapshotFromRolloutFile(
 }
 
 pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
+    if (reg.auto_switch.policy == .auto) {
+        return bestAutoPolicyCandidateIndex(reg, now);
+    }
     const active = reg.active_account_key orelse return null;
     var best_idx: ?usize = null;
     var best: ?CandidateScore = null;
@@ -1318,10 +1343,12 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
 ) !AutoSwitchAttempt {
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
     const now = std.time.timestamp();
-    if (refresh_state.current_reg == null and refresh_state.candidate_index.heap.items.len == 0) {
-        try refresh_state.candidate_index.rebuild(allocator, reg, now);
-    } else {
-        try refresh_state.candidate_index.rebuildIfScoreExpired(allocator, reg, now);
+    if (reg.auto_switch.policy == .threshold) {
+        if (refresh_state.current_reg == null and refresh_state.candidate_index.heap.items.len == 0) {
+            try refresh_state.candidate_index.rebuild(allocator, reg, now);
+        } else {
+            try refresh_state.candidate_index.rebuildIfScoreExpired(allocator, reg, now);
+        }
     }
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
     const now_ns = std.time.nanoTimestamp();
@@ -1329,27 +1356,39 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         .refreshed_candidates = false,
         .switched = false,
     };
-    const current = candidateScore(&reg.accounts.items[active_idx], now);
-    const should_switch_current = shouldSwitchCurrent(reg, now);
+    const current_threshold = candidateScore(&reg.accounts.items[active_idx], now);
+    const current_auto = autoPolicyScore(&reg.accounts.items[active_idx], &reg.auto_switch, now);
+    const should_switch_current = if (reg.auto_switch.policy == .threshold) shouldSwitchCurrent(reg, now) else false;
 
     var changed = false;
     var refreshed_candidates = false;
 
     if (reg.api.usage and !should_switch_current) {
-        const upkeep = try refreshDaemonCandidateUpkeepWithUsageFetcher(
-            allocator,
-            codex_home,
-            reg,
-            refresh_state,
-            usage_fetcher,
-            now,
-            now_ns,
-        );
+        const upkeep = if (reg.auto_switch.policy == .threshold)
+            try refreshDaemonCandidateUpkeepWithUsageFetcher(
+                allocator,
+                codex_home,
+                reg,
+                refresh_state,
+                usage_fetcher,
+                now,
+                now_ns,
+            )
+        else
+            try refreshAutoPolicyCandidateUpkeepWithUsageFetcher(
+                allocator,
+                codex_home,
+                reg,
+                refresh_state,
+                usage_fetcher,
+                now,
+                now_ns,
+            );
         refreshed_candidates = upkeep.attempted != 0;
         changed = upkeep.updated != 0;
     }
 
-    if (!should_switch_current) {
+    if (reg.auto_switch.policy == .threshold and !should_switch_current) {
         return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
@@ -1360,38 +1399,115 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     if (reg.api.usage) {
         var skipped_candidates = std.ArrayListUnmanaged([]const u8).empty;
         defer skipped_candidates.deinit(allocator);
-        const validation = try refreshDaemonSwitchCandidatesWithUsageFetcher(
-            allocator,
-            codex_home,
-            reg,
-            refresh_state,
-            usage_fetcher,
-            now,
-            now_ns,
-            &skipped_candidates,
-        );
+        const validation = if (reg.auto_switch.policy == .threshold)
+            try refreshDaemonSwitchCandidatesWithUsageFetcher(
+                allocator,
+                codex_home,
+                reg,
+                refresh_state,
+                usage_fetcher,
+                now,
+                now_ns,
+                &skipped_candidates,
+            )
+        else
+            try refreshAutoPolicySwitchCandidatesWithUsageFetcher(
+                allocator,
+                codex_home,
+                reg,
+                refresh_state,
+                usage_fetcher,
+                now,
+                now_ns,
+                &skipped_candidates,
+            );
         refreshed_candidates = refreshed_candidates or validation.attempted != 0;
         changed = changed or validation.updated != 0;
 
-        const best_candidate_key = (try bestDaemonCandidateForSwitch(allocator, refresh_state, skipped_candidates.items, now_ns)) orelse return .{
+        const best_candidate_key = if (reg.auto_switch.policy == .threshold)
+            (try bestDaemonCandidateForSwitch(allocator, refresh_state, skipped_candidates.items, now_ns))
+        else blk: {
+            var ordered = try orderedAutoPolicyCandidateKeysAlloc(allocator, reg, now);
+            defer ordered.deinit(allocator);
+            var selected: ?[]const u8 = null;
+            for (ordered.items) |account_key| {
+                if (refresh_state.candidateIsRejected(account_key, now_ns)) continue;
+                if (keyIsSkipped(skipped_candidates.items, account_key)) continue;
+                selected = account_key;
+                break;
+            }
+            break :blk selected;
+        };
+        const resolved_candidate_key = best_candidate_key orelse return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
             .switched = false,
         };
-        const candidate_idx = registry.findAccountIndexByAccountKey(reg, best_candidate_key) orelse return .{
+        const candidate_idx = registry.findAccountIndexByAccountKey(reg, resolved_candidate_key) orelse return .{
+            .refreshed_candidates = refreshed_candidates,
+            .state_changed = changed,
+            .switched = false,
+        };
+        if (reg.auto_switch.policy == .threshold) {
+            const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
+            if (candidate.value <= current_threshold.value) {
+                return .{
+                    .refreshed_candidates = refreshed_candidates,
+                    .state_changed = changed,
+                    .switched = false,
+                };
+            }
+        } else {
+            const candidate = autoPolicyScore(&reg.accounts.items[candidate_idx], &reg.auto_switch, now);
+            if (!autoPolicyCandidateBetter(candidate, current_auto)) {
+                return .{
+                    .refreshed_candidates = refreshed_candidates,
+                    .state_changed = changed,
+                    .switched = false,
+                };
+            }
+        }
+
+        const previous_active_key = reg.accounts.items[active_idx].account_key;
+        const next_active_key = reg.accounts.items[candidate_idx].account_key;
+        try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
+        if (reg.auto_switch.policy == .threshold) {
+            try refresh_state.candidate_index.handleActiveSwitch(
+                allocator,
+                reg,
+                previous_active_key,
+                next_active_key,
+                std.time.timestamp(),
+            );
+        }
+        try refresh_state.markCandidateChecked(allocator, previous_active_key, now_ns);
+        refresh_state.clearCandidateChecked(next_active_key);
+        return .{
+            .refreshed_candidates = refreshed_candidates,
+            .state_changed = true,
+            .switched = true,
+        };
+    }
+
+    if (reg.auto_switch.policy == .threshold) {
+        const candidate_entry = refresh_state.candidate_index.best() orelse return .{
+            .refreshed_candidates = refreshed_candidates,
+            .state_changed = changed,
+            .switched = false,
+        };
+        const candidate_idx = registry.findAccountIndexByAccountKey(reg, candidate_entry.account_key) orelse return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
             .switched = false,
         };
         const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-        if (candidate.value <= current.value) {
+        if (candidate.value <= current_threshold.value) {
             return .{
                 .refreshed_candidates = refreshed_candidates,
                 .state_changed = changed,
                 .switched = false,
             };
         }
-
         const previous_active_key = reg.accounts.items[active_idx].account_key;
         const next_active_key = reg.accounts.items[candidate_idx].account_key;
         try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
@@ -1411,18 +1527,13 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         };
     }
 
-    const candidate_entry = refresh_state.candidate_index.best() orelse return .{
+    const candidate_idx = bestAutoPolicyCandidateIndex(reg, now) orelse return .{
         .refreshed_candidates = refreshed_candidates,
         .state_changed = changed,
         .switched = false,
     };
-    const candidate_idx = registry.findAccountIndexByAccountKey(reg, candidate_entry.account_key) orelse return .{
-        .refreshed_candidates = refreshed_candidates,
-        .state_changed = changed,
-        .switched = false,
-    };
-    const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) {
+    const candidate = autoPolicyScore(&reg.accounts.items[candidate_idx], &reg.auto_switch, now);
+    if (!autoPolicyCandidateBetter(candidate, current_auto)) {
         return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
@@ -1433,13 +1544,6 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     const previous_active_key = reg.accounts.items[active_idx].account_key;
     const next_active_key = reg.accounts.items[candidate_idx].account_key;
     try registry.activateAccountByKey(allocator, codex_home, reg, next_active_key);
-    try refresh_state.candidate_index.handleActiveSwitch(
-        allocator,
-        reg,
-        previous_active_key,
-        next_active_key,
-        std.time.timestamp(),
-    );
     try refresh_state.markCandidateChecked(allocator, previous_active_key, now_ns);
     refresh_state.clearCandidateChecked(next_active_key);
     return .{
@@ -1459,7 +1563,9 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
     const now = std.time.timestamp();
-    if (!shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
+    if (reg.auto_switch.policy == .threshold and !shouldSwitchCurrent(reg, now)) {
+        return .{ .refreshed_candidates = false, .switched = false };
+    }
 
     _ = refresh_state;
     const should_refresh_candidates = reg.api.usage;
@@ -1473,17 +1579,28 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
         .refreshed_candidates = refreshed_candidates,
         .switched = false,
     };
-    const current = candidateScore(&reg.accounts.items[active_idx], now);
     const candidate_idx = bestAutoSwitchCandidateIndex(reg, now) orelse return .{
         .refreshed_candidates = refreshed_candidates,
         .switched = false,
     };
-    const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) {
-        return .{
-            .refreshed_candidates = refreshed_candidates,
-            .switched = false,
-        };
+    if (reg.auto_switch.policy == .threshold) {
+        const current = candidateScore(&reg.accounts.items[active_idx], now);
+        const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
+        if (candidate.value <= current.value) {
+            return .{
+                .refreshed_candidates = refreshed_candidates,
+                .switched = false,
+            };
+        }
+    } else {
+        const current = autoPolicyScore(&reg.accounts.items[active_idx], &reg.auto_switch, now);
+        const candidate = autoPolicyScore(&reg.accounts.items[candidate_idx], &reg.auto_switch, now);
+        if (!autoPolicyCandidateBetter(candidate, current)) {
+            return .{
+                .refreshed_candidates = refreshed_candidates,
+                .switched = false,
+            };
+        }
     }
 
     try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[candidate_idx].account_key);
@@ -1621,6 +1738,83 @@ fn refreshDaemonSwitchCandidatesWithUsageFetcher(
     }
 
     _ = now;
+    return summary;
+}
+
+fn refreshAutoPolicyCandidateUpkeepWithUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    usage_fetcher: anytype,
+    now: i64,
+    now_ns: i128,
+) !CandidateRefreshSummary {
+    var ordered = try orderedAutoPolicyCandidateKeysAlloc(allocator, reg, now);
+    defer ordered.deinit(allocator);
+
+    var summary: CandidateRefreshSummary = .{};
+    for (ordered.items) |account_key| {
+        if (!refresh_state.candidateIsStale(account_key, now_ns)) break;
+        const result = try refreshDaemonCandidateUsageByKeyWithFetcher(
+            allocator,
+            codex_home,
+            reg,
+            refresh_state,
+            account_key,
+            usage_fetcher,
+            now_ns,
+        );
+        summary.attempted += result.attempted;
+        summary.updated += result.updated;
+        if (result.visited) break;
+    }
+    return summary;
+}
+
+fn refreshAutoPolicySwitchCandidatesWithUsageFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+    usage_fetcher: anytype,
+    now: i64,
+    now_ns: i128,
+    skipped_keys: *std.ArrayListUnmanaged([]const u8),
+) !CandidateRefreshSummary {
+    var summary: CandidateRefreshSummary = .{};
+    var visited: usize = 0;
+    while (visited < candidate_switch_validation_limit) : (visited += 1) {
+        var ordered = try orderedAutoPolicyCandidateKeysAlloc(allocator, reg, now);
+        defer ordered.deinit(allocator);
+
+        var selected_key: ?[]const u8 = null;
+        for (ordered.items) |account_key| {
+            if (refresh_state.candidateIsRejected(account_key, now_ns)) continue;
+            if (keyIsSkipped(skipped_keys.items, account_key)) continue;
+            selected_key = account_key;
+            break;
+        }
+        const best_account_key = selected_key orelse break;
+        if (!refresh_state.candidateIsStale(best_account_key, now_ns)) break;
+
+        const result = try refreshDaemonCandidateUsageByKeyWithFetcher(
+            allocator,
+            codex_home,
+            reg,
+            refresh_state,
+            best_account_key,
+            usage_fetcher,
+            now_ns,
+        );
+        summary.attempted += result.attempted;
+        summary.updated += result.updated;
+        if (result.disqualify_for_switch) {
+            try skipped_keys.append(allocator, best_account_key);
+        }
+        if (!result.visited) break;
+    }
+
     return summary;
 }
 
@@ -1884,7 +2078,10 @@ fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     try uninstallService(allocator, codex_home);
 }
 
-pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThresholdOptions) void {
+pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoConfigOptions) void {
+    if (opts.policy) |policy| {
+        cfg.policy = policy;
+    }
     if (opts.threshold_5h_percent) |value| {
         cfg.threshold_5h_percent = value;
     }
@@ -1893,7 +2090,7 @@ pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThres
     }
 }
 
-fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoThresholdOptions) !void {
+fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoConfigOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     applyThresholdConfig(&reg.auto_switch, opts);
@@ -1914,6 +2111,122 @@ fn candidateBetter(a: CandidateScore, b: CandidateScore) bool {
     if (a.value != b.value) return a.value > b.value;
     if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;
     return a.created_at > b.created_at;
+}
+
+fn remainingFractionOrDefault(window: ?registry.RateLimitWindow, now: i64, default_value: f64) f64 {
+    const remaining = registry.remainingPercentAt(window, now) orelse return default_value;
+    return @as(f64, @floatFromInt(remaining)) / 100.0;
+}
+
+fn hoursUntilResetOrDefault(window: ?registry.RateLimitWindow, now: i64, minimum_hours: f64, default_value: f64) f64 {
+    const resolved = window orelse return default_value;
+    const resets_at = resolved.resets_at orelse return default_value;
+    const seconds_until_reset = resets_at - now;
+    if (seconds_until_reset <= 0) return minimum_hours;
+    const hours = @as(f64, @floatFromInt(seconds_until_reset)) / 3600.0;
+    return @max(hours, minimum_hours);
+}
+
+fn configuredHealthy5hFloor(cfg: *const registry.AutoSwitchConfig) f64 {
+    return @as(f64, @floatFromInt(cfg.threshold_5h_percent)) / 100.0;
+}
+
+fn configuredHealthyWeeklyFloor(cfg: *const registry.AutoSwitchConfig) f64 {
+    return @as(f64, @floatFromInt(cfg.threshold_weekly_percent)) / 100.0;
+}
+
+fn autoPolicyScore(rec: *const registry.AccountRecord, cfg: *const registry.AutoSwitchConfig, now: i64) AutoPolicyCandidateScore {
+    const window_5h = registry.resolveRateWindow(rec.last_usage, 300, true);
+    const window_week = registry.resolveRateWindow(rec.last_usage, 10080, false);
+
+    const r5 = remainingFractionOrDefault(window_5h, now, 1.0);
+    const rw = remainingFractionOrDefault(window_week, now, 1.0);
+    const t5 = hoursUntilResetOrDefault(window_5h, now, auto_policy_min_5h_hours, auto_policy_missing_reset_hours);
+    const tw = hoursUntilResetOrDefault(window_week, now, auto_policy_min_weekly_hours, auto_policy_missing_reset_hours);
+
+    const health = @min(r5, rw);
+    const burn = (r5 / @max(t5, auto_policy_min_5h_hours)) + (0.35 * (rw / @max(tw, auto_policy_min_weekly_hours)));
+
+    const dead = r5 <= auto_policy_dead_fraction or rw <= auto_policy_dead_fraction;
+    const healthy = r5 >= configuredHealthy5hFloor(cfg) and rw >= configuredHealthyWeeklyFloor(cfg);
+    const reserve_ok = r5 >= auto_policy_reserve_5h_fraction and rw >= auto_policy_reserve_weekly_fraction;
+
+    const tier: u8 = if (!dead and healthy and reserve_ok)
+        4
+    else if (!dead and healthy)
+        3
+    else if (!dead)
+        2
+    else
+        1;
+
+    const primary = if (tier >= 3) burn else health;
+    const secondary = if (tier >= 3) health else burn;
+
+    return .{
+        .tier = tier,
+        .primary = primary,
+        .secondary = secondary,
+        .health = health,
+        .burn = burn,
+        .last_usage_at = rec.last_usage_at orelse -1,
+        .created_at = rec.created_at,
+    };
+}
+
+fn autoPolicyCandidateBetter(a: AutoPolicyCandidateScore, b: AutoPolicyCandidateScore) bool {
+    if (a.tier != b.tier) return a.tier > b.tier;
+    if (a.primary != b.primary) return a.primary > b.primary;
+    if (a.secondary != b.secondary) return a.secondary > b.secondary;
+    if (a.last_usage_at != b.last_usage_at) return a.last_usage_at > b.last_usage_at;
+    return a.created_at > b.created_at;
+}
+
+fn bestAutoPolicyCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
+    const active = reg.active_account_key orelse return null;
+    var best_idx: ?usize = null;
+    var best: ?AutoPolicyCandidateScore = null;
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        if (std.mem.eql(u8, rec.account_key, active)) continue;
+        const score = autoPolicyScore(rec, &reg.auto_switch, now);
+        if (best == null or autoPolicyCandidateBetter(score, best.?)) {
+            best = score;
+            best_idx = idx;
+        }
+    }
+    return best_idx;
+}
+
+fn orderedAutoPolicyCandidateKeysAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    now: i64,
+) !std.ArrayList([]const u8) {
+    var ordered = try std.ArrayList([]const u8).initCapacity(allocator, reg.accounts.items.len);
+    const active = reg.active_account_key;
+    for (reg.accounts.items) |rec| {
+        if (active) |account_key| {
+            if (std.mem.eql(u8, rec.account_key, account_key)) continue;
+        }
+        try ordered.append(allocator, rec.account_key);
+    }
+
+    const SortContext = struct {
+        reg: *registry.Registry,
+        now: i64,
+    };
+    const Ctx = SortContext{ .reg = reg, .now = now };
+    std.sort.block([]const u8, ordered.items, Ctx, struct {
+        fn lessThan(ctx: SortContext, lhs: []const u8, rhs: []const u8) bool {
+            const lhs_idx = registry.findAccountIndexByAccountKey(ctx.reg, lhs) orelse return false;
+            const rhs_idx = registry.findAccountIndexByAccountKey(ctx.reg, rhs) orelse return false;
+            return autoPolicyCandidateBetter(
+                autoPolicyScore(&ctx.reg.accounts.items[lhs_idx], &ctx.reg.auto_switch, ctx.now),
+                autoPolicyScore(&ctx.reg.accounts.items[rhs_idx], &ctx.reg.auto_switch, ctx.now),
+            );
+        }
+    }.lessThan);
+    return ordered;
 }
 
 fn candidateScoreChangeAt(usage: ?registry.RateLimitSnapshot, now: i64) ?i64 {

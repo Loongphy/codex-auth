@@ -114,6 +114,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 | Command | Description |
 |---------|-------------|
 | `codex-auth config auto enable\|disable` | Enable or disable background auto-switching |
+| `codex-auth config auto --policy <threshold\|auto>` | Select the auto-switch policy |
 | `codex-auth config auto [--5h <%>] [--weekly <%>]` | Set auto-switch thresholds |
 | `codex-auth config api enable\|disable` | Enable or disable both usage refresh and team name refresh API calls |
 
@@ -235,15 +236,24 @@ codex-auth config auto disable
 Adjust thresholds:
 
 ```shell
+codex-auth config auto --policy auto
+codex-auth config auto --policy threshold
 codex-auth config auto --5h 12
+codex-auth config auto --policy auto --5h 12 --weekly 8
 codex-auth config auto --5h 12 --weekly 8
 codex-auth config auto --weekly 8
 ```
 
-When auto-switching is enabled, a long-running background watcher refreshes the active account's usage and silently switches accounts when:
+`threshold` is the default policy. It keeps the current behavior and only switches after the active account crosses the configured 5h or weekly floor.
+
+`auto` is an opt-in proactive policy. It ranks all managed accounts using current 5h remaining, weekly remaining, and time until each reset. It prefers accounts with safe remaining headroom whose unused capacity will reset sooner, while avoiding accounts that are already close to exhaustion.
+
+When auto-switching is enabled with the default `threshold` policy, a long-running background watcher refreshes the active account's usage and silently switches accounts when:
 
 - 5h remaining drops below the configured 5h threshold (default `10%`), or
 - weekly remaining drops below the configured weekly threshold (default `5%`)
+
+When `--policy auto` is enabled, the watcher may switch earlier even if the current account is still above those thresholds, if another account has more perishable safe capacity to burn first.
 
 The managed background worker is long-running on all supported platforms:
 

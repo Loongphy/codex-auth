@@ -49,13 +49,14 @@ pub const RemoveOptions = struct {
 };
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
-pub const AutoThresholdOptions = struct {
+pub const AutoConfigOptions = struct {
+    policy: ?registry.AutoSwitchPolicy,
     threshold_5h_percent: ?u8,
     threshold_weekly_percent: ?u8,
 };
 pub const AutoOptions = union(enum) {
     action: AutoAction,
-    configure: AutoThresholdOptions,
+    configure: AutoConfigOptions,
 };
 pub const ApiAction = enum { enable, disable };
 pub const ConfigOptions = union(enum) {
@@ -306,11 +307,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                 if (std.mem.eql(u8, action, "disable")) return .{ .command = .{ .config = .{ .auto_switch = .{ .action = .disable } } } };
             }
 
+            var policy: ?registry.AutoSwitchPolicy = null;
             var threshold_5h_percent: ?u8 = null;
             var threshold_weekly_percent: ?u8 = null;
             var i: usize = 3;
             while (i < args.len) : (i += 1) {
                 const arg = std.mem.sliceTo(args[i], 0);
+                if (std.mem.eql(u8, arg, "--policy")) {
+                    if (i + 1 >= args.len) return usageErrorResult(allocator, .config, "missing value for `--policy`.", .{});
+                    if (policy != null) return usageErrorResult(allocator, .config, "duplicate `--policy` for `config auto`.", .{});
+                    policy = parseAutoPolicyArg(std.mem.sliceTo(args[i + 1], 0)) orelse
+                        return usageErrorResult(allocator, .config, "`--policy` must be `threshold` or `auto`.", .{});
+                    i += 1;
+                    continue;
+                }
                 if (std.mem.eql(u8, arg, "--5h")) {
                     if (i + 1 >= args.len) return usageErrorResult(allocator, .config, "missing value for `--5h`.", .{});
                     if (threshold_5h_percent != null) return usageErrorResult(allocator, .config, "duplicate `--5h` for `config auto`.", .{});
@@ -328,14 +338,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                     continue;
                 }
                 if (std.mem.eql(u8, arg, "enable") or std.mem.eql(u8, arg, "disable")) {
-                    return usageErrorResult(allocator, .config, "`config auto` cannot mix actions with threshold flags.", .{});
+                    return usageErrorResult(allocator, .config, "`config auto` cannot mix actions with config flags.", .{});
                 }
                 return usageErrorResult(allocator, .config, "unknown argument `{s}` for `config auto`.", .{arg});
             }
-            if (threshold_5h_percent == null and threshold_weekly_percent == null) {
-                return usageErrorResult(allocator, .config, "`config auto` requires an action or threshold flags.", .{});
+            if (policy == null and threshold_5h_percent == null and threshold_weekly_percent == null) {
+                return usageErrorResult(allocator, .config, "`config auto` requires an action or config flags.", .{});
             }
             return .{ .command = .{ .config = .{ .auto_switch = .{ .configure = .{
+                .policy = policy,
                 .threshold_5h_percent = threshold_5h_percent,
                 .threshold_weekly_percent = threshold_weekly_percent,
             } } } } };
@@ -489,8 +500,13 @@ pub fn writeHelp(
     try out.writeAll("Auto Switch:");
     if (use_color) try out.writeAll(ansi.reset);
     try out.print(
-        " {s} (5h<{d}%, weekly<{d}%)\n\n",
-        .{ if (auto_cfg.enabled) "ON" else "OFF", auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
+        " {s} (policy={s}, 5h<{d}%, weekly<{d}%)\n\n",
+        .{
+            if (auto_cfg.enabled) "ON" else "OFF",
+            @tagName(auto_cfg.policy),
+            auto_cfg.threshold_5h_percent,
+            auto_cfg.threshold_weekly_percent,
+        },
     );
 
     if (use_color) try out.writeAll(ansi.bold);
@@ -534,6 +550,7 @@ pub fn writeHelp(
     const config_details = [_]HelpEntry{
         .{ .name = "auto enable", .description = "Enable background auto-switching" },
         .{ .name = "auto disable", .description = "Disable background auto-switching" },
+        .{ .name = "auto --policy <threshold|auto>", .description = "Select the auto-switch policy" },
         .{ .name = "auto --5h <percent> [--weekly <percent>]", .description = "Configure auto-switch thresholds" },
         .{ .name = "api enable", .description = "Enable usage and account APIs" },
         .{ .name = "api disable", .description = "Disable usage and account APIs" },
@@ -563,6 +580,7 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[2].name, config_details[2].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[3].name, config_details[3].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[4].name, config_details[4].description);
+    try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[5].name, config_details[5].description);
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.bold);
@@ -577,6 +595,12 @@ fn parsePercentArg(raw: []const u8) ?u8 {
     const value = std.fmt.parseInt(u8, raw, 10) catch return null;
     if (value < 1 or value > 100) return null;
     return value;
+}
+
+fn parseAutoPolicyArg(raw: []const u8) ?registry.AutoSwitchPolicy {
+    if (std.mem.eql(u8, raw, "threshold")) return .threshold;
+    if (std.mem.eql(u8, raw, "auto")) return .auto;
+    return null;
 }
 
 const HelpEntry = struct {
@@ -714,7 +738,9 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .config => {
             try out.writeAll("  codex-auth config auto enable\n");
             try out.writeAll("  codex-auth config auto disable\n");
+            try out.writeAll("  codex-auth config auto --policy <threshold|auto>\n");
             try out.writeAll("  codex-auth config auto --5h <percent> [--weekly <percent>]\n");
+            try out.writeAll("  codex-auth config auto --policy <threshold|auto> --5h <percent> [--weekly <percent>]\n");
             try out.writeAll("  codex-auth config auto --weekly <percent>\n");
             try out.writeAll("  codex-auth config api enable\n");
             try out.writeAll("  codex-auth config api disable\n");
@@ -757,6 +783,7 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .clean => try out.writeAll("  codex-auth clean\n"),
         .config => {
             try out.writeAll("  codex-auth config auto --5h 12 --weekly 8\n");
+            try out.writeAll("  codex-auth config auto --policy auto\n");
             try out.writeAll("  codex-auth config api enable\n");
         },
         .daemon => {

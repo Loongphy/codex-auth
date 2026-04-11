@@ -191,6 +191,7 @@ test "registry save/load" {
     const active_account_key = try accountKeyForEmailAlloc(gpa, "a@b.com");
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+    reg.auto_switch.policy = .auto;
     reg.auto_switch.threshold_5h_percent = 12;
     reg.auto_switch.threshold_weekly_percent = 8;
     reg.api.usage = true;
@@ -203,10 +204,12 @@ test "registry save/load" {
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"policy\": \"auto\"") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
+    try std.testing.expectEqual(registry.AutoSwitchPolicy.auto, loaded.auto_switch.policy);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
     try std.testing.expect(loaded.api.usage);
@@ -425,6 +428,7 @@ test "registry load defaults missing auto threshold fields" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expectEqual(registry.AutoSwitchPolicy.threshold, loaded.auto_switch.policy);
     try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
     try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
     try std.testing.expect(loaded.api.usage);

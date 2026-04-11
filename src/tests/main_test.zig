@@ -315,6 +315,7 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .list = .{} }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .action = .enable } } }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .configure = .{
+        .policy = null,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = null,
     } } } }));

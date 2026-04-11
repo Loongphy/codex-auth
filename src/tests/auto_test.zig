@@ -602,6 +602,72 @@ test "Scenario: Given free candidate with only a secondary weekly window when se
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
+test "Scenario: Given auto policy and two healthy candidates when selecting auto candidate then the most perishable safe capacity wins" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.policy = .auto;
+    const now = std.time.timestamp();
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = now + 3_600 },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = now + 7 * 24 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "perishable@example.com", .{
+        .primary = .{ .used_percent = 40.0, .window_minutes = 300, .resets_at = now + 3_600 },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = now + 100 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "steady@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = now + 10 * 3_600 },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = now + 100 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, now) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "perishable@example.com"));
+}
+
+test "Scenario: Given auto policy and weak candidates when selecting auto candidate then survival beats burn" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.policy = .auto;
+    const now = std.time.timestamp();
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = now + 3_600 },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = now + 7 * 24 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "burny@example.com", .{
+        .primary = .{ .used_percent = 40.0, .window_minutes = 300, .resets_at = now + 900 },
+        .secondary = .{ .used_percent = 96.0, .window_minutes = 10080, .resets_at = now + 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 200);
+    try appendAccountWithUsage(gpa, &reg, "safer@example.com", .{
+        .primary = .{ .used_percent = 91.0, .window_minutes = 300, .resets_at = now + 10 * 3_600 },
+        .secondary = .{ .used_percent = 50.0, .window_minutes = 10080, .resets_at = now + 100 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 300);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, now) orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "safer@example.com"));
+}
+
 test "Scenario: Given free account with only a weekly window when checking current then the free 5h guard does not misfire" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -718,10 +784,12 @@ test "Scenario: Given threshold overrides when applying config then unspecified 
     cfg.threshold_weekly_percent = 7;
 
     auto.applyThresholdConfig(&cfg, .{
+        .policy = .auto,
         .threshold_5h_percent = 13,
         .threshold_weekly_percent = null,
     });
 
+    try std.testing.expectEqual(registry.AutoSwitchPolicy.auto, cfg.policy);
     try std.testing.expect(cfg.threshold_5h_percent == 13);
     try std.testing.expect(cfg.threshold_weekly_percent == 7);
 }
@@ -775,6 +843,60 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     const active_data = try bdd.readFileAlloc(gpa, active_path);
     defer gpa.free(active_data);
     try std.testing.expect(std.mem.eql(u8, active_data, fresh_auth));
+}
+
+test "Scenario: Given auto policy and healthier current account thresholds when auto switch runs then it still switches proactively to the more perishable safe account" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.auto_switch.policy = .auto;
+    const now = std.time.timestamp();
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 40.0, .window_minutes = 300, .resets_at = now + 10 * 3_600 },
+        .secondary = .{ .used_percent = 30.0, .window_minutes = 10080, .resets_at = now + 100 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", .{
+        .primary = .{ .used_percent = 50.0, .window_minutes = 300, .resets_at = now + 3_600 },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = now + 100 * 3_600 },
+        .credits = null,
+        .plan_type = .pro,
+    }, 200);
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+
+    const active_account_path = try registry.accountAuthPath(gpa, codex_home, active_account_id);
+    defer gpa.free(active_account_path);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    const candidate_account_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_account_path);
+    const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(active_auth_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = active_account_path, .data = active_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = candidate_account_path, .data = candidate_auth });
+    try std.fs.cwd().writeFile(.{ .sub_path = active_auth_path, .data = active_auth });
+
+    try std.testing.expect(try auto.maybeAutoSwitch(gpa, codex_home, &reg));
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, candidate_account_id));
 }
 
 test "Scenario: Given API mode and unknown candidate usage when auto switching then it refreshes the candidate before switching" {
@@ -1588,6 +1710,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try auto.writeStatus(&aw.writer, .{
         .enabled = true,
         .runtime = .running,
+        .policy = .auto,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = false,
@@ -1597,6 +1720,7 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "policy: auto") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "account: disabled") != null);
@@ -1611,6 +1735,7 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
     try auto.writeStatus(&aw.writer, .{
         .enabled = true,
         .runtime = .running,
+        .policy = .threshold,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
         .api_usage_enabled = true,
