@@ -10,17 +10,18 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## File Layout
 
-- `~/.codex/auth.json`
-- `~/.codex/accounts/registry.json`
-- `~/.codex/accounts/<account file key>.auth.json`
-- `~/.codex/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
-- `~/.codex/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
-- `~/.codex/sessions/...`
+- `<codex_home>/auth.json`
+- `<codex_home>/accounts/registry.json`
+- `<codex_home>/accounts/<account file key>.auth.json`
+- `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
+- `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
+- `<codex_home>/sessions/...`
 
-`codex-auth` resolves `codex_home` from the real user home directory:
+`codex-auth` resolves `codex_home` in this order:
 
-1. `HOME/.codex`
-2. `USERPROFILE/.codex` (Windows fallback)
+1. `CODEX_HOME` when it is set to a non-empty path
+2. `HOME/.codex`
+3. `USERPROFILE/.codex` (Windows fallback)
 
 ## Testing Conventions (BDD Style on std.testing)
 
@@ -216,7 +217,7 @@ The detailed runtime, thresholds, service model, and data-source priority rules 
 This document keeps only the cross-reference points that matter to the rest of the implementation:
 
 - background config still lives in `registry.json` under top-level `auto_switch` and `api` blocks
-- managed services still resolve install paths from the real user home directory
+- managed services resolve from the same `codex_home` root as the active CLI process
 - successful foreground `codex-auth` commands except `help`, `version`, `status`, and `daemon` still reconcile the managed service definition
 - Linux/WSL `config auto enable` still requires a working `systemd --user` session
 

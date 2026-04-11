@@ -117,6 +117,51 @@ fn makeAccountRecord(
     };
 }
 
+test "resolveCodexHomeFromEnv prefers CODEX_HOME over HOME" {
+    const gpa = std.testing.allocator;
+
+    const resolved = try registry.resolveCodexHomeFromEnv(
+        gpa,
+        "/tmp/custom-codex",
+        "/tmp/home-root",
+        null,
+    );
+    defer gpa.free(resolved);
+
+    try std.testing.expectEqualStrings("/tmp/custom-codex", resolved);
+}
+
+test "resolveCodexHomeFromEnv falls back to HOME when CODEX_HOME is empty" {
+    const gpa = std.testing.allocator;
+
+    const resolved = try registry.resolveCodexHomeFromEnv(
+        gpa,
+        "",
+        "/tmp/home-root",
+        null,
+    );
+    defer gpa.free(resolved);
+
+    try std.testing.expectEqualStrings("/tmp/home-root/.codex", resolved);
+}
+
+test "resolveCodexHomeFromEnv falls back to USERPROFILE when HOME is unset" {
+    const gpa = std.testing.allocator;
+
+    const resolved = try registry.resolveCodexHomeFromEnv(
+        gpa,
+        null,
+        null,
+        "C:\\Users\\demo",
+    );
+    defer gpa.free(resolved);
+
+    const expected = try std.fs.path.join(gpa, &[_][]const u8{ "C:\\Users\\demo", ".codex" });
+    defer gpa.free(expected);
+
+    try std.testing.expectEqualStrings(expected, resolved);
+}
+
 fn setRecordIds(
     allocator: std.mem.Allocator,
     rec: *registry.AccountRecord,

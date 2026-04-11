@@ -82,12 +82,14 @@ fn writeSuccessfulFakeCodex(dir: std.fs.Dir) !void {
         if (builtin.os.tag == .windows)
             "@echo off\r\n" ++
                 ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
-                "copy /Y \"%HOME%\\fake-auth.json\" \"%HOME%\\.codex\\auth.json\" >NUL\r\n" ++
+                "if not exist \"%CODEX_HOME%\" mkdir \"%CODEX_HOME%\"\r\n" ++
+                "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME%\\auth.json\" >NUL\r\n" ++
                 "exit /b 0\r\n"
         else
             "#!/bin/sh\n" ++
                 "printf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\n" ++
-                "cp \"$HOME/fake-auth.json\" \"$HOME/.codex/auth.json\"\n" ++
+                "mkdir -p \"$CODEX_HOME\"\n" ++
+                "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME/auth.json\"\n" ++
                 "exit 0\n";
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
@@ -113,6 +115,9 @@ fn runCliWithIsolatedHome(
     home_root: []const u8,
     args: []const []const u8,
 ) !std.process.Child.RunResult {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -125,6 +130,7 @@ fn runCliWithIsolatedHome(
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
+    try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
@@ -144,6 +150,9 @@ fn runCliWithIsolatedHomeAndPath(
     path_override: []const u8,
     args: []const []const u8,
 ) !std.process.Child.RunResult {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -156,6 +165,7 @@ fn runCliWithIsolatedHomeAndPath(
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
+    try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
@@ -176,6 +186,9 @@ fn runCliWithIsolatedHomeAndStdin(
     args: []const []const u8,
     stdin_data: []const u8,
 ) !std.process.Child.RunResult {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -188,6 +201,7 @@ fn runCliWithIsolatedHomeAndStdin(
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
+    try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 

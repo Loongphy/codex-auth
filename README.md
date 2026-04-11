@@ -49,6 +49,20 @@ npx @loongphy/codex-auth list
 > npm installs already satisfy that requirement.
 > Legacy standalone binary installs need Node.js 18+ on `PATH` when `codex-auth config api enable` is used.
 
+## Storage Root
+
+`codex-auth` uses the same Codex state root as the current process. Resolution order:
+
+1. `CODEX_HOME` when set to a non-empty path
+2. `HOME/.codex`
+3. `USERPROFILE/.codex` on Windows
+
+That means you can isolate auth, registry, config, and session files by running:
+
+```shell
+CODEX_HOME=/path/to/custom-codex codex-auth list
+```
+
 ### Uninstall
 
 #### npm

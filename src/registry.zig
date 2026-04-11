@@ -264,10 +264,35 @@ fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8
     return val;
 }
 
+pub fn resolveCodexHomeFromEnv(
+    allocator: std.mem.Allocator,
+    codex_home_override: ?[]const u8,
+    home: ?[]const u8,
+    user_profile: ?[]const u8,
+) ![]u8 {
+    if (codex_home_override) |path| {
+        if (path.len != 0) return try allocator.dupe(u8, path);
+    }
+    if (home) |path| {
+        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+    }
+    if (user_profile) |path| {
+        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+    }
+    return error.EnvironmentVariableNotFound;
+}
+
 pub fn resolveCodexHome(allocator: std.mem.Allocator) ![]u8 {
-    const home = try resolveUserHome(allocator);
-    defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".codex" });
+    const codex_home_override = try getNonEmptyEnvVarOwned(allocator, "CODEX_HOME");
+    defer if (codex_home_override) |path| allocator.free(path);
+
+    const home = try getNonEmptyEnvVarOwned(allocator, "HOME");
+    defer if (home) |path| allocator.free(path);
+
+    const user_profile = try getNonEmptyEnvVarOwned(allocator, "USERPROFILE");
+    defer if (user_profile) |path| allocator.free(path);
+
+    return try resolveCodexHomeFromEnv(allocator, codex_home_override, home, user_profile);
 }
 
 pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
