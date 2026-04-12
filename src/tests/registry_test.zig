@@ -142,7 +142,10 @@ test "resolveCodexHomeFromEnv falls back to HOME when CODEX_HOME is empty" {
     );
     defer gpa.free(resolved);
 
-    try std.testing.expectEqualStrings("/tmp/home-root/.codex", resolved);
+    const expected = try std.fs.path.join(gpa, &[_][]const u8{ "/tmp/home-root", ".codex" });
+    defer gpa.free(expected);
+
+    try std.testing.expectEqualStrings(expected, resolved);
 }
 
 test "resolveCodexHomeFromEnv falls back to USERPROFILE when HOME is unset" {
