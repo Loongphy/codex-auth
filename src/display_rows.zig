@@ -139,13 +139,13 @@ fn lessThanByDisplayOrder(ctx: SortContext, lhs: usize, rhs: usize) bool {
 fn planSortRank(plan: ?registry.PlanType) u8 {
     return switch (plan orelse .unknown) {
         .team, .business, .enterprise, .edu => 0,
-        .free, .plus, .pro => 1,
+        .free, .plus, .prolite, .pro => 1,
         else => 2,
     };
 }
 
 fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
-    return if (registry.resolvePlan(rec)) |plan| @tagName(plan) else "-";
+    return if (registry.resolvePlan(rec)) |plan| registry.planLabel(plan) else "-";
 }
 
 fn isActive(reg: *const registry.Registry, account_idx: usize) bool {

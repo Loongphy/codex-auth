@@ -1821,7 +1821,7 @@ fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !Switc
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
+            const plan = if (registry.resolvePlan(&rec)) |p| registry.planLabel(p) else "-";
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);
@@ -1885,7 +1885,7 @@ fn buildSwitchRowsFromIndices(
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
+            const plan = if (registry.resolvePlan(&rec)) |p| registry.planLabel(p) else "-";
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);

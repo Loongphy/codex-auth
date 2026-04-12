@@ -80,6 +80,31 @@ test "parse usage api response without windows is ignored" {
     try std.testing.expect(snapshot == null);
 }
 
+test "parse usage api response maps prolite plan" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "plan_type": "prolite",
+        \\  "rate_limit": {
+        \\    "allowed": true,
+        \\    "limit_reached": false,
+        \\    "primary_window": {
+        \\      "used_percent": 7,
+        \\      "limit_window_seconds": 18000,
+        \\      "reset_after_seconds": 1200,
+        \\      "reset_at": 1773491460
+        \\    },
+        \\    "secondary_window": null
+        \\  }
+        \\}
+    ;
+
+    const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer registry.freeRateLimitSnapshot(gpa, &snapshot);
+
+    try std.testing.expectEqual(registry.PlanType.prolite, snapshot.plan_type.?);
+}
+
 test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing auth" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

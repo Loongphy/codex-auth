@@ -5,7 +5,7 @@ const c_time = @cImport({
     @cInclude("time.h");
 });
 
-pub const PlanType = enum { free, plus, pro, team, business, enterprise, edu, unknown };
+pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 3;
 pub const min_supported_schema_version: u32 = 2;
@@ -82,6 +82,13 @@ pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
     if (rec.plan) |p| return p;
     if (rec.last_usage) |u| return u.plan_type;
     return null;
+}
+
+pub fn planLabel(plan: PlanType) []const u8 {
+    return switch (plan) {
+        .prolite => "pro lite",
+        else => @tagName(plan),
+    };
 }
 
 pub const Registry = struct {
@@ -2512,6 +2519,7 @@ const RegistryOut = struct {
 fn parsePlanType(s: []const u8) ?PlanType {
     if (std.mem.eql(u8, s, "free")) return .free;
     if (std.mem.eql(u8, s, "plus")) return .plus;
+    if (std.mem.eql(u8, s, "prolite")) return .prolite;
     if (std.mem.eql(u8, s, "pro")) return .pro;
     if (std.mem.eql(u8, s, "team")) return .team;
     if (std.mem.eql(u8, s, "business")) return .business;
