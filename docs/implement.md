@@ -165,7 +165,9 @@ When switching:
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_key` is updated to that account’s `record_key`.
 
-The switch command refreshes the current active account's usage once before rendering account choices, so the picker does not show stale data for the currently selected account. It does not refresh the newly selected account after the switch completes.
+When `api.usage = true`, the switch command refreshes usage for all stored accounts before rendering account choices, using a maximum concurrency of `3`. When a per-account foreground usage request returns a non-`200` HTTP status, the picker shows that status in both usage columns for that row. No extra usage refresh is attempted after the switch completes.
+
+When `api.usage = false`, the switch command keeps the existing local-only behavior and can refresh only the active account from the newest local rollout data.
 
 Grouped account-name metadata refresh, when needed, now runs in the same foreground pre-selection phase as that usage refresh; see [docs/api-refresh.md](./api-refresh.md).
 

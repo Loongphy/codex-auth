@@ -31,7 +31,9 @@ fn stderrColorEnabled() bool {
     return std.fs.File.stderr().isTty();
 }
 
-pub const ListOptions = struct {};
+pub const ListOptions = struct {
+    debug: bool = false,
+};
 pub const LoginOptions = struct {
     device_auth: bool = false,
 };
@@ -130,7 +132,30 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
     }
 
     if (std.mem.eql(u8, cmd, "list")) {
-        return try parseSimpleCommandArgs(allocator, "list", .list, .{ .list = .{} }, args[2..]);
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .list } };
+        }
+
+        var opts: ListOptions = .{};
+        var i: usize = 2;
+        while (i < args.len) : (i += 1) {
+            const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.eql(u8, arg, "--debug")) {
+                if (opts.debug) {
+                    return usageErrorResult(allocator, .list, "duplicate `--debug` for `list`.", .{});
+                }
+                opts.debug = true;
+                continue;
+            }
+            if (isHelpFlag(arg)) {
+                return usageErrorResult(allocator, .list, "`--help` must be used by itself for `list`.", .{});
+            }
+            if (std.mem.startsWith(u8, arg, "-")) {
+                return usageErrorResult(allocator, .list, "unknown flag `{s}` for `list`.", .{arg});
+            }
+            return usageErrorResult(allocator, .list, "unexpected argument `{s}` for `list`.", .{arg});
+        }
+        return .{ .command = .{ .list = opts } };
     }
 
     if (std.mem.eql(u8, cmd, "login")) {
@@ -690,7 +715,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
-        .list => try out.writeAll("  codex-auth list\n"),
+        .list => try out.writeAll("  codex-auth list [--debug]\n"),
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -734,7 +759,10 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
             try out.writeAll("  codex-auth config auto enable\n");
         },
-        .list => try out.writeAll("  codex-auth list\n"),
+        .list => {
+            try out.writeAll("  codex-auth list\n");
+            try out.writeAll("  codex-auth list --debug\n");
+        },
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -1053,19 +1081,36 @@ pub fn runCodexLogin(opts: LoginOptions) !void {
 }
 
 pub fn selectAccount(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {
+    return selectAccountWithUsageOverrides(allocator, reg, null);
+}
+
+pub fn selectAccountWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     return if (comptime builtin.os.tag == .windows)
-        selectWithNumbers(allocator, reg)
+        selectWithNumbers(allocator, reg, usage_overrides)
     else
-        selectInteractive(allocator, reg) catch selectWithNumbers(allocator, reg);
+        selectInteractive(allocator, reg, usage_overrides) catch selectWithNumbers(allocator, reg, usage_overrides);
 }
 
 pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
+    return selectAccountFromIndicesWithUsageOverrides(allocator, reg, indices, null);
+}
+
+pub fn selectAccountFromIndicesWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     if (indices.len == 0) return null;
     if (indices.len == 1) return reg.accounts.items[indices[0]].account_key;
     return if (comptime builtin.os.tag == .windows)
-        selectWithNumbersFromIndices(allocator, reg, indices)
+        selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides)
     else
-        selectInteractiveFromIndices(allocator, reg, indices) catch selectWithNumbersFromIndices(allocator, reg, indices);
+        selectInteractiveFromIndices(allocator, reg, indices, usage_overrides) catch selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides);
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
@@ -1108,12 +1153,16 @@ fn accountIndexForSelectable(rows: *const SwitchRows, selectable_idx: usize) usi
     return rows.items[row_idx].account_index.?;
 }
 
-fn selectWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {
+fn selectWithNumbers(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     if (reg.accounts.items.len == 0) return null;
-    var rows = try buildSwitchRows(allocator, reg);
+    var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
     const use_color = colorEnabled();
     const active_idx = activeSelectableIndex(&rows);
@@ -1138,13 +1187,18 @@ fn selectWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]
     return accountIdForSelectable(&rows, reg, idx - 1);
 }
 
-fn selectWithNumbersFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
+fn selectWithNumbersFromIndices(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     if (indices.len == 0) return null;
 
-    var rows = try buildSwitchRowsFromIndices(allocator, reg, indices);
+    var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
     const use_color = colorEnabled();
     const active_idx = activeSelectableIndex(&rows);
@@ -1169,9 +1223,14 @@ fn selectWithNumbersFromIndices(allocator: std.mem.Allocator, reg: *registry.Reg
     return accountIdForSelectable(&rows, reg, idx - 1);
 }
 
-fn selectInteractiveFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
+fn selectInteractiveFromIndices(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     if (indices.len == 0) return null;
-    var rows = try buildSwitchRowsFromIndices(allocator, reg, indices);
+    var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
 
     var tty = try std.fs.cwd().openFile("/dev/tty", .{});
@@ -1344,9 +1403,13 @@ fn isStrictRemoveSelectionLine(line: []const u8) bool {
     return true;
 }
 
-fn selectInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {
+fn selectInteractive(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]const u8 {
     if (reg.accounts.items.len == 0) return null;
-    var rows = try buildSwitchRows(allocator, reg);
+    var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
     var tty = try std.fs.cwd().openFile("/dev/tty", .{});
@@ -1806,7 +1869,33 @@ const SwitchRows = struct {
     }
 };
 
+fn usageOverrideForAccount(
+    usage_overrides: ?[]const ?[]const u8,
+    account_idx: usize,
+) ?[]const u8 {
+    const overrides = usage_overrides orelse return null;
+    if (account_idx >= overrides.len) return null;
+    return overrides[account_idx];
+}
+
+fn usageCellTextAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
+    return formatRateLimitSwitchAlloc(allocator, window);
+}
+
 fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !SwitchRows {
+    return buildSwitchRowsWithUsageOverrides(allocator, reg, null);
+}
+
+fn buildSwitchRowsWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !SwitchRows {
     var display = try display_rows.buildDisplayRows(allocator, reg, null);
     defer display.deinit(allocator);
     var rows = try allocator.alloc(SwitchRow, display.rows.len);
@@ -1824,8 +1913,9 @@ fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !Switc
             const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);
-            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, rate_week);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
+            const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
             rows[i] = .{
                 .account_index = account_idx,
@@ -1871,6 +1961,15 @@ fn buildSwitchRowsFromIndices(
     reg: *registry.Registry,
     indices: []const usize,
 ) !SwitchRows {
+    return buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, null);
+}
+
+fn buildSwitchRowsFromIndicesWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: []const usize,
+    usage_overrides: ?[]const ?[]const u8,
+) !SwitchRows {
     var display = try display_rows.buildDisplayRows(allocator, reg, indices);
     defer display.deinit(allocator);
     var rows = try allocator.alloc(SwitchRow, display.rows.len);
@@ -1888,8 +1987,9 @@ fn buildSwitchRowsFromIndices(
             const plan = if (registry.resolvePlan(&rec)) |p| @tagName(p) else "-";
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitSwitchAlloc(allocator, rate_5h);
-            const rate_week_str = try formatRateLimitSwitchAlloc(allocator, rate_week);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
+            const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
             rows[i] = .{
                 .account_index = account_idx,
@@ -2124,4 +2224,25 @@ test "Scenario: Given grouped accounts when rendering switch list then child row
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "02   free") != null);
+}
+
+test "Scenario: Given usage overrides when rendering switch list then failed rows show response status in both usage columns" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.count(u8, output, "401") >= 2);
 }

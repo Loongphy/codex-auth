@@ -24,18 +24,62 @@ fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const 
 }
 
 pub fn printAccounts(reg: *registry.Registry) !void {
-    try printAccountsTable(reg);
+    try printAccountsWithUsageOverrides(reg, null);
 }
 
-fn printAccountsTable(reg: *registry.Registry) !void {
+pub fn printAccountsWithUsageOverrides(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !void {
+    try printAccountsTable(reg, usage_overrides);
+}
+
+fn printAccountsTable(reg: *registry.Registry, usage_overrides: ?[]const ?[]const u8) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeAccountsTable(out, reg, colorEnabled());
+    try writeAccountsTableWithUsageOverrides(out, reg, colorEnabled(), usage_overrides);
     try out.flush();
 }
 
 fn writeAccountsTable(out: *std.Io.Writer, reg: *registry.Registry, use_color: bool) !void {
+    try writeAccountsTableWithUsageOverrides(out, reg, use_color, null);
+}
+
+fn usageOverrideForAccount(
+    usage_overrides: ?[]const ?[]const u8,
+    account_idx: usize,
+) ?[]const u8 {
+    const overrides = usage_overrides orelse return null;
+    if (account_idx >= overrides.len) return null;
+    return overrides[account_idx];
+}
+
+fn usageCellTextAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+    max_width: usize,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
+    return formatRateLimitUiAlloc(window, max_width);
+}
+
+fn usageCellFullTextAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
+    return formatRateLimitFullAlloc(window);
+}
+
+fn writeAccountsTableWithUsageOverrides(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+) !void {
     const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
@@ -59,9 +103,10 @@ fn writeAccountsTable(out: *std.Io.Writer, reg: *registry.Registry, use_color: b
             const plan = planDisplay(&rec, "-");
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitFullAlloc(rate_5h);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try formatRateLimitFullAlloc(rate_week);
+            const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
             defer std.heap.page_allocator.free(rate_week_str);
             const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last_str);
@@ -113,9 +158,10 @@ fn writeAccountsTable(out: *std.Io.Writer, reg: *registry.Registry, use_color: b
             const plan = planDisplay(&rec, "-");
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-            const rate_5h_str = try formatRateLimitUiAlloc(rate_5h, widths[2]);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[2], usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try formatRateLimitUiAlloc(rate_week, widths[3]);
+            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[3], usage_override);
             defer std.heap.page_allocator.free(rate_week_str);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last);
@@ -684,4 +730,22 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "02   free") != null);
+}
+
+test "writeAccountsTable shows usage override statuses for failed refreshes" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "403" };
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
 }

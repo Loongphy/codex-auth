@@ -95,7 +95,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth list` | List all accounts |
+| `codex-auth list [--debug]` | List all accounts |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
 | `codex-auth switch [<email>]` | Switch active account interactively or by partial match |
 | `codex-auth remove` | Remove accounts with interactive multi-select |
@@ -125,6 +125,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 ```shell
 codex-auth list
+codex-auth list --debug
 ```
 
 ### Switch Account
@@ -135,7 +136,7 @@ Interactive: shows email, 5h, weekly, and last activity.
 codex-auth switch
 ```
 
-Before the picker opens, the current active account's usage is refreshed once so the selected row is not stale. The newly selected account is not refreshed after the switch completes.
+Before the picker opens, `switch` refreshes usage for all stored accounts with a maximum concurrency of `3`, so the picker is based on a fresh cross-account snapshot. No extra usage refresh is attempted after the switch completes.
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 

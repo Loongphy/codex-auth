@@ -166,6 +166,21 @@ test "Scenario: Given list with extra args when parsing then usage error is retu
     try expectUsageError(result, .list, "unexpected argument");
 }
 
+test "Scenario: Given list with debug flag when parsing then debug mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--debug" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| try std.testing.expect(opts.debug),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given login with removed no-login flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "login", "--no-login" };

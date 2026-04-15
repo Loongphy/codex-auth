@@ -32,9 +32,10 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 - `api.usage = true`: foreground refresh uses the usage API.
 - `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- `list` refreshes only the current active account before rendering.
-- `switch` refreshes only the current active account before showing the picker so the currently selected row is not stale.
-- `switch` does not refresh usage for the newly selected account after the switch completes.
+- when `api.usage = true`, both `list` and pre-selection `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
+- when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
+- when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
+- `switch` does not refresh usage again after the new account is activated
 - the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
 - the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
 - the daemon usage paths are cooldown-limited; see [docs/auto-switch.md](./auto-switch.md) for the broader runtime loop

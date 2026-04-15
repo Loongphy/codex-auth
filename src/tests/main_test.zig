@@ -4,6 +4,7 @@ const auth_mod = @import("../auth.zig");
 const display_rows = @import("../display_rows.zig");
 const main_mod = @import("../main.zig");
 const registry = @import("../registry.zig");
+const usage_api = @import("../usage_api.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const shared_user_id = "user-ESYgcy2QkOGZc0NoxSlFCeVT";
@@ -12,6 +13,7 @@ const secondary_account_id = "518a44d9-ba75-4bad-87e5-ae9377042960";
 const tertiary_account_id = "a4021fa5-998b-4774-989f-784fa69c367b";
 const primary_record_key = shared_user_id ++ "::" ++ primary_account_id;
 const secondary_record_key = shared_user_id ++ "::" ++ secondary_account_id;
+const tertiary_record_key = shared_user_id ++ "::" ++ tertiary_account_id;
 const standalone_team_user_id = "user-q2Lm6Nx8Vc4Rb7Ty1Hp9JkDs";
 const standalone_team_account_id = "29a9c0cb-e840-45ec-97bf-d6c5f7e0f55b";
 const standalone_team_record_key = standalone_team_user_id ++ "::" ++ standalone_team_account_id;
@@ -329,6 +331,108 @@ test "Scenario: Given foreground usage refresh targets when checking refresh pol
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
     try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
+}
+
+test "Scenario: Given api usage refresh for list and switch when refreshing foreground usage then all accounts are updated with status overlays" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestUsageFetcher = struct {
+        fn snapshot(plan: registry.PlanType, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = used_5h,
+                    .window_minutes = 300,
+                    .resets_at = 1773491460,
+                },
+                .secondary = .{
+                    .used_percent = used_weekly,
+                    .window_minutes = 10080,
+                    .resets_at = 1773749620,
+                },
+                .credits = null,
+                .plan_type = plan,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
+            var info = try auth_mod.parseAuthInfo(allocator, auth_path);
+            defer info.deinit(allocator);
+
+            const account_id = info.chatgpt_account_id orelse return .{
+                .snapshot = null,
+                .status_code = null,
+                .missing_auth = true,
+            };
+
+            if (std.mem.eql(u8, account_id, primary_account_id)) {
+                return .{
+                    .snapshot = snapshot(.team, 18, 39),
+                    .status_code = 200,
+                };
+            }
+            if (std.mem.eql(u8, account_id, secondary_account_id)) {
+                return .{
+                    .snapshot = null,
+                    .status_code = 403,
+                };
+            }
+            if (std.mem.eql(u8, account_id, tertiary_account_id)) {
+                return .{
+                    .snapshot = snapshot(.plus, 30, 55),
+                    .status_code = 200,
+                };
+            }
+            return .{
+                .snapshot = null,
+                .status_code = 404,
+            };
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, tertiary_record_key, "user@example.com", "", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    reg.accounts.items[2].last_usage = TestUsageFetcher.snapshot(.plus, 30, 55);
+    reg.accounts.items[2].last_usage_at = 10;
+
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, secondary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "plus", shared_user_id, tertiary_account_id);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        TestUsageFetcher.fetch,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expect(!state.local_only_mode);
+    try std.testing.expectEqual(@as(usize, 3), state.attempted);
+    try std.testing.expectEqual(@as(usize, 1), state.updated);
+    try std.testing.expectEqual(@as(usize, 1), state.failed);
+    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+
+    try std.testing.expect(state.usage_overrides[0] == null);
+    try std.testing.expectEqualStrings("403", state.usage_overrides[1].?);
+    try std.testing.expect(state.usage_overrides[2] == null);
+
+    try std.testing.expect(state.outcomes[0].updated);
+    try std.testing.expectEqual(@as(?u16, 403), state.outcomes[1].status_code);
+    try std.testing.expect(state.outcomes[2].unchanged);
+
+    try std.testing.expectEqual(@as(?registry.PlanType, .team), reg.accounts.items[0].last_usage.?.plan_type);
+    try std.testing.expectEqual(@as(f64, 18), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
 }
 
 test "Scenario: Given list with missing team names when running foreground account-name refresh then it waits and saves the updated names" {

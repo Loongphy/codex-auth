@@ -2,24 +2,87 @@ const std = @import("std");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
+const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
+const io_util = @import("io_util.zig");
+const usage_api = @import("usage_api.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
+const foreground_usage_refresh_concurrency: usize = 3;
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
     access_token: []const u8,
     account_id: []const u8,
 ) anyerror!account_api.FetchResult;
+const UsageFetchDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) anyerror!usage_api.UsageFetchResult;
 const BackgroundRefreshLockAcquirer = *const fn (
     allocator: std.mem.Allocator,
     codex_home: []const u8,
 ) anyerror!?account_name_refresh.BackgroundRefreshLock;
+
+const ForegroundUsageWorkerResult = struct {
+    status_code: ?u16 = null,
+    missing_auth: bool = false,
+    error_name: ?[]const u8 = null,
+    snapshot: ?registry.RateLimitSnapshot = null,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.snapshot) |*snapshot| {
+            registry.freeRateLimitSnapshot(allocator, snapshot);
+            self.snapshot = null;
+        }
+    }
+};
+
+pub const ForegroundUsageOutcome = struct {
+    attempted: bool = false,
+    status_code: ?u16 = null,
+    missing_auth: bool = false,
+    error_name: ?[]const u8 = null,
+    has_usage_windows: bool = false,
+    updated: bool = false,
+    unchanged: bool = false,
+};
+
+pub const ForegroundUsageRefreshState = struct {
+    usage_overrides: []?[]const u8,
+    outcomes: []ForegroundUsageOutcome,
+    attempted: usize = 0,
+    updated: usize = 0,
+    failed: usize = 0,
+    unchanged: usize = 0,
+    local_only_mode: bool = false,
+
+    pub fn deinit(self: *ForegroundUsageRefreshState, allocator: std.mem.Allocator) void {
+        for (self.usage_overrides) |override| {
+            if (override) |value| allocator.free(value);
+        }
+        allocator.free(self.usage_overrides);
+        allocator.free(self.outcomes);
+        self.* = undefined;
+    }
+};
+
+const DebugUsageLabelState = struct {
+    labels: [][]const u8,
+    display_order: []usize,
+
+    fn deinit(self: *DebugUsageLabelState, allocator: std.mem.Allocator) void {
+        for (self.labels) |label| allocator.free(@constCast(label));
+        allocator.free(self.labels);
+        allocator.free(self.display_order);
+        self.* = undefined;
+    }
+};
 
 pub fn main() !void {
     var exit_code: u8 = 0;
@@ -184,6 +247,24 @@ pub fn loadHelpConfig(allocator: std.mem.Allocator, codex_home: []const u8) Help
     };
 }
 
+fn initForegroundUsageRefreshState(
+    allocator: std.mem.Allocator,
+    account_count: usize,
+) !ForegroundUsageRefreshState {
+    const usage_overrides = try allocator.alloc(?[]const u8, account_count);
+    errdefer allocator.free(usage_overrides);
+    for (usage_overrides) |*slot| slot.* = null;
+
+    const outcomes = try allocator.alloc(ForegroundUsageOutcome, account_count);
+    errdefer allocator.free(outcomes);
+    for (outcomes) |*outcome| outcome.* = .{};
+
+    return .{
+        .usage_overrides = usage_overrides,
+        .outcomes = outcomes,
+    };
+}
+
 fn maybeRefreshForegroundUsage(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -194,6 +275,292 @@ fn maybeRefreshForegroundUsage(
     if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
         try registry.saveRegistry(allocator, codex_home, reg);
     }
+}
+
+pub fn refreshForegroundUsageForDisplayWithApiFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+) !ForegroundUsageRefreshState {
+    var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
+    errdefer state.deinit(allocator);
+
+    if (!reg.api.usage) {
+        state.local_only_mode = true;
+        if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
+            try registry.saveRegistry(allocator, codex_home, reg);
+        }
+        return state;
+    }
+
+    if (reg.accounts.items.len == 0) return state;
+
+    const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
+    defer {
+        for (worker_results) |*worker_result| worker_result.deinit(allocator);
+        allocator.free(worker_results);
+    }
+    for (worker_results) |*worker_result| worker_result.* = .{};
+
+    var thread_safe_allocator: std.heap.ThreadSafeAllocator = .{ .child_allocator = allocator };
+    const thread_allocator = thread_safe_allocator.allocator();
+    var pool: std.Thread.Pool = undefined;
+    try pool.init(.{
+        .allocator = thread_allocator,
+        .n_jobs = @max(1, @min(reg.accounts.items.len, foreground_usage_refresh_concurrency)),
+    });
+    defer pool.deinit();
+
+    var wait_group: std.Thread.WaitGroup = .{};
+    for (reg.accounts.items, 0..) |_, idx| {
+        pool.spawnWg(&wait_group, foregroundUsageRefreshWorker, .{
+            thread_allocator,
+            codex_home,
+            reg,
+            idx,
+            usage_fetcher,
+            worker_results,
+        });
+    }
+    wait_group.wait();
+
+    var registry_changed = false;
+    for (worker_results, 0..) |*worker_result, idx| {
+        const outcome = &state.outcomes[idx];
+        outcome.* = .{
+            .attempted = true,
+            .status_code = worker_result.status_code,
+            .missing_auth = worker_result.missing_auth,
+            .error_name = worker_result.error_name,
+            .has_usage_windows = worker_result.snapshot != null,
+        };
+        state.attempted += 1;
+
+        if (worker_result.snapshot) |snapshot| {
+            if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, snapshot)) {
+                outcome.unchanged = true;
+                state.unchanged += 1;
+                worker_result.deinit(allocator);
+            } else {
+                registry.updateUsage(allocator, reg, reg.accounts.items[idx].account_key, snapshot);
+                worker_result.snapshot = null;
+                outcome.updated = true;
+                state.updated += 1;
+                registry_changed = true;
+            }
+        } else if (try setForegroundUsageOverrideForOutcome(allocator, &state.usage_overrides[idx], outcome.*)) {
+            state.failed += 1;
+        } else {
+            outcome.unchanged = true;
+            state.unchanged += 1;
+        }
+    }
+
+    if (registry_changed) {
+        try registry.saveRegistry(allocator, codex_home, reg);
+    }
+
+    return state;
+}
+
+fn foregroundUsageRefreshWorker(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    account_idx: usize,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+) void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const auth_path = registry.accountAuthPath(arena, codex_home, reg.accounts.items[account_idx].account_key) catch |err| {
+        results[account_idx] = .{ .error_name = @errorName(err) };
+        return;
+    };
+
+    const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+        results[account_idx] = .{ .error_name = @errorName(err) };
+        return;
+    };
+
+    var result: ForegroundUsageWorkerResult = .{
+        .status_code = fetch_result.status_code,
+        .missing_auth = fetch_result.missing_auth,
+    };
+
+    if (fetch_result.snapshot) |snapshot| {
+        result.snapshot = registry.cloneRateLimitSnapshot(allocator, snapshot) catch |err| {
+            results[account_idx] = .{
+                .status_code = fetch_result.status_code,
+                .missing_auth = fetch_result.missing_auth,
+                .error_name = @errorName(err),
+            };
+            return;
+        };
+    }
+
+    results[account_idx] = result;
+}
+
+fn setForegroundUsageOverrideForOutcome(
+    allocator: std.mem.Allocator,
+    slot: *?[]const u8,
+    outcome: ForegroundUsageOutcome,
+) !bool {
+    if (outcome.error_name) |error_name| {
+        slot.* = try allocator.dupe(u8, error_name);
+        return true;
+    }
+    if (outcome.missing_auth) {
+        slot.* = try allocator.dupe(u8, "MissingAuth");
+        return true;
+    }
+    if (outcome.status_code) |status_code| {
+        if (status_code != 200) {
+            slot.* = try std.fmt.allocPrint(allocator, "{d}", .{status_code});
+            return true;
+        }
+    }
+    return false;
+}
+
+fn buildDebugUsageLabelState(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+) !DebugUsageLabelState {
+    var labels = try allocator.alloc([]const u8, reg.accounts.items.len);
+    errdefer allocator.free(labels);
+    for (reg.accounts.items, 0..) |rec, idx| {
+        labels[idx] = try allocator.dupe(u8, rec.email);
+    }
+    errdefer {
+        for (labels) |label| allocator.free(@constCast(label));
+    }
+
+    var display = try display_rows.buildDisplayRows(allocator, reg, null);
+    defer display.deinit(allocator);
+    var display_order = std.ArrayList(usize).empty;
+    defer display_order.deinit(allocator);
+
+    for (display.rows) |row| {
+        const account_idx = row.account_index orelse continue;
+        const next_label = if (row.depth == 0)
+            try allocator.dupe(u8, row.account_cell)
+        else
+            try std.fmt.allocPrint(allocator, "{s} | {s}", .{
+                reg.accounts.items[account_idx].email,
+                row.account_cell,
+            });
+        allocator.free(@constCast(labels[account_idx]));
+        labels[account_idx] = next_label;
+        try display_order.append(allocator, account_idx);
+    }
+
+    return .{
+        .labels = labels,
+        .display_order = try display_order.toOwnedSlice(allocator),
+    };
+}
+
+fn debugStatusLabel(buf: *[32]u8, outcome: ForegroundUsageOutcome) []const u8 {
+    if (outcome.error_name) |error_name| return error_name;
+    if (outcome.missing_auth) return "MissingAuth";
+    if (outcome.status_code) |status_code| {
+        return std.fmt.bufPrint(buf, "{d}", .{status_code}) catch "-";
+    }
+    return if (outcome.has_usage_windows) "200" else "-";
+}
+
+fn outcomeHasNoUsageWindow(outcome: ForegroundUsageOutcome) bool {
+    return outcome.error_name == null and
+        !outcome.missing_auth and
+        !outcome.has_usage_windows and
+        outcome.status_code != null and
+        outcome.status_code.? == 200;
+}
+
+fn formatRemainingPercentAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+) ![]const u8 {
+    const remaining = registry.remainingPercentAt(window, std.time.timestamp()) orelse return allocator.dupe(u8, "-");
+    return std.fmt.allocPrint(allocator, "{d}%", .{remaining});
+}
+
+fn printForegroundUsageDebug(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    state: *const ForegroundUsageRefreshState,
+) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+
+    if (state.local_only_mode) {
+        try out.writeAll("[debug] usage refresh skipped: mode=local-only; only the active account can refresh from local rollout data\n");
+        try out.flush();
+        return;
+    }
+
+    var label_state = try buildDebugUsageLabelState(allocator, reg);
+    defer label_state.deinit(allocator);
+
+    try out.print(
+        "[debug] usage refresh start: accounts={d} concurrency={d}\n",
+        .{
+            reg.accounts.items.len,
+            @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+        },
+    );
+
+    for (label_state.display_order) |account_idx| {
+        if (!state.outcomes[account_idx].attempted) continue;
+        try out.print("[debug] request usage: {s}\n", .{label_state.labels[account_idx]});
+    }
+
+    for (label_state.display_order) |account_idx| {
+        const outcome = state.outcomes[account_idx];
+        if (!outcome.attempted) continue;
+
+        var status_buf: [32]u8 = undefined;
+        try out.print(
+            "[debug] response usage: {s} status={s}",
+            .{
+                label_state.labels[account_idx],
+                debugStatusLabel(&status_buf, outcome),
+            },
+        );
+        if (outcomeHasNoUsageWindow(outcome)) {
+            try out.writeAll(" result=no-usage-limits-window");
+        }
+        try out.writeAll("\n");
+
+        if (outcome.updated) {
+            const rate_5h = registry.resolveRateWindow(reg.accounts.items[account_idx].last_usage, 300, true);
+            const rate_weekly = registry.resolveRateWindow(reg.accounts.items[account_idx].last_usage, 10080, false);
+            const rate_5h_text = try formatRemainingPercentAlloc(allocator, rate_5h);
+            defer allocator.free(rate_5h_text);
+            const rate_weekly_text = try formatRemainingPercentAlloc(allocator, rate_weekly);
+            defer allocator.free(rate_weekly_text);
+            try out.print(
+                "[debug] updated usage: {s} 5h={s} weekly={s}\n",
+                .{
+                    label_state.labels[account_idx],
+                    rate_5h_text,
+                    rate_weekly_text,
+                },
+            );
+        }
+    }
+
+    try out.print(
+        "[debug] usage refresh done: attempted={d} updated={d} failed={d} unchanged={d}\n",
+        .{ state.attempted, state.updated, state.failed, state.unchanged },
+    );
+    try out.flush();
 }
 
 pub fn maybeRefreshForegroundAccountNames(
@@ -488,7 +855,6 @@ fn loadSingleFileImportAuthInfo(
 }
 
 fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
-    _ = opts;
     if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
 
     var reg = try registry.loadRegistry(allocator, codex_home);
@@ -496,9 +862,18 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .list);
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+        allocator,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+    );
+    defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .list, defaultAccountFetcher);
-    try format.printAccounts(&reg);
+    if (opts.debug) {
+        try printForegroundUsageDebug(allocator, &reg, &usage_state);
+    }
+    try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
@@ -569,7 +944,13 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .switch_account);
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+        allocator,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+    );
+    defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .switch_account, defaultAccountFetcher);
 
     var selected_account_key: ?[]const u8 = null;
@@ -585,11 +966,16 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         if (matches.items.len == 1) {
             selected_account_key = reg.accounts.items[matches.items[0]].account_key;
         } else {
-            selected_account_key = try cli.selectAccountFromIndices(allocator, &reg, matches.items);
+            selected_account_key = try cli.selectAccountFromIndicesWithUsageOverrides(
+                allocator,
+                &reg,
+                matches.items,
+                usage_state.usage_overrides,
+            );
         }
         if (selected_account_key == null) return;
     } else {
-        const selected = try cli.selectAccount(allocator, &reg);
+        const selected = try cli.selectAccountWithUsageOverrides(allocator, &reg, usage_state.usage_overrides);
         if (selected == null) return;
         selected_account_key = selected.?;
     }
