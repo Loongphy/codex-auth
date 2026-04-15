@@ -109,14 +109,17 @@ fn writeSuccessfulFakeCodex(dir: std.fs.Dir) !void {
         if (builtin.os.tag == .windows)
             "@echo off\r\n" ++
                 ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
-                "if not exist \"%CODEX_HOME%\" mkdir \"%CODEX_HOME%\"\r\n" ++
-                "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME%\\auth.json\" >NUL\r\n" ++
+                "set \"CODEX_HOME_DIR=%CODEX_HOME%\"\r\n" ++
+                "if \"%CODEX_HOME_DIR%\"==\"\" set \"CODEX_HOME_DIR=%HOME%\\.codex\"\r\n" ++
+                "if not exist \"%CODEX_HOME_DIR%\" mkdir \"%CODEX_HOME_DIR%\"\r\n" ++
+                "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME_DIR%\\auth.json\" >NUL\r\n" ++
                 "exit /b 0\r\n"
         else
             "#!/bin/sh\n" ++
                 "printf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\n" ++
-                "mkdir -p \"$CODEX_HOME\"\n" ++
-                "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME/auth.json\"\n" ++
+                "CODEX_HOME_DIR=\"${CODEX_HOME:-$HOME/.codex}\"\n" ++
+                "mkdir -p \"$CODEX_HOME_DIR\"\n" ++
+                "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME_DIR/auth.json\"\n" ++
                 "exit 0\n";
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
@@ -142,9 +145,29 @@ fn runCliWithIsolatedHome(
     home_root: []const u8,
     args: []const []const u8,
 ) !std.process.Child.RunResult {
-    const codex_home = try codexHomeAlloc(allocator, home_root);
-    defer allocator.free(codex_home);
-    return try runCliWithIsolatedHomeAndCodexHome(allocator, project_root, home_root, codex_home, args);
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    env_map.remove("CODEX_HOME");
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
+
+    return try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+        .cwd = project_root,
+        .env_map = &env_map,
+        .max_output_bytes = 1024 * 1024,
+    });
 }
 
 fn runCliWithIsolatedHomeAndCodexHome(
@@ -220,28 +243,6 @@ fn runCliWithIsolatedHomeAndPath(
     path_override: []const u8,
     args: []const []const u8,
 ) !std.process.Child.RunResult {
-    const codex_home = try codexHomeAlloc(allocator, home_root);
-    defer allocator.free(codex_home);
-    return try runCliWithIsolatedHomeAndCodexHomeAndPath(
-        allocator,
-        project_root,
-        home_root,
-        codex_home,
-        path_override,
-        args,
-    );
-}
-
-fn runCliWithIsolatedHomeAndStdin(
-    allocator: std.mem.Allocator,
-    project_root: []const u8,
-    home_root: []const u8,
-    args: []const []const u8,
-    stdin_data: []const u8,
-) !std.process.Child.RunResult {
-    const codex_home = try codexHomeAlloc(allocator, home_root);
-    defer allocator.free(codex_home);
-
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -254,7 +255,40 @@ fn runCliWithIsolatedHomeAndStdin(
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
-    try env_map.put("CODEX_HOME", codex_home);
+    env_map.remove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
+
+    return try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+        .cwd = project_root,
+        .env_map = &env_map,
+        .max_output_bytes = 1024 * 1024,
+    });
+}
+
+fn runCliWithIsolatedHomeAndStdin(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    args: []const []const u8,
+    stdin_data: []const u8,
+) !std.process.Child.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    env_map.remove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
