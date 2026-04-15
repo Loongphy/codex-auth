@@ -136,7 +136,7 @@ Interactive: shows email, 5h, weekly, and last activity.
 codex-auth switch
 ```
 
-Before the picker opens, `switch` refreshes usage for all stored accounts with a maximum concurrency of `3`, so the picker is based on a fresh cross-account snapshot. No extra usage refresh is attempted after the switch completes.
+Before the picker opens, `switch` refreshes usage for all stored accounts with a maximum concurrency of `3`, so the picker is based on a fresh cross-account snapshot. If a refresh returns a non-`200` HTTP status such as `401` or `403`, that row shows the status in both usage columns. If a stored account snapshot cannot make a ChatGPT usage request at all because the required auth fields are missing, that row shows `MissingAuth` instead of the previous usage values. No extra usage refresh is attempted after the switch completes.
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 

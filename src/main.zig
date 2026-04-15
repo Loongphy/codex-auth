@@ -24,6 +24,11 @@ const UsageFetchDetailedFn = *const fn (
     allocator: std.mem.Allocator,
     auth_path: []const u8,
 ) anyerror!usage_api.UsageFetchResult;
+const ForegroundUsagePoolInitFn = *const fn (
+    pool: *std.Thread.Pool,
+    allocator: std.mem.Allocator,
+    n_jobs: usize,
+) anyerror!void;
 const BackgroundRefreshLockAcquirer = *const fn (
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -283,6 +288,22 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        initForegroundUsagePool,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
 
@@ -303,27 +324,43 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
-    var thread_safe_allocator: std.heap.ThreadSafeAllocator = .{ .child_allocator = allocator };
-    const thread_allocator = thread_safe_allocator.allocator();
-    var pool: std.Thread.Pool = undefined;
-    try pool.init(.{
-        .allocator = thread_allocator,
-        .n_jobs = @max(1, @min(reg.accounts.items.len, foreground_usage_refresh_concurrency)),
-    });
-    defer pool.deinit();
+    if (reg.accounts.items.len <= 1) {
+        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results);
+    } else {
+        var thread_safe_allocator: std.heap.ThreadSafeAllocator = .{ .child_allocator = allocator };
+        const thread_allocator = thread_safe_allocator.allocator();
+        var pool: std.Thread.Pool = undefined;
+        const pool_started = blk: {
+            pool_init(
+                &pool,
+                thread_allocator,
+                @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => break :blk false,
+            };
+            break :blk true;
+        };
 
-    var wait_group: std.Thread.WaitGroup = .{};
-    for (reg.accounts.items, 0..) |_, idx| {
-        pool.spawnWg(&wait_group, foregroundUsageRefreshWorker, .{
-            thread_allocator,
-            codex_home,
-            reg,
-            idx,
-            usage_fetcher,
-            worker_results,
-        });
+        if (pool_started) {
+            defer pool.deinit();
+
+            var wait_group: std.Thread.WaitGroup = .{};
+            for (reg.accounts.items, 0..) |_, idx| {
+                pool.spawnWg(&wait_group, foregroundUsageRefreshWorker, .{
+                    thread_allocator,
+                    codex_home,
+                    reg,
+                    idx,
+                    usage_fetcher,
+                    worker_results,
+                });
+            }
+            wait_group.wait();
+        } else {
+            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results);
+        }
     }
-    wait_group.wait();
 
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
@@ -362,6 +399,29 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     }
 
     return state;
+}
+
+fn initForegroundUsagePool(
+    pool: *std.Thread.Pool,
+    allocator: std.mem.Allocator,
+    n_jobs: usize,
+) !void {
+    try pool.init(.{
+        .allocator = allocator,
+        .n_jobs = n_jobs,
+    });
+}
+
+fn runForegroundUsageRefreshWorkersSerially(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+) void {
+    for (reg.accounts.items, 0..) |_, idx| {
+        foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
+    }
 }
 
 fn foregroundUsageRefreshWorker(

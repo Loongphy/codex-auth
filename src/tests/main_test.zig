@@ -435,6 +435,91 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
 }
 
+test "Scenario: Given thread pool init failure when refreshing foreground usage then it falls back to serial refresh" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestUsageFetcher = struct {
+        fn snapshot(plan: registry.PlanType, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = used_5h,
+                    .window_minutes = 300,
+                    .resets_at = 1773491460,
+                },
+                .secondary = .{
+                    .used_percent = used_weekly,
+                    .window_minutes = 10080,
+                    .resets_at = 1773749620,
+                },
+                .credits = null,
+                .plan_type = plan,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
+            var info = try auth_mod.parseAuthInfo(allocator, auth_path);
+            defer info.deinit(allocator);
+
+            const account_id = info.chatgpt_account_id orelse return .{
+                .snapshot = null,
+                .status_code = null,
+                .missing_auth = true,
+            };
+
+            if (std.mem.eql(u8, account_id, primary_account_id)) {
+                return .{
+                    .snapshot = snapshot(.team, 22, 41),
+                    .status_code = 200,
+                };
+            }
+            return .{
+                .snapshot = null,
+                .status_code = 403,
+            };
+        }
+
+        fn failPoolInit(
+            pool: *std.Thread.Pool,
+            allocator: std.mem.Allocator,
+            n_jobs: usize,
+        ) !void {
+            _ = pool;
+            _ = allocator;
+            _ = n_jobs;
+            return error.ThreadQuotaExceeded;
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, secondary_account_id);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+        gpa,
+        codex_home,
+        &reg,
+        TestUsageFetcher.fetch,
+        TestUsageFetcher.failPoolInit,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 2), state.attempted);
+    try std.testing.expectEqual(@as(usize, 1), state.updated);
+    try std.testing.expectEqual(@as(usize, 1), state.failed);
+    try std.testing.expectEqualStrings("403", state.usage_overrides[1].?);
+    try std.testing.expectEqual(@as(f64, 22), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
+}
+
 test "Scenario: Given list with missing team names when running foreground account-name refresh then it waits and saves the updated names" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

@@ -34,6 +34,7 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
 - when `api.usage = true`, both `list` and pre-selection `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
 - when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
+- when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
 - `switch` does not refresh usage again after the new account is activated
 - the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
