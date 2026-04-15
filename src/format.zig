@@ -19,7 +19,7 @@ fn colorEnabled() bool {
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
-    if (registry.resolvePlan(rec)) |p| return @tagName(p);
+    if (registry.resolvePlan(rec)) |p| return registry.planLabel(p);
     return missing;
 }
 
@@ -683,5 +683,5 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "02   free") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
 }

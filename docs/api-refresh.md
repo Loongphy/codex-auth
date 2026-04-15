@@ -92,8 +92,8 @@ After a successful `accounts/check` response:
 
 Example 1:
 
-- active record: `user@example.com / team #1 / account_name = null`
-- same grouped scope: `user@example.com / team #2 / account_name = null`
+- active record: `user@example.com / Team #1 / account_name = null`
+- same grouped scope: `user@example.com / Team #2 / account_name = null`
 
 Running `codex-auth list` should issue `accounts/check`. If the API returns:
 
@@ -104,9 +104,9 @@ Then both grouped Team records are updated.
 
 Example 2:
 
-- active record: `user@example.com / pro / account_name = null`
-- same grouped scope: `user@example.com / team #1 / account_name = null`
-- same grouped scope: `user@example.com / team #2 / account_name = "Old Workspace"`
+- active record: `user@example.com / Pro / account_name = null`
+- same grouped scope: `user@example.com / Team #1 / account_name = null`
+- same grouped scope: `user@example.com / Team #2 / account_name = "Old Workspace"`
 
 Running `codex-auth list` should still issue `accounts/check`, because the grouped scope still has missing Team names. If the API returns:
 
@@ -115,7 +115,7 @@ Running `codex-auth list` should still issue `accounts/check`, because the group
 
 Then:
 
-- `team #1` is filled with `Prod Workspace`
-- `team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
+- `Team #1` is filled with `Prod Workspace`
+- `Team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
 
 The same grouped-scope rule also applies to synchronous `list` / pre-selection `switch` refreshes and to the auto-switch daemon.
