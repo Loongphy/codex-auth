@@ -294,7 +294,8 @@ Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_co
   - child rows are the selectable accounts
   - alias takes precedence for the child label
   - otherwise the child label is the human-readable plan name (`Team`, `Plus`, `Pro Lite`, etc.)
-  - repeated plans under the same email are rendered as stable numbered labels like `Team #1`, `Team #2`
+  - workspace-style duplicate plans may use stable numbered labels like `Team #1`, `Team #2`
+  - non-workspace duplicate plans (`Free`, `Plus`, `Pro`, `Pro Lite`) do not use `#1` / `#2`; they should use another disambiguator such as an account or user suffix
 - Single-account emails still render as one flat row; when an alias is set, that row shows `(alias)email`.
 - The switch/remove UI shows `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`, and preserves grouped child indentation.
 - Usage limit cells show remaining percent plus reset time: `NN% (HH:MM)` for same-day resets, or `NN% (HH:MM on D Mon)` when the reset is on a different day.
