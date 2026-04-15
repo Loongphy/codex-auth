@@ -178,6 +178,7 @@ fn writeAccountSnapshotWithIds(
     const account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
     defer allocator.free(account_key);
 
+    try registry.ensureAccountsDir(allocator, codex_home);
     const auth_path = try registry.accountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(auth_path);
 
@@ -199,6 +200,7 @@ fn writeAccountSnapshotWithIdsAndLastRefresh(
     const account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
     defer allocator.free(account_key);
 
+    try registry.ensureAccountsDir(allocator, codex_home);
     const auth_path = try registry.accountAuthPath(allocator, codex_home, account_key);
     defer allocator.free(auth_path);
 

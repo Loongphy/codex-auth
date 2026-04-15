@@ -278,7 +278,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 
