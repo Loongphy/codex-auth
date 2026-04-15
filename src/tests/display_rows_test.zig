@@ -80,20 +80,21 @@ test "Scenario: Given grouped accounts with aliases when building display rows t
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "backup") or std.mem.eql(u8, rows.rows[2].account_cell, "work"));
 }
 
-test "Scenario: Given prolite accounts when building display rows then labels use Pro Lite wording" {
+test "Scenario: Given grouped accounts with a prolite record when building display rows then labels use Pro Lite wording" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
     try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "", .prolite);
-    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "", .prolite);
+    try appendAccount(gpa, &reg, "user-ESYgcy2QkOGZc0NoxSlFCeVT::518a44d9-ba75-4bad-87e5-ae9377042960", "user@example.com", "", .team);
 
     var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 3), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "Pro Lite #1"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Pro Lite #2"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "user@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "Team"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Pro Lite"));
 }
 
 test "Scenario: Given same-email accounts filtered down to one row when building display rows then singleton is decided from the rendered subset" {
