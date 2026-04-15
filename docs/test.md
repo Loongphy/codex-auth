@@ -227,4 +227,4 @@ Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue
 
 Expected result after disable: no task is returned.
 
-For isolated HOME tests, use `daemon --once` to validate actual switching behavior. The Windows managed service artifacts are installed under the real Windows user profile, so `enable/disable/status` and `daemon --once` together provide the cleanest acceptance signal even though the managed task itself now starts the persistent watcher mode.
+For isolated HOME tests, use `daemon --once` to validate actual switching behavior. The Windows task definition still lives in the real Windows user profile, while the managed watcher itself uses the `codex_home` that was active during enablement. `enable/disable/status` and `daemon --once` together still provide the cleanest acceptance signal.

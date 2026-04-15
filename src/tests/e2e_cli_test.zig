@@ -3,38 +3,58 @@ const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
+const e2e_install_prefix_env = "CODEX_AUTH_E2E_INSTALL_PREFIX";
+const e2e_project_root_env = "CODEX_AUTH_E2E_PROJECT_ROOT";
+
 const SeedAccount = struct {
     email: []const u8,
     alias: []const u8,
 };
 
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
+    const project_root = std.process.getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (project_root) |path| return path;
     return std.fs.cwd().realpathAlloc(allocator, ".");
 }
 
 fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void {
-    const global_cache_dir = try std.fs.path.join(allocator, &[_][]const u8{
-        project_root,
-        ".zig-cache",
-        "e2e-global",
-    });
-    defer allocator.free(global_cache_dir);
-
-    const local_cache_dir = try std.fs.path.join(allocator, &[_][]const u8{
-        project_root,
-        ".zig-cache",
-        "e2e-local",
-    });
-    defer allocator.free(local_cache_dir);
-
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
+    const global_cache_dir = if (env_map.get("ZIG_GLOBAL_CACHE_DIR")) |dir|
+        try allocator.dupe(u8, dir)
+    else
+        try std.fs.path.join(allocator, &[_][]const u8{
+            project_root,
+            ".zig-cache",
+            "e2e-global",
+        });
+    defer allocator.free(global_cache_dir);
+
+    const local_cache_dir = if (env_map.get("ZIG_LOCAL_CACHE_DIR")) |dir|
+        try allocator.dupe(u8, dir)
+    else
+        try std.fs.path.join(allocator, &[_][]const u8{
+            project_root,
+            ".zig-cache",
+            "e2e-local",
+        });
+    defer allocator.free(local_cache_dir);
+    const install_prefix = if (env_map.get(e2e_install_prefix_env)) |dir|
+        try allocator.dupe(u8, dir)
+    else
+        try std.fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
+    defer allocator.free(install_prefix);
+
     try env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
+    try env_map.put(e2e_install_prefix_env, install_prefix);
 
     const result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "zig", "build" },
+        .argv = &[_][]const u8{ "zig", "build", "-p", install_prefix },
         .cwd = project_root,
         .env_map = &env_map,
         .max_output_bytes = 1024 * 1024,
@@ -54,7 +74,14 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 
 fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "codex-auth.exe" else "codex-auth";
-    return std.fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
+    const install_prefix = std.process.getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+
+    const prefix = install_prefix orelse return std.fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
+    return std.fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
 fn fakeCodexCommandPath() []const u8 {
@@ -117,7 +144,16 @@ fn runCliWithIsolatedHome(
 ) !std.process.Child.RunResult {
     const codex_home = try codexHomeAlloc(allocator, home_root);
     defer allocator.free(codex_home);
+    return try runCliWithIsolatedHomeAndCodexHome(allocator, project_root, home_root, codex_home, args);
+}
 
+fn runCliWithIsolatedHomeAndCodexHome(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    codex_home: []const u8,
+    args: []const []const u8,
+) !std.process.Child.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -143,16 +179,14 @@ fn runCliWithIsolatedHome(
     });
 }
 
-fn runCliWithIsolatedHomeAndPath(
+fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     allocator: std.mem.Allocator,
     project_root: []const u8,
     home_root: []const u8,
+    codex_home: []const u8,
     path_override: []const u8,
     args: []const []const u8,
 ) !std.process.Child.RunResult {
-    const codex_home = try codexHomeAlloc(allocator, home_root);
-    defer allocator.free(codex_home);
-
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -177,6 +211,25 @@ fn runCliWithIsolatedHomeAndPath(
         .env_map = &env_map,
         .max_output_bytes = 1024 * 1024,
     });
+}
+
+fn runCliWithIsolatedHomeAndPath(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    args: []const []const u8,
+) !std.process.Child.RunResult {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+    return try runCliWithIsolatedHomeAndCodexHomeAndPath(
+        allocator,
+        project_root,
+        home_root,
+        codex_home,
+        path_override,
+        args,
+    );
 }
 
 fn runCliWithIsolatedHomeAndStdin(
@@ -396,6 +449,61 @@ test "Scenario: Given device auth login when running login then it forwards the 
     const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(active_auth);
     try std.testing.expectEqualStrings(fake_auth, active_auth);
+}
+
+test "Scenario: Given CODEX_HOME override when running login then it stores auth state under the override root" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("custom-codex");
+    try tmp.dir.makePath("fake-bin");
+
+    const custom_codex_home = try tmp.dir.realpathAlloc(gpa, "custom-codex");
+    defer gpa.free(custom_codex_home);
+
+    const expected_email = "override@example.com";
+    const fake_auth = try bdd.authJsonWithEmailPlan(gpa, expected_email, "plus");
+    defer gpa.free(fake_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = fake_auth });
+    try writeSuccessfulFakeCodex(tmp.dir);
+
+    const fake_bin_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        custom_codex_home,
+        path_override,
+        &[_][]const u8{ "login", "--device-auth" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+
+    const custom_auth_path = try registry.activeAuthPath(gpa, custom_codex_home);
+    defer gpa.free(custom_auth_path);
+    try std.fs.cwd().access(custom_auth_path, .{});
+
+    const default_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(default_auth_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(default_auth_path, .{}));
+
+    var loaded = try registry.loadRegistry(gpa, custom_codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, expected_email));
 }
 
 test "Scenario: Given failed device auth login with existing auth json when running login then it forwards the flag and does not mutate the registry" {

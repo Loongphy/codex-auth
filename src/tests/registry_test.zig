@@ -119,16 +119,52 @@ fn makeAccountRecord(
 
 test "resolveCodexHomeFromEnv prefers CODEX_HOME over HOME" {
     const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
+    try tmp.dir.makePath("custom-codex");
+    const custom_codex_home = try tmp.dir.realpathAlloc(gpa, "custom-codex");
+    defer gpa.free(custom_codex_home);
     const resolved = try registry.resolveCodexHomeFromEnv(
         gpa,
-        "/tmp/custom-codex",
+        custom_codex_home,
         "/tmp/home-root",
         null,
     );
     defer gpa.free(resolved);
 
-    try std.testing.expectEqualStrings("/tmp/custom-codex", resolved);
+    try std.testing.expectEqualStrings(custom_codex_home, resolved);
+}
+
+test "resolveCodexHomeFromEnv rejects a missing CODEX_HOME override" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const missing = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(missing);
+    const missing_path = try std.fs.path.join(gpa, &[_][]const u8{ missing, "missing-codex-home" });
+    defer gpa.free(missing_path);
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        registry.resolveCodexHomeFromEnv(gpa, missing_path, "/tmp/home-root", null),
+    );
+}
+
+test "resolveCodexHomeFromEnv rejects a file CODEX_HOME override" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "codex-home.txt", .data = "not a directory" });
+    const file_path = try tmp.dir.realpathAlloc(gpa, "codex-home.txt");
+    defer gpa.free(file_path);
+
+    try std.testing.expectError(
+        error.NotDir,
+        registry.resolveCodexHomeFromEnv(gpa, file_path, "/tmp/home-root", null),
+    );
 }
 
 test "resolveCodexHomeFromEnv falls back to HOME when CODEX_HOME is empty" {

@@ -38,6 +38,7 @@ pub const Status = struct {
 };
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
+const codex_home_env_name = "CODEX_HOME";
 
 pub const AutoSwitchAttempt = struct {
     refreshed_candidates: bool,
@@ -2036,12 +2037,11 @@ pub fn deleteAbsoluteFileIfExists(path: []const u8) void {
 }
 
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    _ = codex_home;
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
     try std.fs.cwd().access(helper_path, .{});
 
-    const register_script = try windowsRegisterTaskScript(allocator, helper_path);
+    const register_script = try windowsRegisterTaskScript(allocator, helper_path, codex_home);
     defer allocator.free(register_script);
     const end_script = try windowsEndTaskScript(allocator);
     defer allocator.free(end_script);
@@ -2125,52 +2125,60 @@ fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
 }
 
 pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
-    _ = codex_home;
     const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --watch", .{self_exe});
     defer allocator.free(exec);
     const escaped_version = try escapeSystemdValue(allocator, version.app_version);
     defer allocator.free(escaped_version);
+    const escaped_codex_home = try escapeSystemdValue(allocator, codex_home);
+    defer allocator.free(escaped_codex_home);
     return try std.fmt.allocPrint(
         allocator,
-        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=codex-auth auto-switch watcher\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\nEnvironment=\"{s}={s}\"\nExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
         .{
             service_version_env_name,
             escaped_version,
+            codex_home_env_name,
+            escaped_codex_home,
             exec,
         },
     );
 }
 
 pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
-    _ = codex_home;
     const exe = try escapeXml(allocator, self_exe);
     defer allocator.free(exe);
     const current_version = try escapeXml(allocator, version.app_version);
     defer allocator.free(current_version);
+    const escaped_codex_home = try escapeXml(allocator, codex_home);
+    defer allocator.free(escaped_codex_home);
     return try std.fmt.allocPrint(
         allocator,
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
-        .{ mac_label, exe, service_version_env_name, current_version },
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>{s}</key>\n    <string>{s}</string>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
+        .{ mac_label, exe, service_version_env_name, current_version, codex_home_env_name, escaped_codex_home },
     );
 }
 
-pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
+    const args = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(args);
     return try std.fmt.allocPrint(
         allocator,
-        "\"{s}\" --service-version {s}",
-        .{ helper_path, version.app_version },
+        "\"{s}\" {s}",
+        .{ helper_path, args },
     );
 }
 
-pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
     const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
     defer allocator.free(escaped_helper_path);
-    const escaped_version = try escapePowerShellSingleQuoted(allocator, version.app_version);
-    defer allocator.free(escaped_version);
+    const args = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(args);
+    const escaped_args = try escapePowerShellSingleQuoted(allocator, args);
+    defer allocator.free(escaped_args);
     return try std.fmt.allocPrint(
         allocator,
-        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '--service-version {s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
-        .{ escaped_helper_path, escaped_version, windows_task_restart_count, windows_task_name },
+        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '{s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
+        .{ escaped_helper_path, escaped_args, windows_task_restart_count, windows_task_name },
     );
 }
 
@@ -2309,10 +2317,9 @@ fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_ex
 }
 
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    _ = codex_home;
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
-    const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path);
+    const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path, codex_home);
     defer allocator.free(expected_action);
     const expected_fingerprint = try windowsExpectedTaskDefinitionFingerprint(allocator, expected_action);
     defer allocator.free(expected_fingerprint);
@@ -2335,12 +2342,10 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
     };
 }
 
-fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
-    return try std.fmt.allocPrint(
-        allocator,
-        "{s} --service-version {s}",
-        .{ helper_path, version.app_version },
-    );
+fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
+    const args = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(args);
+    return try std.fmt.allocPrint(allocator, "{s} {s}", .{ helper_path, args });
 }
 
 fn windowsExpectedTaskDefinitionFingerprint(allocator: std.mem.Allocator, action: []const u8) ![]u8 {
@@ -2441,6 +2446,51 @@ fn escapeSystemdValue(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 
 fn escapePowerShellSingleQuoted(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return std.mem.replaceOwned(u8, allocator, input, "'", "''");
+}
+
+fn windowsTaskArguments(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    const quoted_codex_home = try quoteWindowsCommandArg(allocator, codex_home);
+    defer allocator.free(quoted_codex_home);
+    return try std.fmt.allocPrint(
+        allocator,
+        "--service-version {s} --codex-home {s}",
+        .{ version.app_version, quoted_codex_home },
+    );
+}
+
+fn quoteWindowsCommandArg(allocator: std.mem.Allocator, arg: []const u8) ![]u8 {
+    const needs_quotes = blk: {
+        if (arg.len == 0) break :blk true;
+        for (arg) |ch| {
+            if (ch <= ' ' or ch == '"') break :blk true;
+        }
+        break :blk false;
+    };
+    if (!needs_quotes) return try allocator.dupe(u8, arg);
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    try out.append(allocator, '"');
+
+    var backslash_count: usize = 0;
+    for (arg) |byte| {
+        switch (byte) {
+            '\\' => backslash_count += 1,
+            '"' => {
+                try out.appendNTimes(allocator, '\\', backslash_count * 2 + 1);
+                try out.append(allocator, '"');
+                backslash_count = 0;
+            },
+            else => {
+                try out.appendNTimes(allocator, '\\', backslash_count);
+                try out.append(allocator, byte);
+                backslash_count = 0;
+            },
+        }
+    }
+    try out.appendNTimes(allocator, '\\', backslash_count * 2);
+    try out.append(allocator, '"');
+    return try out.toOwnedSlice(allocator);
 }
 
 test "candidate index refreshes cached ranking after a reset window expires" {

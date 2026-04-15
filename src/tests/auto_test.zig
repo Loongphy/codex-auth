@@ -1365,6 +1365,7 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
     try std.testing.expect(std.mem.indexOf(u8, unit, "Type=simple") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Restart=always") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_AUTH_VERSION=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Environment=\"CODEX_HOME=/tmp/custom-codex-home\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "[Install]") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "WantedBy=default.target") != null);
@@ -1403,27 +1404,31 @@ test "Scenario: Given mac plist when rendering then it includes version metadata
     defer gpa.free(plist);
 
     try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_AUTH_VERSION</key>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_HOME</key>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>/tmp/custom-codex-home</string>") != null);
     try std.testing.expect(std.mem.indexOf(u8, plist, "<string>daemon</string>") != null);
 }
 
 test "Scenario: Given windows task action when rendering then it launches the helper directly without cmd" {
     const gpa = std.testing.allocator;
-    const action = try auto.windowsTaskAction(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
+    const action = try auto.windowsTaskAction(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe", "C:\\Users\\demo\\Codex Home\\");
     defer gpa.free(action);
 
     try std.testing.expect(std.mem.indexOf(u8, action, "cmd.exe /D /C") == null);
     try std.testing.expect(std.mem.indexOf(u8, action, "\"C:\\Program Files\\codex-auth\\codex-auth-auto.exe\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "--service-version ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "--codex-home \"C:\\Users\\demo\\Codex Home\\\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, action, "powershell.exe") == null);
     try std.testing.expect(action.len < 262);
 }
 
 test "Scenario: Given windows task register script when rendering then it configures restart-on-failure" {
     const gpa = std.testing.allocator;
-    const script = try auto.windowsRegisterTaskScript(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
+    const script = try auto.windowsRegisterTaskScript(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe", "C:\\Users\\demo\\Codex Home\\");
     defer gpa.free(script);
 
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "--codex-home \"C:\\Users\\demo\\Codex Home\\\\\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskTrigger -AtLogOn") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-ExecutionTimeLimit (New-TimeSpan -Seconds 0)") != null);

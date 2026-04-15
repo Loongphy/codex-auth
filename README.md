@@ -53,10 +53,11 @@ npx @loongphy/codex-auth list
 
 `codex-auth` uses the same Codex state root as the current process. Resolution order:
 
-1. `CODEX_HOME` when set to a non-empty path
+1. `CODEX_HOME` when set to a non-empty existing directory
 2. `HOME/.codex`
 3. `USERPROFILE/.codex` on Windows
 
+When `CODEX_HOME` is set, `codex-auth` follows Codex and requires that directory to already exist.
 That means you can isolate auth, registry, config, and session files by running:
 
 ```shell

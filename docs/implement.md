@@ -19,7 +19,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 `codex-auth` resolves `codex_home` in this order:
 
-1. `CODEX_HOME` when it is set to a non-empty path
+1. `CODEX_HOME` when it is set to a non-empty existing directory
 2. `HOME/.codex`
 3. `USERPROFILE/.codex` (Windows fallback)
 

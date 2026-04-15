@@ -101,7 +101,7 @@ Platform bootstrap:
 - macOS: `LaunchAgent` with `KeepAlive`
 - Windows: user scheduled task with an `ONLOGON` trigger, restart-on-failure settings, and an unlimited execution time for `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
 
-Service install paths resolve from the current `codex_home` root. When `CODEX_HOME` is set, the watcher/service files are installed under that override; otherwise the default remains `HOME/.codex` (or `USERPROFILE/.codex` on Windows).
+Service definition files stay in the platform-standard per-user locations. The managed watcher process uses the current `codex_home` root, so when `CODEX_HOME` is set during enablement the watcher keeps reading and writing that override after it starts in the background.
 Foreground commands other than `help`, `version`, `status`, and `daemon` still reconcile the managed service definition after they complete.
 `config auto enable` also prints a short usage-mode note so the user can see whether switching is currently running with default API-backed usage data or local-only fallback semantics.
 When migrating from older Linux/WSL timer-based installs, enable/reconcile also removes the legacy `codex-auth-autoswitch.timer` unit file instead of leaving the old minute timer behind.
