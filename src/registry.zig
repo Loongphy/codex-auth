@@ -86,8 +86,15 @@ pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
 
 pub fn planLabel(plan: PlanType) []const u8 {
     return switch (plan) {
-        .prolite => "pro lite",
-        else => @tagName(plan),
+        .free => "Free",
+        .plus => "Plus",
+        .prolite => "Pro Lite",
+        .pro => "Pro",
+        .team => "Team",
+        .business => "Business",
+        .enterprise => "Enterprise",
+        .edu => "Edu",
+        .unknown => "Unknown",
     };
 }
 

@@ -218,6 +218,34 @@ test "registry save/load" {
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
 }
 
+test "plan labels are human-readable while registry stores raw plan values" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "label@example.com", "", .prolite, .chatgpt, 1));
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try bdd.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"plan\": \"prolite\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "Pro Lite") == null);
+    try std.testing.expectEqualStrings("Free", registry.planLabel(.free));
+    try std.testing.expectEqualStrings("Plus", registry.planLabel(.plus));
+    try std.testing.expectEqualStrings("Pro Lite", registry.planLabel(.prolite));
+    try std.testing.expectEqualStrings("Team", registry.planLabel(.team));
+}
+
 test "registry load defaults missing account_name field to null" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

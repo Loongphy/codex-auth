@@ -57,10 +57,10 @@ test "Scenario: Given same email with two team accounts and one plus account whe
     try std.testing.expect(rows.rows.len == 4);
     try std.testing.expect(rows.rows[0].account_index == null);
     try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "user@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "team #1"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "Team #1"));
     try std.testing.expect(rows.rows[1].is_active);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "team #2"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Team #2"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
     try std.testing.expect(rows.selectable_row_indices.len == 3);
 }
 
@@ -80,7 +80,7 @@ test "Scenario: Given grouped accounts with aliases when building display rows t
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "backup") or std.mem.eql(u8, rows.rows[2].account_cell, "work"));
 }
 
-test "Scenario: Given prolite accounts when building display rows then labels use pro lite wording" {
+test "Scenario: Given prolite accounts when building display rows then labels use Pro Lite wording" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -92,8 +92,8 @@ test "Scenario: Given prolite accounts when building display rows then labels us
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 3), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "pro lite #1"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "pro lite #2"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "Pro Lite #1"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Pro Lite #2"));
 }
 
 test "Scenario: Given same-email accounts filtered down to one row when building display rows then singleton is decided from the rendered subset" {
@@ -160,7 +160,7 @@ test "Scenario: Given mixed singleton and grouped accounts when building display
     try std.testing.expect(rows.rows[1].account_index == null);
     try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "user@example.com"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
 }
 
 test "Scenario: Given grouped accounts with account names when building display rows then child labels use the same precedence" {
@@ -184,5 +184,5 @@ test "Scenario: Given grouped accounts with account names when building display 
             (std.mem.eql(u8, rows.rows[1].account_cell, "Backup Workspace") and
                 std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)")),
     );
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "plus"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
 }
