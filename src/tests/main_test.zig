@@ -522,6 +522,140 @@ test "Scenario: Given thread pool init failure when refreshing foreground usage 
     try std.testing.expectEqual(@as(f64, 22), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
 }
 
+test "Scenario: Given debug usage refresh when listing then request and response details stream in refresh order" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestUsageFetcher = struct {
+        fn snapshot(plan: registry.PlanType, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = used_5h,
+                    .window_minutes = 300,
+                    .resets_at = 4773491460,
+                },
+                .secondary = .{
+                    .used_percent = used_weekly,
+                    .window_minutes = 10080,
+                    .resets_at = 4773749620,
+                },
+                .credits = null,
+                .plan_type = plan,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
+            var info = try auth_mod.parseAuthInfo(allocator, auth_path);
+            defer info.deinit(allocator);
+
+            const account_id = info.chatgpt_account_id orelse return .{
+                .snapshot = null,
+                .status_code = null,
+                .missing_auth = true,
+            };
+
+            if (std.mem.eql(u8, account_id, primary_account_id)) {
+                return .{
+                    .snapshot = snapshot(.team, 18, 39),
+                    .status_code = 200,
+                };
+            }
+            if (std.mem.eql(u8, account_id, secondary_account_id)) {
+                return .{
+                    .snapshot = null,
+                    .status_code = 403,
+                };
+            }
+            return .{
+                .snapshot = null,
+                .status_code = 404,
+            };
+        }
+
+        fn failPoolInit(
+            pool: *std.Thread.Pool,
+            allocator: std.mem.Allocator,
+            n_jobs: usize,
+        ) !void {
+            _ = pool;
+            _ = allocator;
+            _ = n_jobs;
+            return error.ThreadQuotaExceeded;
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    try writeAccountSnapshotWithIds(gpa, codex_home, "alpha@example.com", "team", shared_user_id, primary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "beta@example.com", "team", shared_user_id, secondary_account_id);
+
+    var debug_output: std.Io.Writer.Allocating = .init(gpa);
+    defer debug_output.deinit();
+    var debug_logger = main_mod.ForegroundUsageDebugLogger.init(&debug_output.writer);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+        gpa,
+        codex_home,
+        &reg,
+        TestUsageFetcher.fetch,
+        TestUsageFetcher.failPoolInit,
+        &debug_logger,
+    );
+    defer state.deinit(gpa);
+
+    const debug_text = debug_output.written();
+    const start_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] usage refresh start: accounts=2 concurrency=2 timeout_ms=5000 child_timeout_ms=7000 endpoint=https://chatgpt.com/backend-api/wham/usage node=",
+    ) orelse return error.TestExpectedEqual;
+    const request_primary_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] request usage: alpha@example.com account_id=67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\n",
+    ) orelse return error.TestExpectedEqual;
+    const response_primary_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] response usage: alpha@example.com status=200 result=usage-windows\n",
+    ) orelse return error.TestExpectedEqual;
+    const updated_primary_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] updated usage: alpha@example.com ",
+    ) orelse return error.TestExpectedEqual;
+    const request_secondary_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] request usage: beta@example.com account_id=518a44d9-ba75-4bad-87e5-ae9377042960\n",
+    ) orelse return error.TestExpectedEqual;
+    const response_secondary_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] response usage: beta@example.com status=403 result=http-response\n",
+    ) orelse return error.TestExpectedEqual;
+    const done_idx = std.mem.indexOf(
+        u8,
+        debug_text,
+        "[debug] usage refresh done: attempted=2 updated=1 failed=1 unchanged=0\n",
+    ) orelse return error.TestExpectedEqual;
+
+    try std.testing.expect(start_idx < request_primary_idx);
+    try std.testing.expect(request_primary_idx < response_primary_idx);
+    try std.testing.expect(response_primary_idx < updated_primary_idx);
+    try std.testing.expect(updated_primary_idx < request_secondary_idx);
+    try std.testing.expect(request_secondary_idx < response_secondary_idx);
+    try std.testing.expect(response_secondary_idx < done_idx);
+}
+
 test "Scenario: Given list with missing team names when running foreground account-name refresh then it waits and saves the updated names" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

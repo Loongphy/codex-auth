@@ -4,7 +4,8 @@ This document is the single source of truth for outbound ChatGPT API refresh beh
 
 All API refresh requests are issued through `Node.js fetch`.
 When `codex-auth` is launched from the npm package, the wrapper passes its current Node executable to the Zig binary.
-Legacy standalone binary installs must have Node.js 18+ available on `PATH` for API-backed refresh to work.
+Legacy standalone binary installs must have Node.js 22+ available on `PATH` for API-backed refresh to work.
+When `HTTP_PROXY` / `HTTPS_PROXY` are present, `codex-auth` enables Node environment-proxy support for the fetch child process automatically.
 
 ## Endpoints
 

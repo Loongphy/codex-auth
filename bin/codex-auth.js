@@ -4,6 +4,21 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const rootPackageJsonPath = path.join(__dirname, "..", "package.json");
+const requiredNodeMajor = 22;
+
+function ensureSupportedNodeVersion() {
+  const major = Number(process.versions?.node?.split(".")[0] ?? 0);
+  if (Number.isInteger(major) && major >= requiredNodeMajor) {
+    return;
+  }
+
+  console.error(
+    `Node.js ${requiredNodeMajor}+ is required to run @loongphy/codex-auth. Current version: ${process.version}.`
+  );
+  process.exit(1);
+}
+
+ensureSupportedNodeVersion();
 
 const packageMap = {
   "linux:x64": "@loongphy/codex-auth-linux-x64",

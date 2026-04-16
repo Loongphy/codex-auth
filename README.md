@@ -47,7 +47,7 @@ npx @loongphy/codex-auth list
 > If you previously used those legacy installers, remove the leftover binaries and profile changes during migration.
 > API-backed usage refresh and team-name refresh use Node.js `fetch`.
 > npm installs already satisfy that requirement.
-> Legacy standalone binary installs need Node.js 18+ on `PATH` when `codex-auth config api enable` is used.
+> Legacy standalone binary installs need Node.js 22+ on `PATH` when `codex-auth config api enable` is used.
 
 ## Storage Root
 

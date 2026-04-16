@@ -2,6 +2,7 @@ const std = @import("std");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
+const chatgpt_http = @import("chatgpt_http.zig");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
@@ -29,6 +30,7 @@ const ForegroundUsagePoolInitFn = *const fn (
     allocator: std.mem.Allocator,
     n_jobs: usize,
 ) anyerror!void;
+const NodeAvailabilityFn = *const fn (allocator: std.mem.Allocator) anyerror!void;
 const BackgroundRefreshLockAcquirer = *const fn (
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -79,14 +81,36 @@ pub const ForegroundUsageRefreshState = struct {
 
 const DebugUsageLabelState = struct {
     labels: [][]const u8,
-    display_order: []usize,
 
     fn deinit(self: *DebugUsageLabelState, allocator: std.mem.Allocator) void {
         for (self.labels) |label| allocator.free(@constCast(label));
         allocator.free(self.labels);
-        allocator.free(self.display_order);
         self.* = undefined;
     }
+};
+
+pub const ForegroundUsageDebugLogger = struct {
+    writer: *std.Io.Writer,
+    mutex: std.Thread.Mutex = .{},
+
+    pub fn init(writer: *std.Io.Writer) ForegroundUsageDebugLogger {
+        return .{
+            .writer = writer,
+        };
+    }
+
+    pub fn print(self: *ForegroundUsageDebugLogger, comptime fmt: []const u8, args: anytype) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        try self.writer.print(fmt, args);
+        try self.writer.flush();
+    }
+};
+
+const ForegroundUsageDebugContext = struct {
+    logger: *ForegroundUsageDebugLogger,
+    label_state: *const DebugUsageLabelState,
 };
 
 pub fn main() !void {
@@ -158,6 +182,7 @@ fn runMain() !void {
 fn isHandledCliError(err: anyerror) bool {
     return err == error.AccountNotFound or
         err == error.CodexLoginFailed or
+        err == error.NodeJsRequired or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput;
@@ -288,12 +313,13 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
         initForegroundUsagePool,
+        null,
     );
 }
 
@@ -304,18 +330,61 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     usage_fetcher: UsageFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        pool_init,
+        null,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
+
+    var debug_label_state: ?DebugUsageLabelState = null;
+    defer if (debug_label_state) |*label_state| label_state.deinit(allocator);
+
+    var debug_context: ?ForegroundUsageDebugContext = null;
 
     if (!reg.api.usage) {
         state.local_only_mode = true;
         if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
             try registry.saveRegistry(allocator, codex_home, reg);
         }
+        if (debug_logger) |logger| {
+            try logger.print("[debug] usage refresh skipped: mode=local-only; only the active account can refresh from local rollout data\n", .{});
+            try printForegroundUsageDebugDone(logger, &state);
+        }
         return state;
     }
 
-    if (reg.accounts.items.len == 0) return state;
+    if (debug_logger) |logger| {
+        debug_label_state = try buildDebugUsageLabelState(allocator, reg);
+        debug_context = .{
+            .logger = logger,
+            .label_state = &debug_label_state.?,
+        };
+        const node_executable = try chatgpt_http.resolveNodeExecutableForDebugAlloc(allocator);
+        defer allocator.free(node_executable);
+        try printForegroundUsageDebugStart(logger, reg.accounts.items.len, node_executable);
+    }
+
+    if (reg.accounts.items.len == 0) {
+        if (debug_logger) |logger| {
+            try printForegroundUsageDebugDone(logger, &state);
+        }
+        return state;
+    }
 
     const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
     defer {
@@ -325,7 +394,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     for (worker_results) |*worker_result| worker_result.* = .{};
 
     if (reg.accounts.items.len <= 1) {
-        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results);
+        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
     } else {
         var thread_safe_allocator: std.heap.ThreadSafeAllocator = .{ .child_allocator = allocator };
         const thread_allocator = thread_safe_allocator.allocator();
@@ -347,6 +416,9 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
 
             var wait_group: std.Thread.WaitGroup = .{};
             for (reg.accounts.items, 0..) |_, idx| {
+                if (debug_context) |debug| {
+                    try printForegroundUsageDebugRequest(debug.logger, reg, idx, debug.label_state.labels[idx]);
+                }
                 pool.spawnWg(&wait_group, foregroundUsageRefreshWorker, .{
                     thread_allocator,
                     codex_home,
@@ -354,11 +426,12 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
                     idx,
                     usage_fetcher,
                     worker_results,
+                    debug_context,
                 });
             }
             wait_group.wait();
         } else {
-            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results);
+            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
         }
     }
 
@@ -398,6 +471,10 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
         try registry.saveRegistry(allocator, codex_home, reg);
     }
 
+    if (debug_logger) |logger| {
+        try printForegroundUsageDebugDone(logger, &state);
+    }
+
     return state;
 }
 
@@ -418,9 +495,13 @@ fn runForegroundUsageRefreshWorkersSerially(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
 ) void {
     for (reg.accounts.items, 0..) |_, idx| {
-        foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
+        if (debug_context) |debug| {
+            printForegroundUsageDebugRequest(debug.logger, reg, idx, debug.label_state.labels[idx]) catch {};
+        }
+        foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results, debug_context);
     }
 }
 
@@ -431,6 +512,7 @@ fn foregroundUsageRefreshWorker(
     account_idx: usize,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
 ) void {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -438,11 +520,29 @@ fn foregroundUsageRefreshWorker(
 
     const auth_path = registry.accountAuthPath(arena, codex_home, reg.accounts.items[account_idx].account_key) catch |err| {
         results[account_idx] = .{ .error_name = @errorName(err) };
+        if (debug_context) |debug| {
+            printForegroundUsageDebugWorkerResult(
+                arena,
+                debug.logger,
+                debug.label_state.labels[account_idx],
+                reg.accounts.items[account_idx].last_usage,
+                results[account_idx],
+            );
+        }
         return;
     };
 
     const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
         results[account_idx] = .{ .error_name = @errorName(err) };
+        if (debug_context) |debug| {
+            printForegroundUsageDebugWorkerResult(
+                arena,
+                debug.logger,
+                debug.label_state.labels[account_idx],
+                reg.accounts.items[account_idx].last_usage,
+                results[account_idx],
+            );
+        }
         return;
     };
 
@@ -458,11 +558,29 @@ fn foregroundUsageRefreshWorker(
                 .missing_auth = fetch_result.missing_auth,
                 .error_name = @errorName(err),
             };
+            if (debug_context) |debug| {
+                printForegroundUsageDebugWorkerResult(
+                    arena,
+                    debug.logger,
+                    debug.label_state.labels[account_idx],
+                    reg.accounts.items[account_idx].last_usage,
+                    results[account_idx],
+                );
+            }
             return;
         };
     }
 
     results[account_idx] = result;
+    if (debug_context) |debug| {
+        printForegroundUsageDebugWorkerResult(
+            arena,
+            debug.logger,
+            debug.label_state.labels[account_idx],
+            reg.accounts.items[account_idx].last_usage,
+            result,
+        );
+    }
 }
 
 fn setForegroundUsageOverrideForOutcome(
@@ -502,9 +620,6 @@ fn buildDebugUsageLabelState(
 
     var display = try display_rows.buildDisplayRows(allocator, reg, null);
     defer display.deinit(allocator);
-    var display_order = std.ArrayList(usize).empty;
-    defer display_order.deinit(allocator);
-
     for (display.rows) |row| {
         const account_idx = row.account_index orelse continue;
         const next_label = if (row.depth == 0)
@@ -516,30 +631,28 @@ fn buildDebugUsageLabelState(
             });
         allocator.free(@constCast(labels[account_idx]));
         labels[account_idx] = next_label;
-        try display_order.append(allocator, account_idx);
     }
 
     return .{
         .labels = labels,
-        .display_order = try display_order.toOwnedSlice(allocator),
     };
 }
 
-fn debugStatusLabel(buf: *[32]u8, outcome: ForegroundUsageOutcome) []const u8 {
-    if (outcome.error_name) |error_name| return error_name;
-    if (outcome.missing_auth) return "MissingAuth";
-    if (outcome.status_code) |status_code| {
+fn debugWorkerStatusLabel(buf: *[32]u8, result: ForegroundUsageWorkerResult) []const u8 {
+    if (result.error_name) |error_name| return error_name;
+    if (result.missing_auth) return "MissingAuth";
+    if (result.status_code) |status_code| {
         return std.fmt.bufPrint(buf, "{d}", .{status_code}) catch "-";
     }
-    return if (outcome.has_usage_windows) "200" else "-";
+    return if (result.snapshot != null) "200" else "-";
 }
 
-fn outcomeHasNoUsageWindow(outcome: ForegroundUsageOutcome) bool {
-    return outcome.error_name == null and
-        !outcome.missing_auth and
-        !outcome.has_usage_windows and
-        outcome.status_code != null and
-        outcome.status_code.? == 200;
+fn workerResultHasNoUsageWindow(result: ForegroundUsageWorkerResult) bool {
+    return result.error_name == null and
+        !result.missing_auth and
+        result.snapshot == null and
+        result.status_code != null and
+        result.status_code.? == 200;
 }
 
 fn formatRemainingPercentAlloc(
@@ -550,77 +663,121 @@ fn formatRemainingPercentAlloc(
     return std.fmt.allocPrint(allocator, "{d}%", .{remaining});
 }
 
-fn printForegroundUsageDebug(
-    allocator: std.mem.Allocator,
-    reg: *const registry.Registry,
-    state: *const ForegroundUsageRefreshState,
+fn printForegroundUsageDebugStart(
+    logger: *ForegroundUsageDebugLogger,
+    account_count: usize,
+    node_executable: []const u8,
 ) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-
-    if (state.local_only_mode) {
-        try out.writeAll("[debug] usage refresh skipped: mode=local-only; only the active account can refresh from local rollout data\n");
-        try out.flush();
-        return;
-    }
-
-    var label_state = try buildDebugUsageLabelState(allocator, reg);
-    defer label_state.deinit(allocator);
-
-    try out.print(
-        "[debug] usage refresh start: accounts={d} concurrency={d}\n",
+    try logger.print(
+        "[debug] usage refresh start: accounts={d} concurrency={d} timeout_ms={s} child_timeout_ms={s} endpoint={s} node={s}\n",
         .{
-            reg.accounts.items.len,
-            @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            account_count,
+            @min(account_count, foreground_usage_refresh_concurrency),
+            chatgpt_http.request_timeout_ms,
+            chatgpt_http.child_process_timeout_ms,
+            usage_api.default_usage_endpoint,
+            node_executable,
         },
     );
+}
 
-    for (label_state.display_order) |account_idx| {
-        if (!state.outcomes[account_idx].attempted) continue;
-        try out.print("[debug] request usage: {s}\n", .{label_state.labels[account_idx]});
-    }
-
-    for (label_state.display_order) |account_idx| {
-        const outcome = state.outcomes[account_idx];
-        if (!outcome.attempted) continue;
-
-        var status_buf: [32]u8 = undefined;
-        try out.print(
-            "[debug] response usage: {s} status={s}",
-            .{
-                label_state.labels[account_idx],
-                debugStatusLabel(&status_buf, outcome),
-            },
-        );
-        if (outcomeHasNoUsageWindow(outcome)) {
-            try out.writeAll(" result=no-usage-limits-window");
-        }
-        try out.writeAll("\n");
-
-        if (outcome.updated) {
-            const rate_5h = registry.resolveRateWindow(reg.accounts.items[account_idx].last_usage, 300, true);
-            const rate_weekly = registry.resolveRateWindow(reg.accounts.items[account_idx].last_usage, 10080, false);
-            const rate_5h_text = try formatRemainingPercentAlloc(allocator, rate_5h);
-            defer allocator.free(rate_5h_text);
-            const rate_weekly_text = try formatRemainingPercentAlloc(allocator, rate_weekly);
-            defer allocator.free(rate_weekly_text);
-            try out.print(
-                "[debug] updated usage: {s} 5h={s} weekly={s}\n",
-                .{
-                    label_state.labels[account_idx],
-                    rate_5h_text,
-                    rate_weekly_text,
-                },
-            );
-        }
-    }
-
-    try out.print(
+fn printForegroundUsageDebugDone(logger: *ForegroundUsageDebugLogger, state: *const ForegroundUsageRefreshState) !void {
+    try logger.print(
         "[debug] usage refresh done: attempted={d} updated={d} failed={d} unchanged={d}\n",
         .{ state.attempted, state.updated, state.failed, state.unchanged },
     );
-    try out.flush();
+}
+
+fn printForegroundUsageDebugRequest(
+    logger: *ForegroundUsageDebugLogger,
+    reg: *const registry.Registry,
+    account_idx: usize,
+    label: []const u8,
+) !void {
+    try logger.print(
+        "[debug] request usage: {s} account_id={s}\n",
+        .{
+            label,
+            reg.accounts.items[account_idx].chatgpt_account_id,
+        },
+    );
+}
+
+fn printForegroundUsageDebugWorkerResult(
+    allocator: std.mem.Allocator,
+    logger: *ForegroundUsageDebugLogger,
+    label: []const u8,
+    previous_snapshot: ?registry.RateLimitSnapshot,
+    result: ForegroundUsageWorkerResult,
+) void {
+    var status_buf: [32]u8 = undefined;
+    if (workerResultHasNoUsageWindow(result)) {
+        logger.print(
+            "[debug] response usage: {s} status={s} result=no-usage-limits-window\n",
+            .{
+                label,
+                debugWorkerStatusLabel(&status_buf, result),
+            },
+        ) catch return;
+    } else if (result.snapshot != null) {
+        logger.print(
+            "[debug] response usage: {s} status={s} result=usage-windows\n",
+            .{
+                label,
+                debugWorkerStatusLabel(&status_buf, result),
+            },
+        ) catch return;
+    } else if (result.missing_auth) {
+        logger.print(
+            "[debug] response usage: {s} status={s} result=missing-auth\n",
+            .{
+                label,
+                debugWorkerStatusLabel(&status_buf, result),
+            },
+        ) catch return;
+    } else if (result.error_name != null) {
+        const result_kind = if (std.mem.eql(u8, result.error_name.?, "NodeProcessTimedOut"))
+            "node-process-timeout"
+        else if (std.mem.eql(u8, result.error_name.?, "NodeJsRequired"))
+            "node-launch-failed"
+        else
+            "error";
+        logger.print(
+            "[debug] response usage: {s} status={s} result={s}\n",
+            .{
+                label,
+                debugWorkerStatusLabel(&status_buf, result),
+                result_kind,
+            },
+        ) catch return;
+    } else {
+        logger.print(
+            "[debug] response usage: {s} status={s} result=http-response\n",
+            .{
+                label,
+                debugWorkerStatusLabel(&status_buf, result),
+            },
+        ) catch return;
+    }
+
+    const snapshot = result.snapshot orelse return;
+    if (registry.rateLimitSnapshotsEqual(previous_snapshot, snapshot)) return;
+
+    const rate_5h = registry.resolveRateWindow(snapshot, 300, true);
+    const rate_weekly = registry.resolveRateWindow(snapshot, 10080, false);
+    const rate_5h_text = formatRemainingPercentAlloc(allocator, rate_5h) catch return;
+    defer allocator.free(rate_5h_text);
+    const rate_weekly_text = formatRemainingPercentAlloc(allocator, rate_weekly) catch return;
+    defer allocator.free(rate_weekly_text);
+
+    logger.print(
+        "[debug] updated usage: {s} 5h={s} weekly={s}\n",
+        .{
+            label,
+            rate_5h_text,
+            rate_weekly_text,
+        },
+    ) catch {};
 }
 
 pub fn maybeRefreshForegroundAccountNames(
@@ -731,6 +888,62 @@ pub fn refreshAccountNamesForList(
 fn shouldRefreshTeamAccountNamesForUserScope(reg: *registry.Registry, chatgpt_user_id: []const u8) bool {
     if (!reg.api.account) return false;
     return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
+}
+
+fn shouldPreflightNodeForAccountNameRefresh(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+) !bool {
+    switch (target) {
+        .list, .switch_account => {},
+        .remove_account => return false,
+    }
+
+    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
+    if (!shouldRefreshTeamAccountNamesForUserScope(reg, active_user_id)) return false;
+
+    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
+    defer info.deinit(allocator);
+
+    return info.access_token != null and info.chatgpt_account_id != null;
+}
+
+fn shouldPreflightNodeForForegroundTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+) !bool {
+    if (shouldRefreshForegroundUsage(target) and reg.api.usage and reg.accounts.items.len > 0) return true;
+    return try shouldPreflightNodeForAccountNameRefresh(allocator, codex_home, reg, target);
+}
+
+fn ensureForegroundNodeAvailable(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+) !void {
+    try ensureForegroundNodeAvailableWithChecker(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        chatgpt_http.ensureNodeExecutableAvailable,
+    );
+}
+
+fn ensureForegroundNodeAvailableWithChecker(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    checker: NodeAvailabilityFn,
+) !void {
+    if (!try shouldPreflightNodeForForegroundTarget(allocator, codex_home, reg, target)) return;
+    try checker(allocator);
 }
 
 pub fn shouldScheduleBackgroundAccountNameRefresh(reg: *registry.Registry) bool {
@@ -922,17 +1135,24 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+    try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .list);
+    var debug_stdout: io_util.Stdout = undefined;
+    var debug_logger: ?ForegroundUsageDebugLogger = null;
+    if (opts.debug) {
+        debug_stdout.init();
+        debug_logger = ForegroundUsageDebugLogger.init(debug_stdout.out());
+    }
+
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
         allocator,
         codex_home,
         &reg,
         usage_api.fetchUsageForAuthPathDetailed,
+        initForegroundUsagePool,
+        if (debug_logger) |*logger| logger else null,
     );
     defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .list, defaultAccountFetcher);
-    if (opts.debug) {
-        try printForegroundUsageDebug(allocator, &reg, &usage_state);
-    }
     try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
 }
 
@@ -1004,6 +1224,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
+    try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .switch_account);
     var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
         allocator,
         codex_home,
@@ -1318,6 +1539,188 @@ test "background account-name refresh returns early when another refresh holds t
         TestState.lockUnavailable,
     );
     try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
+}
+
+test "foreground node preflight fails fast when usage refresh needs node" {
+    const TestState = struct {
+        var check_count: usize = 0;
+
+        fn missingNode(allocator: std.mem.Allocator) !void {
+            _ = allocator;
+            check_count += 1;
+            return error.NodeJsRequired;
+        }
+    };
+
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = registry.Registry{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+
+    try reg.accounts.append(gpa, .{
+        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
+        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
+        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
+        .email = try gpa.dupe(u8, "alpha@example.com"),
+        .alias = try gpa.dupe(u8, ""),
+        .account_name = null,
+        .plan = .plus,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+
+    TestState.check_count = 0;
+    try std.testing.expectError(
+        error.NodeJsRequired,
+        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
+    );
+    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
+}
+
+test "foreground node preflight fails fast when account-name refresh needs node" {
+    const TestState = struct {
+        var check_count: usize = 0;
+
+        fn missingNode(allocator: std.mem.Allocator) !void {
+            _ = allocator;
+            check_count += 1;
+            return error.NodeJsRequired;
+        }
+
+        fn appendAccount(
+            allocator: std.mem.Allocator,
+            reg: *registry.Registry,
+            record_key: []const u8,
+            email: []const u8,
+            plan: registry.PlanType,
+        ) !void {
+            const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+            const user_id = record_key[0..sep];
+            const account_id = record_key[sep + 2 ..];
+            try reg.accounts.append(allocator, .{
+                .account_key = try allocator.dupe(u8, record_key),
+                .chatgpt_account_id = try allocator.dupe(u8, account_id),
+                .chatgpt_user_id = try allocator.dupe(u8, user_id),
+                .email = try allocator.dupe(u8, email),
+                .alias = try allocator.dupe(u8, ""),
+                .account_name = null,
+                .plan = plan,
+                .auth_mode = .chatgpt,
+                .created_at = 1,
+                .last_used_at = null,
+                .last_usage = null,
+                .last_usage_at = null,
+                .last_local_rollout = null,
+            });
+        }
+
+        fn authJsonWithIds(
+            allocator: std.mem.Allocator,
+            email: []const u8,
+            plan: []const u8,
+            chatgpt_user_id: []const u8,
+            chatgpt_account_id: []const u8,
+        ) ![]u8 {
+            const encoder = std.base64.url_safe_no_pad.Encoder;
+            const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+            const payload = try std.fmt.allocPrint(
+                allocator,
+                "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+                .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+            );
+            defer allocator.free(payload);
+
+            const header_b64 = try allocator.alloc(u8, encoder.calcSize(header.len));
+            defer allocator.free(header_b64);
+            _ = encoder.encode(header_b64, header);
+            const payload_b64 = try allocator.alloc(u8, encoder.calcSize(payload.len));
+            defer allocator.free(payload_b64);
+            _ = encoder.encode(payload_b64, payload);
+            const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ header_b64, ".", payload_b64, ".sig" });
+            defer allocator.free(jwt);
+
+            return try std.fmt.allocPrint(
+                allocator,
+                "{{\"tokens\":{{\"access_token\":\"access-{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+                .{ email, chatgpt_account_id, jwt },
+            );
+        }
+
+        fn writeActiveAuth(
+            allocator: std.mem.Allocator,
+            codex_home: []const u8,
+            email: []const u8,
+            plan: []const u8,
+            chatgpt_user_id: []const u8,
+            chatgpt_account_id: []const u8,
+        ) !void {
+            const auth_path = try registry.activeAuthPath(allocator, codex_home);
+            defer allocator.free(auth_path);
+
+            const auth_json = try authJsonWithIds(
+                allocator,
+                email,
+                plan,
+                chatgpt_user_id,
+                chatgpt_account_id,
+            );
+            defer allocator.free(auth_json);
+            try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+        }
+    };
+
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = registry.Registry{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+
+    const user_id = "user-shared";
+    const primary_record_key = "user-shared::acct-primary";
+    const secondary_record_key = "user-shared::acct-secondary";
+    try TestState.appendAccount(gpa, &reg, primary_record_key, "team@example.com", .team);
+    try TestState.appendAccount(gpa, &reg, secondary_record_key, "team@example.com", .team);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    try TestState.writeActiveAuth(gpa, codex_home, "team@example.com", "team", user_id, "acct-primary");
+
+    TestState.check_count = 0;
+    try std.testing.expectError(
+        error.NodeJsRequired,
+        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
+    );
+    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
+}
+
+test "handled cli errors include missing node" {
+    try std.testing.expect(isHandledCliError(error.NodeJsRequired));
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
