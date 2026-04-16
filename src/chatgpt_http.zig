@@ -516,7 +516,9 @@ test "launch path resolution preserves node symlink path" {
     });
     var real_file = try tmp_dir.dir.openFile("node-real", .{ .mode = .read_write });
     defer real_file.close();
-    try real_file.chmod(0o755);
+    if (builtin.os.tag != .windows) {
+        try real_file.chmod(0o755);
+    }
     try tmp_dir.dir.symLink("node-real", "node", .{});
 
     const resolved = (try resolveExecutablePathEntryForLaunchAlloc(allocator, entry, "node")) orelse return error.TestUnexpectedResult;
