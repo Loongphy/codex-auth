@@ -217,7 +217,7 @@ pub const ForegroundUsageRefreshTarget = enum {
 };
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list or target == .switch_account;
+    return target == .list or target == .switch_account or target == .remove_account;
 }
 
 fn isAccountNameRefreshOnlyMode() bool {
@@ -307,18 +307,6 @@ fn initForegroundUsageRefreshState(
         .usage_overrides = usage_overrides,
         .outcomes = outcomes,
     };
-}
-
-fn maybeRefreshForegroundUsage(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !void {
-    if (!shouldRefreshForegroundUsage(target)) return;
-    if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
-        try registry.saveRegistry(allocator, codex_home, reg);
-    }
 }
 
 pub fn refreshForegroundUsageForDisplayWithApiFetcher(
@@ -1420,7 +1408,20 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    try maybeRefreshForegroundUsage(allocator, codex_home, &reg, .remove_account);
+
+    const needs_selector = !opts.all and opts.query == null;
+    var usage_state: ?ForegroundUsageRefreshState = null;
+    defer if (usage_state) |*state| state.deinit(allocator);
+
+    if (needs_selector) {
+        try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .remove_account);
+        usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+            allocator,
+            codex_home,
+            &reg,
+            usage_api.fetchUsageForAuthPathDetailed,
+        );
+    }
 
     var selected: ?[]usize = null;
     if (opts.all) {
@@ -1450,7 +1451,11 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
         selected = try allocator.dupe(usize, matches.items);
     } else {
-        selected = cli.selectAccountsToRemove(allocator, &reg) catch |err| switch (err) {
+        selected = cli.selectAccountsToRemoveWithUsageOverrides(
+            allocator,
+            &reg,
+            if (usage_state) |*state| state.usage_overrides else null,
+        ) catch |err| switch (err) {
             error.InvalidRemoveSelectionInput => {
                 try cli.printInvalidRemoveSelectionError();
                 return error.InvalidRemoveSelectionInput;

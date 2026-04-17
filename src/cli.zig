@@ -1114,13 +1114,21 @@ pub fn selectAccountFromIndicesWithUsageOverrides(
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
+    return selectAccountsToRemoveWithUsageOverrides(allocator, reg, null);
+}
+
+pub fn selectAccountsToRemoveWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]usize {
     if (comptime builtin.os.tag == .windows) {
-        return selectRemoveWithNumbers(allocator, reg);
+        return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
     if (shouldUseNumberedRemoveSelector(false, std.fs.File.stdin().isTty())) {
-        return selectRemoveWithNumbers(allocator, reg);
+        return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
-    return selectRemoveInteractive(allocator, reg) catch selectRemoveWithNumbers(allocator, reg);
+    return selectRemoveInteractive(allocator, reg, usage_overrides) catch selectRemoveWithNumbers(allocator, reg, usage_overrides);
 }
 
 pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool) bool {
@@ -1334,12 +1342,16 @@ fn selectInteractiveFromIndices(
     }
 }
 
-fn selectRemoveWithNumbers(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
+fn selectRemoveWithNumbers(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]usize {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     if (reg.accounts.items.len == 0) return null;
-    var rows = try buildSwitchRows(allocator, reg);
+    var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
     const use_color = colorEnabled();
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
@@ -1512,9 +1524,13 @@ fn selectInteractive(
     }
 }
 
-fn selectRemoveInteractive(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
+fn selectRemoveInteractive(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !?[]usize {
     if (reg.accounts.items.len == 0) return null;
-    var rows = try buildSwitchRows(allocator, reg);
+    var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
     var tty = try std.fs.cwd().openFile("/dev/tty", .{});
@@ -1549,7 +1565,7 @@ fn selectRemoveInteractive(allocator: std.mem.Allocator, reg: *registry.Registry
         try renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, Enter delete, 1-9 type, Backspace edit, Esc exit\n");
+        try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, Enter delete, 1-9 type, Backspace edit, Esc or q quit\n");
         if (use_color) try out.writeAll(ansi.reset);
         try out.flush();
 
@@ -1588,6 +1604,7 @@ fn selectRemoveInteractive(allocator: std.mem.Allocator, reg: *registry.Registry
                 }
                 return selected;
             }
+            if (isQuitKey(b[i])) return null;
             if (b[i] == 'k' and idx > 0) {
                 idx -= 1;
                 number_len = 0;
@@ -2247,6 +2264,28 @@ test "Scenario: Given usage overrides when rendering switch list then failed row
     try std.testing.expect(std.mem.count(u8, output, "401") >= 2);
 }
 
+test "Scenario: Given usage overrides when rendering remove list then failed rows show response status in both usage columns" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+
+    var checked = [_]bool{ false, false };
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, null, &checked, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.count(u8, output, "401") >= 2);
+}
+
 test "Scenario: Given a usage snapshot plan when building switch rows then the displayed plan prefers it over the stored auth plan" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -2265,4 +2304,3 @@ test "Scenario: Given a usage snapshot plan when building switch rows then the d
 
     try std.testing.expectEqualStrings("Business", rows.items[0].plan);
 }
-

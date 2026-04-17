@@ -329,10 +329,10 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
 }
 
-test "Scenario: Given foreground usage refresh targets when checking refresh policy then list and switch refresh but remove does not" {
+test "Scenario: Given foreground usage refresh targets when checking refresh policy then list, switch, and remove all refresh" {
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
-    try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
+    try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.remove_account));
 }
 
 test "Scenario: Given switch query with one local match when resolving locally then it returns the target account directly" {
