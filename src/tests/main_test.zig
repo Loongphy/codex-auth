@@ -1,5 +1,5 @@
 const std = @import("std");
-const time_compat = @import("../compat_time.zig");
+const app_runtime = @import("../runtime.zig");
 const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const auth_mod = @import("../auth.zig");
@@ -1183,7 +1183,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
     try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
@@ -1238,7 +1238,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
     reg.active_account_activated_at_ms = 1;
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,

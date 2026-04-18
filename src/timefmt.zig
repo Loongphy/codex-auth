@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
 
 pub fn formatRelativeTimeAlloc(allocator: std.mem.Allocator, ts: i64, now: i64) ![]u8 {
     if (ts <= 0) return std.fmt.allocPrint(allocator, "-", .{});

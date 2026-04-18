@@ -1,7 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const time_compat = @import("compat_time.zig");
-const fs = @import("compat_fs.zig");
+const app_runtime = @import("runtime.zig");
 const registry = @import("registry.zig");
 
 pub const LatestUsage = struct {
@@ -78,7 +77,7 @@ const UsageCreditsJson = struct {
 };
 
 const max_rollout_line_bytes: usize = 10 * 1024 * 1024;
-const rollout_full_rescan_interval_ns = 15 * time_compat.ns_per_s;
+const rollout_full_rescan_interval_ns = 15 * std.time.ns_per_s;
 
 pub const RolloutScanCache = struct {
     last_full_scan_at_ns: i128 = 0,
@@ -164,7 +163,7 @@ pub fn scanLatestUsableUsageInFile(
 }
 
 pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestRolloutEvent {
-    const sessions_root = try fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
+    const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
     defer allocator.free(sessions_root);
 
     var latest_candidate: ?RolloutCandidate = null;
@@ -172,20 +171,20 @@ pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home
         allocator.free(candidate.path);
     };
 
-    var dir = try fs.cwd().openDir(sessions_root, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), sessions_root, .{ .iterate = true });
+    defer dir.close(app_runtime.io());
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
-    while (try walker.next()) |entry| {
+    while (try walker.next(app_runtime.io())) |entry| {
         if (entry.kind != .file) continue;
         if (!isRolloutFile(entry.path)) continue;
-        const stat = try dir.statFile(entry.path);
+        const stat = try dir.statFile(app_runtime.io(), entry.path, .{});
         const mtime: i64 = @intCast(stat.mtime.nanoseconds);
         if (latest_candidate) |candidate| {
             if (mtime <= candidate.mtime) continue;
         }
-        const path = try fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
         errdefer allocator.free(path);
         if (latest_candidate) |candidate| {
             allocator.free(candidate.path);
@@ -212,10 +211,10 @@ pub fn scanLatestRolloutEventWithCache(
     codex_home: []const u8,
     cache: *RolloutScanCache,
 ) !?LatestRolloutEvent {
-    const now_ns = time_compat.nanoTimestamp();
+    const now_ns = @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds());
 
     if (cache.latest) |cached| {
-        const stat = fs.cwd().statFile(cached.path) catch |err| switch (err) {
+        const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), cached.path, .{}) catch |err| switch (err) {
             error.FileNotFound => return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns),
             else => return err,
         };
@@ -247,32 +246,32 @@ fn scanFileForLatestUsableUsage(allocator: std.mem.Allocator, path: []const u8) 
 }
 
 fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep_latest_unusable: bool) !?ParsedUsageEvent {
-    var file = try fs.cwd().openFile(path, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{});
+    defer file.close(app_runtime.io());
 
-    const stat = try file.stat();
+    const stat = try file.stat(app_runtime.io());
     if (stat.size == 0) return null;
     if (comptime builtin.os.tag == .windows) {
         return scanFileForUsageStreaming(allocator, file, keep_latest_unusable);
     }
 
-    var map = try file.createMemoryMap(.{
+    var map = try file.createMemoryMap(app_runtime.io(), .{
         .len = @intCast(stat.size),
         .protection = .{ .read = true, .write = false },
         .populate = false,
     });
-    defer map.destroy(fs.io());
+    defer map.destroy(app_runtime.io());
 
     return scanUsageEventSliceBackwards(allocator, map.memory, keep_latest_unusable);
 }
 
 fn scanFileForUsageStreaming(
     allocator: std.mem.Allocator,
-    file: fs.File,
+    file: std.Io.File,
     keep_latest_unusable: bool,
 ) !?ParsedUsageEvent {
     var read_buffer: [8192]u8 = undefined;
-    var file_reader = file.reader(&read_buffer);
+    var file_reader = file.reader(app_runtime.io(), &read_buffer);
     const reader = &file_reader.interface;
     var line_buffer: std.Io.Writer.Allocating = .init(allocator);
     defer line_buffer.deinit();
@@ -540,6 +539,6 @@ fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
 
 fn isRolloutFile(path: []const u8) bool {
     if (!std.mem.endsWith(u8, path, ".jsonl")) return false;
-    const base = fs.path.basename(path);
+    const base = std.fs.path.basename(path);
     return std.mem.startsWith(u8, base, "rollout-");
 }

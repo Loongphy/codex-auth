@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
 const auth = @import("auth.zig");
 const chatgpt_http = @import("chatgpt_http.zig");
 const registry = @import("registry.zig");

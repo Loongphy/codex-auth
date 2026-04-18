@@ -1,7 +1,6 @@
 const std = @import("std");
-const time_compat = @import("../compat_time.zig");
+const app_runtime = @import("../runtime.zig");
 const fs = @import("../compat_fs.zig");
-const process_compat = @import("../compat_process.zig");
 const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -12,13 +11,25 @@ const e2e_project_root_env = "CODEX_AUTH_E2E_PROJECT_ROOT";
 var cli_build_ready = false;
 var cli_build_mutex: std.Io.Mutex = .init;
 
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
+
 const SeedAccount = struct {
     email: []const u8,
     alias: []const u8,
 };
 
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
-    const project_root = process_compat.getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
+    const project_root = getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
@@ -65,7 +76,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
         return;
     } else |_| {}
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     const global_cache_dir = if (env_map.get("ZIG_GLOBAL_CACHE_DIR")) |dir|
         try allocator.dupe(u8, dir)
@@ -115,7 +126,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 
 fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "codex-auth.exe" else "codex-auth";
-    const install_prefix = process_compat.getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
+    const install_prefix = getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
@@ -173,7 +184,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
 }
 
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
@@ -194,7 +205,7 @@ fn runCliWithIsolatedHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -220,7 +231,7 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -247,7 +258,7 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -274,7 +285,7 @@ fn runCliWithIsolatedHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -301,7 +312,7 @@ fn runCliWithIsolatedHomeAndStdin(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -413,7 +424,7 @@ fn seedRegistryWithAccounts(
 
     const active_key = try bdd.accountKeyForEmailAlloc(allocator, active_email);
     reg.active_account_key = active_key;
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -437,7 +448,7 @@ fn appendCustomAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = time_compat.timestamp(),
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -1694,7 +1705,7 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .team);
     try appendCustomAccount(gpa, &reg, "user-b::acct-personal", "alice@example.com", "personal", .plus);
     reg.active_account_key = try gpa.dupe(u8, "user-a::acct-work");
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "alice@" }, "y\n");
@@ -1951,7 +1962,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
         gpa.free(key);
     }
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all" }, "");

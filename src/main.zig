@@ -1,7 +1,5 @@
 const std = @import("std");
-const time_compat = @import("compat_time.zig");
-const fs = @import("compat_fs.zig");
-const process_compat = @import("compat_process.zig");
+const app_runtime = @import("runtime.zig");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
@@ -18,6 +16,18 @@ const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
 const foreground_usage_refresh_concurrency: usize = 3;
+
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
@@ -116,8 +126,8 @@ pub const ForegroundUsageDebugLogger = struct {
     }
 
     pub fn print(self: *ForegroundUsageDebugLogger, comptime fmt: []const u8, args: anytype) !void {
-        self.mutex.lockUncancelable(fs.io());
-        defer self.mutex.unlock(fs.io());
+        self.mutex.lockUncancelable(app_runtime.io());
+        defer self.mutex.unlock(app_runtime.io());
 
         try self.writer.print(fmt, args);
         try self.writer.flush();
@@ -232,7 +242,7 @@ fn isBackgroundAccountNameRefreshDisabled() bool {
 }
 
 fn hasNonEmptyEnvVar(name: []const u8) bool {
-    const value = process_compat.getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
+    const value = getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return false,
         else => return false,
     };
@@ -278,7 +288,7 @@ pub fn reconcileActiveAuthAfterRemove(
 
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
-    fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteFile(app_runtime.io(), auth_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -639,7 +649,7 @@ fn formatRemainingPercentAlloc(
     allocator: std.mem.Allocator,
     window: ?registry.RateLimitWindow,
 ) ![]const u8 {
-    const remaining = registry.remainingPercentAt(window, time_compat.timestamp()) orelse return allocator.dupe(u8, "-");
+    const remaining = registry.remainingPercentAt(window, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()) orelse return allocator.dupe(u8, "-");
     return std.fmt.allocPrint(allocator, "{d}%", .{remaining});
 }
 
@@ -1011,7 +1021,7 @@ fn runBackgroundAccountNameRefreshWithLockAcquirer(
 }
 
 fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
-    var env_map = process_compat.getEnvMap(allocator) catch |err| {
+    var env_map = getEnvMap(allocator) catch |err| {
         std.log.warn("background account metadata refresh skipped: {s}", .{@errorName(err)});
         return;
     };
@@ -1021,10 +1031,10 @@ fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
     try env_map.put(disable_background_account_name_refresh_env, "1");
     try env_map.put(skip_service_reconcile_env, "1");
 
-    const self_exe = try fs.selfExePathAlloc(allocator);
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
     defer allocator.free(self_exe);
 
-    _ = try std.process.spawn(fs.io(), .{
+    _ = try std.process.spawn(app_runtime.io(), .{
         .argv = &[_][]const u8{ self_exe, "list" },
         .environ_map = &env_map,
         .stdin = .ignore,
@@ -1073,13 +1083,15 @@ fn loadSingleFileImportAuthInfo(
             },
         },
         .cpa => blk: {
-            var file = fs.cwd().openFile(opts.auth_path.?, .{}) catch |err| {
+            var file = std.Io.Dir.cwd().openFile(app_runtime.io(), opts.auth_path.?, .{}) catch |err| {
                 std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
                 return null;
             };
-            defer file.close();
+            defer file.close(app_runtime.io());
 
-            const data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| switch (err) {
+            var read_buffer: [4096]u8 = undefined;
+            var file_reader = file.reader(app_runtime.io(), &read_buffer);
+            const data = file_reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024)) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => {
                     std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
@@ -1308,7 +1320,7 @@ fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !C
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().access(app_runtime.io(), auth_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{
             .record_key = null,
             .syncable = false,
@@ -1358,7 +1370,7 @@ fn selectBestRemainingAccountKeyByUsageAlloc(
 ) !?[]u8 {
     if (reg.accounts.items.len == 0) return null;
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
@@ -1421,7 +1433,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 freeOwnedStrings(allocator, matched_labels.items);
                 matched_labels.deinit(allocator);
             }
-            if (!fs.File.stdin().isTty()) {
+            if (!(std.Io.File.stdin().isTty(app_runtime.io()) catch false)) {
                 try cli.printRemoveConfirmationUnavailableError(matched_labels.items);
                 return error.RemoveConfirmationUnavailable;
             }
@@ -1504,7 +1516,7 @@ fn handleTopLevelHelp(allocator: std.mem.Allocator, codex_home: []const u8) !voi
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const summary = try registry.cleanAccountsBackups(allocator, codex_home);
     var stdout: [256]u8 = undefined;
-    var writer = fs.File.stdout().writer(&stdout);
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &stdout);
     const out = &writer.interface;
     try out.print(
         "cleaned accounts: auth_backups={d}, registry_backups={d}, stale_entries={d}\n",
@@ -1539,10 +1551,10 @@ test "background account-name refresh returns early when another refresh holds t
     };
 
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
     defer gpa.free(codex_home);
 
     TestState.fetch_count = 0;
@@ -1567,10 +1579,10 @@ test "foreground node preflight fails fast when usage refresh needs node" {
     };
 
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
     defer gpa.free(codex_home);
 
     var reg = registry.Registry{
@@ -1695,15 +1707,15 @@ test "foreground node preflight fails fast when account-name refresh needs node"
                 chatgpt_account_id,
             );
             defer allocator.free(auth_json);
-            try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+            try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = auth_path, .data = auth_json });
         }
     };
 
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
     defer gpa.free(codex_home);
 
     var reg = registry.Registry{

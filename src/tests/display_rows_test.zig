@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("../compat_fs.zig");
 const display_rows = @import("../display_rows.zig");
 const registry = @import("../registry.zig");
 

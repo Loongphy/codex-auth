@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
 const chatgpt_http = @import("chatgpt_http.zig");
 
 pub const default_account_endpoint = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";

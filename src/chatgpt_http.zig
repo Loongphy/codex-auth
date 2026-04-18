@@ -1,7 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const fs = @import("compat_fs.zig");
-const process_compat = @import("compat_process.zig");
+const app_runtime = @import("runtime.zig");
 const winreg = if (builtin.os.tag == .windows) struct {
     extern "advapi32" fn RegGetValueW(
         hkey: std.os.windows.HKEY,
@@ -29,6 +28,18 @@ pub const node_use_env_proxy_env = "NODE_USE_ENV_PROXY";
 pub const node_requirement_hint = "Node.js 22+ is required for ChatGPT API refresh. Install Node.js 22+ or use the npm package.";
 
 const max_output_bytes = 1024 * 1024;
+
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
 
 pub const HttpResult = struct {
     body: []u8,
@@ -138,7 +149,7 @@ fn runNodeGetJsonCommand(
     const node_executable = try resolveNodeExecutableForLaunchAlloc(allocator);
     defer allocator.free(node_executable);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const node_env_proxy_supported = if (needsNodeEnvProxySupportCheck(&env_map))
@@ -203,11 +214,11 @@ fn runChildCapture(
     timeout_ms: u64,
     env_map: ?*const std.process.Environ.Map,
 ) !ChildCaptureResult {
-    var local_env_map = try process_compat.getEnvMap(allocator);
+    var local_env_map = try getEnvMap(allocator);
     defer local_env_map.deinit();
     const effective_env_map = env_map orelse &local_env_map;
 
-    const raw_result = std.process.run(std.heap.page_allocator, fs.io(), .{
+    const raw_result = std.process.run(std.heap.page_allocator, app_runtime.io(), .{
         .argv = argv,
         .environ_map = effective_env_map,
         .stdout_limit = .limited(max_output_bytes),
@@ -242,7 +253,7 @@ fn runChildCapture(
 }
 
 fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
-    return process_compat.getEnvVarOwned(allocator, node_executable_env) catch |err| switch (err) {
+    return getEnvVarOwned(allocator, node_executable_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => try allocator.dupe(u8, "node"),
         else => return err,
     };
@@ -294,15 +305,15 @@ fn detectNodeEnvProxySupportWithTimeout(
     node_executable: []const u8,
     timeout_ms: u64,
 ) bool {
-    node_env_proxy_support_cache.mutex.lockUncancelable(fs.io());
+    node_env_proxy_support_cache.mutex.lockUncancelable(app_runtime.io());
     if (node_env_proxy_support_cache.executable) |cached| {
         if (std.mem.eql(u8, cached, node_executable)) {
             const supported = node_env_proxy_support_cache.supported;
-            node_env_proxy_support_cache.mutex.unlock(fs.io());
+            node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
             return supported;
         }
     }
-    node_env_proxy_support_cache.mutex.unlock(fs.io());
+    node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
 
     const result = runChildCapture(allocator, &.{ node_executable, "--version" }, timeout_ms, null) catch return false;
     defer result.deinit(allocator);
@@ -316,8 +327,8 @@ fn detectNodeEnvProxySupportWithTimeout(
     const version = parseNodeVersion(result.stdout) catch return false;
     const supported = nodeVersionSupportsEnvProxy(version);
 
-    node_env_proxy_support_cache.mutex.lockUncancelable(fs.io());
-    defer node_env_proxy_support_cache.mutex.unlock(fs.io());
+    node_env_proxy_support_cache.mutex.lockUncancelable(app_runtime.io());
+    defer node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
     if (node_env_proxy_support_cache.executable) |cached| {
         std.heap.page_allocator.free(cached);
     }
@@ -636,7 +647,7 @@ fn resolveExecutableForLaunchAlloc(allocator: std.mem.Allocator, executable: []c
         return try allocator.dupe(u8, executable);
     }
 
-    const path_value = process_compat.getEnvVarOwned(allocator, "PATH") catch |err| switch (err) {
+    const path_value = getEnvVarOwned(allocator, "PATH") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return null,
         else => return err,
     };
@@ -664,7 +675,7 @@ fn resolveExecutablePathEntryForLaunchAlloc(
     }
 
     if (builtin.os.tag == .windows and std.fs.path.extension(executable).len == 0) {
-        const path_ext = process_compat.getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
+        const path_ext = getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => try allocator.dupe(u8, ".COM;.EXE;.BAT;.CMD"),
             else => return err,
         };
@@ -689,11 +700,11 @@ fn resolveExecutablePathEntryForLaunchAlloc(
 }
 fn accessPath(path: []const u8) bool {
     if (std.fs.path.isAbsolute(path)) {
-        fs.accessAbsolute(path, .{}) catch return false;
+        std.Io.Dir.accessAbsolute(app_runtime.io(), path, .{}) catch return false;
         return true;
     }
 
-    fs.cwd().access(path, .{}) catch return false;
+    std.Io.Dir.cwd().access(app_runtime.io(), path, .{}) catch return false;
     return true;
 }
 
@@ -759,7 +770,7 @@ test "parse node http output keeps timeout marker" {
 
 test "run child capture times out stalled child process" {
     const allocator = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const script_name = switch (builtin.os.tag) {
@@ -776,18 +787,18 @@ test "run child capture times out stalled child process" {
         ,
     };
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(app_runtime.io(), .{
         .sub_path = script_name,
         .data = script_data,
     });
 
     if (builtin.os.tag != .windows) {
-        var script_file = try tmp.dir.openFile(script_name, .{ .mode = .read_write });
-        defer script_file.close();
-        try script_file.chmod(0o755);
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
     }
 
-    const script_path = try tmp.dir.realpathAlloc(allocator, script_name);
+    const script_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), script_name, allocator);
     defer allocator.free(script_path);
 
     const argv: []const []const u8 = switch (builtin.os.tag) {
@@ -828,7 +839,7 @@ test "node version support gate matches documented ranges" {
 
 test "detect node env proxy support times out blocked helper" {
     const allocator = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
     const script_name = switch (builtin.os.tag) {
@@ -846,14 +857,14 @@ test "detect node env proxy support times out blocked helper" {
         ,
     };
 
-    try tmp.dir.writeFile(.{ .sub_path = script_name, .data = script_data });
+    try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = script_name, .data = script_data });
     if (builtin.os.tag != .windows) {
-        var script_file = try tmp.dir.openFile(script_name, .{ .mode = .read_write });
-        defer script_file.close();
-        try script_file.chmod(0o755);
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
     }
 
-    const script_path = try tmp.dir.realpathAlloc(allocator, script_name);
+    const script_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), script_name, allocator);
     defer allocator.free(script_path);
 
     try std.testing.expect(!detectNodeEnvProxySupportWithTimeout(allocator, script_path, 100));
@@ -950,26 +961,26 @@ test "derive windows system proxy alloc maps socks-only entries" {
 
 test "launch path resolution preserves node symlink path" {
     const allocator = std.testing.allocator;
-    var tmp_dir = fs.tmpDir(.{});
+    var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const entry = try tmp_dir.dir.realpathAlloc(arena, ".");
+    const entry = try tmp_dir.dir.realPathFileAlloc(app_runtime.io(), ".", arena);
     const node_path = try std.fs.path.join(arena, &[_][]const u8{ entry, "node" });
 
-    try tmp_dir.dir.writeFile(.{
+    try tmp_dir.dir.writeFile(app_runtime.io(), .{
         .sub_path = "node-real",
         .data = "#!/bin/sh\nexit 0\n",
     });
-    var real_file = try tmp_dir.dir.openFile("node-real", .{ .mode = .read_write });
-    defer real_file.close();
+    var real_file = try tmp_dir.dir.openFile(app_runtime.io(), "node-real", .{ .mode = .read_write });
+    defer real_file.close(app_runtime.io());
     if (builtin.os.tag != .windows) {
-        try real_file.chmod(0o755);
+        try real_file.setPermissions(app_runtime.io(), .fromMode(0o755));
     }
-    try tmp_dir.dir.symLink("node-real", "node", .{});
+    try tmp_dir.dir.symLink(app_runtime.io(), "node-real", "node", .{});
 
     const resolved = (try resolveExecutablePathEntryForLaunchAlloc(allocator, entry, "node")) orelse return error.TestUnexpectedResult;
     defer allocator.free(resolved);
