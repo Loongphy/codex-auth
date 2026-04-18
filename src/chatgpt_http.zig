@@ -2,6 +2,21 @@ const builtin = @import("builtin");
 const std = @import("std");
 const fs = @import("compat_fs.zig");
 const process_compat = @import("compat_process.zig");
+const winreg = if (builtin.os.tag == .windows) struct {
+    extern "advapi32" fn RegGetValueW(
+        hkey: std.os.windows.HKEY,
+        sub_key: ?[*:0]const u16,
+        value_name: ?[*:0]const u16,
+        flags: u32,
+        actual_type: ?*std.os.windows.ULONG,
+        data: ?*anyopaque,
+        data_len: ?*u32,
+    ) callconv(.winapi) std.os.windows.LSTATUS;
+
+    const RRF_RT_REG_SZ: u32 = 0x00000002;
+    const RRF_RT_REG_EXPAND_SZ: u32 = 0x00000004;
+    const RRF_RT_REG_DWORD: u32 = 0x00000010;
+} else struct {};
 
 pub const request_timeout_secs: []const u8 = "5";
 pub const request_timeout_ms: []const u8 = "5000";
@@ -403,10 +418,7 @@ fn queryWindowsSystemProxyAlloc(allocator: std.mem.Allocator) !?WindowsSystemPro
         std.os.windows.HKEY_CURRENT_USER,
         windows_internet_settings_key,
         windows_proxy_enable_value,
-    ) catch |err| switch (err) {
-        error.ValueNotFound, error.UnexpectedRegistryType, error.RegistryReadFailed => return null,
-        else => return err,
-    };
+    ) catch return null;
     if (proxy_enabled == 0) return null;
 
     const proxy_server = readWindowsRegistryStringAlloc(
@@ -528,11 +540,11 @@ fn readWindowsRegistryDword(
     var actual_type: std.os.windows.ULONG = undefined;
     var reg_size: u32 = @sizeOf(u32);
     var reg_value: u32 = 0;
-    const rc = std.os.windows.advapi32.RegGetValueW(
+    const rc = winreg.RegGetValueW(
         hkey,
         sub_key,
         value_name,
-        std.os.windows.advapi32.RRF.RT_REG_DWORD,
+        winreg.RRF_RT_REG_DWORD,
         &actual_type,
         &reg_value,
         &reg_size,
@@ -542,7 +554,7 @@ fn readWindowsRegistryDword(
         .FILE_NOT_FOUND => return error.ValueNotFound,
         else => return error.RegistryReadFailed,
     }
-    if (actual_type != std.os.windows.REG.DWORD) return error.UnexpectedRegistryType;
+    if (actual_type != @intFromEnum(std.os.windows.REG.ValueType.DWORD)) return error.UnexpectedRegistryType;
     return reg_value;
 }
 
@@ -556,11 +568,11 @@ fn readWindowsRegistryStringAlloc(
 
     var actual_type: std.os.windows.ULONG = undefined;
     var buf_size: u32 = 0;
-    var rc = std.os.windows.advapi32.RegGetValueW(
+    var rc = winreg.RegGetValueW(
         hkey,
         sub_key,
         value_name,
-        std.os.windows.advapi32.RRF.RT_REG_SZ | std.os.windows.advapi32.RRF.RT_REG_EXPAND_SZ,
+        winreg.RRF_RT_REG_SZ | winreg.RRF_RT_REG_EXPAND_SZ,
         &actual_type,
         null,
         &buf_size,
@@ -570,18 +582,20 @@ fn readWindowsRegistryStringAlloc(
         .FILE_NOT_FOUND => return error.ValueNotFound,
         else => return error.RegistryReadFailed,
     }
-    if (actual_type != std.os.windows.REG.SZ and actual_type != std.os.windows.REG.EXPAND_SZ) {
+    if (actual_type != @intFromEnum(std.os.windows.REG.ValueType.SZ) and
+        actual_type != @intFromEnum(std.os.windows.REG.ValueType.EXPAND_SZ))
+    {
         return error.UnexpectedRegistryType;
     }
 
     const buf = try allocator.alloc(u16, std.math.divCeil(u32, buf_size, 2) catch unreachable);
     defer allocator.free(buf);
 
-    rc = std.os.windows.advapi32.RegGetValueW(
+    rc = winreg.RegGetValueW(
         hkey,
         sub_key,
         value_name,
-        std.os.windows.advapi32.RRF.RT_REG_SZ | std.os.windows.advapi32.RRF.RT_REG_EXPAND_SZ,
+        winreg.RRF_RT_REG_SZ | winreg.RRF_RT_REG_EXPAND_SZ,
         &actual_type,
         buf.ptr,
         &buf_size,
@@ -591,7 +605,9 @@ fn readWindowsRegistryStringAlloc(
         .FILE_NOT_FOUND => return error.ValueNotFound,
         else => return error.RegistryReadFailed,
     }
-    if (actual_type != std.os.windows.REG.SZ and actual_type != std.os.windows.REG.EXPAND_SZ) {
+    if (actual_type != @intFromEnum(std.os.windows.REG.ValueType.SZ) and
+        actual_type != @intFromEnum(std.os.windows.REG.ValueType.EXPAND_SZ))
+    {
         return error.UnexpectedRegistryType;
     }
 
