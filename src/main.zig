@@ -15,7 +15,7 @@ const usage_api = @import("usage_api.zig");
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
-const foreground_usage_refresh_concurrency: usize = 3;
+const foreground_usage_refresh_concurrency: usize = 5;
 
 fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return try app_runtime.currentEnviron().createMap(allocator);
@@ -38,6 +38,11 @@ const UsageFetchDetailedFn = *const fn (
     allocator: std.mem.Allocator,
     auth_path: []const u8,
 ) anyerror!usage_api.UsageFetchResult;
+const UsageBatchFetchDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+) anyerror![]usage_api.BatchUsageFetchResult;
 const ForegroundUsagePoolInitFn = *const fn (
     allocator: std.mem.Allocator,
     n_jobs: usize,
@@ -337,13 +342,44 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebug(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        null,
         initForegroundUsagePool,
         null,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplay(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherAndDebug(
+        allocator,
+        codex_home,
+        reg,
+        null,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebug(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebug(
+        allocator,
+        codex_home,
+        reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        usage_api.fetchUsageForAuthPathsDetailedBatch,
+        initForegroundUsagePool,
+        debug_logger,
     );
 }
 
@@ -354,11 +390,12 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     usage_fetcher: UsageFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebug(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        null,
         pool_init,
         null,
     );
@@ -369,6 +406,26 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     codex_home: []const u8,
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebug(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        null,
+        pool_init,
+        debug_logger,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebug(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    batch_fetcher: ?UsageBatchFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
 ) !ForegroundUsageRefreshState {
@@ -417,16 +474,73 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
-    if (reg.accounts.items.len > 1) {
-        pool_init(
+    if (batch_fetcher) |fetch_batch| {
+        var auth_path_arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer auth_path_arena_state.deinit();
+        const auth_path_arena = auth_path_arena_state.allocator();
+
+        const auth_paths = try auth_path_arena.alloc([]const u8, reg.accounts.items.len);
+        for (reg.accounts.items, 0..) |account, idx| {
+            auth_paths[idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+            if (debug_context) |debug| {
+                try printForegroundUsageDebugRequest(debug.logger, reg, idx, debug.label_state.labels[idx]);
+            }
+        }
+
+        const batch_results = try fetch_batch(
             allocator,
+            auth_paths,
             @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => {},
-        };
+        );
+        defer {
+            for (batch_results) |*batch_result| batch_result.deinit(allocator);
+            allocator.free(batch_results);
+        }
+
+        for (batch_results, 0..) |*batch_result, idx| {
+            worker_results[idx] = .{
+                .status_code = batch_result.status_code,
+                .missing_auth = batch_result.missing_auth,
+                .error_name = batch_result.error_name,
+                .snapshot = batch_result.snapshot,
+            };
+            batch_result.snapshot = null;
+
+            if (debug_context) |debug| {
+                printForegroundUsageDebugWorkerResult(
+                    auth_path_arena,
+                    debug.logger,
+                    debug.label_state.labels[idx],
+                    reg.accounts.items[idx].last_usage,
+                    worker_results[idx],
+                );
+            }
+        }
+    } else {
+        var use_concurrent_usage_refresh = reg.accounts.items.len > 1;
+        if (use_concurrent_usage_refresh) {
+            pool_init(
+                allocator,
+                @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => use_concurrent_usage_refresh = false,
+            };
+        }
+
+        if (use_concurrent_usage_refresh) {
+            try runForegroundUsageRefreshWorkersConcurrently(
+                allocator,
+                codex_home,
+                reg,
+                usage_fetcher,
+                worker_results,
+                debug_context,
+            );
+        } else {
+            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
+        }
     }
-    runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
 
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
@@ -479,6 +593,79 @@ fn initForegroundUsagePool(
     _ = n_jobs;
 }
 
+const ForegroundUsageWorkerQueue = struct {
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
+    next_index: std.atomic.Value(usize) = .init(0),
+
+    fn run(self: *ForegroundUsageWorkerQueue) void {
+        while (true) {
+            const idx = self.next_index.fetchAdd(1, .monotonic);
+            if (idx >= self.reg.accounts.items.len) return;
+
+            if (self.debug_context) |debug| {
+                printForegroundUsageDebugRequest(debug.logger, self.reg, idx, debug.label_state.labels[idx]) catch {};
+            }
+            foregroundUsageRefreshWorker(
+                self.allocator,
+                self.codex_home,
+                self.reg,
+                idx,
+                self.usage_fetcher,
+                self.results,
+                self.debug_context,
+            );
+        }
+    }
+};
+
+fn runForegroundUsageRefreshWorkersConcurrently(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
+) !void {
+    const worker_count = @min(reg.accounts.items.len, foreground_usage_refresh_concurrency);
+    if (worker_count <= 1) {
+        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, debug_context);
+        return;
+    }
+
+    var queue: ForegroundUsageWorkerQueue = .{
+        .allocator = allocator,
+        .codex_home = codex_home,
+        .reg = reg,
+        .usage_fetcher = usage_fetcher,
+        .results = results,
+        .debug_context = debug_context,
+    };
+
+    const helper_count = worker_count - 1;
+    var threads = try allocator.alloc(std.Thread, helper_count);
+    defer allocator.free(threads);
+
+    var spawned_count: usize = 0;
+    defer {
+        for (threads[0..spawned_count]) |thread| thread.join();
+    }
+
+    for (threads) |*thread| {
+        thread.* = std.Thread.spawn(.{}, ForegroundUsageWorkerQueue.run, .{&queue}) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => break,
+        };
+        spawned_count += 1;
+    }
+
+    queue.run();
+}
+
 fn runForegroundUsageRefreshWorkersSerially(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -504,7 +691,7 @@ fn foregroundUsageRefreshWorker(
     results: []ForegroundUsageWorkerResult,
     debug_context: ?ForegroundUsageDebugContext,
 ) void {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1136,12 +1323,10 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         debug_logger = ForegroundUsageDebugLogger.init(debug_stdout.out());
     }
 
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebug(
         allocator,
         codex_home,
         &reg,
-        usage_api.fetchUsageForAuthPathDetailed,
-        initForegroundUsagePool,
         if (debug_logger) |*logger| logger else null,
     );
     defer usage_state.deinit(allocator);
@@ -1242,11 +1427,10 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
     try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .switch_account);
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+    var usage_state = try refreshForegroundUsageForDisplay(
         allocator,
         codex_home,
         &reg,
-        usage_api.fetchUsageForAuthPathDetailed,
     );
     defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .switch_account, defaultAccountFetcher);
@@ -1406,11 +1590,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     if (needs_selector) {
         try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .remove_account);
-        usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+        usage_state = try refreshForegroundUsageForDisplay(
             allocator,
             codex_home,
             &reg,
-            usage_api.fetchUsageForAuthPathDetailed,
         );
     }
 
