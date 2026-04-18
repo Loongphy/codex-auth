@@ -220,7 +220,19 @@ pub const ForegroundUsageRefreshTarget = enum {
 };
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list or target == .switch_account or target == .remove_account;
+    return target == .list or target == .switch_account;
+}
+
+fn apiModeUsesApi(default_enabled: bool, api_mode: cli.ApiMode) bool {
+    return switch (api_mode) {
+        .default => default_enabled,
+        .force_api => true,
+        .skip_api => false,
+    };
+}
+
+fn apiModeUsesStoredDataOnly(api_mode: cli.ApiMode) bool {
+    return api_mode == .skip_api;
 }
 
 fn isAccountNameRefreshOnlyMode() bool {
@@ -327,13 +339,14 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
         initForegroundUsagePool,
         null,
+        reg.api.usage,
     );
 }
 
@@ -344,13 +357,14 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     usage_fetcher: UsageFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
         pool_init,
         null,
+        reg.api.usage,
     );
 }
 
@@ -362,6 +376,26 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        pool_init,
+        debug_logger,
+        reg.api.usage,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+    usage_api_enabled: bool,
+) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
 
@@ -370,7 +404,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
 
     var debug_context: ?ForegroundUsageDebugContext = null;
 
-    if (!reg.api.usage) {
+    if (!usage_api_enabled) {
         state.local_only_mode = true;
         if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
             try registry.saveRegistry(allocator, codex_home, reg);
@@ -767,10 +801,39 @@ pub fn maybeRefreshForegroundAccountNames(
     target: ForegroundUsageRefreshTarget,
     fetcher: AccountFetchFn,
 ) !void {
+    return try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        fetcher,
+        reg.api.account,
+    );
+}
+
+fn maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+) !void {
     const changed = switch (target) {
-        .list => try refreshAccountNamesForList(allocator, codex_home, reg, fetcher),
-        .switch_account => try refreshAccountNamesAfterSwitch(allocator, codex_home, reg, fetcher),
-        .remove_account => false,
+        .list, .remove_account => try refreshAccountNamesForListWithAccountApiEnabled(
+            allocator,
+            codex_home,
+            reg,
+            fetcher,
+            account_api_enabled,
+        ),
+        .switch_account => try refreshAccountNamesAfterSwitchWithAccountApiEnabled(
+            allocator,
+            codex_home,
+            reg,
+            fetcher,
+            account_api_enabled,
+        ),
     };
     if (!changed) return;
     try registry.saveRegistry(allocator, codex_home, reg);
@@ -795,8 +858,24 @@ fn maybeRefreshAccountNamesForAuthInfo(
     info: *const auth.AuthInfo,
     fetcher: AccountFetchFn,
 ) !bool {
+    return try maybeRefreshAccountNamesForAuthInfoWithAccountApiEnabled(
+        allocator,
+        reg,
+        info,
+        fetcher,
+        reg.api.account,
+    );
+}
+
+fn maybeRefreshAccountNamesForAuthInfoWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    info: *const auth.AuthInfo,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+) !bool {
     const chatgpt_user_id = info.chatgpt_user_id orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScope(reg, chatgpt_user_id)) return false;
+    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, account_api_enabled)) return false;
     const access_token = info.access_token orelse return false;
     const chatgpt_account_id = info.chatgpt_account_id orelse return false;
 
@@ -830,12 +909,34 @@ fn refreshAccountNamesForActiveAuth(
     reg: *registry.Registry,
     fetcher: AccountFetchFn,
 ) !bool {
+    return try refreshAccountNamesForActiveAuthWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        fetcher,
+        reg.api.account,
+    );
+}
+
+fn refreshAccountNamesForActiveAuthWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+) !bool {
     const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScope(reg, active_user_id)) return false;
+    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
 
     var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
     defer info.deinit(allocator);
-    return try maybeRefreshAccountNamesForAuthInfo(allocator, reg, &info, fetcher);
+    return try maybeRefreshAccountNamesForAuthInfoWithAccountApiEnabled(
+        allocator,
+        reg,
+        &info,
+        fetcher,
+        account_api_enabled,
+    );
 }
 
 pub fn refreshAccountNamesAfterLogin(
@@ -853,7 +954,29 @@ pub fn refreshAccountNamesAfterSwitch(
     reg: *registry.Registry,
     fetcher: AccountFetchFn,
 ) !bool {
-    return try refreshAccountNamesForActiveAuth(allocator, codex_home, reg, fetcher);
+    return try refreshAccountNamesAfterSwitchWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        fetcher,
+        reg.api.account,
+    );
+}
+
+fn refreshAccountNamesAfterSwitchWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+) !bool {
+    return try refreshAccountNamesForActiveAuthWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        fetcher,
+        account_api_enabled,
+    );
 }
 
 pub fn refreshAccountNamesForList(
@@ -862,11 +985,41 @@ pub fn refreshAccountNamesForList(
     reg: *registry.Registry,
     fetcher: AccountFetchFn,
 ) !bool {
-    return try refreshAccountNamesForActiveAuth(allocator, codex_home, reg, fetcher);
+    return try refreshAccountNamesForListWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        fetcher,
+        reg.api.account,
+    );
+}
+
+fn refreshAccountNamesForListWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+) !bool {
+    return try refreshAccountNamesForActiveAuthWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        fetcher,
+        account_api_enabled,
+    );
 }
 
 fn shouldRefreshTeamAccountNamesForUserScope(reg: *registry.Registry, chatgpt_user_id: []const u8) bool {
-    if (!reg.api.account) return false;
+    return shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, reg.api.account);
+}
+
+fn shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(
+    reg: *registry.Registry,
+    chatgpt_user_id: []const u8,
+    account_api_enabled: bool,
+) bool {
+    if (!account_api_enabled) return false;
     return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
 }
 
@@ -876,13 +1029,28 @@ fn shouldPreflightNodeForAccountNameRefresh(
     reg: *registry.Registry,
     target: ForegroundUsageRefreshTarget,
 ) !bool {
+    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        reg.api.account,
+    );
+}
+
+fn shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    account_api_enabled: bool,
+) !bool {
     switch (target) {
-        .list, .switch_account => {},
-        .remove_account => return false,
+        .list, .switch_account, .remove_account => {},
     }
 
     const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScope(reg, active_user_id)) return false;
+    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
 
     var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
     defer info.deinit(allocator);
@@ -896,8 +1064,32 @@ fn shouldPreflightNodeForForegroundTarget(
     reg: *registry.Registry,
     target: ForegroundUsageRefreshTarget,
 ) !bool {
-    if (shouldRefreshForegroundUsage(target) and reg.api.usage and reg.accounts.items.len > 0) return true;
-    return try shouldPreflightNodeForAccountNameRefresh(allocator, codex_home, reg, target);
+    return try shouldPreflightNodeForForegroundTargetWithApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        reg.api.usage,
+        reg.api.account,
+    );
+}
+
+fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !bool {
+    if (usage_api_enabled and reg.accounts.items.len > 0) return true;
+    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        account_api_enabled,
+    );
 }
 
 fn ensureForegroundNodeAvailable(
@@ -906,11 +1098,31 @@ fn ensureForegroundNodeAvailable(
     reg: *registry.Registry,
     target: ForegroundUsageRefreshTarget,
 ) !void {
-    try ensureForegroundNodeAvailableWithChecker(
+    try ensureForegroundNodeAvailableWithApiEnabled(
         allocator,
         codex_home,
         reg,
         target,
+        reg.api.usage,
+        reg.api.account,
+    );
+}
+
+fn ensureForegroundNodeAvailableWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !void {
+    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        usage_api_enabled,
+        account_api_enabled,
         chatgpt_http.ensureNodeExecutableAvailable,
     );
 }
@@ -922,7 +1134,34 @@ fn ensureForegroundNodeAvailableWithChecker(
     target: ForegroundUsageRefreshTarget,
     checker: NodeAvailabilityFn,
 ) !void {
-    if (!try shouldPreflightNodeForForegroundTarget(allocator, codex_home, reg, target)) return;
+    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        reg.api.usage,
+        reg.api.account,
+        checker,
+    );
+}
+
+fn ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+    checker: NodeAvailabilityFn,
+) !void {
+    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        usage_api_enabled,
+        account_api_enabled,
+    )) return;
     try checker(allocator);
 }
 
@@ -1116,7 +1355,22 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
-    try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .list);
+    if (apiModeUsesStoredDataOnly(opts.api_mode)) {
+        try format.printAccounts(&reg);
+        return;
+    }
+
+    const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
+    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+
+    try ensureForegroundNodeAvailableWithApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .list,
+        usage_api_enabled,
+        account_api_enabled,
+    );
     var debug_stdout: io_util.Stdout = undefined;
     var debug_logger: ?ForegroundUsageDebugLogger = null;
     if (opts.debug) {
@@ -1124,16 +1378,24 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         debug_logger = ForegroundUsageDebugLogger.init(debug_stdout.out());
     }
 
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         &reg,
         usage_api.fetchUsageForAuthPathDetailed,
         initForegroundUsagePool,
         if (debug_logger) |*logger| logger else null,
+        usage_api_enabled,
     );
     defer usage_state.deinit(allocator);
-    try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .list, defaultAccountFetcher);
+    try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .list,
+        defaultAccountFetcher,
+        account_api_enabled,
+    );
     try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
 }
 
@@ -1206,22 +1468,54 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     if (opts.query) |query| {
+        const usage_api_enabled = apiModeUsesApi(false, opts.api_mode);
+        const account_api_enabled = apiModeUsesApi(false, opts.api_mode);
+        var usage_state: ?ForegroundUsageRefreshState = null;
+        defer if (usage_state) |*state| state.deinit(allocator);
+
+        if (usage_api_enabled or account_api_enabled) {
+            try ensureForegroundNodeAvailableWithApiEnabled(
+                allocator,
+                codex_home,
+                &reg,
+                .switch_account,
+                usage_api_enabled,
+                account_api_enabled,
+            );
+            usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+                allocator,
+                codex_home,
+                &reg,
+                usage_api.fetchUsageForAuthPathDetailed,
+                initForegroundUsagePool,
+                null,
+                usage_api_enabled,
+            );
+            try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+                allocator,
+                codex_home,
+                &reg,
+                .switch_account,
+                defaultAccountFetcher,
+                account_api_enabled,
+            );
+        }
+
         var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
         defer resolution.deinit(allocator);
 
+        const usage_overrides = if (usage_state) |*state| state.usage_overrides else null;
         const selected_account_key = switch (resolution) {
             .not_found => {
                 try cli.printAccountNotFoundError(query);
                 return error.AccountNotFound;
             },
-            // Query-driven switching stays local-only so a direct target does not
-            // block on usage or account-name API refreshes before activation.
             .direct => |account_key| account_key,
             .multiple => |matches| try cli.selectAccountFromIndicesWithUsageOverrides(
                 allocator,
                 &reg,
                 matches.items,
-                null,
+                usage_overrides,
             ),
         };
         if (selected_account_key == null) return;
@@ -1229,15 +1523,44 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
         return;
     }
-    try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .switch_account);
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+
+    if (apiModeUsesStoredDataOnly(opts.api_mode)) {
+        const selected_account_key = try cli.selectAccount(allocator, &reg);
+        if (selected_account_key == null) return;
+        try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
+        try registry.saveRegistry(allocator, codex_home, &reg);
+        return;
+    }
+
+    const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
+    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+
+    try ensureForegroundNodeAvailableWithApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .switch_account,
+        usage_api_enabled,
+        account_api_enabled,
+    );
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         &reg,
         usage_api.fetchUsageForAuthPathDetailed,
+        initForegroundUsagePool,
+        null,
+        usage_api_enabled,
     );
     defer usage_state.deinit(allocator);
-    try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .switch_account, defaultAccountFetcher);
+    try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .switch_account,
+        defaultAccountFetcher,
+        account_api_enabled,
+    );
 
     const selected_account_key = try cli.selectAccountWithUsageOverrides(allocator, &reg, usage_state.usage_overrides);
     if (selected_account_key == null) return;
@@ -1251,6 +1574,10 @@ pub fn resolveSwitchQueryLocally(
     reg: *registry.Registry,
     query: []const u8,
 ) !SwitchQueryResolution {
+    if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
+        return .{ .direct = reg.accounts.items[account_idx].account_key };
+    }
+
     var matches = try findMatchingAccounts(allocator, reg, query);
     if (matches.items.len == 0) {
         matches.deinit(allocator);
@@ -1292,6 +1619,32 @@ pub fn findMatchingAccounts(
         }
     }
     return matches;
+}
+
+fn parseDisplayNumber(selector: []const u8) ?usize {
+    if (selector.len == 0) return null;
+    for (selector) |ch| {
+        if (ch < '0' or ch > '9') return null;
+    }
+
+    const parsed = std.fmt.parseInt(usize, selector, 10) catch return null;
+    if (parsed == 0) return null;
+    return parsed;
+}
+
+fn findAccountIndexByDisplayNumber(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    selector: []const u8,
+) !?usize {
+    const display_number = parseDisplayNumber(selector) orelse return null;
+
+    var display = try display_rows.buildDisplayRows(allocator, reg, null);
+    defer display.deinit(allocator);
+
+    if (display_number > display.selectable_row_indices.len) return null;
+    const row_idx = display.selectable_row_indices[display_number - 1];
+    return display.rows[row_idx].account_index;
 }
 
 const CurrentAuthState = struct {
@@ -1388,35 +1741,74 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    const needs_selector = !opts.all and opts.query == null;
     var usage_state: ?ForegroundUsageRefreshState = null;
     defer if (usage_state) |*state| state.deinit(allocator);
-
-    if (needs_selector) {
-        try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .remove_account);
-        usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+    if (opts.api_mode == .force_api) {
+        try ensureForegroundNodeAvailableWithApiEnabled(
+            allocator,
+            codex_home,
+            &reg,
+            .remove_account,
+            true,
+            true,
+        );
+        usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
             allocator,
             codex_home,
             &reg,
             usage_api.fetchUsageForAuthPathDetailed,
+            initForegroundUsagePool,
+            null,
+            true,
+        );
+        try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+            allocator,
+            codex_home,
+            &reg,
+            .remove_account,
+            defaultAccountFetcher,
+            true,
         );
     }
+    const usage_overrides = if (usage_state) |*state| state.usage_overrides else null;
 
     var selected: ?[]usize = null;
     if (opts.all) {
         selected = try allocator.alloc(usize, reg.accounts.items.len);
         for (selected.?, 0..) |*slot, idx| slot.* = idx;
-    } else if (opts.query) |query| {
-        var matches = try findMatchingAccounts(allocator, &reg, query);
-        defer matches.deinit(allocator);
+    } else if (opts.selectors.len != 0) {
+        var selected_list = std.ArrayList(usize).empty;
+        defer selected_list.deinit(allocator);
+        var requires_confirmation = false;
 
-        if (matches.items.len == 0) {
-            try cli.printAccountNotFoundError(query);
-            return error.AccountNotFound;
+        for (opts.selectors) |selector| {
+            if (try findAccountIndexByDisplayNumber(allocator, &reg, selector)) |account_idx| {
+                if (!selectionContainsIndex(selected_list.items, account_idx)) {
+                    try selected_list.append(allocator, account_idx);
+                }
+                continue;
+            }
+
+            var matches = try findMatchingAccounts(allocator, &reg, selector);
+            defer matches.deinit(allocator);
+
+            if (matches.items.len == 0) {
+                try cli.printAccountNotFoundError(selector);
+                return error.AccountNotFound;
+            }
+            if (matches.items.len > 1) {
+                requires_confirmation = true;
+            }
+            for (matches.items) |account_idx| {
+                if (!selectionContainsIndex(selected_list.items, account_idx)) {
+                    try selected_list.append(allocator, account_idx);
+                }
+            }
         }
 
-        if (matches.items.len > 1) {
-            var matched_labels = try cli.buildRemoveLabels(allocator, &reg, matches.items);
+        if (selected_list.items.len == 0) return;
+        if (requires_confirmation) {
+            var matched_labels = try cli.buildRemoveLabels(allocator, &reg, selected_list.items);
             defer {
                 freeOwnedStrings(allocator, matched_labels.items);
                 matched_labels.deinit(allocator);
@@ -1428,12 +1820,12 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             if (!(try cli.confirmRemoveMatches(matched_labels.items))) return;
         }
 
-        selected = try allocator.dupe(usize, matches.items);
+        selected = try allocator.dupe(usize, selected_list.items);
     } else {
         selected = cli.selectAccountsToRemoveWithUsageOverrides(
             allocator,
             &reg,
-            if (usage_state) |*state| state.usage_overrides else null,
+            usage_overrides,
         ) catch |err| switch (err) {
             error.InvalidRemoveSelectionInput => {
                 try cli.printInvalidRemoveSelectionError();
@@ -1729,6 +2121,114 @@ test "foreground node preflight fails fast when account-name refresh needs node"
     try std.testing.expectError(
         error.NodeJsRequired,
         ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
+    );
+    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
+}
+
+test "foreground node preflight can be forced on when command api override enables usage refresh" {
+    const TestState = struct {
+        var check_count: usize = 0;
+
+        fn missingNode(allocator: std.mem.Allocator) !void {
+            _ = allocator;
+            check_count += 1;
+            return error.NodeJsRequired;
+        }
+    };
+
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = registry.Registry{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+    reg.api.account = false;
+
+    try reg.accounts.append(gpa, .{
+        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
+        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
+        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
+        .email = try gpa.dupe(u8, "alpha@example.com"),
+        .alias = try gpa.dupe(u8, ""),
+        .account_name = null,
+        .plan = .plus,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+
+    TestState.check_count = 0;
+    try std.testing.expectError(
+        error.NodeJsRequired,
+        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .list, true, false, TestState.missingNode),
+    );
+    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
+}
+
+test "foreground node preflight can be forced on for remove when command api override enables usage refresh" {
+    const TestState = struct {
+        var check_count: usize = 0;
+
+        fn missingNode(allocator: std.mem.Allocator) !void {
+            _ = allocator;
+            check_count += 1;
+            return error.NodeJsRequired;
+        }
+    };
+
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = registry.Registry{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+    reg.api.usage = false;
+    reg.api.account = false;
+
+    try reg.accounts.append(gpa, .{
+        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
+        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
+        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
+        .email = try gpa.dupe(u8, "alpha@example.com"),
+        .alias = try gpa.dupe(u8, ""),
+        .account_name = null,
+        .plan = .plus,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+
+    TestState.check_count = 0;
+    try std.testing.expectError(
+        error.NodeJsRequired,
+        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .remove_account, true, false, TestState.missingNode),
     );
     try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
 }

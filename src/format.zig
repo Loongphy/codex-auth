@@ -13,6 +13,8 @@ const c = @cImport({
 const ansi = struct {
     const reset = "\x1b[0m";
     const dim = "\x1b[2m";
+    const red = "\x1b[31m";
+    const bold_red = "\x1b[1;31m";
     const green = "\x1b[32m";
 };
 
@@ -180,7 +182,13 @@ fn writeAccountsTableWithUsageOverrides(
             const last_cell = try truncateAlloc(last, widths[4]);
             defer std.heap.page_allocator.free(last_cell);
             if (use_color) {
-                if (row.is_active) {
+                if (usage_override != null) {
+                    if (row.is_active) {
+                        try out.writeAll(ansi.bold_red);
+                    } else {
+                        try out.writeAll(ansi.red);
+                    }
+                } else if (row.is_active) {
                     try out.writeAll(ansi.green);
                 } else {
                     try out.writeAll(ansi.dim);
@@ -751,6 +759,25 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
+}
+
+
+test "writeAccountsTable highlights usage override rows in red when color is enabled" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "403" };
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, true, &usage_overrides);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
 }
 
 test "writeAccountsTable prefers usage snapshot plan labels over stored auth plan" {

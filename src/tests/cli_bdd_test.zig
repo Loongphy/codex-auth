@@ -182,6 +182,36 @@ test "Scenario: Given list with debug flag when parsing then debug mode is prese
     }
 }
 
+test "Scenario: Given list with skip-api flag when parsing then local-only display mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--skip-api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| try std.testing.expectEqual(cli.ApiMode.skip_api, opts.api_mode),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given list with api flag when parsing then forced api mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| try std.testing.expectEqual(cli.ApiMode.force_api, opts.api_mode),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given login with removed no-login flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "login", "--no-login" };
@@ -256,7 +286,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove [<query>|--all]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "remove [<query>...] [--all] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
@@ -279,7 +309,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 
@@ -674,6 +704,45 @@ test "Scenario: Given switch with positional query when parsing then non-interac
             .switch_account => |opts| {
                 try std.testing.expect(opts.query != null);
                 try std.testing.expect(std.mem.eql(u8, opts.query.?, "user@example.com"));
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch with skip-api flag when parsing then local-only picker mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--skip-api", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expectEqual(cli.ApiMode.skip_api, opts.api_mode);
+                try std.testing.expect(opts.query != null);
+                try std.testing.expect(std.mem.eql(u8, opts.query.?, "02"));
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch with api flag when parsing then forced api mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--api", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expectEqual(cli.ApiMode.force_api, opts.api_mode);
+                try std.testing.expect(opts.query != null);
+                try std.testing.expect(std.mem.eql(u8, opts.query.?, "02"));
             },
             else => return error.TestExpectedEqual,
         },
@@ -699,7 +768,7 @@ test "Scenario: Given switch with unexpected flag when parsing then usage error 
     try expectUsageError(result, .switch_account, "unknown flag");
 }
 
-test "Scenario: Given remove with positional query when parsing then query mode is preserved" {
+test "Scenario: Given remove with positional query when parsing then selector mode is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "remove", "user@example.com" };
     var result = try cli.parseArgs(gpa, &args);
@@ -708,9 +777,10 @@ test "Scenario: Given remove with positional query when parsing then query mode 
     switch (result) {
         .command => |cmd| switch (cmd) {
             .remove_account => |opts| {
-                try std.testing.expect(opts.query != null);
-                try std.testing.expect(std.mem.eql(u8, opts.query.?, "user@example.com"));
+                try std.testing.expectEqual(@as(usize, 1), opts.selectors.len);
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[0], "user@example.com"));
                 try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
         },
@@ -727,8 +797,9 @@ test "Scenario: Given remove with all flag when parsing then all mode is preserv
     switch (result) {
         .command => |cmd| switch (cmd) {
             .remove_account => |opts| {
-                try std.testing.expect(opts.query == null);
+                try std.testing.expectEqual(@as(usize, 0), opts.selectors.len);
                 try std.testing.expect(opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
         },
@@ -736,13 +807,64 @@ test "Scenario: Given remove with all flag when parsing then all mode is preserv
     }
 }
 
-test "Scenario: Given remove with duplicate targets when parsing then usage error is returned" {
+test "Scenario: Given remove with multiple selectors when parsing then all selectors are preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "remove", "a@example.com", "b@example.com" };
+    const args = [_][:0]const u8{ "codex-auth", "remove", "01", "b@example.com", "03" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "unexpected extra selector");
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expectEqual(@as(usize, 3), opts.selectors.len);
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[0], "01"));
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[1], "b@example.com"));
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[2], "03"));
+                try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove with skip-api flag when parsing then explicit local-only mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--skip-api", "01" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expectEqual(cli.ApiMode.skip_api, opts.api_mode);
+                try std.testing.expectEqual(@as(usize, 1), opts.selectors.len);
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[0], "01"));
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove with api flag when parsing then forced api mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--api", "work" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expectEqual(cli.ApiMode.force_api, opts.api_mode);
+                try std.testing.expectEqual(@as(usize, 1), opts.selectors.len);
+                try std.testing.expect(std.mem.eql(u8, opts.selectors[0], "work"));
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "Scenario: Given remove with unexpected flag when parsing then usage error is returned" {
