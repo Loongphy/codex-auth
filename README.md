@@ -41,29 +41,6 @@ npx @loongphy/codex-auth list
 
   npm packages currently support Linux x64, Linux arm64, macOS x64, macOS arm64, Windows x64, and Windows arm64.
 
-> [!NOTE]
-> If you only installed `@loongphy/codex-auth` with npm, you do not need any legacy cleanup steps.
-> Older Bash/PowerShell GitHub-release installs could leave a standalone `codex-auth` binary outside npm's install path.
-> If you previously used those legacy installers, remove the leftover binaries and profile changes during migration.
-> API-backed usage refresh and team-name refresh use Node.js `fetch`.
-> npm installs already satisfy that requirement.
-> Legacy standalone binary installs need Node.js 22+ on `PATH` when `codex-auth config api enable` is used.
-
-## Storage Root
-
-`codex-auth` uses the same Codex state root as the current process. Resolution order:
-
-1. `CODEX_HOME` when set to a non-empty existing directory
-2. `HOME/.codex`
-3. `USERPROFILE/.codex` on Windows
-
-When `CODEX_HOME` is set, `codex-auth` follows Codex and requires that directory to already exist.
-That means you can isolate auth, registry, config, and session files by running:
-
-```shell
-CODEX_HOME=/path/to/custom-codex codex-auth list
-```
-
 ### Uninstall
 
 #### npm
@@ -75,6 +52,13 @@ npm uninstall -g @loongphy/codex-auth
 ```
 
 #### Legacy Bash Installer
+
+> [!NOTE]
+> If you only installed `@loongphy/codex-auth` with npm, you do not need any legacy cleanup steps.
+> Older Bash/PowerShell GitHub-release installs could leave a standalone `codex-auth` binary outside npm's install path.
+> If you previously used those legacy installers, remove the leftover binaries and profile changes during migration.
+> API-backed usage refresh and team-name refresh use Node.js `fetch`.
+> npm installs already satisfy that requirement.
 
 For non-npm installs on Linux/macOS/WSL2 only:
 
@@ -137,6 +121,9 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 ## Examples
 
 ### List Accounts
+
+> [!IMPORTANT]
+> Built-in Node proxy support for API refresh requires Node.js `22.21.0+` or `24.0.0+`.
 
 ```shell
 codex-auth list

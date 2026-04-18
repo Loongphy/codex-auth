@@ -5,7 +5,15 @@ This document is the single source of truth for outbound ChatGPT API refresh beh
 All API refresh requests are issued through `Node.js fetch`.
 When `codex-auth` is launched from the npm package, the wrapper passes its current Node executable to the Zig binary.
 Legacy standalone binary installs must have Node.js 22+ available on `PATH` for API-backed refresh to work.
-When `HTTP_PROXY` / `HTTPS_PROXY` are present, `codex-auth` enables Node environment-proxy support for the fetch child process automatically.
+Built-in Node environment-proxy support for `fetch()` requires Node.js `22.21.0+` or `24.0.0+`.
+
+`codex-auth` configures proxy support for the fetch child process in this order:
+
+1. inherit explicit `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values from the parent process
+2. map `ALL_PROXY` into `HTTP_PROXY` and `HTTPS_PROXY` when the direct variables are absent
+3. on Windows only, when no proxy environment variables are present and the detected Node runtime supports env-proxy for `fetch()` (`22.21.0+` or `24.0.0+`), read `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` and map HTTP/HTTPS/SOCKS `ProxyServer` entries into `HTTP_PROXY` / `HTTPS_PROXY`
+4. on Windows only, map explicit `ProxyOverride` entries into `NO_PROXY`; the WinINet-only `<local>` shorthand is not translated
+5. when proxy variables are configured and the detected Node runtime supports env-proxy for `fetch()`, set `NODE_USE_ENV_PROXY=1` for the Node child process automatically
 
 ## Endpoints
 

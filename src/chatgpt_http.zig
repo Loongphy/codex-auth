@@ -59,9 +59,16 @@ const node_request_script =
     \\  process.stdout.write("\n");
     \\  process.stdout.write(outcome);
     \\};
+    \\const emitAndExit = (body, status, outcome) => {
+    \\  process.stdout.write(encode(body));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(String(status));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(outcome, () => process.exit(0));
+    \\};
     \\const nodeMajor = Number(process.versions?.node?.split(".")[0] ?? 0);
     \\if (!Number.isInteger(nodeMajor) || nodeMajor < 22 || typeof fetch !== "function" || typeof AbortSignal?.timeout !== "function") {
-    \\  emit("Node.js 22+ is required.", 0, "node-too-old");
+    \\  emitAndExit("Node.js 22+ is required.", 0, "node-too-old");
     \\} else {
     \\  void (async () => {
     \\    try {
@@ -77,10 +84,10 @@ const node_request_script =
     \\      emit(await response.text(), response.status, "ok");
     \\    } catch (error) {
     \\      const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
-    \\      emit(error?.message ?? "", 0, isTimeout ? "timeout" : "error");
+    \\      emitAndExit(error?.message ?? "", 0, isTimeout ? "timeout" : "error");
     \\    }
     \\  })().catch((error) => {
-    \\    emit(error?.message ?? "", 0, "error");
+    \\    emitAndExit(error?.message ?? "", 0, "error");
     \\  });
     \\}
 ;
@@ -116,6 +123,15 @@ fn runNodeGetJsonCommand(
     const node_executable = try resolveNodeExecutableForLaunchAlloc(allocator);
     defer allocator.free(node_executable);
 
+    var env_map = try process_compat.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const node_env_proxy_supported = if (needsNodeEnvProxySupportCheck(&env_map))
+        detectNodeEnvProxySupport(allocator, node_executable)
+    else
+        false;
+    try maybeEnableNodeEnvProxy(allocator, &env_map, node_env_proxy_supported);
+
     // Use an explicit wait path so failed output collection cannot strand zombies.
     const result = runChildCapture(allocator, &.{
         node_executable,
@@ -126,7 +142,7 @@ fn runNodeGetJsonCommand(
         account_id,
         request_timeout_ms,
         browser_user_agent,
-    }, child_process_timeout_ms_value) catch |err| switch (err) {
+    }, child_process_timeout_ms_value, &env_map) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.FileNotFound => {
             logNodeRequirement();
@@ -170,13 +186,15 @@ fn runChildCapture(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     timeout_ms: u64,
+    env_map: ?*const std.process.Environ.Map,
 ) !ChildCaptureResult {
-    var env_map = try process_compat.getEnvMap(allocator);
-    defer env_map.deinit();
-    try maybeEnableNodeEnvProxy(&env_map);
+    var local_env_map = try process_compat.getEnvMap(allocator);
+    defer local_env_map.deinit();
+    const effective_env_map = env_map orelse &local_env_map;
+
     const raw_result = std.process.run(std.heap.page_allocator, fs.io(), .{
         .argv = argv,
-        .environ_map = &env_map,
+        .environ_map = effective_env_map,
         .stdout_limit = .limited(max_output_bytes),
         .stderr_limit = .limited(max_output_bytes),
         .timeout = .{ .duration = .{
@@ -197,7 +215,6 @@ fn runChildCapture(
         },
         else => return err,
     };
-
     defer std.heap.page_allocator.free(raw_result.stdout);
     defer std.heap.page_allocator.free(raw_result.stderr);
 
@@ -216,26 +233,373 @@ fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
     };
 }
 
-fn maybeEnableNodeEnvProxy(env_map: *std.process.Environ.Map) !void {
-    if (env_map.get(node_use_env_proxy_env) == null) {
-        const all_proxy = env_map.get("ALL_PROXY") orelse env_map.get("all_proxy");
-        if (all_proxy) |proxy| {
-            if (env_map.get("HTTP_PROXY") == null and env_map.get("http_proxy") == null) {
-                try env_map.put("HTTP_PROXY", proxy);
-            }
-            if (env_map.get("HTTPS_PROXY") == null and env_map.get("https_proxy") == null) {
-                try env_map.put("HTTPS_PROXY", proxy);
-            }
-        }
+fn maybeEnableNodeEnvProxy(
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+    node_env_proxy_supported: bool,
+) !void {
+    try maybeMapAllProxy(env_map);
+    if (node_env_proxy_supported) {
+        try maybeApplyWindowsSystemProxyFallback(allocator, env_map);
+    }
 
-        if (env_map.get("HTTP_PROXY") != null or
-            env_map.get("http_proxy") != null or
-            env_map.get("HTTPS_PROXY") != null or
-            env_map.get("https_proxy") != null)
-        {
-            try env_map.put(node_use_env_proxy_env, "1");
+    if (node_env_proxy_supported and env_map.get(node_use_env_proxy_env) == null and hasNodeProxyConfiguration(env_map)) {
+        try env_map.put(node_use_env_proxy_env, "1");
+    }
+}
+
+fn needsNodeEnvProxySupportCheck(env_map: *std.process.Environ.Map) bool {
+    return builtin.os.tag == .windows or hasNodeProxyConfiguration(env_map) or hasAllProxyConfiguration(env_map);
+}
+
+fn hasAllProxyConfiguration(env_map: *std.process.Environ.Map) bool {
+    return env_map.get("ALL_PROXY") != null or env_map.get("all_proxy") != null;
+}
+
+const NodeVersion = struct {
+    major: u32,
+    minor: u32,
+    patch: u32,
+};
+
+const NodeEnvProxySupportCache = struct {
+    mutex: std.Io.Mutex = .init,
+    executable: ?[]u8 = null,
+    supported: bool = false,
+};
+
+var node_env_proxy_support_cache: NodeEnvProxySupportCache = .{};
+
+fn detectNodeEnvProxySupport(allocator: std.mem.Allocator, node_executable: []const u8) bool {
+    return detectNodeEnvProxySupportWithTimeout(allocator, node_executable, child_process_timeout_ms_value);
+}
+
+fn detectNodeEnvProxySupportWithTimeout(
+    allocator: std.mem.Allocator,
+    node_executable: []const u8,
+    timeout_ms: u64,
+) bool {
+    node_env_proxy_support_cache.mutex.lockUncancelable(fs.io());
+    if (node_env_proxy_support_cache.executable) |cached| {
+        if (std.mem.eql(u8, cached, node_executable)) {
+            const supported = node_env_proxy_support_cache.supported;
+            node_env_proxy_support_cache.mutex.unlock(fs.io());
+            return supported;
         }
     }
+    node_env_proxy_support_cache.mutex.unlock(fs.io());
+
+    const result = runChildCapture(allocator, &.{ node_executable, "--version" }, timeout_ms, null) catch return false;
+    defer result.deinit(allocator);
+
+    if (result.timed_out) return false;
+    switch (result.term) {
+        .exited => |code| if (code != 0) return false,
+        else => return false,
+    }
+
+    const version = parseNodeVersion(result.stdout) catch return false;
+    const supported = nodeVersionSupportsEnvProxy(version);
+
+    node_env_proxy_support_cache.mutex.lockUncancelable(fs.io());
+    defer node_env_proxy_support_cache.mutex.unlock(fs.io());
+    if (node_env_proxy_support_cache.executable) |cached| {
+        std.heap.page_allocator.free(cached);
+    }
+    node_env_proxy_support_cache.executable = std.heap.page_allocator.dupe(u8, node_executable) catch null;
+    node_env_proxy_support_cache.supported = supported;
+    return supported;
+}
+
+fn parseNodeVersion(raw: []const u8) !NodeVersion {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    const version_text = if (trimmed.len != 0 and trimmed[0] == 'v') trimmed[1..] else trimmed;
+
+    var parts = std.mem.splitScalar(u8, version_text, '.');
+    const major_text = parts.next() orelse return error.InvalidVersion;
+    const minor_text = parts.next() orelse return error.InvalidVersion;
+    const patch_text = parts.next() orelse return error.InvalidVersion;
+
+    return .{
+        .major = try std.fmt.parseInt(u32, major_text, 10),
+        .minor = try std.fmt.parseInt(u32, minor_text, 10),
+        .patch = try std.fmt.parseInt(u32, patch_text, 10),
+    };
+}
+
+fn nodeVersionSupportsEnvProxy(version: NodeVersion) bool {
+    return version.major >= 24 or (version.major == 22 and version.minor >= 21);
+}
+
+fn maybeMapAllProxy(env_map: *std.process.Environ.Map) !void {
+    const all_proxy = env_map.get("ALL_PROXY") orelse env_map.get("all_proxy");
+    if (all_proxy) |proxy| {
+        if (env_map.get("HTTP_PROXY") == null and env_map.get("http_proxy") == null) {
+            try env_map.put("HTTP_PROXY", proxy);
+        }
+        if (env_map.get("HTTPS_PROXY") == null and env_map.get("https_proxy") == null) {
+            try env_map.put("HTTPS_PROXY", proxy);
+        }
+    }
+}
+
+fn hasNodeProxyConfiguration(env_map: *std.process.Environ.Map) bool {
+    return env_map.get("HTTP_PROXY") != null or
+        env_map.get("http_proxy") != null or
+        env_map.get("HTTPS_PROXY") != null or
+        env_map.get("https_proxy") != null;
+}
+
+fn hasNoProxyConfiguration(env_map: *std.process.Environ.Map) bool {
+    return env_map.get("NO_PROXY") != null or env_map.get("no_proxy") != null;
+}
+
+const windows_internet_settings_key = std.unicode.wtf8ToWtf16LeStringLiteral("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings");
+const windows_proxy_enable_value = std.unicode.wtf8ToWtf16LeStringLiteral("ProxyEnable");
+const windows_proxy_server_value = std.unicode.wtf8ToWtf16LeStringLiteral("ProxyServer");
+const windows_proxy_override_value = std.unicode.wtf8ToWtf16LeStringLiteral("ProxyOverride");
+
+const WindowsSystemProxy = struct {
+    http_proxy: ?[]u8 = null,
+    https_proxy: ?[]u8 = null,
+    no_proxy: ?[]u8 = null,
+
+    fn deinit(self: *WindowsSystemProxy, allocator: std.mem.Allocator) void {
+        if (self.http_proxy) |value| allocator.free(value);
+        if (self.https_proxy) |value| allocator.free(value);
+        if (self.no_proxy) |value| allocator.free(value);
+        self.* = .{};
+    }
+};
+
+fn maybeApplyWindowsSystemProxyFallback(allocator: std.mem.Allocator, env_map: *std.process.Environ.Map) !void {
+    if (builtin.os.tag != .windows) return;
+    if (hasNodeProxyConfiguration(env_map)) return;
+
+    var proxy = (try queryWindowsSystemProxyAlloc(allocator)) orelse return;
+    defer proxy.deinit(allocator);
+
+    if (proxy.http_proxy) |value| {
+        if (env_map.get("HTTP_PROXY") == null and env_map.get("http_proxy") == null) {
+            try env_map.put("HTTP_PROXY", value);
+        }
+    }
+    if (proxy.https_proxy) |value| {
+        if (env_map.get("HTTPS_PROXY") == null and env_map.get("https_proxy") == null) {
+            try env_map.put("HTTPS_PROXY", value);
+        }
+    }
+    if (proxy.no_proxy) |value| {
+        if (!hasNoProxyConfiguration(env_map)) {
+            try env_map.put("NO_PROXY", value);
+        }
+    }
+}
+
+fn queryWindowsSystemProxyAlloc(allocator: std.mem.Allocator) !?WindowsSystemProxy {
+    if (builtin.os.tag != .windows) return null;
+
+    const proxy_enabled = readWindowsRegistryDword(
+        std.os.windows.HKEY_CURRENT_USER,
+        windows_internet_settings_key,
+        windows_proxy_enable_value,
+    ) catch |err| switch (err) {
+        error.ValueNotFound, error.UnexpectedRegistryType, error.RegistryReadFailed => return null,
+        else => return err,
+    };
+    if (proxy_enabled == 0) return null;
+
+    const proxy_server = readWindowsRegistryStringAlloc(
+        allocator,
+        std.os.windows.HKEY_CURRENT_USER,
+        windows_internet_settings_key,
+        windows_proxy_server_value,
+    ) catch |err| switch (err) {
+        error.ValueNotFound, error.UnexpectedRegistryType, error.RegistryReadFailed => return null,
+        else => return err,
+    };
+    defer allocator.free(proxy_server);
+
+    const proxy_override = readWindowsRegistryStringAlloc(
+        allocator,
+        std.os.windows.HKEY_CURRENT_USER,
+        windows_internet_settings_key,
+        windows_proxy_override_value,
+    ) catch |err| switch (err) {
+        error.ValueNotFound, error.UnexpectedRegistryType, error.RegistryReadFailed => null,
+        else => return err,
+    };
+    defer if (proxy_override) |value| allocator.free(value);
+
+    return try deriveWindowsSystemProxyAlloc(allocator, proxy_server, proxy_override);
+}
+
+fn deriveWindowsSystemProxyAlloc(
+    allocator: std.mem.Allocator,
+    proxy_server_raw: []const u8,
+    proxy_override_raw: ?[]const u8,
+) !?WindowsSystemProxy {
+    const proxy_server = std.mem.trim(u8, proxy_server_raw, " \t\r\n");
+    if (proxy_server.len == 0) return null;
+
+    var result = WindowsSystemProxy{};
+    errdefer result.deinit(allocator);
+
+    var default_proxy: ?[]u8 = null;
+    defer if (default_proxy) |value| allocator.free(value);
+
+    var entries = std.mem.splitScalar(u8, proxy_server, ';');
+    while (entries.next()) |entry_raw| {
+        const entry = std.mem.trim(u8, entry_raw, " \t\r\n");
+        if (entry.len == 0) continue;
+
+        if (std.mem.indexOfScalar(u8, entry, '=')) |eq_idx| {
+            const key = std.mem.trim(u8, entry[0..eq_idx], " \t\r\n");
+            const value = std.mem.trim(u8, entry[eq_idx + 1 ..], " \t\r\n");
+            if (value.len == 0) continue;
+
+            if (std.ascii.eqlIgnoreCase(key, "http")) {
+                if (result.http_proxy == null) result.http_proxy = try normalizeWindowsProxyUrlAlloc(allocator, value, "http://");
+            } else if (std.ascii.eqlIgnoreCase(key, "https")) {
+                if (result.https_proxy == null) result.https_proxy = try normalizeWindowsProxyUrlAlloc(allocator, value, "http://");
+            } else if (std.ascii.eqlIgnoreCase(key, "socks")) {
+                const socks_proxy = try normalizeWindowsProxyUrlAlloc(allocator, value, "socks://");
+                defer allocator.free(socks_proxy);
+                if (result.http_proxy == null) result.http_proxy = try allocator.dupe(u8, socks_proxy);
+                if (result.https_proxy == null) result.https_proxy = try allocator.dupe(u8, socks_proxy);
+            }
+        } else if (default_proxy == null) {
+            default_proxy = try normalizeWindowsProxyUrlAlloc(allocator, entry, "http://");
+        }
+    }
+
+    if (default_proxy) |value| {
+        if (result.http_proxy == null) result.http_proxy = try allocator.dupe(u8, value);
+        if (result.https_proxy == null) result.https_proxy = try allocator.dupe(u8, value);
+    }
+
+    if (result.http_proxy == null and result.https_proxy == null) return null;
+
+    if (proxy_override_raw) |raw| {
+        result.no_proxy = try normalizeWindowsNoProxyAlloc(allocator, raw);
+    }
+
+    return result;
+}
+
+fn normalizeWindowsProxyUrlAlloc(allocator: std.mem.Allocator, raw: []const u8, default_scheme: []const u8) ![]u8 {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return allocator.dupe(u8, trimmed);
+    if (std.mem.indexOf(u8, trimmed, "://") != null) return allocator.dupe(u8, trimmed);
+    return std.fmt.allocPrint(allocator, "{s}{s}", .{ default_scheme, trimmed });
+}
+
+fn normalizeWindowsNoProxyAlloc(allocator: std.mem.Allocator, raw: []const u8) !?[]u8 {
+    var list = std.ArrayList(u8).empty;
+    defer list.deinit(allocator);
+
+    var overrides = std.mem.splitScalar(u8, raw, ';');
+    while (overrides.next()) |entry_raw| {
+        const entry = std.mem.trim(u8, entry_raw, " \t\r\n");
+        if (entry.len == 0) continue;
+
+        if (std.ascii.eqlIgnoreCase(entry, "<local>")) continue;
+        if (entry[0] == '<' and entry[entry.len - 1] == '>') continue;
+        try appendNoProxyEntry(allocator, &list, entry);
+    }
+
+    if (list.items.len == 0) return null;
+    return try list.toOwnedSlice(allocator);
+}
+
+fn appendNoProxyEntry(allocator: std.mem.Allocator, list: *std.ArrayList(u8), entry: []const u8) !void {
+    if (entry.len == 0) return;
+    if (list.items.len != 0) try list.append(allocator, ',');
+    try list.appendSlice(allocator, entry);
+}
+
+fn readWindowsRegistryDword(
+    hkey: std.os.windows.HKEY,
+    sub_key: [*:0]const u16,
+    value_name: [*:0]const u16,
+) error{ RegistryReadFailed, UnexpectedRegistryType, ValueNotFound }!u32 {
+    if (builtin.os.tag != .windows) return error.ValueNotFound;
+
+    var actual_type: std.os.windows.ULONG = undefined;
+    var reg_size: u32 = @sizeOf(u32);
+    var reg_value: u32 = 0;
+    const rc = std.os.windows.advapi32.RegGetValueW(
+        hkey,
+        sub_key,
+        value_name,
+        std.os.windows.advapi32.RRF.RT_REG_DWORD,
+        &actual_type,
+        &reg_value,
+        &reg_size,
+    );
+    switch (@as(std.os.windows.Win32Error, @enumFromInt(rc))) {
+        .SUCCESS => {},
+        .FILE_NOT_FOUND => return error.ValueNotFound,
+        else => return error.RegistryReadFailed,
+    }
+    if (actual_type != std.os.windows.REG.DWORD) return error.UnexpectedRegistryType;
+    return reg_value;
+}
+
+fn readWindowsRegistryStringAlloc(
+    allocator: std.mem.Allocator,
+    hkey: std.os.windows.HKEY,
+    sub_key: [*:0]const u16,
+    value_name: [*:0]const u16,
+) error{ OutOfMemory, RegistryReadFailed, UnexpectedRegistryType, ValueNotFound }![]u8 {
+    if (builtin.os.tag != .windows) return error.ValueNotFound;
+
+    var actual_type: std.os.windows.ULONG = undefined;
+    var buf_size: u32 = 0;
+    var rc = std.os.windows.advapi32.RegGetValueW(
+        hkey,
+        sub_key,
+        value_name,
+        std.os.windows.advapi32.RRF.RT_REG_SZ | std.os.windows.advapi32.RRF.RT_REG_EXPAND_SZ,
+        &actual_type,
+        null,
+        &buf_size,
+    );
+    switch (@as(std.os.windows.Win32Error, @enumFromInt(rc))) {
+        .SUCCESS => {},
+        .FILE_NOT_FOUND => return error.ValueNotFound,
+        else => return error.RegistryReadFailed,
+    }
+    if (actual_type != std.os.windows.REG.SZ and actual_type != std.os.windows.REG.EXPAND_SZ) {
+        return error.UnexpectedRegistryType;
+    }
+
+    const buf = try allocator.alloc(u16, std.math.divCeil(u32, buf_size, 2) catch unreachable);
+    defer allocator.free(buf);
+
+    rc = std.os.windows.advapi32.RegGetValueW(
+        hkey,
+        sub_key,
+        value_name,
+        std.os.windows.advapi32.RRF.RT_REG_SZ | std.os.windows.advapi32.RRF.RT_REG_EXPAND_SZ,
+        &actual_type,
+        buf.ptr,
+        &buf_size,
+    );
+    switch (@as(std.os.windows.Win32Error, @enumFromInt(rc))) {
+        .SUCCESS => {},
+        .FILE_NOT_FOUND => return error.ValueNotFound,
+        else => return error.RegistryReadFailed,
+    }
+    if (actual_type != std.os.windows.REG.SZ and actual_type != std.os.windows.REG.EXPAND_SZ) {
+        return error.UnexpectedRegistryType;
+    }
+
+    const value_z: [*:0]const u16 = @ptrCast(buf.ptr);
+    return std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.span(value_z)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.RegistryReadFailed,
+    };
 }
 
 fn resolveNodeExecutableForLaunchAlloc(allocator: std.mem.Allocator) ![]u8 {
@@ -415,7 +779,7 @@ test "run child capture times out stalled child process" {
         else => &[_][]const u8{script_path},
     };
 
-    const result = runChildCapture(allocator, argv, 100) catch |err| switch (err) {
+    const result = runChildCapture(allocator, argv, 100, null) catch |err| switch (err) {
         error.OutOfMemory => return error.SkipZigTest,
         else => return err,
     };
@@ -431,12 +795,71 @@ test "ensure executable available returns NodeJsRequired for missing path" {
     );
 }
 
+test "parse node version handles leading v prefix" {
+    const version = try parseNodeVersion("v22.21.0\n");
+
+    try std.testing.expectEqual(@as(u32, 22), version.major);
+    try std.testing.expectEqual(@as(u32, 21), version.minor);
+    try std.testing.expectEqual(@as(u32, 0), version.patch);
+}
+
+test "node version support gate matches documented ranges" {
+    try std.testing.expect(!nodeVersionSupportsEnvProxy(.{ .major = 22, .minor = 20, .patch = 9 }));
+    try std.testing.expect(nodeVersionSupportsEnvProxy(.{ .major = 22, .minor = 21, .patch = 0 }));
+    try std.testing.expect(!nodeVersionSupportsEnvProxy(.{ .major = 23, .minor = 11, .patch = 1 }));
+    try std.testing.expect(nodeVersionSupportsEnvProxy(.{ .major = 24, .minor = 0, .patch = 0 }));
+}
+
+test "detect node env proxy support times out blocked helper" {
+    const allocator = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script_name = switch (builtin.os.tag) {
+        .windows => "node.cmd",
+        else => "node",
+    };
+    const script_data = switch (builtin.os.tag) {
+        .windows =>
+        \\@echo off
+        \\powershell -NoLogo -NoProfile -Command "Start-Sleep -Seconds 30"
+        ,
+        else =>
+        \\#!/bin/sh
+        \\sleep 30
+        ,
+    };
+
+    try tmp.dir.writeFile(.{ .sub_path = script_name, .data = script_data });
+    if (builtin.os.tag != .windows) {
+        var script_file = try tmp.dir.openFile(script_name, .{ .mode = .read_write });
+        defer script_file.close();
+        try script_file.chmod(0o755);
+    }
+
+    const script_path = try tmp.dir.realpathAlloc(allocator, script_name);
+    defer allocator.free(script_path);
+
+    try std.testing.expect(!detectNodeEnvProxySupportWithTimeout(allocator, script_path, 100));
+}
+
+test "maybe enable node env proxy does not set NODE_USE_ENV_PROXY when runtime lacks support" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+
+    try env_map.put("HTTPS_PROXY", "http://127.0.0.1:7890");
+    try maybeEnableNodeEnvProxy(std.testing.allocator, &env_map, false);
+
+    try std.testing.expect(env_map.get(node_use_env_proxy_env) == null);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTPS_PROXY").?);
+}
+
 test "maybe enable node env proxy sets NODE_USE_ENV_PROXY when HTTP proxy is present" {
     var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
 
     try env_map.put("HTTPS_PROXY", "http://127.0.0.1:7890");
-    try maybeEnableNodeEnvProxy(&env_map);
+    try maybeEnableNodeEnvProxy(std.testing.allocator, &env_map, true);
 
     try std.testing.expectEqualStrings("1", env_map.get(node_use_env_proxy_env).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTPS_PROXY").?);
@@ -447,11 +870,66 @@ test "maybe enable node env proxy maps ALL_PROXY when direct proxy vars are miss
     defer env_map.deinit();
 
     try env_map.put("ALL_PROXY", "http://127.0.0.1:7890");
-    try maybeEnableNodeEnvProxy(&env_map);
+    try maybeEnableNodeEnvProxy(std.testing.allocator, &env_map, true);
 
     try std.testing.expectEqualStrings("1", env_map.get(node_use_env_proxy_env).?);
     try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTP_PROXY").?);
     try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTPS_PROXY").?);
+}
+
+test "maybe enable node env proxy maps ALL_PROXY even when NODE_USE_ENV_PROXY is already set" {
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
+    defer env_map.deinit();
+
+    try env_map.put("ALL_PROXY", "http://127.0.0.1:7890");
+    try env_map.put(node_use_env_proxy_env, "1");
+    try maybeEnableNodeEnvProxy(std.testing.allocator, &env_map, true);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTP_PROXY").?);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTPS_PROXY").?);
+    try std.testing.expectEqualStrings("1", env_map.get(node_use_env_proxy_env).?);
+}
+
+test "derive windows system proxy alloc maps shared proxy and explicit overrides" {
+    const allocator = std.testing.allocator;
+    var proxy = (try deriveWindowsSystemProxyAlloc(
+        allocator,
+        "127.0.0.1:7890",
+        "*.corp;intranet.local;<local>",
+    )) orelse return error.TestUnexpectedResult;
+    defer proxy.deinit(allocator);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:7890", proxy.http_proxy.?);
+    try std.testing.expectEqualStrings("http://127.0.0.1:7890", proxy.https_proxy.?);
+    try std.testing.expectEqualStrings("*.corp,intranet.local", proxy.no_proxy.?);
+}
+
+test "derive windows system proxy alloc maps protocol-specific entries" {
+    const allocator = std.testing.allocator;
+    var proxy = (try deriveWindowsSystemProxyAlloc(
+        allocator,
+        "http=127.0.0.1:8080;https=https://127.0.0.1:8443",
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    defer proxy.deinit(allocator);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:8080", proxy.http_proxy.?);
+    try std.testing.expectEqualStrings("https://127.0.0.1:8443", proxy.https_proxy.?);
+    try std.testing.expect(proxy.no_proxy == null);
+}
+
+test "derive windows system proxy alloc maps socks-only entries" {
+    const allocator = std.testing.allocator;
+    var proxy = (try deriveWindowsSystemProxyAlloc(
+        allocator,
+        "socks=127.0.0.1:1080",
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    defer proxy.deinit(allocator);
+
+    try std.testing.expectEqualStrings("socks://127.0.0.1:1080", proxy.http_proxy.?);
+    try std.testing.expectEqualStrings("socks://127.0.0.1:1080", proxy.https_proxy.?);
+    try std.testing.expect(proxy.no_proxy == null);
 }
 
 test "launch path resolution preserves node symlink path" {
