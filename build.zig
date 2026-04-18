@@ -33,6 +33,10 @@ pub fn build(b: *std.Build) void {
         .name = "codex-auth",
         .root_module = main_module,
     });
+    if (is_windows) {
+        exe.root_module.linkSystemLibrary("ole32", .{});
+        exe.root_module.linkSystemLibrary("oleaut32", .{});
+    }
     b.installArtifact(exe);
 
     if (is_windows) {
@@ -49,6 +53,8 @@ pub fn build(b: *std.Build) void {
             .name = "codex-auth-auto",
             .root_module = auto_module,
         });
+        auto_exe.root_module.linkSystemLibrary("ole32", .{});
+        auto_exe.root_module.linkSystemLibrary("oleaut32", .{});
         auto_exe.subsystem = .Windows;
         b.installArtifact(auto_exe);
     }
@@ -73,6 +79,10 @@ pub fn build(b: *std.Build) void {
         .name = "codex-auth-test",
         .root_module = test_module,
     });
+    if (is_windows) {
+        tests.root_module.linkSystemLibrary("ole32", .{});
+        tests.root_module.linkSystemLibrary("oleaut32", .{});
+    }
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests.step);
 }

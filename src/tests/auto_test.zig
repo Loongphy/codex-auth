@@ -5,6 +5,7 @@ const account_api = @import("../account_api.zig");
 const auto = @import("../auto.zig");
 const registry = @import("../registry.zig");
 const usage_api = @import("../usage_api.zig");
+const version = @import("../version.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const rollout_line = "{" ++
@@ -1424,33 +1425,38 @@ test "Scenario: Given windows task action when rendering then it launches the he
     try std.testing.expect(action.len < 262);
 }
 
-test "Scenario: Given windows task register script when rendering then it configures restart-on-failure" {
+test "Scenario: Given windows task XML when matching then it validates the command trigger and restart settings" {
     const gpa = std.testing.allocator;
-    const script = try auto.windowsRegisterTaskScript(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe", "C:\\Users\\demo\\Codex Home\\");
-    defer gpa.free(script);
+    const xml = try std.fmt.allocPrint(
+        gpa,
+        "<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions><Exec><Command>C:\\Program Files\\codex-auth\\codex-auth-auto.exe</Command><Arguments>--service-version {s} --codex-home \"C:\\Users\\demo\\Codex Home\\\\\"</Arguments></Exec></Actions></Task>",
+        .{version.app_version},
+    );
+    defer gpa.free(xml);
 
-    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskAction") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "--codex-home \"C:\\Users\\demo\\Codex Home\\\\\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskTrigger -AtLogOn") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "-ExecutionTimeLimit (New-TimeSpan -Seconds 0)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
+    try std.testing.expect(try auto.windowsTaskDefinitionMatchesXml(
+        gpa,
+        xml,
+        "C:\\Program Files\\codex-auth\\codex-auth-auto.exe",
+        "C:\\Users\\demo\\Codex Home\\",
+    ));
 }
 
-test "Scenario: Given windows task match script when rendering then it validates both action and the logon trigger" {
+test "Scenario: Given windows task XML with the wrong trigger when matching then it rejects the definition" {
     const gpa = std.testing.allocator;
-    const script = try auto.windowsTaskMatchScript(gpa);
-    defer gpa.free(script);
+    const xml = try std.fmt.allocPrint(
+        gpa,
+        "<Task><Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers><Settings><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions><Exec><Command>C:\\Program Files\\codex-auth\\codex-auth-auto.exe</Command><Arguments>--service-version {s} --codex-home \"C:\\Users\\demo\\Codex Home\\\\\"</Arguments></Exec></Actions></Task>",
+        .{version.app_version},
+    );
+    defer gpa.free(xml);
 
-    try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "Export-ScheduledTask -TaskName 'CodexAuthAutoSwitch'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "RestartOnFailure") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "ExecutionTimeLimit") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "LocalName") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "$action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval + '|LIMIT:' + $executionLimit") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "|TRIGGER:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "|RESTART:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "|LIMIT:") != null);
+    try std.testing.expect(!(try auto.windowsTaskDefinitionMatchesXml(
+        gpa,
+        xml,
+        "C:\\Program Files\\codex-auth\\codex-auth-auto.exe",
+        "C:\\Users\\demo\\Codex Home\\",
+    )));
 }
 
 test "Scenario: Given auto-switch disabled when reconciling managed service then it stays off" {
@@ -1569,22 +1575,38 @@ test "Scenario: Given an absolute managed unit path when deleting it then the fi
     try std.testing.expectError(error.FileNotFound, fs.openFileAbsolute(timer_path, .{}));
 }
 
-test "Scenario: Given windows delete task script when rendering then missing tasks are treated as success" {
+test "Scenario: Given windows task XML with the wrong restart policy when matching then it rejects the definition" {
     const gpa = std.testing.allocator;
-    const script = try auto.windowsDeleteTaskScript(gpa);
-    defer gpa.free(script);
+    const xml = try std.fmt.allocPrint(
+        gpa,
+        "<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT5M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions><Exec><Command>C:\\Program Files\\codex-auth\\codex-auth-auto.exe</Command><Arguments>--service-version {s} --codex-home \"C:\\Users\\demo\\Codex Home\\\\\"</Arguments></Exec></Actions></Task>",
+        .{version.app_version},
+    );
+    defer gpa.free(xml);
 
-    try std.testing.expect(std.mem.indexOf(u8, script, "Get-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -ErrorAction SilentlyContinue") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "if ($null -eq $task) { exit 0 }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "Unregister-ScheduledTask -TaskName 'CodexAuthAutoSwitch' -Confirm:$false") != null);
+    try std.testing.expect(!(try auto.windowsTaskDefinitionMatchesXml(
+        gpa,
+        xml,
+        "C:\\Program Files\\codex-auth\\codex-auth-auto.exe",
+        "C:\\Users\\demo\\Codex Home\\",
+    )));
 }
 
-test "Scenario: Given windows task state output when parsing then localized text is no longer required" {
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("4\r\n") == .running);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("3\r\n") == .stopped);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("2\r\n") == .stopped);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("1\r\n") == .stopped);
-    try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
+test "Scenario: Given windows task XML with multiple triggers when matching then it rejects the definition" {
+    const gpa = std.testing.allocator;
+    const xml = try std.fmt.allocPrint(
+        gpa,
+        "<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers><Settings><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure></Settings><Actions><Exec><Command>C:\\Program Files\\codex-auth\\codex-auth-auto.exe</Command><Arguments>--service-version {s} --codex-home \"C:\\Users\\demo\\Codex Home\\\\\"</Arguments></Exec></Actions></Task>",
+        .{version.app_version},
+    );
+    defer gpa.free(xml);
+
+    try std.testing.expect(!(try auto.windowsTaskDefinitionMatchesXml(
+        gpa,
+        xml,
+        "C:\\Program Files\\codex-auth\\codex-auth-auto.exe",
+        "C:\\Users\\demo\\Codex Home\\",
+    )));
 }
 
 test "Scenario: Given status when rendering then auto and usage api settings are shown" {

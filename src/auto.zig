@@ -14,6 +14,7 @@ const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
 const usage_api = @import("usage_api.zig");
 const version = @import("version.zig");
+const windows_task_scheduler = @import("windows_task_scheduler.zig");
 
 const linux_service_name = "codex-auth-autoswitch.service";
 const linux_timer_name = "codex-auth-autoswitch.timer";
@@ -22,6 +23,7 @@ const windows_task_name = "CodexAuthAutoSwitch";
 const windows_helper_name = "codex-auth-auto.exe";
 const windows_task_trigger_kind = "LogonTrigger";
 const windows_task_restart_count = "999";
+const windows_task_restart_count_value: i32 = 999;
 const windows_task_restart_interval_xml = "PT1M";
 const windows_task_execution_time_limit_xml = "PT0S";
 const lock_file_name = "auto-switch.lock";
@@ -2020,42 +2022,21 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
     defer allocator.free(helper_path);
     try fs.cwd().access(helper_path, .{});
 
-    const register_script = try windowsRegisterTaskScript(allocator, helper_path, codex_home);
-    defer allocator.free(register_script);
-    const end_script = try windowsEndTaskScript(allocator);
-    defer allocator.free(end_script);
-    _ = runChecked(allocator, &[_][]const u8{
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-Command",
-        end_script,
-    }) catch {};
-    try runChecked(allocator, &[_][]const u8{
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-Command",
-        register_script,
-    });
-    try runChecked(allocator, &[_][]const u8{
-        "schtasks",
-        "/Run",
-        "/TN",
-        windows_task_name,
+    const arguments = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(arguments);
+
+    try windows_task_scheduler.installTask(allocator, .{
+        .task_name = windows_task_name,
+        .executable_path = helper_path,
+        .arguments = arguments,
+        .restart_count = windows_task_restart_count_value,
+        .restart_interval = windows_task_restart_interval_xml,
+        .execution_time_limit = windows_task_execution_time_limit_xml,
     });
 }
 
 fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
-    const script = try windowsDeleteTaskScript(allocator);
-    defer allocator.free(script);
-    try runChecked(allocator, &[_][]const u8{
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-Command",
-        script,
-    });
+    try windows_task_scheduler.uninstallTask(allocator, windows_task_name);
 }
 
 fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
@@ -2085,21 +2066,10 @@ fn queryMacRuntimeState(allocator: std.mem.Allocator) RuntimeState {
 }
 
 fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    const script = windowsTaskStateScript();
-    const result = runCapture(allocator, &[_][]const u8{
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-Command",
-        script,
-    }) catch return .unknown;
-    defer {
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
-    }
-    return switch (result.term) {
-        .exited => |code| if (code == 0) parseWindowsTaskStateOutput(result.stdout) else if (code == 1) .stopped else .unknown,
-        else => .unknown,
+    return switch (windows_task_scheduler.queryTaskRuntimeState(allocator, windows_task_name)) {
+        .running => .running,
+        .stopped => .stopped,
+        .unknown => .unknown,
     };
 }
 
@@ -2147,57 +2117,83 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8, 
     );
 }
 
-pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
-    const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
+pub fn windowsTaskDefinitionMatchesXml(
+    allocator: std.mem.Allocator,
+    xml: []const u8,
+    helper_path: []const u8,
+    codex_home: []const u8,
+) !bool {
+    const exec = windowsTaskXmlSection("Exec", xml) orelse return false;
+    const command = windowsTaskXmlTagValue("Command", exec) orelse return false;
+    const arguments = windowsTaskXmlTagValue("Arguments", exec) orelse return false;
+
+    const expected_arguments = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(expected_arguments);
+    const escaped_helper_path = try escapeXml(allocator, helper_path);
     defer allocator.free(escaped_helper_path);
-    const args = try windowsTaskArguments(allocator, codex_home);
-    defer allocator.free(args);
-    const escaped_args = try escapePowerShellSingleQuoted(allocator, args);
-    defer allocator.free(escaped_args);
-    return try std.fmt.allocPrint(
-        allocator,
-        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '{s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
-        .{ escaped_helper_path, escaped_args, windows_task_restart_count, windows_task_name },
-    );
+    const escaped_arguments = try escapeXml(allocator, expected_arguments);
+    defer allocator.free(escaped_arguments);
+
+    if (!std.mem.eql(u8, command, escaped_helper_path)) return false;
+    if (!std.mem.eql(u8, arguments, escaped_arguments)) return false;
+
+    const trigger_kind = windowsTaskTriggerKindFromXml(xml) orelse return false;
+    if (!std.mem.eql(u8, trigger_kind, windows_task_trigger_kind)) return false;
+
+    const settings = windowsTaskXmlSection("Settings", xml) orelse return false;
+    const execution_limit = windowsTaskXmlTagValue("ExecutionTimeLimit", settings) orelse return false;
+    if (!std.mem.eql(u8, execution_limit, windows_task_execution_time_limit_xml)) return false;
+
+    const restart = windowsTaskXmlSection("RestartOnFailure", settings) orelse return false;
+    const restart_count = windowsTaskXmlTagValue("Count", restart) orelse return false;
+    const restart_interval = windowsTaskXmlTagValue("Interval", restart) orelse return false;
+    if (!std.mem.eql(u8, restart_count, windows_task_restart_count)) return false;
+    if (!std.mem.eql(u8, restart_interval, windows_task_restart_interval_xml)) return false;
+
+    return true;
 }
 
-pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
-    return try std.fmt.allocPrint(
-        allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $restartNode = $xml.Task.Settings.RestartOnFailure; if ($null -eq $restartNode) {{ exit 5 }}; $restartCount = [string]$restartNode.Count; $restartInterval = [string]$restartNode.Interval; if ([string]::IsNullOrWhiteSpace($restartCount) -or [string]::IsNullOrWhiteSpace($restartInterval)) {{ exit 6 }}; $executionLimit = [string]$xml.Task.Settings.ExecutionTimeLimit; if ([string]::IsNullOrWhiteSpace($executionLimit)) {{ exit 7 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval + '|LIMIT:' + $executionLimit)",
-        .{ windows_task_name, windows_task_name },
-    );
+fn windowsTaskXmlSection(comptime tag: []const u8, xml: []const u8) ?[]const u8 {
+    const open_tag = "<" ++ tag ++ ">";
+    const close_tag = "</" ++ tag ++ ">";
+    const start = std.mem.indexOf(u8, xml, open_tag) orelse return null;
+    const content_start = start + open_tag.len;
+    const end_rel = std.mem.indexOf(u8, xml[content_start..], close_tag) orelse return null;
+    return xml[content_start .. content_start + end_rel];
 }
 
-pub fn windowsEndTaskScript(allocator: std.mem.Allocator) ![]u8 {
-    return try std.fmt.allocPrint(
-        allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 0 }}; if ($task.State -eq 4) {{ Stop-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue }}",
-        .{ windows_task_name, windows_task_name },
-    );
+fn windowsTaskXmlTagValue(comptime tag: []const u8, xml: []const u8) ?[]const u8 {
+    const value = windowsTaskXmlSection(tag, xml) orelse return null;
+    return std.mem.trim(u8, value, " \\n\\r\\t");
 }
-
-pub fn windowsDeleteTaskScript(allocator: std.mem.Allocator) ![]u8 {
-    return try std.fmt.allocPrint(
-        allocator,
-        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 0 }}; Unregister-ScheduledTask -TaskName '{s}' -Confirm:$false",
-        .{ windows_task_name, windows_task_name },
-    );
-}
-
-pub fn windowsTaskStateScript() []const u8 {
-    return "$task = Get-ScheduledTask -TaskName '" ++ windows_task_name ++ "' -ErrorAction SilentlyContinue; if ($null -eq $task) { exit 1 }; Write-Output ([int]$task.State)";
-}
-
-pub fn parseWindowsTaskStateOutput(output: []const u8) RuntimeState {
-    const trimmed = std.mem.trim(u8, output, " \n\r\t");
-    if (trimmed.len == 0) return .unknown;
-    const value = std.fmt.parseInt(u8, trimmed, 10) catch return .unknown;
-    return switch (value) {
-        4 => .running,
-        0, 1, 2, 3 => .stopped,
-        else => .unknown,
+fn windowsTaskTriggerKindFromXml(xml: []const u8) ?[]const u8 {
+    const triggers = windowsTaskXmlSection("Triggers", xml) orelse return null;
+    const known_triggers = [_][]const u8{
+        "BootTrigger",
+        "DailyTrigger",
+        "EventTrigger",
+        "IdleTrigger",
+        "LogonTrigger",
+        "MonthlyDOWTrigger",
+        "MonthlyTrigger",
+        "RegistrationTrigger",
+        "SessionStateChangeTrigger",
+        "TimeTrigger",
+        "WeeklyTrigger",
     };
+
+    var matched: ?[]const u8 = null;
+    var count: usize = 0;
+    inline for (known_triggers) |tag| {
+        if (std.mem.indexOf(u8, triggers, "<" ++ tag ++ ">") != null or
+            std.mem.indexOf(u8, triggers, "<" ++ tag ++ " ") != null)
+        {
+            matched = tag;
+            count += 1;
+        }
+    }
+    if (count != 1) return null;
+    return matched;
 }
 
 fn linuxUnitPath(allocator: std.mem.Allocator, service_name: []const u8) ![]u8 {
@@ -2298,27 +2294,12 @@ fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_ex
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
-    const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path, codex_home);
-    defer allocator.free(expected_action);
-    const expected_fingerprint = try windowsExpectedTaskDefinitionFingerprint(allocator, expected_action);
-    defer allocator.free(expected_fingerprint);
-    const script = try windowsTaskMatchScript(allocator);
-    defer allocator.free(script);
-    const result = runCapture(allocator, &[_][]const u8{
-        "powershell.exe",
-        "-NoLogo",
-        "-NoProfile",
-        "-Command",
-        script,
-    }) catch return false;
-    defer {
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
-    }
-    return switch (result.term) {
-        .exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
-        else => false,
-    };
+
+    const xml = try windows_task_scheduler.readTaskXmlAlloc(allocator, windows_task_name);
+    defer if (xml) |bytes| allocator.free(bytes);
+    if (xml == null) return false;
+
+    return try windowsTaskDefinitionMatchesXml(allocator, xml.?, helper_path, codex_home);
 }
 
 fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
