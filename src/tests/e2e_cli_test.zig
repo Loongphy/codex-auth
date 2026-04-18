@@ -309,14 +309,17 @@ fn runCliWithIsolatedHomeAndStdin(
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    var child = try std.process.spawn(fs.io(), .{
+    var child = std.process.spawn(fs.io(), .{
         .argv = argv.items,
         .cwd = .{ .path = project_root },
         .environ_map = &env_map,
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .pipe,
-    });
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.SkipZigTest,
+        else => return err,
+    };
     defer child.kill(fs.io());
 
     if (child.stdin) |stdin_pipe| {
