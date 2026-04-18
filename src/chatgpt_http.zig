@@ -1127,7 +1127,7 @@ test "run child capture times out stalled child process" {
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
     }
 
-    const script_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), script_name, allocator);
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
     const argv: []const []const u8 = switch (builtin.os.tag) {
@@ -1193,7 +1193,7 @@ test "detect node env proxy support times out blocked helper" {
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
     }
 
-    const script_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), script_name, allocator);
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
     try std.testing.expect(!detectNodeEnvProxySupportWithTimeout(allocator, script_path, 100));
@@ -1297,7 +1297,7 @@ test "launch path resolution preserves node symlink path" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const entry = try tmp_dir.dir.realPathFileAlloc(app_runtime.io(), ".", arena);
+    const entry = try app_runtime.realPathFileAlloc(arena, tmp_dir.dir, ".");
     const node_path = try std.fs.path.join(arena, &[_][]const u8{ entry, "node" });
 
     try tmp_dir.dir.writeFile(app_runtime.io(), .{

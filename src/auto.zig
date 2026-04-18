@@ -2214,7 +2214,7 @@ pub fn managedServiceSelfExePathFromDir(allocator: std.mem.Allocator, cwd: std.I
         const candidate_rel = try std.fs.path.join(allocator, &[_][]const u8{ "zig-out", "bin", std.fs.path.basename(self_exe) });
         defer allocator.free(candidate_rel);
         cwd.access(app_runtime.io(), candidate_rel, .{}) catch return try allocator.dupe(u8, self_exe);
-        return try cwd.realPathFileAlloc(app_runtime.io(), candidate_rel, allocator);
+        return try app_runtime.realPathFileAlloc(allocator, cwd, candidate_rel);
     }
     return try allocator.dupe(u8, self_exe);
 }

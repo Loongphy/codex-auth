@@ -120,7 +120,7 @@ test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing
         ,
     });
 
-    const auth_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), "auth.json", gpa);
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const result = try usage_api.fetchUsageForAuthPathDetailed(gpa, auth_path);

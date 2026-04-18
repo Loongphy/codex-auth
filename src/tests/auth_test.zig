@@ -37,7 +37,7 @@ test "parse auth info from jwt" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = json });
-    const auth_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), "auth.json", gpa);
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -61,7 +61,7 @@ test "api key auth" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
-    const auth_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), "auth.json", gpa);
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
     const info = try auth.parseAuthInfo(gpa, auth_path);
     defer info.deinit(gpa);
@@ -76,7 +76,7 @@ test "parse auth info does not leak duplicated tokens when id token is missing" 
         .sub_path = "auth.json",
         .data = "{\"tokens\":{\"access_token\":\"access-user@example.com\",\"account_id\":\"67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\"}}",
     });
-    const auth_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), "auth.json", gpa);
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -112,7 +112,7 @@ test "parse auth info frees allocations on account mismatch" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = json });
-    const auth_path = try tmp.dir.realPathFileAlloc(app_runtime.io(), "auth.json", gpa);
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     try std.testing.expectError(error.AccountIdMismatch, auth.parseAuthInfo(gpa, auth_path));

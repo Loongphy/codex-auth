@@ -136,7 +136,7 @@ test "scan latest usage chooses newest valid event from the most recent rollout 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -197,7 +197,7 @@ test "scan latest usage ignores rollout files beyond the most recent file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -246,7 +246,7 @@ test "scan latest rollout event keeps newest token_count event even when rate_li
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
     try tmp.dir.writeFile(app_runtime.io(), .{
@@ -268,7 +268,7 @@ test "scan latest usage keeps the last usable snapshot when a later token_count 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -295,7 +295,7 @@ test "scan latest usage streams rollout files larger than ten megabytes" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -317,7 +317,7 @@ test "scan latest usage keeps final line without trailing newline" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -339,7 +339,7 @@ test "scan latest rollout event cache tracks changes to the current rollout file
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -377,7 +377,7 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
     const first_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
@@ -420,7 +420,7 @@ test "scan latest rollout event cache rescans immediately after an empty result"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -446,7 +446,7 @@ test "scan latest usage accepts valid token_count lines above one megabyte" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 
@@ -472,7 +472,7 @@ test "scan latest usage skips oversized malformed lines and keeps later valid ev
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
 

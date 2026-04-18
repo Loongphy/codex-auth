@@ -10,8 +10,8 @@ const SyncBddContext = struct {
     reg: registry.Registry,
 
     fn givenCleanCodexHome(allocator: std.mem.Allocator) !SyncBddContext {
-        var tmp = std.testing.tmpDir(.{});
-        const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", allocator);
+        const tmp = std.testing.tmpDir(.{});
+        const codex_home = try app_runtime.realPathFileAlloc(allocator, tmp.dir, ".");
         return SyncBddContext{
             .allocator = allocator,
             .tmp = tmp,

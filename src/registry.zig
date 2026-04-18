@@ -36,9 +36,9 @@ fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
 
 fn realPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) {
-        return try std.Io.Dir.realPathFileAbsoluteAlloc(app_runtime.io(), path, allocator);
+        return try app_runtime.realPathFileAbsoluteAlloc(allocator, path);
     }
-    return try std.Io.Dir.cwd().realPathFileAlloc(app_runtime.io(), path, allocator);
+    return try app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
 }
 
 fn readFileAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_bytes: usize) ![]u8 {

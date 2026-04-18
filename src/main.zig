@@ -1737,7 +1737,7 @@ test "background account-name refresh returns early when another refresh holds t
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
     TestState.fetch_count = 0;
@@ -1765,7 +1765,7 @@ test "foreground node preflight fails fast when usage refresh needs node" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
     var reg = registry.Registry{
@@ -1898,7 +1898,7 @@ test "foreground node preflight fails fast when account-name refresh needs node"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", gpa);
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
     var reg = registry.Registry{

@@ -41,3 +41,16 @@ pub fn io() std.Io {
     ensureIoInitialized();
     return io_instance.io();
 }
+
+pub fn dupeOwnedNoSentinel(allocator: std.mem.Allocator, z_bytes: [:0]u8) ![]u8 {
+    defer allocator.free(z_bytes);
+    return try allocator.dupe(u8, z_bytes);
+}
+
+pub fn realPathFileAlloc(allocator: std.mem.Allocator, dir: std.Io.Dir, sub_path: []const u8) ![]u8 {
+    return try dupeOwnedNoSentinel(allocator, try dir.realPathFileAlloc(io(), sub_path, allocator));
+}
+
+pub fn realPathFileAbsoluteAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    return try dupeOwnedNoSentinel(allocator, try std.Io.Dir.realPathFileAbsoluteAlloc(io(), path, allocator));
+}

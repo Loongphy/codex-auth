@@ -1387,7 +1387,7 @@ test "Scenario: Given a zig build run executable path when resolving the managed
     );
     defer gpa.free(path);
 
-    const expected = try tmp.dir.realPathFileAlloc(app_runtime.io(), "zig-out/bin/codex-auth", gpa);
+    const expected = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "zig-out/bin/codex-auth");
     defer gpa.free(expected);
     try std.testing.expectEqualStrings(expected, path);
 }
