@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-const fs = require("node:fs");
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 const rootPackageJsonPath = path.join(__dirname, "..", "package.json");
 const requiredNodeMajor = 22;
 

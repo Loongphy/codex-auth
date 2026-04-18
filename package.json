@@ -1,6 +1,7 @@
 {
   "name": "@loongphy/codex-auth",
   "version": "0.2.6-alpha.1",
+  "type": "module",
   "description": "CLI for switching Codex accounts",
   "license": "MIT",
   "repository": {
