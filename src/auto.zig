@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const auth = @import("auth.zig");
@@ -23,8 +25,8 @@ const windows_task_restart_count = "999";
 const windows_task_restart_interval_xml = "PT1M";
 const windows_task_execution_time_limit_xml = "PT0S";
 const lock_file_name = "auto-switch.lock";
-const watch_poll_interval_ns = 1 * std.time.ns_per_s;
-const api_refresh_interval_ns = 60 * std.time.ns_per_s;
+const watch_poll_interval_ns = 1 * time_compat.ns_per_s;
+const api_refresh_interval_ns = 60 * time_compat.ns_per_s;
 const free_plan_realtime_guard_5h_percent: i64 = 35;
 pub const RuntimeState = enum { running, stopped, unknown };
 
@@ -399,7 +401,7 @@ pub const DaemonRefreshState = struct {
             reg.deinit(allocator);
         }
         self.current_reg = loaded;
-        try self.candidate_index.rebuild(allocator, &self.current_reg.?, std.time.timestamp());
+        try self.candidate_index.rebuild(allocator, &self.current_reg.?, time_compat.timestamp());
         try self.refreshTrackedFileMtims(allocator, codex_home);
     }
 
@@ -410,7 +412,7 @@ pub const DaemonRefreshState = struct {
         self.candidate_check_times = .empty;
         self.candidate_rejections.deinit(allocator);
         self.candidate_rejections = .empty;
-        try self.candidate_index.rebuild(allocator, &self.current_reg.?, std.time.timestamp());
+        try self.candidate_index.rebuild(allocator, &self.current_reg.?, time_compat.timestamp());
     }
 
     fn refreshTrackedFileMtims(self: *DaemonRefreshState, allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -473,12 +475,12 @@ pub const DaemonRefreshState = struct {
 };
 
 const DaemonLock = struct {
-    file: std.fs.File,
+    file: fs.File,
 
     fn acquire(allocator: std.mem.Allocator, codex_home: []const u8) !?DaemonLock {
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", lock_file_name });
+        const path = try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", lock_file_name });
         defer allocator.free(path);
-        var file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
+        var file = try fs.cwd().createFile(path, .{ .read = true, .truncate = false });
         errdefer file.close();
         if (!(try tryExclusiveLock(file))) {
             file.close();
@@ -493,7 +495,7 @@ const DaemonLock = struct {
     }
 };
 
-fn tryExclusiveLock(file: std.fs.File) !bool {
+fn tryExclusiveLock(file: fs.File) !bool {
     if (builtin.os.tag == .windows) {
         const windows = std.os.windows;
         const range_off: windows.LARGE_INTEGER = 0;
@@ -525,7 +527,7 @@ pub fn helpStateLabel(enabled: bool) []const u8 {
 }
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty();
+    return fs.File.stdout().isTty();
 }
 
 pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -591,7 +593,7 @@ pub fn writeAutoSwitchLogLine(
 
 fn emitAutoSwitchLog(from: *const registry.AccountRecord, to: *const registry.AccountRecord) void {
     var stderr_buffer: [256]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var writer = fs.File.stderr().writer(&stderr_buffer);
     writeAutoSwitchLogLine(&writer.interface, from, to) catch {};
 }
 
@@ -606,7 +608,7 @@ const DaemonLogPriority = enum {
 fn emitDaemonLog(priority: DaemonLogPriority, comptime fmt: []const u8, args: anytype) void {
     _ = priority;
     var stderr_buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var writer = fs.File.stderr().writer(&stderr_buffer);
     writer.interface.print(fmt ++ "\n", args) catch {};
     writer.interface.flush() catch {};
 }
@@ -619,7 +621,7 @@ fn emitTaggedDaemonLog(
 ) void {
     _ = priority;
     var stderr_buffer: [1024]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var writer = fs.File.stderr().writer(&stderr_buffer);
     writer.interface.print("[{s}] ", .{tag}) catch {};
     writer.interface.print(fmt ++ "\n", args) catch {};
     writer.interface.flush() catch {};
@@ -632,7 +634,7 @@ fn percentLabel(buf: *[5]u8, value: ?i64) []const u8 {
 }
 
 fn localDateTimeLabel(buf: *[19]u8, timestamp_ms: i64) []const u8 {
-    const seconds = @divTrunc(timestamp_ms, std.time.ms_per_s);
+    const seconds = @divTrunc(timestamp_ms, time_compat.ms_per_s);
     var tm: c_time.struct_tm = undefined;
     if (!localtimeCompat(seconds, &tm)) return "-";
     const year: u32 = @intCast(tm.tm_year + 1900);
@@ -652,7 +654,7 @@ fn localDateTimeLabel(buf: *[19]u8, timestamp_ms: i64) []const u8 {
 }
 
 fn rolloutFileLabel(buf: *[96]u8, path: []const u8) []const u8 {
-    const basename = std.fs.path.basename(path);
+    const basename = fs.path.basename(path);
     return std.fmt.bufPrint(buf, "{s}", .{basename}) catch basename;
 }
 
@@ -731,11 +733,11 @@ fn rolloutWindowsLabel(buf: *[64]u8, snapshot: registry.RateLimitSnapshot, now: 
 }
 
 fn fileMtimeNsIfExists(path: []const u8) !?i128 {
-    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+    const stat = fs.cwd().statFile(path) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
-    return @as(i128, stat.mtime);
+    return stat.mtime.nanoseconds;
 }
 
 fn apiStatusLabel(buf: *[24]u8, status_code: ?u16, has_usage_windows: bool, missing_auth: bool) []const u8 {
@@ -796,7 +798,7 @@ pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const
     if (builtin.os.tag == .linux and !linuxUserSystemdAvailable(allocator)) return;
 
     const runtime = queryRuntimeState(allocator);
-    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    const self_exe = try fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
     const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
     defer allocator.free(managed_self_exe);
@@ -819,7 +821,7 @@ pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
             break :blk true;
         };
         if (!keep_running) return;
-        std.Thread.sleep(watch_poll_interval_ns);
+        try std.Io.sleep(fs.io(), .fromNanoseconds(watch_poll_interval_ns), .awake);
     }
 }
 
@@ -894,7 +896,7 @@ pub fn refreshActiveAccountNamesForDaemonWithFetcher(
     const account_key = reg.active_account_key orelse return false;
     try refresh_state.resetAccountNameCooldownIfAccountChanged(allocator, account_key);
 
-    const now_ns = std.time.nanoTimestamp();
+    const now_ns = time_compat.nanoTimestamp();
     if (refresh_state.last_account_name_refresh_at_ns != 0 and
         (now_ns - refresh_state.last_account_name_refresh_at_ns) < api_refresh_interval_ns)
     {
@@ -1052,7 +1054,7 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
     }
     if (!reg.api.usage) return false;
 
-    const now_ns = std.time.nanoTimestamp();
+    const now_ns = time_compat.nanoTimestamp();
     if (refresh_state.last_api_refresh_at_ns != 0 and (now_ns - refresh_state.last_api_refresh_at_ns) < api_refresh_interval_ns) {
         return false;
     }
@@ -1123,7 +1125,7 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
     }
     if (!reg.api.usage) return false;
 
-    const now_ns = std.time.nanoTimestamp();
+    const now_ns = time_compat.nanoTimestamp();
     if (refresh_state.last_api_refresh_at_ns != 0 and (now_ns - refresh_state.last_api_refresh_at_ns) < api_refresh_interval_ns) {
         return false;
     }
@@ -1205,7 +1207,7 @@ fn refreshActiveUsageFromSessionsForDaemon(
         return false;
     }
 
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     var windows_buf: [64]u8 = undefined;
     emitTaggedDaemonLog(.notice, "local", "{s}{s}event={s}{s}file={s}", .{
         rolloutWindowsLabel(&windows_buf, latest_event.snapshot.?, now),
@@ -1318,14 +1320,14 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
     usage_fetcher: anytype,
 ) !AutoSwitchAttempt {
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     if (refresh_state.current_reg == null and refresh_state.candidate_index.heap.items.len == 0) {
         try refresh_state.candidate_index.rebuild(allocator, reg, now);
     } else {
         try refresh_state.candidate_index.rebuildIfScoreExpired(allocator, reg, now);
     }
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
-    const now_ns = std.time.nanoTimestamp();
+    const now_ns = time_compat.nanoTimestamp();
     const active_idx = registry.findAccountIndexByAccountKey(reg, active) orelse return .{
         .refreshed_candidates = false,
         .switched = false,
@@ -1401,7 +1403,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
             reg,
             previous_active_key,
             next_active_key,
-            std.time.timestamp(),
+            time_compat.timestamp(),
         );
         try refresh_state.markCandidateChecked(allocator, previous_active_key, now_ns);
         refresh_state.clearCandidateChecked(next_active_key);
@@ -1439,7 +1441,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         reg,
         previous_active_key,
         next_active_key,
-        std.time.timestamp(),
+        time_compat.timestamp(),
     );
     try refresh_state.markCandidateChecked(allocator, previous_active_key, now_ns);
     refresh_state.clearCandidateChecked(next_active_key);
@@ -1459,7 +1461,7 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
 ) !AutoSwitchAttempt {
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     if (!shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
 
     _ = refresh_state;
@@ -1706,7 +1708,7 @@ fn refreshDaemonCandidateUsageByKeyWithFetcher(
 
     registry.updateUsage(allocator, reg, account_key, latest);
     snapshot_consumed = true;
-    try refresh_state.candidate_index.upsertFromRegistry(allocator, reg, account_key, std.time.timestamp());
+    try refresh_state.candidate_index.upsertFromRegistry(allocator, reg, account_key, time_compat.timestamp());
     return .{ .visited = true, .attempted = 1, .updated = 1 };
 }
 
@@ -1805,7 +1807,7 @@ pub fn daemonCycleWithAccountNameFetcherForTest(
 }
 
 fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    const self_exe = try fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
     const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
     defer allocator.free(managed_self_exe);
@@ -1968,9 +1970,9 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     const unit_text = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(unit_text);
 
-    const unit_dir = std.fs.path.dirname(unit_path).?;
-    try std.fs.cwd().makePath(unit_dir);
-    try std.fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
+    const unit_dir = fs.path.dirname(unit_path).?;
+    try fs.cwd().makePath(unit_dir);
+    try fs.cwd().writeFile(.{ .sub_path = unit_path, .data = unit_text });
     try removeLinuxUnit(allocator, linux_timer_name);
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
@@ -2003,7 +2005,7 @@ fn linuxUserSystemdAvailable(allocator: std.mem.Allocator) bool {
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| code == 0,
+        .exited => |code| code == 0,
         else => false,
     };
 }
@@ -2014,9 +2016,9 @@ fn installMacService(allocator: std.mem.Allocator, codex_home: []const u8, self_
     const plist = try macPlistText(allocator, self_exe, codex_home);
     defer allocator.free(plist);
 
-    const dir = std.fs.path.dirname(plist_path).?;
-    try std.fs.cwd().makePath(dir);
-    try std.fs.cwd().writeFile(.{ .sub_path = plist_path, .data = plist });
+    const dir = fs.path.dirname(plist_path).?;
+    try fs.cwd().makePath(dir);
+    try fs.cwd().writeFile(.{ .sub_path = plist_path, .data = plist });
     _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unload", plist_path }) catch {};
     try runChecked(allocator, &[_][]const u8{ "launchctl", "load", plist_path });
 }
@@ -2030,7 +2032,7 @@ fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !vo
 }
 
 pub fn deleteAbsoluteFileIfExists(path: []const u8) void {
-    std.fs.deleteFileAbsolute(path) catch |err| switch (err) {
+    fs.deleteFileAbsolute(path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => {},
     };
@@ -2039,7 +2041,7 @@ pub fn deleteAbsoluteFileIfExists(path: []const u8) void {
 fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
-    try std.fs.cwd().access(helper_path, .{});
+    try fs.cwd().access(helper_path, .{});
 
     const register_script = try windowsRegisterTaskScript(allocator, helper_path, codex_home);
     defer allocator.free(register_script);
@@ -2086,7 +2088,7 @@ fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| if (code == 0 and std.mem.startsWith(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), "active")) .running else .stopped,
+        .exited => |code| if (code == 0 and std.mem.startsWith(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), "active")) .running else .stopped,
         else => .unknown,
     };
 }
@@ -2100,7 +2102,7 @@ fn queryMacRuntimeState(allocator: std.mem.Allocator) RuntimeState {
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| if (code == 0) .running else .stopped,
+        .exited => |code| if (code == 0) .running else .stopped,
         else => .unknown,
     };
 }
@@ -2119,7 +2121,7 @@ fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| if (code == 0) parseWindowsTaskStateOutput(result.stdout) else if (code == 1) .stopped else .unknown,
+        .exited => |code| if (code == 0) parseWindowsTaskStateOutput(result.stdout) else if (code == 1) .stopped else .unknown,
         else => .unknown,
     };
 }
@@ -2224,16 +2226,16 @@ pub fn parseWindowsTaskStateOutput(output: []const u8) RuntimeState {
 fn linuxUnitPath(allocator: std.mem.Allocator, service_name: []const u8) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", service_name });
+    return try fs.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", service_name });
 }
 
 pub fn managedServiceSelfExePath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
-    return managedServiceSelfExePathFromDir(allocator, std.fs.cwd(), self_exe);
+    return managedServiceSelfExePathFromDir(allocator, fs.cwd(), self_exe);
 }
 
-pub fn managedServiceSelfExePathFromDir(allocator: std.mem.Allocator, cwd: std.fs.Dir, self_exe: []const u8) ![]u8 {
+pub fn managedServiceSelfExePathFromDir(allocator: std.mem.Allocator, cwd: fs.Dir, self_exe: []const u8) ![]u8 {
     if (std.mem.indexOf(u8, self_exe, "/.zig-cache/") != null or std.mem.indexOf(u8, self_exe, "\\.zig-cache\\") != null) {
-        const candidate_rel = try std.fs.path.join(allocator, &[_][]const u8{ "zig-out", "bin", std.fs.path.basename(self_exe) });
+        const candidate_rel = try fs.path.join(allocator, &[_][]const u8{ "zig-out", "bin", fs.path.basename(self_exe) });
         defer allocator.free(candidate_rel);
         cwd.access(candidate_rel, .{}) catch return try allocator.dupe(u8, self_exe);
         return try cwd.realpathAlloc(allocator, candidate_rel);
@@ -2278,7 +2280,7 @@ fn linuxUnitHasLegacyResidue(allocator: std.mem.Allocator, service_name: []const
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| code == 0 and linuxShowUnitHasResidue(result.stdout),
+        .exited => |code| code == 0 and linuxShowUnitHasResidue(result.stdout),
         else => false,
     };
 }
@@ -2337,7 +2339,7 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
         allocator.free(result.stderr);
     }
     return switch (result.term) {
-        .Exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
+        .exited => |code| code == 0 and std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \n\r\t"), expected_fingerprint),
         else => false,
     };
 }
@@ -2357,14 +2359,14 @@ fn windowsExpectedTaskDefinitionFingerprint(allocator: std.mem.Allocator, action
 }
 
 fn windowsHelperPath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
-    const dir = std.fs.path.dirname(self_exe) orelse return error.FileNotFound;
-    return try std.fs.path.join(allocator, &[_][]const u8{ dir, windows_helper_name });
+    const dir = fs.path.dirname(self_exe) orelse return error.FileNotFound;
+    return try fs.path.join(allocator, &[_][]const u8{ dir, windows_helper_name });
 }
 
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", mac_label ++ ".plist" });
+    return try fs.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", mac_label ++ ".plist" });
 }
 
 fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8) !void {
@@ -2374,7 +2376,7 @@ fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8) !void {
         allocator.free(result.stderr);
     }
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) return;
         },
         else => {},
@@ -2386,7 +2388,7 @@ fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8) !void {
 }
 
 fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    var file = fs.cwd().openFile(path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
@@ -2401,11 +2403,11 @@ fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []cons
     return std.mem.eql(u8, data.?, bytes);
 }
 
-fn runCapture(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.Child.RunResult {
-    return try std.process.Child.run(.{
-        .allocator = allocator,
+fn runCapture(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.RunResult {
+    return try std.process.run(allocator, fs.io(), .{
         .argv = argv,
-        .max_output_bytes = 1024 * 1024,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
     });
 }
 

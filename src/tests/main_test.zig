@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("../compat_time.zig");
+const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const auth_mod = @import("../auth.zig");
 const display_rows = @import("../display_rows.zig");
@@ -76,7 +78,7 @@ fn writeSnapshot(allocator: std.mem.Allocator, codex_home: []const u8, email: []
     defer allocator.free(snapshot_path);
     const auth_json = try bdd.authJsonWithEmailPlan(allocator, email, plan);
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
 }
 
 fn authJsonWithIds(
@@ -164,7 +166,7 @@ fn writeActiveAuthWithIds(
 
     const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
 fn writeAccountSnapshotWithIds(
@@ -184,7 +186,7 @@ fn writeAccountSnapshotWithIds(
 
     const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
 fn writeAccountSnapshotWithIdsAndLastRefresh(
@@ -214,7 +216,7 @@ fn writeAccountSnapshotWithIdsAndLastRefresh(
         last_refresh,
     );
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
 fn mockAccountNameFetcher(
@@ -375,7 +377,7 @@ test "Scenario: Given switch query with multiple local matches when resolving lo
 
 test "Scenario: Given api usage refresh for list and switch when refreshing foreground usage then all accounts are updated with status overlays" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -477,7 +479,7 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
 
 test "Scenario: Given thread pool init failure when refreshing foreground usage then it falls back to serial refresh" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -524,11 +526,9 @@ test "Scenario: Given thread pool init failure when refreshing foreground usage 
         }
 
         fn failPoolInit(
-            pool: *std.Thread.Pool,
             allocator: std.mem.Allocator,
             n_jobs: usize,
         ) !void {
-            _ = pool;
             _ = allocator;
             _ = n_jobs;
             return error.ThreadQuotaExceeded;
@@ -562,7 +562,7 @@ test "Scenario: Given thread pool init failure when refreshing foreground usage 
 
 test "Scenario: Given debug usage refresh when listing then request and response details stream in refresh order" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -615,11 +615,9 @@ test "Scenario: Given debug usage refresh when listing then request and response
         }
 
         fn failPoolInit(
-            pool: *std.Thread.Pool,
             allocator: std.mem.Allocator,
             n_jobs: usize,
         ) !void {
-            _ = pool;
             _ = allocator;
             _ = n_jobs;
             return error.ThreadQuotaExceeded;
@@ -696,7 +694,7 @@ test "Scenario: Given debug usage refresh when listing then request and response
 
 test "Scenario: Given list with missing team names when running foreground account-name refresh then it waits and saves the updated names" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -725,7 +723,7 @@ test "Scenario: Given list with missing team names when running foreground accou
 
 test "Scenario: Given switch with missing team names when running foreground account-name refresh then it waits and saves the updated names" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -770,7 +768,7 @@ test "Scenario: Given team name fetch candidates when checking grouped-account p
 
 test "Scenario: Given a standalone team account when building display rows and refreshing names then it keeps the email label and skips requests" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -811,7 +809,7 @@ test "Scenario: Given a standalone team account when building display rows and r
 
 test "Scenario: Given grouped team accounts with account api disabled when refreshing names then every entry point skips requests" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -896,7 +894,7 @@ test "Scenario: Given login with missing account names when refreshing metadata 
 
 test "Scenario: Given switched account with missing account names when refreshing metadata then it issues at most one request" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -920,7 +918,7 @@ test "Scenario: Given switched account with missing account names when refreshin
 
 test "Scenario: Given api disabled while background account-name refresh is in flight when it finishes then the latest api config is preserved" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -951,7 +949,7 @@ test "Scenario: Given api disabled while background account-name refresh is in f
 
 test "Scenario: Given grouped stored snapshots without active auth when running background account-name refresh then it updates the missing names" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -976,7 +974,7 @@ test "Scenario: Given grouped stored snapshots without active auth when running 
 
 test "Scenario: Given grouped stored snapshots with multiple tokens when running background account-name refresh then it prefers the newest last_refresh" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1021,7 +1019,7 @@ test "Scenario: Given grouped stored snapshots with multiple tokens when running
 
 test "Scenario: Given grouped team names with only a stored plus snapshot for the same user when running background account-name refresh then it updates the team records" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1086,7 +1084,7 @@ test "Scenario: Given directory import or purge when refreshing account names th
 
 test "Scenario: Given list refresh when only other users have missing account names then it skips the request" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1109,7 +1107,7 @@ test "Scenario: Given list refresh when only other users have missing account na
 
 test "Scenario: Given list refresh with missing active-user account names when refreshing metadata then it issues one request" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1138,7 +1136,7 @@ test "Scenario: Given list refresh with missing active-user account names when r
 
 test "Scenario: Given list refresh with team names missing under the same user when refreshing metadata then it updates the team records" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1169,7 +1167,7 @@ test "Scenario: Given list refresh with team names missing under the same user w
 
 test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1185,7 +1183,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
     try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
 
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
@@ -1222,7 +1220,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
 
 test "Scenario: Given stale active key with remaining accounts when reconciling after remove then it is treated as unset" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1240,7 +1238,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
     reg.active_account_activated_at_ms = 1;
 
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
@@ -1277,7 +1275,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
 
 test "Scenario: Given no remaining accounts when reconciling after remove then active auth is deleted" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1294,12 +1292,12 @@ test "Scenario: Given no remaining accounts when reconciling after remove then a
 
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given newer registry schema when loading help config then default help settings are used" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");

@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("../compat_time.zig");
+const fs = @import("../compat_fs.zig");
 const registry = @import("../registry.zig");
 
 pub fn b64url(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
@@ -216,7 +218,7 @@ pub fn appendAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = std.time.timestamp(),
+        .created_at = time_compat.timestamp(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -240,7 +242,7 @@ fn extractToken(auth_json: []const u8) []const u8 {
 }
 
 pub fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = try fs.cwd().openFile(path, .{});
     defer file.close();
     return try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
 }

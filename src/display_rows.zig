@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("compat_fs.zig");
 const registry = @import("registry.zig");
 
 pub const DisplayRow = struct {

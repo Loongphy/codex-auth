@@ -1,21 +1,22 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const fs = @import("compat_fs.zig");
 const auth = @import("auth.zig");
 const registry = @import("registry.zig");
 
 pub const BackgroundRefreshLock = struct {
-    file: std.fs.File,
+    file: fs.File,
 
     pub fn acquire(allocator: std.mem.Allocator, codex_home: []const u8) !?BackgroundRefreshLock {
         try registry.ensureAccountsDir(allocator, codex_home);
-        const path = try std.fs.path.join(allocator, &[_][]const u8{
+        const path = try fs.path.join(allocator, &[_][]const u8{
             codex_home,
             "accounts",
             registry.account_name_refresh_lock_file_name,
         });
         defer allocator.free(path);
 
-        var file = try std.fs.cwd().createFile(path, .{ .read = true, .truncate = false });
+        var file = try fs.cwd().createFile(path, .{ .read = true, .truncate = false });
         errdefer file.close();
         if (!(try tryExclusiveLock(file))) {
             file.close();
@@ -51,7 +52,7 @@ fn candidateIsNewer(candidate: *const auth.AuthInfo, best: *const auth.AuthInfo)
     return std.mem.order(u8, candidate_refresh, best_refresh) == .gt;
 }
 
-fn tryExclusiveLock(file: std.fs.File) !bool {
+fn tryExclusiveLock(file: fs.File) !bool {
     if (builtin.os.tag == .windows) {
         const windows = std.os.windows;
         const range_off: windows.LARGE_INTEGER = 0;

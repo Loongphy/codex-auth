@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("../compat_time.zig");
+const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const auto = @import("../auto.zig");
 const registry = @import("../registry.zig");
@@ -48,7 +50,7 @@ fn appendGroupedAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = std.time.timestamp(),
+        .created_at = time_compat.timestamp(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -98,7 +100,7 @@ fn writeActiveAuthWithIds(
 
     const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
 fn writeAccountSnapshotWithIds(
@@ -117,7 +119,7 @@ fn writeAccountSnapshotWithIds(
 
     const auth_json = try authJsonWithIds(allocator, email, plan, chatgpt_user_id, chatgpt_account_id);
     defer allocator.free(auth_json);
-    try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+    try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
 }
 
 fn resetDaemonAccountNameFetcher() void {
@@ -178,7 +180,7 @@ fn fetchGroupedAccountNamesAfterConcurrentUsageDisable(
 
 test "Scenario: Given auto-switch daemon with missing grouped account names when it detects the active scope then it refreshes and saves them" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -222,7 +224,7 @@ test "Scenario: Given auto-switch daemon with missing grouped account names when
 
 test "Scenario: Given auto-switch disabled when account names are missing then the daemon skips grouped name refresh" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -251,7 +253,7 @@ test "Scenario: Given auto-switch disabled when account names are missing then t
 
 test "Scenario: Given daemon account-name refresh when registry changes during fetch then it merges onto the latest registry" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -294,7 +296,7 @@ test "Scenario: Given daemon account-name refresh when registry changes during f
 
 test "Scenario: Given auto-switch daemon with only another user missing grouped account names when it runs then it refreshes that stored scope too" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -336,7 +338,7 @@ test "Scenario: Given auto-switch daemon with only another user missing grouped 
 
 test "Scenario: Given auto-switch daemon with grouped team names and only a stored plus snapshot for the same user when it runs then it updates the team records" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -485,7 +487,7 @@ fn fetchCandidateUsageMissingAuth(_: std.mem.Allocator, _: []const u8) !usage_ap
 }
 
 fn partialServiceArtifactPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "partial-service-artifact" });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "partial-service-artifact" });
 }
 
 fn installServiceWithPartialArtifact(
@@ -495,14 +497,14 @@ fn installServiceWithPartialArtifact(
 ) !void {
     const artifact_path = try partialServiceArtifactPath(allocator, codex_home);
     defer allocator.free(artifact_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = artifact_path, .data = "partial" });
+    try fs.cwd().writeFile(.{ .sub_path = artifact_path, .data = "partial" });
     return error.TestInstallFailed;
 }
 
 fn uninstallPartialServiceArtifact(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const artifact_path = try partialServiceArtifactPath(allocator, codex_home);
     defer allocator.free(artifact_path);
-    std.fs.cwd().deleteFile(artifact_path) catch |err| switch (err) {
+    fs.cwd().deleteFile(artifact_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -536,7 +538,7 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
 }
 
@@ -567,7 +569,7 @@ test "Scenario: Given free candidate with only a primary weekly window when sele
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
@@ -598,7 +600,7 @@ test "Scenario: Given free candidate with only a secondary weekly window when se
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.time.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
@@ -617,7 +619,7 @@ test "Scenario: Given free account with only a weekly window when checking curre
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given weekly remaining below threshold when checking current then auto switch is required" {
@@ -635,7 +637,7 @@ test "Scenario: Given weekly remaining below threshold when checking current the
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given custom 5h threshold when checking current then it uses configured value" {
@@ -654,7 +656,7 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given missing window_minutes in the primary slot when checking current then 5h fallback still triggers auto switch" {
@@ -672,7 +674,7 @@ test "Scenario: Given missing window_minutes in the primary slot when checking c
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given free account near exhaustion when checking current then realtime guard switches earlier than the configured threshold" {
@@ -690,7 +692,7 @@ test "Scenario: Given free account near exhaustion when checking current then re
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given stricter weekly threshold when checking current then default trigger can be suppressed" {
@@ -709,7 +711,7 @@ test "Scenario: Given stricter weekly threshold when checking current then defau
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.time.timestamp()));
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
 }
 
 test "Scenario: Given threshold overrides when applying config then unspecified values stay unchanged" {
@@ -728,7 +730,7 @@ test "Scenario: Given threshold overrides when applying config then unspecified 
 
 test "Scenario: Given better candidate when auto switch runs then auth and active account move silently" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -764,9 +766,9 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     const active_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_path);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
+    try fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
+    try fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
 
     try std.testing.expect(try auto.maybeAutoSwitch(gpa, codex_home, &reg));
     try std.testing.expect(reg.active_account_key != null);
@@ -779,7 +781,7 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
 
 test "Scenario: Given API mode and unknown candidate usage when auto switching then it refreshes the candidate before switching" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -814,9 +816,9 @@ test "Scenario: Given API mode and unknown candidate usage when auto switching t
     defer gpa.free(fresh_path);
     const active_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
+    try fs.cwd().writeFile(.{ .sub_path = low_path, .data = low_auth });
+    try fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_path, .data = low_auth });
 
     candidate_high_auth_path = try gpa.dupe(u8, fresh_path);
     defer {
@@ -833,7 +835,7 @@ test "Scenario: Given API mode and unknown candidate usage when auto switching t
 
 test "Scenario: Given API mode and poor refreshed candidate when auto switching then it stays on the current account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -862,7 +864,7 @@ test "Scenario: Given API mode and poor refreshed candidate when auto switching 
     defer gpa.free(fresh_auth);
     const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
     defer gpa.free(fresh_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
 
     candidate_low_auth_path = try gpa.dupe(u8, fresh_path);
     defer {
@@ -879,7 +881,7 @@ test "Scenario: Given API mode and poor refreshed candidate when auto switching 
 
 test "Scenario: Given repeated daemon candidate refresh attempts within cooldown when auto switching then candidate API refresh is rate-limited" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -908,7 +910,7 @@ test "Scenario: Given repeated daemon candidate refresh attempts within cooldown
     defer gpa.free(fresh_auth);
     const fresh_path = try registry.accountAuthPath(gpa, codex_home, fresh_account_id);
     defer gpa.free(fresh_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
+    try fs.cwd().writeFile(.{ .sub_path = fresh_path, .data = fresh_auth });
 
     candidate_low_auth_path = try gpa.dupe(u8, fresh_path);
     defer {
@@ -932,7 +934,7 @@ test "Scenario: Given repeated daemon candidate refresh attempts within cooldown
 
 test "Scenario: Given switch-time candidate validation returns non-200 then that candidate is disqualified" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -962,7 +964,7 @@ test "Scenario: Given switch-time candidate validation returns non-200 then that
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_api_fetch_count = 0;
     var refresh_state = auto.DaemonRefreshState{};
@@ -978,7 +980,7 @@ test "Scenario: Given switch-time candidate validation returns non-200 then that
 
 test "Scenario: Given switch-time candidate validation returns 200 without windows then that candidate is disqualified" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1008,7 +1010,7 @@ test "Scenario: Given switch-time candidate validation returns 200 without windo
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_api_fetch_count = 0;
     var refresh_state = auto.DaemonRefreshState{};
@@ -1024,7 +1026,7 @@ test "Scenario: Given switch-time candidate validation returns 200 without windo
 
 test "Scenario: Given a candidate is rejected by API validation then it stays rejected across the next daemon cycle" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1054,7 +1056,7 @@ test "Scenario: Given a candidate is rejected by API validation then it stays re
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_api_fetch_count = 0;
     var refresh_state = auto.DaemonRefreshState{};
@@ -1074,7 +1076,7 @@ test "Scenario: Given a candidate is rejected by API validation then it stays re
 
 test "Scenario: Given switch-time candidate validation reports missing auth then that candidate is disqualified" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1104,7 +1106,7 @@ test "Scenario: Given switch-time candidate validation reports missing auth then
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_api_fetch_count = 0;
     var refresh_state = auto.DaemonRefreshState{};
@@ -1120,7 +1122,7 @@ test "Scenario: Given switch-time candidate validation reports missing auth then
 
 test "Scenario: Given switch-time candidate validation gets no response then the candidate remains eligible" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1150,7 +1152,7 @@ test "Scenario: Given switch-time candidate validation gets no response then the
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_api_fetch_count = 0;
     var refresh_state = auto.DaemonRefreshState{};
@@ -1166,7 +1168,7 @@ test "Scenario: Given switch-time candidate validation gets no response then the
 
 test "Scenario: Given daemon api mode and an api-key candidate when auto switching then the candidate stays eligible without usage refresh" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1201,9 +1203,9 @@ test "Scenario: Given daemon api mode and an api-key candidate when auto switchi
     const active_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_path);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = active_account_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_account_path, .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_account_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_account_path, .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
+    try fs.cwd().writeFile(.{ .sub_path = active_path, .data = active_auth });
 
     const candidate_idx = bdd.findAccountIndexByEmail(&reg, "apikey@example.com") orelse return error.TestExpectedEqual;
     reg.accounts.items[candidate_idx].auth_mode = .apikey;
@@ -1226,7 +1228,7 @@ test "Scenario: Given daemon api mode and an api-key candidate when auto switchi
 
 test "Scenario: Given healthy active usage when daemon runs then it performs only bounded candidate upkeep" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1256,7 +1258,7 @@ test "Scenario: Given healthy active usage when daemon runs then it performs onl
     defer gpa.free(candidate_auth);
     const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
     defer gpa.free(candidate_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
 
     candidate_high_auth_path = try gpa.dupe(u8, candidate_path);
     defer {
@@ -1281,7 +1283,7 @@ test "Scenario: Given healthy active usage when daemon runs then it performs onl
 
 test "Scenario: Given stale top candidates when daemon switches then it validates them in priority order instead of refreshing all candidates" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1327,10 +1329,10 @@ test "Scenario: Given stale top candidates when daemon switches then it validate
     defer gpa.free(third_path);
     const active_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = first_path, .data = first_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = second_path, .data = second_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = third_path, .data = third_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_path, .data = first_auth });
+    try fs.cwd().writeFile(.{ .sub_path = first_path, .data = first_auth });
+    try fs.cwd().writeFile(.{ .sub_path = second_path, .data = second_auth });
+    try fs.cwd().writeFile(.{ .sub_path = third_path, .data = third_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_path, .data = first_auth });
 
     candidate_low_auth_path = try gpa.dupe(u8, first_path);
     candidate_high_auth_path = try gpa.dupe(u8, second_path);
@@ -1373,7 +1375,7 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
 
 test "Scenario: Given a zig build run executable path when resolving the managed service binary then it prefers zig-out" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.makePath("zig-out/bin");
     try tmp.dir.writeFile(.{ .sub_path = "zig-out/bin/codex-auth", .data = "" });
@@ -1464,7 +1466,7 @@ test "Scenario: Given auto-switch enabled with stopped or stale service when rec
 
 test "Scenario: Given partial service install failure when enabling auto-switch then registry and artifacts roll back" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1493,12 +1495,12 @@ test "Scenario: Given partial service install failure when enabling auto-switch 
 
     const artifact_path = try partialServiceArtifactPath(gpa, codex_home);
     defer gpa.free(artifact_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(artifact_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(artifact_path, .{}));
 }
 
 test "Scenario: Given preflight failure when enabling auto-switch then registry is unchanged and installer is skipped" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1527,7 +1529,7 @@ test "Scenario: Given preflight failure when enabling auto-switch then registry 
 
     const artifact_path = try partialServiceArtifactPath(gpa, codex_home);
     defer gpa.free(artifact_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(artifact_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(artifact_path, .{}));
 }
 
 test "Scenario: Given supported and unsupported OS tags when checking service support then only managed-service platforms reconcile" {
@@ -1555,7 +1557,7 @@ test "Scenario: Given automatic switch when writing daemon log then it records s
 
 test "Scenario: Given an absolute managed unit path when deleting it then the file is removed" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     try tmp.dir.writeFile(.{ .sub_path = "codex-auth-autoswitch.timer", .data = "[Timer]\n" });
@@ -1564,7 +1566,7 @@ test "Scenario: Given an absolute managed unit path when deleting it then the fi
 
     auto.deleteAbsoluteFileIfExists(timer_path);
 
-    try std.testing.expectError(error.FileNotFound, std.fs.openFileAbsolute(timer_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.openFileAbsolute(timer_path, .{}));
 }
 
 test "Scenario: Given windows delete task script when rendering then missing tasks are treated as success" {
@@ -1631,7 +1633,7 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1651,7 +1653,7 @@ test "Scenario: Given missing sessions dir when refreshing active usage then it 
 
 test "Scenario: Given local-only mode when refreshing usage then api fetcher is never used" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1671,7 +1673,7 @@ test "Scenario: Given local-only mode when refreshing usage then api fetcher is 
 
 test "Scenario: Given local-only daemon mode and newest null-limits event when refreshing usage then it keeps the last usable local snapshot" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1703,7 +1705,7 @@ test "Scenario: Given local-only daemon mode and newest null-limits event when r
 
 test "Scenario: Given api-backed daemon mode and newest null-limits event with earlier usable local data when api is unavailable then it still applies the local snapshot" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1740,7 +1742,7 @@ test "Scenario: Given api-backed daemon mode and newest null-limits event with e
 
 test "Scenario: Given api usage for active account when refreshing usage then it updates without rollout files" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1763,7 +1765,7 @@ test "Scenario: Given api usage for active account when refreshing usage then it
 
 test "Scenario: Given unchanged api usage when refreshing usage then rollout fallback is skipped" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1787,7 +1789,7 @@ test "Scenario: Given unchanged api usage when refreshing usage then rollout fal
 
 test "Scenario: Given api-backed switch with stale rollout when api later fails then the stale rollout is not assigned to the new active account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1819,7 +1821,7 @@ test "Scenario: Given api-backed switch with stale rollout when api later fails 
 
 test "Scenario: Given unchanged rollout after switching accounts when refreshing usage then it is not reassigned to the new active account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1854,7 +1856,7 @@ test "Scenario: Given unchanged rollout after switching accounts when refreshing
 
 test "Scenario: Given new rollout event in the same file after switching accounts when refreshing usage then it is assigned to the new active account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1896,7 +1898,7 @@ test "Scenario: Given new rollout event in the same file after switching account
 
 test "Scenario: Given API-enabled mode and API failure when refreshing usage then local usage stays untouched and local rollout state is unchanged" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1921,7 +1923,7 @@ test "Scenario: Given API-enabled mode and API failure when refreshing usage the
 
 test "Scenario: Given daemon sees a null-rate-limits rollout then it falls back to the API without overwriting local rollout state" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1949,7 +1951,7 @@ test "Scenario: Given daemon sees a null-rate-limits rollout then it falls back 
 
 test "Scenario: Given daemon sees an empty-rate-limits rollout then it also falls back to the API" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1977,7 +1979,7 @@ test "Scenario: Given daemon sees an empty-rate-limits rollout then it also fall
 
 test "Scenario: Given repeated bad rollout events within the daemon cooldown then API fallback is rate-limited" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2004,7 +2006,7 @@ test "Scenario: Given repeated bad rollout events within the daemon cooldown the
 
 test "Scenario: Given the active daemon account changes during API cooldown then the new account refreshes immediately" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2037,7 +2039,7 @@ test "Scenario: Given the active daemon account changes during API cooldown then
 
 test "Scenario: Given api failure when returning to local refresh after switching accounts then the pre-switch rollout is not assigned to the new active account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2069,7 +2071,7 @@ test "Scenario: Given api failure when returning to local refresh after switchin
 
 test "Scenario: Given latest rollout file without usable rate limits when refreshing usage then stored usage is preserved" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2093,7 +2095,7 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-c.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-d.jsonl", .data = rollout_line ++ "\n" });
 
-    const base_time = @as(i128, std.time.nanoTimestamp());
+    const base_time = @as(i128, time_compat.nanoTimestamp());
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-d.jsonl", .{ .mode = .read_write });
         defer file.close();
@@ -2102,17 +2104,17 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-c.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
+        try file.updateTimes(base_time + time_compat.ns_per_s, base_time + time_compat.ns_per_s);
     }
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-b.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + (2 * std.time.ns_per_s), base_time + (2 * std.time.ns_per_s));
+        try file.updateTimes(base_time + (2 * time_compat.ns_per_s), base_time + (2 * time_compat.ns_per_s));
     }
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-a.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
+        try file.updateTimes(base_time + (3 * time_compat.ns_per_s), base_time + (3 * time_compat.ns_per_s));
     }
 
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));

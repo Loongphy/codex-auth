@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -78,7 +79,7 @@ fn legacySnapshotRelPath(allocator: std.mem.Allocator, email: []const u8) ![]u8 
     defer allocator.free(key);
     const filename = try std.fmt.allocPrint(allocator, "{s}.auth.json", .{key});
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ "accounts", filename });
+    return try fs.path.join(allocator, &[_][]const u8{ "accounts", filename });
 }
 
 fn makeEmptyRegistry() registry.Registry {
@@ -119,7 +120,7 @@ fn makeAccountRecord(
 
 test "resolveCodexHomeFromEnv prefers CODEX_HOME over HOME" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     try tmp.dir.makePath("custom-codex");
@@ -138,12 +139,12 @@ test "resolveCodexHomeFromEnv prefers CODEX_HOME over HOME" {
 
 test "resolveCodexHomeFromEnv rejects a missing CODEX_HOME override" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const missing = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(missing);
-    const missing_path = try std.fs.path.join(gpa, &[_][]const u8{ missing, "missing-codex-home" });
+    const missing_path = try fs.path.join(gpa, &[_][]const u8{ missing, "missing-codex-home" });
     defer gpa.free(missing_path);
 
     try std.testing.expectError(
@@ -154,7 +155,7 @@ test "resolveCodexHomeFromEnv rejects a missing CODEX_HOME override" {
 
 test "resolveCodexHomeFromEnv rejects a file CODEX_HOME override" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     try tmp.dir.writeFile(.{ .sub_path = "codex-home.txt", .data = "not a directory" });
@@ -178,7 +179,7 @@ test "resolveCodexHomeFromEnv falls back to HOME when CODEX_HOME is empty" {
     );
     defer gpa.free(resolved);
 
-    const expected = try std.fs.path.join(gpa, &[_][]const u8{ "/tmp/home-root", ".codex" });
+    const expected = try fs.path.join(gpa, &[_][]const u8{ "/tmp/home-root", ".codex" });
     defer gpa.free(expected);
 
     try std.testing.expectEqualStrings(expected, resolved);
@@ -195,7 +196,7 @@ test "resolveCodexHomeFromEnv falls back to USERPROFILE when HOME is unset" {
     );
     defer gpa.free(resolved);
 
-    const expected = try std.fs.path.join(gpa, &[_][]const u8{ "C:\\Users\\demo", ".codex" });
+    const expected = try fs.path.join(gpa, &[_][]const u8{ "C:\\Users\\demo", ".codex" });
     defer gpa.free(expected);
 
     try std.testing.expectEqualStrings(expected, resolved);
@@ -215,7 +216,7 @@ fn setRecordIds(
     rec.account_key = try std.fmt.allocPrint(allocator, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
 }
 
-fn countBackups(dir: std.fs.Dir, prefix: []const u8) !usize {
+fn countBackups(dir: fs.Dir, prefix: []const u8) !usize {
     var count: usize = 0;
     var it = dir.iterate();
     while (try it.next()) |entry| {
@@ -260,7 +261,7 @@ fn expectBackupNameFormat(name: []const u8, prefix: []const u8) !void {
 
 test "registry save/load" {
     var gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -282,7 +283,7 @@ test "registry save/load" {
 
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -304,7 +305,7 @@ test "registry save/load" {
 
 test "plan labels are human-readable while registry stores raw plan values" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -317,7 +318,7 @@ test "plan labels are human-readable while registry stores raw plan values" {
     try reg.accounts.append(gpa, try makeAccountRecord(gpa, "label@example.com", "", .prolite, .chatgpt, 1));
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -350,7 +351,7 @@ test "resolveDisplayPlan prefers a usage snapshot plan over the stored auth plan
 
 test "registry load defaults missing account_name field to null" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -389,7 +390,7 @@ test "registry load defaults missing account_name field to null" {
 
 test "registry save/load round-trips account_name null" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -403,7 +404,7 @@ test "registry save/load round-trips account_name null" {
     try reg.accounts.append(gpa, rec);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -416,7 +417,7 @@ test "registry save/load round-trips account_name null" {
 
 test "registry save/load round-trips account_name string" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -431,7 +432,7 @@ test "registry save/load round-trips account_name string" {
     try reg.accounts.append(gpa, rec);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -509,7 +510,7 @@ test "applyAccountNamesForUser updates same-user records across personal and tea
 
 test "registry save/load round-trips api.account false" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -532,7 +533,7 @@ test "registry save/load round-trips api.account false" {
 
 test "registry load defaults missing auto threshold fields" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -561,7 +562,7 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms == null);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -571,7 +572,7 @@ test "registry load defaults missing auto threshold fields" {
 
 test "registry load backfills missing api.account from api.usage and rewrites file" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -596,7 +597,7 @@ test "registry load backfills missing api.account from api.usage and rewrites fi
     try std.testing.expect(!loaded.api.usage);
     try std.testing.expect(!loaded.api.account);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -606,7 +607,7 @@ test "registry load backfills missing api.account from api.usage and rewrites fi
 
 test "registry load backfills missing api.usage from api.account and rewrites file" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -631,7 +632,7 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
     try std.testing.expect(!loaded.api.usage);
     try std.testing.expect(!loaded.api.account);
 
-    const registry_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try bdd.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
@@ -641,7 +642,7 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
 
 test "schema 3 registry with legacy rollout attribution rewrites to normalized schema 3" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -691,7 +692,7 @@ test "schema 3 registry with legacy rollout attribution rewrites to normalized s
 
 test "legacy current-layout registry version field rewrites to schema_version" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -725,7 +726,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
 
 test "too-new schema version is rejected without rewriting registry" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -753,7 +754,7 @@ test "too-new schema version is rejected without rewriting registry" {
 
 test "v2 registry migrates active email records to current schema" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -799,7 +800,7 @@ test "v2 registry migrates active email records to current schema" {
 
     const migrated_snapshot_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
     defer gpa.free(migrated_snapshot_path);
-    var migrated_snapshot = try std.fs.cwd().openFile(migrated_snapshot_path, .{});
+    var migrated_snapshot = try fs.cwd().openFile(migrated_snapshot_path, .{});
     migrated_snapshot.close();
 
     var file = try tmp.dir.openFile("accounts/registry.json", .{});
@@ -814,20 +815,20 @@ test "v2 registry migrates active email records to current schema" {
 
 test "auth backup only on change" {
     var gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
 
-    const current = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
+    const current = try fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
     defer gpa.free(current);
     const user_account_id = try accountKeyForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
-    const account_name = std.fs.path.basename(new_auth);
-    const account_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
+    const account_name = fs.path.basename(new_auth);
+    const account_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
     defer gpa.free(account_path);
 
     try tmp.dir.makePath("accounts");
@@ -858,20 +859,20 @@ test "auth backup only on change" {
 
 test "auth backup rotation" {
     var gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(codex_home);
 
-    const current = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
+    const current = try fs.path.join(gpa, &[_][]const u8{ codex_home, "auth.json" });
     defer gpa.free(current);
     const user_account_id = try accountKeyForEmailAlloc(gpa, "user@example.com");
     defer gpa.free(user_account_id);
     const new_auth = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(new_auth);
-    const account_name = std.fs.path.basename(new_auth);
-    const account_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
+    const account_name = fs.path.basename(new_auth);
+    const account_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
     defer gpa.free(account_path);
 
     try tmp.dir.makePath("accounts");
@@ -893,7 +894,7 @@ test "auth backup rotation" {
 
 test "sync active auth matches by email and updates account auth" {
     var gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -912,8 +913,8 @@ test "sync active auth matches by email and updates account auth" {
     defer gpa.free(user_account_id);
     const account_auth_abs = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(account_auth_abs);
-    const account_name = std.fs.path.basename(account_auth_abs);
-    const account_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
+    const account_name = fs.path.basename(account_auth_abs);
+    const account_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", account_name });
     defer gpa.free(account_path);
     try tmp.dir.writeFile(.{ .sub_path = account_path, .data = account_auth });
 
@@ -928,7 +929,7 @@ test "sync active auth matches by email and updates account auth" {
 
     const acc_path = try registry.accountAuthPath(gpa, codex_home, user_account_id);
     defer gpa.free(acc_path);
-    var file = try std.fs.cwd().openFile(acc_path, .{});
+    var file = try fs.cwd().openFile(acc_path, .{});
     defer file.close();
     const data = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(data);
@@ -937,7 +938,7 @@ test "sync active auth matches by email and updates account auth" {
 
 test "registry backup only on change" {
     var gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -975,7 +976,7 @@ test "registry backup only on change" {
 
 test "clean uses a whitelist and only removes non-current entries under accounts" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -992,8 +993,8 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     defer gpa.free(keep_account_id);
     const keep_abs_path = try registry.accountAuthPath(gpa, codex_home, keep_account_id);
     defer gpa.free(keep_abs_path);
-    const keep_name = std.fs.path.basename(keep_abs_path);
-    const keep_rel_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", keep_name });
+    const keep_name = fs.path.basename(keep_abs_path);
+    const keep_rel_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", keep_name });
     defer gpa.free(keep_rel_path);
 
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.1", .data = "a1" });
@@ -1033,7 +1034,7 @@ test "clean uses a whitelist and only removes non-current entries under accounts
 
 test "clean preserves account snapshots when registry is missing" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1050,14 +1051,14 @@ test "clean preserves account snapshots when registry is missing" {
     defer gpa.free(keep_account_key);
     const keep_abs_path = try registry.accountAuthPath(gpa, codex_home, keep_account_key);
     defer gpa.free(keep_abs_path);
-    const keep_rel_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", std.fs.path.basename(keep_abs_path) });
+    const keep_rel_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(keep_abs_path) });
     defer gpa.free(keep_rel_path);
 
     const recover_account_key = try accountKeyForEmailAlloc(gpa, "recover@example.com");
     defer gpa.free(recover_account_key);
     const recover_abs_path = try registry.accountAuthPath(gpa, codex_home, recover_account_key);
     defer gpa.free(recover_abs_path);
-    const recover_rel_path = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", std.fs.path.basename(recover_abs_path) });
+    const recover_rel_path = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(recover_abs_path) });
     defer gpa.free(recover_rel_path);
 
     try tmp.dir.writeFile(.{ .sub_path = keep_rel_path, .data = "keep" });
@@ -1079,7 +1080,7 @@ test "clean preserves account snapshots when registry is missing" {
 
 test "remove accounts deletes matching snapshots and auth backups only for removed records" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1107,8 +1108,8 @@ test "remove accounts deletes matching snapshots and auth backups only for remov
     const keep_auth = try authJsonWithEmailPlan(gpa, "keep@example.com", "team");
     defer gpa.free(keep_auth);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = remove_snapshot_path, .data = remove_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = keep_snapshot_path, .data = keep_auth });
+    try fs.cwd().writeFile(.{ .sub_path = remove_snapshot_path, .data = remove_auth });
+    try fs.cwd().writeFile(.{ .sub_path = keep_snapshot_path, .data = keep_auth });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-010101", .data = remove_auth });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-020202", .data = keep_auth });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260320-030303", .data = "{not-json}" });
@@ -1119,8 +1120,8 @@ test "remove accounts deletes matching snapshots and auth backups only for remov
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].email, "keep@example.com"));
     try std.testing.expect(reg.active_account_key == null);
 
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(remove_snapshot_path, .{}));
-    var keep_snapshot = try std.fs.cwd().openFile(keep_snapshot_path, .{});
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(remove_snapshot_path, .{}));
+    var keep_snapshot = try fs.cwd().openFile(keep_snapshot_path, .{});
     keep_snapshot.close();
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/auth.json.bak.20260320-010101", .{}));
@@ -1132,7 +1133,7 @@ test "remove accounts deletes matching snapshots and auth backups only for remov
 
 test "import auth path with single file keeps explicit alias" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1143,7 +1144,7 @@ test "import auth path with single file keeps explicit alias" {
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = "imports/one.json", .data = auth_json });
 
-    const one_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
+    const one_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
     defer gpa.free(one_path);
 
     var reg = makeEmptyRegistry();
@@ -1162,7 +1163,7 @@ test "import auth path with single file keeps explicit alias" {
 
 test "import auth path with directory imports multiple json files and skips bad files" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1178,7 +1179,7 @@ test "import auth path with directory imports multiple json files and skips bad 
     try tmp.dir.writeFile(.{ .sub_path = "imports/readme.txt", .data = "ignored" });
     try tmp.dir.writeFile(.{ .sub_path = "imports/bad.json", .data = "{not-json}" });
 
-    const imports_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
+    const imports_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
     defer gpa.free(imports_dir);
 
     var reg = makeEmptyRegistry();
@@ -1203,15 +1204,15 @@ test "import auth path with directory imports multiple json files and skips bad 
     defer gpa.free(account_id_b);
     const path_b = try registry.accountAuthPath(gpa, codex_home, account_id_b);
     defer gpa.free(path_b);
-    var file_a = try std.fs.cwd().openFile(path_a, .{});
+    var file_a = try fs.cwd().openFile(path_a, .{});
     defer file_a.close();
-    var file_b = try std.fs.cwd().openFile(path_b, .{});
+    var file_b = try fs.cwd().openFile(path_b, .{});
     defer file_b.close();
 }
 
 test "import auth path with repeated single file reports updated on second import" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1222,7 +1223,7 @@ test "import auth path with repeated single file reports updated on second impor
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = "imports/repeat.json", .data = auth_json });
 
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
     defer gpa.free(auth_path);
 
     var reg = makeEmptyRegistry();
@@ -1245,7 +1246,7 @@ test "import auth path with repeated single file reports updated on second impor
 
 test "import auth path with invalid single file keeps failure for non-zero exit handling" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1256,7 +1257,7 @@ test "import auth path with invalid single file keeps failure for non-zero exit 
     defer gpa.free(invalid_auth);
     try tmp.dir.writeFile(.{ .sub_path = "imports/invalid.json", .data = invalid_auth });
 
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "invalid.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "invalid.json" });
     defer gpa.free(auth_path);
 
     var reg = makeEmptyRegistry();
@@ -1276,7 +1277,7 @@ test "import auth path with invalid single file keeps failure for non-zero exit 
 
 test "import cpa path with single file converts to standard auth and keeps explicit alias" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1287,7 +1288,7 @@ test "import cpa path with single file converts to standard auth and keeps expli
     defer gpa.free(cpa_json);
     try tmp.dir.writeFile(.{ .sub_path = "imports/one.json", .data = cpa_json });
 
-    const one_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
+    const one_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "one.json" });
     defer gpa.free(one_path);
 
     var reg = makeEmptyRegistry();
@@ -1312,7 +1313,7 @@ test "import cpa path with single file converts to standard auth and keeps expli
 
 test "import cpa path with repeated single file reports updated on second import" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1323,7 +1324,7 @@ test "import cpa path with repeated single file reports updated on second import
     defer gpa.free(cpa_json);
     try tmp.dir.writeFile(.{ .sub_path = "imports/repeat.json", .data = cpa_json });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "repeat.json" });
     defer gpa.free(import_path);
 
     var reg = makeEmptyRegistry();
@@ -1344,7 +1345,7 @@ test "import cpa path with repeated single file reports updated on second import
 
 test "import cpa path with directory imports multiple json files and skips bad files" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1363,7 +1364,7 @@ test "import cpa path with directory imports multiple json files and skips bad f
     try tmp.dir.writeFile(.{ .sub_path = "imports/bad.json", .data = "{not-json}" });
     try tmp.dir.writeFile(.{ .sub_path = "imports/readme.txt", .data = "ignored" });
 
-    const imports_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
+    const imports_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports" });
     defer gpa.free(imports_dir);
 
     var reg = makeEmptyRegistry();

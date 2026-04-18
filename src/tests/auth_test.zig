@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const auth = @import("../auth.zig");
 const bdd = @import("bdd_helpers.zig");
 
@@ -32,12 +33,12 @@ test "parse auth info from jwt" {
     );
     defer gpa.free(json);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = json });
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -58,12 +59,12 @@ test "parse auth info from jwt" {
 
 test "api key auth" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
     defer gpa.free(auth_path);
     const info = try auth.parseAuthInfo(gpa, auth_path);
     defer info.deinit(gpa);
@@ -72,7 +73,7 @@ test "api key auth" {
 
 test "parse auth info does not leak duplicated tokens when id token is missing" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{
         .sub_path = "auth.json",
@@ -80,7 +81,7 @@ test "parse auth info does not leak duplicated tokens when id token is missing" 
     });
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -112,12 +113,12 @@ test "parse auth info frees allocations on account mismatch" {
     );
     defer gpa.free(json);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = json });
     const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(tmp_path);
-    const auth_path = try std.fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
     defer gpa.free(auth_path);
 
     try std.testing.expectError(error.AccountIdMismatch, auth.parseAuthInfo(gpa, auth_path));

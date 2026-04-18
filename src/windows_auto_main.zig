@@ -1,10 +1,12 @@
 const std = @import("std");
+const fs = @import("compat_fs.zig");
 const auto = @import("auto.zig");
 const registry = @import("registry.zig");
 
-fn resolveDaemonCodexHome(allocator: std.mem.Allocator) ![]u8 {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+fn resolveDaemonCodexHome(allocator: std.mem.Allocator, init: std.process.Init.Minimal) ![]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const args = try init.args.toSlice(arena_state.allocator());
 
     var codex_home_override: ?[]u8 = null;
     defer if (codex_home_override) |path| allocator.free(path);
@@ -33,12 +35,12 @@ fn resolveDaemonCodexHome(allocator: std.mem.Allocator) ![]u8 {
     return try registry.resolveCodexHome(allocator);
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init.Minimal) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    const codex_home = try resolveDaemonCodexHome(allocator);
+    const codex_home = try resolveDaemonCodexHome(allocator, init);
     defer allocator.free(codex_home);
 
     try auto.runDaemon(allocator, codex_home);

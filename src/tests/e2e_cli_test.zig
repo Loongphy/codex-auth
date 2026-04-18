@@ -1,4 +1,7 @@
 const std = @import("std");
+const time_compat = @import("../compat_time.zig");
+const fs = @import("../compat_fs.zig");
+const process_compat = @import("../compat_process.zig");
 const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -6,27 +9,68 @@ const bdd = @import("bdd_helpers.zig");
 const e2e_install_prefix_env = "CODEX_AUTH_E2E_INSTALL_PREFIX";
 const e2e_project_root_env = "CODEX_AUTH_E2E_PROJECT_ROOT";
 
+var cli_build_ready = false;
+var cli_build_mutex: std.Io.Mutex = .init;
+
 const SeedAccount = struct {
     email: []const u8,
     alias: []const u8,
 };
 
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
-    const project_root = std.process.getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
+    const project_root = process_compat.getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
     if (project_root) |path| return path;
-    return std.fs.cwd().realpathAlloc(allocator, ".");
+    return fs.cwd().realpathAlloc(allocator, ".");
+}
+
+fn runCapture(
+    allocator: std.mem.Allocator,
+    cwd_path: []const u8,
+    env_map: ?*const std.process.Environ.Map,
+    argv: []const []const u8,
+) !std.process.RunResult {
+    const raw_result = std.process.run(std.heap.page_allocator, fs.io(), .{
+        .argv = argv,
+        .cwd = .{ .path = cwd_path },
+        .environ_map = env_map,
+        .stdout_limit = .limited(1024 * 1024),
+        .stderr_limit = .limited(1024 * 1024),
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.SkipZigTest,
+        else => return err,
+    };
+    defer std.heap.page_allocator.free(raw_result.stdout);
+    defer std.heap.page_allocator.free(raw_result.stderr);
+
+    return .{
+        .term = raw_result.term,
+        .stdout = try allocator.dupe(u8, raw_result.stdout),
+        .stderr = try allocator.dupe(u8, raw_result.stderr),
+    };
 }
 
 fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void {
-    var env_map = try std.process.getEnvMap(allocator);
+    cli_build_mutex.lockUncancelable(fs.io());
+    defer cli_build_mutex.unlock(fs.io());
+
+    if (cli_build_ready) return;
+
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+    if (fs.accessAbsolute(exe_path, .{})) |_| {
+        cli_build_ready = true;
+        return;
+    } else |_| {}
+
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     const global_cache_dir = if (env_map.get("ZIG_GLOBAL_CACHE_DIR")) |dir|
         try allocator.dupe(u8, dir)
     else
-        try std.fs.path.join(allocator, &[_][]const u8{
+        try fs.path.join(allocator, &[_][]const u8{
             project_root,
             ".zig-cache",
             "e2e-global",
@@ -36,7 +80,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     const local_cache_dir = if (env_map.get("ZIG_LOCAL_CACHE_DIR")) |dir|
         try allocator.dupe(u8, dir)
     else
-        try std.fs.path.join(allocator, &[_][]const u8{
+        try fs.path.join(allocator, &[_][]const u8{
             project_root,
             ".zig-cache",
             "e2e-local",
@@ -45,25 +89,22 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     const install_prefix = if (env_map.get(e2e_install_prefix_env)) |dir|
         try allocator.dupe(u8, dir)
     else
-        try std.fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
+        try fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
     defer allocator.free(install_prefix);
 
     try env_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
     try env_map.put(e2e_install_prefix_env, install_prefix);
 
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{ "zig", "build", "-p", install_prefix },
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
+    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ "zig", "build", "-p", install_prefix });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| if (code == 0) return,
+        .exited => |code| if (code == 0) {
+            cli_build_ready = true;
+            return;
+        },
         else => {},
     }
 
@@ -74,21 +115,21 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 
 fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "codex-auth.exe" else "codex-auth";
-    const install_prefix = std.process.getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
+    const install_prefix = process_compat.getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
     defer if (install_prefix) |dir| allocator.free(dir);
 
-    const prefix = install_prefix orelse return std.fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
-    return std.fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
+    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
+    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
 fn fakeCodexCommandPath() []const u8 {
     return if (builtin.os.tag == .windows) "fake-bin/codex.cmd" else "fake-bin/codex";
 }
 
-fn writeFailingFakeCodex(dir: std.fs.Dir, exit_code: u8) !void {
+fn writeFailingFakeCodex(dir: fs.Dir, exit_code: u8) !void {
     var script_buf: [128]u8 = undefined;
     const script = if (builtin.os.tag == .windows)
         try std.fmt.bufPrint(&script_buf, "@echo off\r\n>\"%HOME%\\fake-codex-argv.txt\" echo %*\r\nexit /b {d}\r\n", .{exit_code})
@@ -104,7 +145,7 @@ fn writeFailingFakeCodex(dir: std.fs.Dir, exit_code: u8) !void {
     }
 }
 
-fn writeSuccessfulFakeCodex(dir: std.fs.Dir) !void {
+fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     const script =
         if (builtin.os.tag == .windows)
             "@echo off\r\n" ++
@@ -132,11 +173,11 @@ fn writeSuccessfulFakeCodex(dir: std.fs.Dir) !void {
 }
 
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
-    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, std.fs.path.delimiter, inherited_path });
+    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
 }
 
 fn runCliWithIsolatedHome(
@@ -144,7 +185,7 @@ fn runCliWithIsolatedHome(
     project_root: []const u8,
     home_root: []const u8,
     args: []const []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -153,21 +194,15 @@ fn runCliWithIsolatedHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
-    env_map.remove("CODEX_HOME");
+    _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHomeAndCodexHome(
@@ -176,7 +211,7 @@ fn runCliWithIsolatedHomeAndCodexHome(
     home_root: []const u8,
     codex_home: []const u8,
     args: []const []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -185,7 +220,7 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -193,13 +228,7 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHomeAndCodexHomeAndPath(
@@ -209,7 +238,7 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     codex_home: []const u8,
     path_override: []const u8,
     args: []const []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -218,7 +247,7 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -227,13 +256,7 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHomeAndPath(
@@ -242,7 +265,7 @@ fn runCliWithIsolatedHomeAndPath(
     home_root: []const u8,
     path_override: []const u8,
     args: []const []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -251,22 +274,16 @@ fn runCliWithIsolatedHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
-    env_map.remove("CODEX_HOME");
+    _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHomeAndStdin(
@@ -275,7 +292,7 @@ fn runCliWithIsolatedHomeAndStdin(
     home_root: []const u8,
     args: []const []const u8,
     stdin_data: []const u8,
-) !std.process.Child.RunResult {
+) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
     defer allocator.free(exe_path);
 
@@ -284,69 +301,79 @@ fn runCliWithIsolatedHomeAndStdin(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
-    env_map.remove("CODEX_HOME");
+    _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
-    var child = std.process.Child.init(argv.items, allocator);
-    child.cwd = project_root;
-    child.env_map = &env_map;
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    var stdout = std.ArrayList(u8).empty;
-    defer stdout.deinit(allocator);
-    var stderr = std.ArrayList(u8).empty;
-    defer stderr.deinit(allocator);
-
-    try child.spawn();
-    errdefer {
-        _ = child.kill() catch {};
-    }
+    var child = try std.process.spawn(fs.io(), .{
+        .argv = argv.items,
+        .cwd = .{ .path = project_root },
+        .environ_map = &env_map,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    });
+    defer child.kill(fs.io());
 
     if (child.stdin) |stdin_pipe| {
-        try stdin_pipe.writeAll(stdin_data);
-        stdin_pipe.close();
+        try fs.wrapFile(stdin_pipe).writeAll(stdin_data);
+        fs.wrapFile(stdin_pipe).close();
         child.stdin = null;
     }
 
-    try child.collectOutput(allocator, &stdout, &stderr, 1024 * 1024);
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(allocator, fs.io(), multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
+
+    while (multi_reader.fill(64, .none)) |_| {
+        if (stdout_reader.buffered().len > 1024 * 1024) return error.StreamTooLong;
+        if (stderr_reader.buffered().len > 1024 * 1024) return error.StreamTooLong;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+
+    try multi_reader.checkAnyError();
+    const term = try child.wait(fs.io());
 
     return .{
-        .stdout = try stdout.toOwnedSlice(allocator),
-        .stderr = try stderr.toOwnedSlice(allocator),
-        .term = try child.wait(),
+        .stdout = try multi_reader.toOwnedSlice(0),
+        .stderr = try multi_reader.toOwnedSlice(1),
+        .term = term,
     };
 }
 
-fn expectSuccess(result: std.process.Child.RunResult) !void {
+fn expectSuccess(result: std.process.RunResult) !void {
     switch (result.term) {
-        .Exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
         else => return error.TestUnexpectedResult,
     }
 }
 
-fn expectFailure(result: std.process.Child.RunResult) !void {
+fn expectFailure(result: std.process.RunResult) !void {
     switch (result.term) {
-        .Exited => |code| try std.testing.expect(code != 0),
+        .exited => |code| try std.testing.expect(code != 0),
         else => return error.TestUnexpectedResult,
     }
 }
 
 fn authJsonPathAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".codex", "auth.json" });
+    return fs.path.join(allocator, &[_][]const u8{ home_root, ".codex", "auth.json" });
 }
 
 fn codexHomeAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
-    return std.fs.path.join(allocator, &[_][]const u8{ home_root, ".codex" });
+    return fs.path.join(allocator, &[_][]const u8{ home_root, ".codex" });
 }
 
-fn countAuthBackups(dir: std.fs.Dir, rel_path: []const u8) !usize {
+fn countAuthBackups(dir: fs.Dir, rel_path: []const u8) !usize {
     var accounts = try dir.openDir(rel_path, .{ .iterate = true });
     defer accounts.close();
 
@@ -383,7 +410,7 @@ fn seedRegistryWithAccounts(
 
     const active_key = try bdd.accountKeyForEmailAlloc(allocator, active_email);
     reg.active_account_key = active_key;
-    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -407,7 +434,7 @@ fn appendCustomAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = std.time.timestamp(),
+        .created_at = time_compat.timestamp(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -421,7 +448,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -435,7 +462,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = fake_auth });
     try writeSuccessfulFakeCodex(tmp.dir);
 
-    const fake_bin_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
     defer gpa.free(fake_bin_path);
     const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
     defer gpa.free(path_override);
@@ -454,7 +481,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings("", result.stderr);
 
-    const argv_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-argv.txt" });
+    const argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-argv.txt" });
     defer gpa.free(argv_path);
     const argv_data = try bdd.readFileAlloc(gpa, argv_path);
     defer gpa.free(argv_data);
@@ -491,7 +518,7 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -508,7 +535,7 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = fake_auth });
     try writeSuccessfulFakeCodex(tmp.dir);
 
-    const fake_bin_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
     defer gpa.free(fake_bin_path);
     const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
     defer gpa.free(path_override);
@@ -528,11 +555,11 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
 
     const custom_auth_path = try registry.activeAuthPath(gpa, custom_codex_home);
     defer gpa.free(custom_auth_path);
-    try std.fs.cwd().access(custom_auth_path, .{});
+    try fs.cwd().access(custom_auth_path, .{});
 
     const default_auth_path = try authJsonPathAlloc(gpa, home_root);
     defer gpa.free(default_auth_path);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(default_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(default_auth_path, .{}));
 
     var loaded = try registry.loadRegistry(gpa, custom_codex_home);
     defer loaded.deinit(gpa);
@@ -546,7 +573,7 @@ test "Scenario: Given failed device auth login with existing auth json when runn
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -559,7 +586,7 @@ test "Scenario: Given failed device auth login with existing auth json when runn
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = existing_auth });
     try writeFailingFakeCodex(tmp.dir, 9);
 
-    const fake_bin_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
     defer gpa.free(fake_bin_path);
     const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
     defer gpa.free(path_override);
@@ -578,7 +605,7 @@ test "Scenario: Given failed device auth login with existing auth json when runn
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings("", result.stderr);
 
-    const argv_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-argv.txt" });
+    const argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-argv.txt" });
     defer gpa.free(argv_path);
     const argv_data = try bdd.readFileAlloc(gpa, argv_path);
     defer gpa.free(argv_data);
@@ -601,7 +628,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -652,7 +679,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -667,7 +694,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
 
     const legacy_name = try legacySnapshotNameForEmail(gpa, email);
     defer gpa.free(legacy_name);
-    const legacy_rel = try std.fs.path.join(gpa, &[_][]const u8{ ".codex", "accounts", legacy_name });
+    const legacy_rel = try fs.path.join(gpa, &[_][]const u8{ ".codex", "accounts", legacy_name });
     defer gpa.free(legacy_rel);
     try tmp.dir.writeFile(.{ .sub_path = legacy_rel, .data = auth_json });
 
@@ -717,7 +744,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
 
     const migrated_path = try registry.accountAuthPath(gpa, codex_home, expected_account_id);
     defer gpa.free(migrated_path);
-    var migrated = try std.fs.cwd().openFile(migrated_path, .{});
+    var migrated = try fs.cwd().openFile(migrated_path, .{});
     migrated.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(legacy_rel, .{}));
 }
@@ -728,7 +755,7 @@ test "Scenario: Given repeated single-file import when running import then first
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -740,7 +767,7 @@ test "Scenario: Given repeated single-file import when running import then first
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = rel_path, .data = auth_json });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, rel_path });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, rel_path });
     defer gpa.free(import_path);
 
     const first = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", import_path });
@@ -764,7 +791,7 @@ test "Scenario: Given single-file import missing email when running import then 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -776,7 +803,7 @@ test "Scenario: Given single-file import missing email when running import then 
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = rel_path, .data = auth_json });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, rel_path });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, rel_path });
     defer gpa.free(import_path);
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", import_path });
@@ -794,7 +821,7 @@ test "Scenario: Given purge with no recoverable active auth when running import 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -810,7 +837,7 @@ test "Scenario: Given purge with no recoverable active auth when running import 
     defer gpa.free(zed_key);
     const zed_snapshot_path = try registry.accountAuthPath(gpa, codex_home, zed_key);
     defer gpa.free(zed_snapshot_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = zed_snapshot_path, .data = zed_auth });
+    try fs.cwd().writeFile(.{ .sub_path = zed_snapshot_path, .data = zed_auth });
 
     const alpha_auth = try bdd.authJsonWithEmailPlan(gpa, "alpha@example.com", "plus");
     defer gpa.free(alpha_auth);
@@ -818,7 +845,7 @@ test "Scenario: Given purge with no recoverable active auth when running import 
     defer gpa.free(alpha_key);
     const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
     defer gpa.free(alpha_snapshot_path);
-    try std.fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+    try fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
 
     const stale_auth = "{\"broken\":true}";
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = stale_auth });
@@ -853,7 +880,7 @@ test "Scenario: Given purge with no recoverable active auth when running import 
     }
     try std.testing.expect(backup_name != null);
 
-    const backup_rel = try std.fs.path.join(gpa, &[_][]const u8{ ".codex", "accounts", backup_name.? });
+    const backup_rel = try fs.path.join(gpa, &[_][]const u8{ ".codex", "accounts", backup_name.? });
     defer gpa.free(backup_rel);
     var backup_file = try tmp.dir.openFile(backup_rel, .{});
     defer backup_file.close();
@@ -873,7 +900,7 @@ test "Scenario: Given directory import with new updated and invalid files when r
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -885,7 +912,7 @@ test "Scenario: Given directory import with new updated and invalid files when r
     defer gpa.free(existing_auth);
     try tmp.dir.writeFile(.{ .sub_path = existing_rel, .data = existing_auth });
 
-    const existing_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, existing_rel });
+    const existing_path = try fs.path.join(gpa, &[_][]const u8{ home_root, existing_rel });
     defer gpa.free(existing_path);
 
     const seed_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", existing_path });
@@ -915,7 +942,7 @@ test "Scenario: Given directory import with new updated and invalid files when r
 
     try tmp.dir.writeFile(.{ .sub_path = "imports/token_invalid.json", .data = "{not-json}" });
 
-    const imports_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    const imports_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
     defer gpa.free(imports_path);
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
@@ -949,7 +976,7 @@ test "Scenario: Given directory import with an empty json file when running impo
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -961,7 +988,7 @@ test "Scenario: Given directory import with an empty json file when running impo
     try tmp.dir.writeFile(.{ .sub_path = "imports/valid.json", .data = valid_auth });
     try tmp.dir.writeFile(.{ .sub_path = "imports/empty.json", .data = "" });
 
-    const imports_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    const imports_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
     defer gpa.free(imports_path);
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
@@ -996,7 +1023,7 @@ test "Scenario: Given directory import with a broken symlink when running import
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1008,7 +1035,7 @@ test "Scenario: Given directory import with a broken symlink when running import
     try tmp.dir.writeFile(.{ .sub_path = "imports/valid.json", .data = valid_auth });
     try tmp.dir.symLink("missing.json", "imports/broken.json", .{});
 
-    const imports_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    const imports_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
     defer gpa.free(imports_path);
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
@@ -1041,7 +1068,7 @@ test "Scenario: Given cpa directory in default location when running import cpa 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1085,7 +1112,7 @@ test "Scenario: Given missing default cpa directory when running import cpa then
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1104,7 +1131,7 @@ test "Scenario: Given cpa file import when running import cpa then it stores a s
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1115,7 +1142,7 @@ test "Scenario: Given cpa file import when running import cpa then it stores a s
     defer gpa.free(cpa_json);
     try tmp.dir.writeFile(.{ .sub_path = "imports/cpa.json", .data = cpa_json });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "cpa.json" });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "cpa.json" });
     defer gpa.free(import_path);
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", "--cpa", import_path, "--alias", "personal" });
@@ -1148,7 +1175,7 @@ test "Scenario: Given default api usage when rendering help then the api enable 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1172,7 +1199,7 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1203,8 +1230,8 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer gpa.free(backup_auth);
 
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
@@ -1240,7 +1267,7 @@ test "Scenario: Given remove query with one match when running remove then it de
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1268,8 +1295,8 @@ test "Scenario: Given remove query with one match when running remove then it de
     const keeper_auth = try bdd.authJsonWithEmailPlan(gpa, "keeper@example.com", "team");
     defer gpa.free(keeper_auth);
 
-    try std.fs.cwd().writeFile(.{ .sub_path = removed_snapshot_path, .data = removed_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = keeper_snapshot_path, .data = keeper_auth });
+    try fs.cwd().writeFile(.{ .sub_path = removed_snapshot_path, .data = removed_auth });
+    try fs.cwd().writeFile(.{ .sub_path = keeper_snapshot_path, .data = keeper_auth });
     try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-010101", .data = removed_auth });
     try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-020202", .data = removed_auth });
     try tmp.dir.writeFile(.{ .sub_path = ".codex/accounts/auth.json.bak.20260320-030303", .data = keeper_auth });
@@ -1289,8 +1316,8 @@ test "Scenario: Given remove query with one match when running remove then it de
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(removed_snapshot_path, .{}));
-    var keeper_snapshot = try std.fs.cwd().openFile(keeper_snapshot_path, .{});
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(removed_snapshot_path, .{}));
+    var keeper_snapshot = try fs.cwd().openFile(keeper_snapshot_path, .{});
     keeper_snapshot.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-010101", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-020202", .{}));
@@ -1304,7 +1331,7 @@ test "Scenario: Given active account removal with a replacement when running rem
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1334,8 +1361,8 @@ test "Scenario: Given active account removal with a replacement when running rem
     const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
     defer gpa.free(backup_auth);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
     defer gpa.free(result.stdout);
@@ -1348,7 +1375,7 @@ test "Scenario: Given active account removal with a replacement when running rem
     const replaced_auth = try bdd.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(replaced_auth);
     try std.testing.expectEqualStrings(backup_auth, replaced_auth);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_snapshot_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_snapshot_path, .{}));
     try std.testing.expectEqual(@as(usize, 0), try countAuthBackups(tmp.dir, ".codex/accounts"));
 }
 
@@ -1358,7 +1385,7 @@ test "Scenario: Given active account removal with missing auth json when running
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1387,8 +1414,8 @@ test "Scenario: Given active account removal with missing auth json when running
     defer gpa.free(active_auth);
     const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
     defer gpa.free(backup_auth);
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
     defer gpa.free(result.stdout);
@@ -1409,7 +1436,7 @@ test "Scenario: Given missing auth json and no valid active key when running rem
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1438,8 +1465,8 @@ test "Scenario: Given missing auth json and no valid active key when running rem
     defer gpa.free(active_auth);
     const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
     defer gpa.free(backup_auth);
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     var reg = try registry.loadRegistry(gpa, codex_home);
     defer reg.deinit(gpa);
@@ -1475,7 +1502,7 @@ test "Scenario: Given auth json already points at another registry account when 
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1505,8 +1532,8 @@ test "Scenario: Given auth json already points at another registry account when 
     const beta_auth = try bdd.authJsonWithEmailPlan(gpa, "beta@example.com", "plus");
     defer gpa.free(beta_auth);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = beta_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
+    try fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+    try fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
 
     const remove_result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "beta@" }, "");
     defer gpa.free(remove_result.stdout);
@@ -1547,7 +1574,7 @@ test "Scenario: Given remove query with no matches when running remove then it e
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1574,7 +1601,7 @@ test "Scenario: Given non-tty remove with invalid selection input when running r
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1611,7 +1638,7 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1651,7 +1678,7 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1664,7 +1691,7 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .team);
     try appendCustomAccount(gpa, &reg, "user-b::acct-personal", "alice@example.com", "personal", .plus);
     reg.active_account_key = try gpa.dupe(u8, "user-a::acct-work");
-    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "alice@" }, "y\n");
@@ -1688,7 +1715,7 @@ test "Scenario: Given remove query deletes the final active account when running
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1710,7 +1737,7 @@ test "Scenario: Given remove query deletes the final active account when running
     const solo_auth = try bdd.authJsonWithEmailPlan(gpa, "solo@example.com", "pro");
     defer gpa.free(solo_auth);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = solo_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = solo_auth });
+    try fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = solo_auth });
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "solo" }, "");
     defer gpa.free(result.stdout);
@@ -1727,8 +1754,8 @@ test "Scenario: Given remove query deletes the final active account when running
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(snapshot_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(snapshot_path, .{}));
 }
 
 test "Scenario: Given non-tty stdin when running interactive remove then it falls back to the numbered selector" {
@@ -1737,7 +1764,7 @@ test "Scenario: Given non-tty stdin when running interactive remove then it fall
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1766,7 +1793,7 @@ test "Scenario: Given remove all when running remove then it clears all accounts
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1797,7 +1824,7 @@ test "Scenario: Given remove all when running remove then it clears all accounts
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given remove all with malformed auth json when running remove then registry is cleared but auth json is preserved" {
@@ -1806,7 +1833,7 @@ test "Scenario: Given remove all with malformed auth json when running remove th
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1847,7 +1874,7 @@ test "Scenario: Given remove all with tracked auth json and no active key when r
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1887,7 +1914,7 @@ test "Scenario: Given remove all with tracked auth json and no active key when r
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given remove all with tracked auth json and stale active key when running remove then auth json is deleted too" {
@@ -1896,7 +1923,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1921,7 +1948,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
         gpa.free(key);
     }
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
-    reg.active_account_activated_at_ms = std.time.milliTimestamp();
+    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all" }, "");
@@ -1936,7 +1963,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().openFile(active_auth_path, .{}));
+    try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
 }
 
 test "Scenario: Given unsynced active auth when removing the active registry account then auth json is preserved" {
@@ -1945,7 +1972,7 @@ test "Scenario: Given unsynced active auth when removing the active registry acc
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1975,8 +2002,8 @@ test "Scenario: Given unsynced active auth when removing the active registry acc
     const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
     defer gpa.free(backup_auth);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = "{\"broken\":true}" });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
     defer gpa.free(result.stdout);
@@ -2003,7 +2030,7 @@ test "Scenario: Given parseable auth without email for the active account when r
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2035,8 +2062,8 @@ test "Scenario: Given parseable auth without email for the active account when r
     const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
     defer gpa.free(backup_auth);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = missing_email_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
-    try std.fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
     defer gpa.free(result.stdout);
@@ -2063,7 +2090,7 @@ test "Scenario: Given default api usage when rendering status then no warning is
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
@@ -2086,7 +2113,7 @@ test "Scenario: Given default api usage when listing accounts then no warning is
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
 
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");

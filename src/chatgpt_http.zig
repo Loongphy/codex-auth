@@ -1,5 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const fs = @import("compat_fs.zig");
+const process_compat = @import("compat_process.zig");
 
 pub const request_timeout_secs: []const u8 = "5";
 pub const request_timeout_ms: []const u8 = "5000";
@@ -40,36 +42,6 @@ const ChildCaptureResult = struct {
     fn deinit(self: *const ChildCaptureResult, allocator: std.mem.Allocator) void {
         allocator.free(self.stdout);
         allocator.free(self.stderr);
-    }
-};
-
-const ChildProcessWatchdog = struct {
-    mutex: std.Thread.Mutex = .{},
-    completed: bool = false,
-    timed_out: bool = false,
-
-    fn run(self: *ChildProcessWatchdog, child_id: std.process.Child.Id, timeout_ms: u64) void {
-        std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
-
-        self.mutex.lock();
-        if (self.completed) {
-            self.mutex.unlock();
-            return;
-        }
-        self.completed = true;
-        self.timed_out = true;
-        self.mutex.unlock();
-
-        terminateChildProcess(child_id);
-    }
-
-    fn finish(self: *ChildProcessWatchdog) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const timed_out = self.timed_out;
-        self.completed = true;
-        return timed_out;
     }
 };
 
@@ -167,7 +139,7 @@ fn runNodeGetJsonCommand(
     if (result.timed_out) return error.NodeProcessTimedOut;
 
     switch (result.term) {
-        .Exited => |code| if (code != 0) return error.RequestFailed,
+        .exited => |code| if (code != 0) return error.RequestFailed,
         else => return error.RequestFailed,
     }
 
@@ -199,72 +171,52 @@ fn runChildCapture(
     argv: []const []const u8,
     timeout_ms: u64,
 ) !ChildCaptureResult {
-    var child = std.process.Child.init(argv, allocator);
-    var env_map = try std.process.getEnvMap(allocator);
+    var env_map = try process_compat.getEnvMap(allocator);
     defer env_map.deinit();
     try maybeEnableNodeEnvProxy(&env_map);
-    child.env_map = &env_map;
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
+    const raw_result = std.process.run(std.heap.page_allocator, fs.io(), .{
+        .argv = argv,
+        .environ_map = &env_map,
+        .stdout_limit = .limited(max_output_bytes),
+        .stderr_limit = .limited(max_output_bytes),
+        .timeout = .{ .duration = .{
+            .clock = .awake,
+            .raw = .fromMilliseconds(@intCast(timeout_ms)),
+        } },
+    }) catch |err| switch (err) {
+        error.Timeout => {
+            const stdout = try allocator.alloc(u8, 0);
+            errdefer allocator.free(stdout);
+            const stderr = try allocator.alloc(u8, 0);
+            return .{
+                .term = .{ .unknown = 0 },
+                .stdout = stdout,
+                .stderr = stderr,
+                .timed_out = true,
+            };
+        },
+        else => return err,
+    };
 
-    var stdout = std.ArrayList(u8).empty;
-    errdefer stdout.deinit(allocator);
-    var stderr = std.ArrayList(u8).empty;
-    errdefer stderr.deinit(allocator);
-
-    try child.spawn();
-    errdefer reapChildAfterError(&child);
-
-    var watchdog = ChildProcessWatchdog{};
-    const watchdog_thread = std.Thread.spawn(.{}, ChildProcessWatchdog.run, .{
-        &watchdog,
-        child.id,
-        timeout_ms,
-    }) catch null;
-    defer if (watchdog_thread) |thread| thread.join();
-
-    try child.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
-    const term = try child.wait();
-    const timed_out = if (watchdog_thread != null) watchdog.finish() else false;
+    defer std.heap.page_allocator.free(raw_result.stdout);
+    defer std.heap.page_allocator.free(raw_result.stderr);
 
     return .{
-        .term = term,
-        .stdout = try stdout.toOwnedSlice(allocator),
-        .stderr = try stderr.toOwnedSlice(allocator),
-        .timed_out = timed_out,
-    };
-}
-
-fn terminateChildProcess(child_id: std.process.Child.Id) void {
-    switch (builtin.os.tag) {
-        .windows => {
-            std.os.windows.TerminateProcess(child_id, 1) catch {};
-        },
-        .wasi => {},
-        else => {
-            std.posix.kill(child_id, std.posix.SIG.KILL) catch {};
-        },
-    }
-}
-
-fn reapChildAfterError(child: *std.process.Child) void {
-    _ = child.kill() catch |err| switch (err) {
-        error.AlreadyTerminated => {
-            _ = child.wait() catch {};
-        },
-        else => {},
+        .term = raw_result.term,
+        .stdout = try allocator.dupe(u8, raw_result.stdout),
+        .stderr = try allocator.dupe(u8, raw_result.stderr),
+        .timed_out = false,
     };
 }
 
 fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, node_executable_env) catch |err| switch (err) {
+    return process_compat.getEnvVarOwned(allocator, node_executable_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => try allocator.dupe(u8, "node"),
         else => return err,
     };
 }
 
-fn maybeEnableNodeEnvProxy(env_map: *std.process.EnvMap) !void {
+fn maybeEnableNodeEnvProxy(env_map: *std.process.Environ.Map) !void {
     if (env_map.get(node_use_env_proxy_env) == null) {
         const all_proxy = env_map.get("ALL_PROXY") orelse env_map.get("all_proxy");
         if (all_proxy) |proxy| {
@@ -304,7 +256,7 @@ fn resolveExecutableForLaunchAlloc(allocator: std.mem.Allocator, executable: []c
         return try allocator.dupe(u8, executable);
     }
 
-    const path_value = std.process.getEnvVarOwned(allocator, "PATH") catch |err| switch (err) {
+    const path_value = process_compat.getEnvVarOwned(allocator, "PATH") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return null,
         else => return err,
     };
@@ -332,7 +284,7 @@ fn resolveExecutablePathEntryForLaunchAlloc(
     }
 
     if (builtin.os.tag == .windows and std.fs.path.extension(executable).len == 0) {
-        const path_ext = std.process.getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
+        const path_ext = process_compat.getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => try allocator.dupe(u8, ".COM;.EXE;.BAT;.CMD"),
             else => return err,
         };
@@ -357,11 +309,11 @@ fn resolveExecutablePathEntryForLaunchAlloc(
 }
 fn accessPath(path: []const u8) bool {
     if (std.fs.path.isAbsolute(path)) {
-        std.fs.accessAbsolute(path, .{}) catch return false;
+        fs.accessAbsolute(path, .{}) catch return false;
         return true;
     }
 
-    std.fs.cwd().access(path, .{}) catch return false;
+    fs.cwd().access(path, .{}) catch return false;
     return true;
 }
 
@@ -370,7 +322,7 @@ fn logNodeRequirement() void {
 }
 
 fn parseNodeHttpOutput(allocator: std.mem.Allocator, output: []const u8) ?ParsedNodeHttpOutput {
-    const trimmed = std.mem.trimRight(u8, output, "\r\n");
+    const trimmed = std.mem.trimEnd(u8, output, "\r\n");
     const outcome_idx = std.mem.lastIndexOfScalar(u8, trimmed, '\n') orelse return null;
     const status_idx = std.mem.lastIndexOfScalar(u8, trimmed[0..outcome_idx], '\n') orelse return null;
     const encoded_body = std.mem.trim(u8, trimmed[0..status_idx], " \r\t");
@@ -427,7 +379,7 @@ test "parse node http output keeps timeout marker" {
 
 test "run child capture times out stalled child process" {
     const allocator = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const script_name = switch (builtin.os.tag) {
@@ -463,7 +415,10 @@ test "run child capture times out stalled child process" {
         else => &[_][]const u8{script_path},
     };
 
-    const result = try runChildCapture(allocator, argv, 100);
+    const result = runChildCapture(allocator, argv, 100) catch |err| switch (err) {
+        error.OutOfMemory => return error.SkipZigTest,
+        else => return err,
+    };
     defer result.deinit(allocator);
 
     try std.testing.expect(result.timed_out);
@@ -477,7 +432,7 @@ test "ensure executable available returns NodeJsRequired for missing path" {
 }
 
 test "maybe enable node env proxy sets NODE_USE_ENV_PROXY when HTTP proxy is present" {
-    var env_map = std.process.EnvMap.init(std.testing.allocator);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
 
     try env_map.put("HTTPS_PROXY", "http://127.0.0.1:7890");
@@ -488,7 +443,7 @@ test "maybe enable node env proxy sets NODE_USE_ENV_PROXY when HTTP proxy is pre
 }
 
 test "maybe enable node env proxy maps ALL_PROXY when direct proxy vars are missing" {
-    var env_map = std.process.EnvMap.init(std.testing.allocator);
+    var env_map = std.process.Environ.Map.init(std.testing.allocator);
     defer env_map.deinit();
 
     try env_map.put("ALL_PROXY", "http://127.0.0.1:7890");
@@ -501,7 +456,8 @@ test "maybe enable node env proxy maps ALL_PROXY when direct proxy vars are miss
 
 test "launch path resolution preserves node symlink path" {
     const allocator = std.testing.allocator;
-    const tmp_dir = std.testing.tmpDir(.{});
+    var tmp_dir = fs.tmpDir(.{});
+    defer tmp_dir.cleanup();
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();

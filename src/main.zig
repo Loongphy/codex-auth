@@ -1,4 +1,7 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
+const process_compat = @import("compat_process.zig");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
@@ -26,7 +29,6 @@ const UsageFetchDetailedFn = *const fn (
     auth_path: []const u8,
 ) anyerror!usage_api.UsageFetchResult;
 const ForegroundUsagePoolInitFn = *const fn (
-    pool: *std.Thread.Pool,
     allocator: std.mem.Allocator,
     n_jobs: usize,
 ) anyerror!void;
@@ -105,7 +107,7 @@ const DebugUsageLabelState = struct {
 
 pub const ForegroundUsageDebugLogger = struct {
     writer: *std.Io.Writer,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(writer: *std.Io.Writer) ForegroundUsageDebugLogger {
         return .{
@@ -114,8 +116,8 @@ pub const ForegroundUsageDebugLogger = struct {
     }
 
     pub fn print(self: *ForegroundUsageDebugLogger, comptime fmt: []const u8, args: anytype) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(fs.io());
+        defer self.mutex.unlock(fs.io());
 
         try self.writer.print(fmt, args);
         try self.writer.flush();
@@ -127,9 +129,9 @@ const ForegroundUsageDebugContext = struct {
     label_state: *const DebugUsageLabelState,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     var exit_code: u8 = 0;
-    runMain() catch |err| {
+    runMain(init) catch |err| {
         if (err == error.InvalidCliUsage) {
             exit_code = 2;
         } else if (isHandledCliError(err)) {
@@ -141,13 +143,14 @@ pub fn main() !void {
     if (exit_code != 0) std.process.exit(exit_code);
 }
 
-fn runMain() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+fn runMain(init: std.process.Init.Minimal) !void {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const args = try init.args.toSlice(arena_state.allocator());
 
     var parsed = try cli.parseArgs(allocator, args);
     defer cli.freeParseResult(allocator, &parsed);
@@ -185,7 +188,7 @@ fn runMain() !void {
         .import_auth => |opts| try handleImport(allocator, codex_home.?, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try handleRemove(allocator, codex_home.?, opts),
-        .clean => |_| try handleClean(allocator, codex_home.?),
+        .clean => try handleClean(allocator, codex_home.?),
     }
 
     if (shouldReconcileManagedService(cmd)) {
@@ -203,7 +206,7 @@ fn isHandledCliError(err: anyerror) bool {
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
-    if (std.process.hasNonEmptyEnvVarConstant(skip_service_reconcile_env)) return false;
+    if (hasNonEmptyEnvVar(skip_service_reconcile_env)) return false;
     return switch (cmd) {
         .help, .version, .status, .daemon => false,
         else => true,
@@ -221,11 +224,20 @@ pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
 }
 
 fn isAccountNameRefreshOnlyMode() bool {
-    return std.process.hasNonEmptyEnvVarConstant(account_name_refresh_only_env);
+    return hasNonEmptyEnvVar(account_name_refresh_only_env);
 }
 
 fn isBackgroundAccountNameRefreshDisabled() bool {
-    return std.process.hasNonEmptyEnvVarConstant(disable_background_account_name_refresh_env);
+    return hasNonEmptyEnvVar(disable_background_account_name_refresh_env);
+}
+
+fn hasNonEmptyEnvVar(name: []const u8) bool {
+    const value = process_compat.getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return false,
+        else => return false,
+    };
+    defer std.heap.page_allocator.free(value);
+    return value.len != 0;
 }
 
 fn trackedActiveAccountKey(reg: *registry.Registry) ?[]const u8 {
@@ -266,7 +278,7 @@ pub fn reconcileActiveAuthAfterRemove(
 
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
-    std.fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
+    fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -395,47 +407,16 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
-    if (reg.accounts.items.len <= 1) {
-        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
-    } else {
-        var thread_safe_allocator: std.heap.ThreadSafeAllocator = .{ .child_allocator = allocator };
-        const thread_allocator = thread_safe_allocator.allocator();
-        var pool: std.Thread.Pool = undefined;
-        const pool_started = blk: {
-            pool_init(
-                &pool,
-                thread_allocator,
-                @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return err,
-                else => break :blk false,
-            };
-            break :blk true;
+    if (reg.accounts.items.len > 1) {
+        pool_init(
+            allocator,
+            @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {},
         };
-
-        if (pool_started) {
-            defer pool.deinit();
-
-            var wait_group: std.Thread.WaitGroup = .{};
-            for (reg.accounts.items, 0..) |_, idx| {
-                if (debug_context) |debug| {
-                    try printForegroundUsageDebugRequest(debug.logger, reg, idx, debug.label_state.labels[idx]);
-                }
-                pool.spawnWg(&wait_group, foregroundUsageRefreshWorker, .{
-                    thread_allocator,
-                    codex_home,
-                    reg,
-                    idx,
-                    usage_fetcher,
-                    worker_results,
-                    debug_context,
-                });
-            }
-            wait_group.wait();
-        } else {
-            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
-        }
     }
+    runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
 
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
@@ -481,14 +462,11 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
 }
 
 fn initForegroundUsagePool(
-    pool: *std.Thread.Pool,
     allocator: std.mem.Allocator,
     n_jobs: usize,
 ) !void {
-    try pool.init(.{
-        .allocator = allocator,
-        .n_jobs = n_jobs,
-    });
+    _ = allocator;
+    _ = n_jobs;
 }
 
 fn runForegroundUsageRefreshWorkersSerially(
@@ -661,7 +639,7 @@ fn formatRemainingPercentAlloc(
     allocator: std.mem.Allocator,
     window: ?registry.RateLimitWindow,
 ) ![]const u8 {
-    const remaining = registry.remainingPercentAt(window, std.time.timestamp()) orelse return allocator.dupe(u8, "-");
+    const remaining = registry.remainingPercentAt(window, time_compat.timestamp()) orelse return allocator.dupe(u8, "-");
     return std.fmt.allocPrint(allocator, "{d}%", .{remaining});
 }
 
@@ -1033,7 +1011,7 @@ fn runBackgroundAccountNameRefreshWithLockAcquirer(
 }
 
 fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
-    var env_map = std.process.getEnvMap(allocator) catch |err| {
+    var env_map = process_compat.getEnvMap(allocator) catch |err| {
         std.log.warn("background account metadata refresh skipped: {s}", .{@errorName(err)});
         return;
     };
@@ -1043,16 +1021,17 @@ fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
     try env_map.put(disable_background_account_name_refresh_env, "1");
     try env_map.put(skip_service_reconcile_env, "1");
 
-    const self_exe = try std.fs.selfExePathAlloc(allocator);
+    const self_exe = try fs.selfExePathAlloc(allocator);
     defer allocator.free(self_exe);
 
-    var child = std.process.Child.init(&[_][]const u8{ self_exe, "list" }, allocator);
-    child.env_map = &env_map;
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.create_no_window = true;
-    try child.spawn();
+    _ = try std.process.spawn(fs.io(), .{
+        .argv = &[_][]const u8{ self_exe, "list" },
+        .environ_map = &env_map,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
 }
 
 fn maybeSpawnBackgroundAccountNameRefresh(
@@ -1094,7 +1073,7 @@ fn loadSingleFileImportAuthInfo(
             },
         },
         .cpa => blk: {
-            var file = std.fs.cwd().openFile(opts.auth_path.?, .{}) catch |err| {
+            var file = fs.cwd().openFile(opts.auth_path.?, .{}) catch |err| {
                 std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
                 return null;
             };
@@ -1329,7 +1308,7 @@ fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !C
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    std.fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
+    fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{
             .record_key = null,
             .syncable = false,
@@ -1379,7 +1358,7 @@ fn selectBestRemainingAccountKeyByUsageAlloc(
 ) !?[]u8 {
     if (reg.accounts.items.len == 0) return null;
 
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
@@ -1442,7 +1421,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 freeOwnedStrings(allocator, matched_labels.items);
                 matched_labels.deinit(allocator);
             }
-            if (!std.fs.File.stdin().isTty()) {
+            if (!fs.File.stdin().isTty()) {
                 try cli.printRemoveConfirmationUnavailableError(matched_labels.items);
                 return error.RemoveConfirmationUnavailable;
             }
@@ -1525,7 +1504,7 @@ fn handleTopLevelHelp(allocator: std.mem.Allocator, codex_home: []const u8) !voi
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const summary = try registry.cleanAccountsBackups(allocator, codex_home);
     var stdout: [256]u8 = undefined;
-    var writer = std.fs.File.stdout().writer(&stdout);
+    var writer = fs.File.stdout().writer(&stdout);
     const out = &writer.interface;
     try out.print(
         "cleaned accounts: auth_backups={d}, registry_backups={d}, stale_entries={d}\n",
@@ -1560,7 +1539,7 @@ test "background account-name refresh returns early when another refresh holds t
     };
 
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1588,7 +1567,7 @@ test "foreground node preflight fails fast when usage refresh needs node" {
     };
 
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -1716,12 +1695,12 @@ test "foreground node preflight fails fast when account-name refresh needs node"
                 chatgpt_account_id,
             );
             defer allocator.free(auth_json);
-            try std.fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
+            try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
         }
     };
 
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");

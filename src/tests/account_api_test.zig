@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 
 fn findEntryByAccountId(entries: []const account_api.AccountEntry, account_id: []const u8) ?*const account_api.AccountEntry {

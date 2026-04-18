@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 
@@ -112,7 +113,7 @@ fn authJsonWithExplicitIds(
 
 test "Scenario: Given legacy version key current-layout registry when loading then it rewrites to schema_version" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -147,7 +148,7 @@ test "Scenario: Given legacy version key current-layout registry when loading th
 
 test "Scenario: Given newer schema version when loading then it is rejected" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -168,7 +169,7 @@ test "Scenario: Given newer schema version when loading then it is rejected" {
 
 test "Scenario: Given v2 registry when loading then it migrates to record-key layout and rewrites schema_version" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -180,7 +181,7 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
     defer gpa.free(auth_json);
     const legacy_name = try legacySnapshotNameForEmail(gpa, email);
     defer gpa.free(legacy_name);
-    const legacy_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", legacy_name });
+    const legacy_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", legacy_name });
     defer gpa.free(legacy_rel);
     try tmp.dir.writeFile(.{ .sub_path = legacy_rel, .data = auth_json });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.20260312-000000", .data = auth_json });
@@ -233,7 +234,7 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
 
     const migrated_path = try registry.accountAuthPath(gpa, codex_home, account_id);
     defer gpa.free(migrated_path);
-    var migrated = try std.fs.cwd().openFile(migrated_path, .{});
+    var migrated = try fs.cwd().openFile(migrated_path, .{});
     migrated.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(legacy_rel, .{}));
 
@@ -249,7 +250,7 @@ test "Scenario: Given v2 registry when loading then it migrates to record-key la
 
 test "Scenario: Given purge import with file when rebuilding then current auth is imported as active and old registry entries are discarded" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -305,7 +306,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
         ,
     });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
     var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
@@ -345,7 +346,7 @@ test "Scenario: Given purge import with file when rebuilding then current auth i
 
 test "Scenario: Given purge with newer schema registry when rebuilding then auto and api config are preserved" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -375,7 +376,7 @@ test "Scenario: Given purge with newer schema registry when rebuilding then auto
         ,
     });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
     var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
@@ -392,7 +393,7 @@ test "Scenario: Given purge with newer schema registry when rebuilding then auto
 
 test "Scenario: Given purge with malformed registry when rebuilding then auto and api config are recovered best effort" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -421,7 +422,7 @@ test "Scenario: Given purge with malformed registry when rebuilding then auto an
         ,
     });
 
-    const import_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "personal.json" });
     defer gpa.free(import_path);
 
     var report = try registry.purgeRegistryFromImportSource(gpa, codex_home, import_path, "personal");
@@ -438,7 +439,7 @@ test "Scenario: Given purge with malformed registry when rebuilding then auto an
 
 test "Scenario: Given purge without path when rebuilding then it scans account snapshots and ignores registry metadata files" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -451,8 +452,8 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
     defer gpa.free(snapshot_account_id);
     const snapshot_path = try registry.accountAuthPath(gpa, codex_home, snapshot_account_id);
     defer gpa.free(snapshot_path);
-    const snapshot_name = std.fs.path.basename(snapshot_path);
-    const snapshot_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", snapshot_name });
+    const snapshot_name = fs.path.basename(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", snapshot_name });
     defer gpa.free(snapshot_rel);
     try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = snapshot_auth });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json", .data = "{\"bad\":\"registry\"}" });
@@ -469,7 +470,7 @@ test "Scenario: Given purge without path when rebuilding then it scans account s
 
 test "Scenario: Given purge without path and only auth backups when rebuilding then it imports backup auth files too" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -494,13 +495,13 @@ test "Scenario: Given purge without path and only auth backups when rebuilding t
 
     const snapshot_path = try registry.accountAuthPath(gpa, codex_home, record_key);
     defer gpa.free(snapshot_path);
-    var snapshot = try std.fs.cwd().openFile(snapshot_path, .{});
+    var snapshot = try fs.cwd().openFile(snapshot_path, .{});
     snapshot.close();
 }
 
 test "Scenario: Given purge without a recoverable active auth when rebuilding then it activates the first sorted account and backs up the previous auth" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -513,7 +514,7 @@ test "Scenario: Given purge without a recoverable active auth when rebuilding th
     defer gpa.free(zed_record_key);
     const zed_snapshot_path = try registry.accountAuthPath(gpa, codex_home, zed_record_key);
     defer gpa.free(zed_snapshot_path);
-    const zed_snapshot_rel = try std.fs.path.relative(gpa, codex_home, zed_snapshot_path);
+    const zed_snapshot_rel = try std.fs.path.relative(gpa, codex_home, null, codex_home, zed_snapshot_path);
     defer gpa.free(zed_snapshot_rel);
     try tmp.dir.writeFile(.{ .sub_path = zed_snapshot_rel, .data = zed_auth });
 
@@ -523,7 +524,7 @@ test "Scenario: Given purge without a recoverable active auth when rebuilding th
     defer gpa.free(alpha_record_key);
     const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_record_key);
     defer gpa.free(alpha_snapshot_path);
-    const alpha_snapshot_rel = try std.fs.path.relative(gpa, codex_home, alpha_snapshot_path);
+    const alpha_snapshot_rel = try std.fs.path.relative(gpa, codex_home, null, codex_home, alpha_snapshot_path);
     defer gpa.free(alpha_snapshot_rel);
     try tmp.dir.writeFile(.{ .sub_path = alpha_snapshot_rel, .data = alpha_auth });
 
@@ -545,7 +546,7 @@ test "Scenario: Given purge without a recoverable active auth when rebuilding th
 
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
-    var active_file = try std.fs.cwd().openFile(active_auth_path, .{});
+    var active_file = try fs.cwd().openFile(active_auth_path, .{});
     defer active_file.close();
     const active_auth = try active_file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(active_auth);
@@ -569,7 +570,7 @@ test "Scenario: Given purge without a recoverable active auth when rebuilding th
     try std.testing.expectEqual(@as(usize, 1), backup_count);
     try std.testing.expect(backup_name != null);
 
-    const backup_rel = try std.fs.path.join(gpa, &[_][]const u8{ "accounts", backup_name.? });
+    const backup_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", backup_name.? });
     defer gpa.free(backup_rel);
     var backup_file = try tmp.dir.openFile(backup_rel, .{});
     defer backup_file.close();
@@ -580,7 +581,7 @@ test "Scenario: Given purge without a recoverable active auth when rebuilding th
 
 test "Scenario: Given purge without path and an empty snapshot when rebuilding then it reports malformed json and still imports valid backups" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -618,7 +619,7 @@ test "Scenario: Given purge without path and a broken snapshot symlink when rebu
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -654,7 +655,7 @@ test "Scenario: Given purge without path and a broken snapshot symlink when rebu
 
 test "Scenario: Given purge without path and duplicate snapshots when rebuilding then newest snapshot wins and accounts are sorted by email" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -670,7 +671,7 @@ test "Scenario: Given purge without path and duplicate snapshots when rebuilding
     defer gpa.free(current_snapshot_auth);
     const current_snapshot_path = try registry.accountAuthPath(gpa, codex_home, duplicate_record_key);
     defer gpa.free(current_snapshot_path);
-    const current_snapshot_rel = try std.fs.path.relative(gpa, codex_home, current_snapshot_path);
+    const current_snapshot_rel = try std.fs.path.relative(gpa, codex_home, null, codex_home, current_snapshot_path);
     defer gpa.free(current_snapshot_rel);
     try tmp.dir.writeFile(.{
         .sub_path = current_snapshot_rel,
@@ -693,7 +694,7 @@ test "Scenario: Given purge without path and duplicate snapshots when rebuilding
     const duplicate_idx = registry.findAccountIndexByAccountKey(&loaded, duplicate_record_key) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(registry.PlanType.team, loaded.accounts.items[duplicate_idx].plan.?);
 
-    var snapshot = try std.fs.cwd().openFile(current_snapshot_path, .{});
+    var snapshot = try fs.cwd().openFile(current_snapshot_path, .{});
     defer snapshot.close();
     const snapshot_contents = try snapshot.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(snapshot_contents);
@@ -702,7 +703,7 @@ test "Scenario: Given purge without path and duplicate snapshots when rebuilding
 
 test "Scenario: Given same team account id across different users when purging then record key keeps both imported accounts" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -755,7 +756,7 @@ test "Scenario: Given same team account id across different users when purging t
 
 test "Scenario: Given same user across team and free workspaces when purging then record key keeps both workspace records" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -811,7 +812,7 @@ test "Scenario: Given same user across team and free workspaces when purging the
 
 test "Scenario: Given purge without accounts directory when rebuilding then current auth still restores the active account" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     const codex_home = try tmp.dir.realpathAlloc(gpa, ".");

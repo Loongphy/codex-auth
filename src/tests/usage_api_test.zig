@@ -1,4 +1,5 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const registry = @import("../registry.zig");
 const usage_api = @import("../usage_api.zig");
 
@@ -107,7 +108,7 @@ test "parse usage api response maps prolite plan" {
 
 test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing auth" {
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
+    var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
 
     try tmp.dir.writeFile(.{

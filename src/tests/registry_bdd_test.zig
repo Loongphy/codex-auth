@@ -1,15 +1,16 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const SyncBddContext = struct {
     allocator: std.mem.Allocator,
-    tmp: std.testing.TmpDir,
+    tmp: fs.TmpDir,
     codex_home: []u8,
     reg: registry.Registry,
 
     fn givenCleanCodexHome(allocator: std.mem.Allocator) !SyncBddContext {
-        var tmp = std.testing.tmpDir(.{});
+        var tmp = fs.tmpDir(.{});
         const codex_home = try tmp.dir.realpathAlloc(allocator, ".");
         return SyncBddContext{
             .allocator = allocator,

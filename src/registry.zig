@@ -1,4 +1,7 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
+const process_compat = @import("compat_process.zig");
 const builtin = @import("builtin");
 const account_api = @import("account_api.zig");
 const c_time = @cImport({
@@ -274,7 +277,7 @@ fn replaceOptionalStringAlloc(
 }
 
 fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
-    const val = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+    const val = process_compat.getEnvVarOwned(allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return null,
         else => return err,
     };
@@ -286,9 +289,9 @@ fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8
 }
 
 fn resolveExistingCodexHomeOverride(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+    const stat = fs.cwd().statFile(path) catch |err| switch (err) {
         error.IsDir => {
-            return std.fs.realpathAlloc(allocator, path) catch |realpath_err| {
+            return fs.realpathAlloc(allocator, path) catch |realpath_err| {
                 logCodexHomeResolutionError("failed to canonicalize CODEX_HOME `{s}`: {s}", .{ path, @errorName(realpath_err) });
                 return realpath_err;
             };
@@ -306,7 +309,7 @@ fn resolveExistingCodexHomeOverride(allocator: std.mem.Allocator, path: []const 
         logCodexHomeResolutionError("CODEX_HOME points to `{s}`, but that path is not a directory", .{path});
         return error.NotDir;
     }
-    return std.fs.realpathAlloc(allocator, path) catch |err| {
+    return fs.realpathAlloc(allocator, path) catch |err| {
         logCodexHomeResolutionError("failed to canonicalize CODEX_HOME `{s}`: {s}", .{ path, @errorName(err) });
         return err;
     };
@@ -330,10 +333,10 @@ pub fn resolveCodexHomeFromEnv(
         if (path.len != 0) return try resolveExistingCodexHomeOverride(allocator, path);
     }
     if (home) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     if (user_profile) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     return error.EnvironmentVariableNotFound;
 }
@@ -360,13 +363,13 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
 }
 
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    const accounts_dir = try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
-    try std.fs.cwd().makePath(accounts_dir);
+    try fs.cwd().makePath(accounts_dir);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
 }
 
 fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -405,7 +408,7 @@ fn accountSnapshotFileName(allocator: std.mem.Allocator, account_key: []const u8
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
     const filename = try accountSnapshotFileName(allocator, account_key);
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8) ![]u8 {
@@ -413,19 +416,19 @@ fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, e
     defer allocator.free(key);
     const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
 }
 
 pub fn copyFile(src: []const u8, dest: []const u8) !void {
-    try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{});
+    try fs.cwd().copyFile(src, fs.cwd(), dest, .{});
 }
 
 fn writeFile(path: []const u8, data: []const u8) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = try fs.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(data);
 }
@@ -439,7 +442,7 @@ pub const CleanSummary = struct {
 };
 
 fn fileExists(path: []const u8) !bool {
-    std.fs.cwd().access(path, .{}) catch |err| switch (err) {
+    fs.cwd().access(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -447,7 +450,7 @@ fn fileExists(path: []const u8) !bool {
 }
 
 fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    const cwd = std.fs.cwd();
+    const cwd = fs.cwd();
     var file = cwd.openFile(path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
@@ -473,11 +476,11 @@ fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []cons
 }
 
 fn ensureDir(path: []const u8) !void {
-    try std.fs.cwd().makePath(path);
+    try fs.cwd().makePath(path);
 }
 
 fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
 }
 
 fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
@@ -527,7 +530,7 @@ fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
 }
 
 fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) ![]u8 {
-    const timestamp = try formatBackupTimestamp(allocator, std.time.timestamp());
+    const timestamp = try formatBackupTimestamp(allocator, time_compat.timestamp());
     defer allocator.free(timestamp);
     const base = try std.fmt.allocPrint(allocator, "{s}.bak.{s}", .{ base_name, timestamp });
     defer allocator.free(base);
@@ -539,10 +542,10 @@ fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []co
         else
             try std.fmt.allocPrint(allocator, "{s}.{d}", .{ base, attempt });
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, name });
+        const path = try fs.path.join(allocator, &[_][]const u8{ dir, name });
         allocator.free(name);
 
-        if (std.fs.cwd().openFile(path, .{})) |file| {
+        if (fs.cwd().openFile(path, .{})) |file| {
             file.close();
             allocator.free(path);
             continue;
@@ -568,7 +571,7 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
         list.deinit(allocator);
     }
 
-    var dir_handle = try std.fs.cwd().openDir(dir, .{ .iterate = true });
+    var dir_handle = try fs.cwd().openDir(dir, .{ .iterate = true });
     defer dir_handle.close();
 
     var it = dir_handle.iterate();
@@ -579,7 +582,7 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
 
         const stat = try dir_handle.statFile(entry.name);
         const name = try allocator.dupe(u8, entry.name);
-        try list.append(allocator, .{ .name = name, .mtime = stat.mtime });
+        try list.append(allocator, .{ .name = name, .mtime = stat.mtime.nanoseconds });
     }
 
     std.sort.insertion(BackupEntry, list.items, {}, backupEntryLessThan);
@@ -594,7 +597,7 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
 
 fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) !usize {
     var count: usize = 0;
-    var dir_handle = try std.fs.cwd().openDir(dir, .{ .iterate = true });
+    var dir_handle = try fs.cwd().openDir(dir, .{ .iterate = true });
     defer dir_handle.close();
 
     var it = dir_handle.iterate();
@@ -614,7 +617,7 @@ fn resolveStrictAccountAuthPath(
     account_key: []const u8,
 ) ![]u8 {
     const path = try accountAuthPath(allocator, codex_home, account_key);
-    if (std.fs.cwd().openFile(path, .{})) |file| {
+    if (fs.cwd().openFile(path, .{})) |file| {
         file.close();
         return path;
     } else |err| {
@@ -648,7 +651,7 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     const reg_path = try registryPath(allocator, codex_home);
     defer allocator.free(reg_path);
 
-    var cwd = std.fs.cwd();
+    var cwd = fs.cwd();
     var dir_handle = cwd.openDir(dir, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => return err,
@@ -676,7 +679,7 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     defer reg.deinit(allocator);
 
     var stale_snapshot_files_removed: usize = 0;
-    var accounts_dir = try std.fs.cwd().openDir(dir, .{ .iterate = true });
+    var accounts_dir = try fs.cwd().openDir(dir, .{ .iterate = true });
     defer accounts_dir.close();
     var it = accounts_dir.iterate();
     while (try it.next()) |entry| {
@@ -710,14 +713,14 @@ pub fn backupAuthIfChanged(
     try ensureDir(dir);
 
     if (!(try filesEqual(allocator, current_auth_path, new_auth_path))) {
-        if (std.fs.cwd().openFile(current_auth_path, .{})) |file| {
+        if (fs.cwd().openFile(current_auth_path, .{})) |file| {
             file.close();
         } else |_| {
             return;
         }
         const backup = try makeBackupPath(allocator, dir, "auth.json");
         defer allocator.free(backup);
-        try std.fs.cwd().copyFile(current_auth_path, std.fs.cwd(), backup, .{});
+        try fs.cwd().copyFile(current_auth_path, fs.cwd(), backup, .{});
         try pruneBackups(allocator, dir, "auth.json", max_backups);
     }
 }
@@ -736,7 +739,7 @@ fn backupRegistryIfChanged(
         return;
     }
 
-    if (std.fs.cwd().openFile(current_registry_path, .{})) |file| {
+    if (fs.cwd().openFile(current_registry_path, .{})) |file| {
         file.close();
     } else |_| {
         return;
@@ -744,7 +747,7 @@ fn backupRegistryIfChanged(
 
     const backup = try makeBackupPath(allocator, dir, "registry.json");
     defer allocator.free(backup);
-    try std.fs.cwd().copyFile(current_registry_path, std.fs.cwd(), backup, .{});
+    try fs.cwd().copyFile(current_registry_path, fs.cwd(), backup, .{});
     try pruneBackups(allocator, dir, "registry.json", max_backups);
 }
 
@@ -874,7 +877,7 @@ fn loadPurgeCarryForwardConfig(allocator: std.mem.Allocator, codex_home: []const
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
-    const cwd = std.fs.cwd();
+    const cwd = fs.cwd();
     var file = cwd.openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => return err,
@@ -1002,7 +1005,7 @@ fn importDisplayLabelFromName(allocator: std.mem.Allocator, name: []const u8) ![
 }
 
 fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return importDisplayLabelFromName(allocator, std.fs.path.basename(path));
+    return importDisplayLabelFromName(allocator, fs.path.basename(path));
 }
 
 fn importReasonLabel(err: anyerror) []const u8 {
@@ -1066,7 +1069,7 @@ pub fn importCpaPath(
     }
 
     const path = auth_path.?;
-    const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+    const stat = fs.cwd().statFile(path) catch |err| switch (err) {
         error.IsDir => {
             if (explicit_alias != null) {
                 std.log.warn("--alias is ignored when importing a directory: {s}", .{path});
@@ -1107,7 +1110,7 @@ pub fn importAuthPath(
     auth_path: []const u8,
     explicit_alias: ?[]const u8,
 ) !ImportReport {
-    const stat = std.fs.cwd().statFile(auth_path) catch |err| switch (err) {
+    const stat = fs.cwd().statFile(auth_path) catch |err| switch (err) {
         error.IsDir => {
             if (explicit_alias != null) {
                 std.log.warn("--alias is ignored when importing a directory: {s}", .{auth_path});
@@ -1144,7 +1147,7 @@ pub fn importAuthPath(
 fn defaultCpaImportPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
+    return try fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
 }
 
 fn importCpaFile(
@@ -1154,7 +1157,7 @@ fn importCpaFile(
     auth_file: []const u8,
     explicit_alias: ?[]const u8,
 ) !ImportOutcome {
-    var file = try std.fs.cwd().openFile(auth_file, .{});
+    var file = try fs.cwd().openFile(auth_file, .{});
     defer file.close();
 
     const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
@@ -1243,7 +1246,7 @@ fn importCpaDirectory(
     errdefer report.deinit(allocator);
     report.source_label = try allocator.dupe(u8, source_label);
 
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => if (missing_ok) return report else return err,
         else => return err,
     };
@@ -1265,7 +1268,7 @@ fn importCpaDirectory(
     std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
 
     for (names.items) |name| {
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
@@ -1286,7 +1289,7 @@ fn importAuthDirectory(
     reg: *Registry,
     dir_path: []const u8,
 ) !ImportReport {
-    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir = try fs.cwd().openDir(dir_path, .{ .iterate = true });
     defer dir.close();
 
     var names = std.ArrayList([]u8).empty;
@@ -1308,7 +1311,7 @@ fn importAuthDirectory(
     errdefer report.deinit(allocator);
     report.source_label = try allocator.dupe(u8, dir_path);
     for (names.items) |name| {
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
@@ -1340,7 +1343,7 @@ fn importAccountsSnapshotDirectory(
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return report,
         else => return err,
     };
@@ -1357,7 +1360,7 @@ fn importAccountsSnapshotDirectory(
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isPurgeImportAuthFile(entry.name)) continue;
 
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         var file_path_owned = true;
         errdefer if (file_path_owned) allocator.free(file_path);
 
@@ -1408,7 +1411,7 @@ fn importAccountsSnapshotDirectory(
             .path = file_path,
             .record_key = candidate_record_key,
             .email = candidate_email,
-            .mtime = stat.mtime,
+            .mtime = stat.mtime.nanoseconds,
             .kind = if (std.mem.eql(u8, entry.name, canonical_name))
                 .current_snapshot
             else if (std.mem.startsWith(u8, entry.name, "auth.json.bak."))
@@ -1537,7 +1540,7 @@ fn syncCurrentAuthBestEffort(
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    if (std.fs.cwd().openFile(auth_path, .{})) |file| {
+    if (fs.cwd().openFile(auth_path, .{})) |file| {
         file.close();
     } else |_| {
         return null;
@@ -1603,8 +1606,8 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
         allocator.free(k);
     }
     reg.active_account_key = new_active_account_key;
-    reg.active_account_activated_at_ms = std.time.milliTimestamp();
-    const now = std.time.timestamp();
+    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    const now = time_compat.timestamp();
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_key, account_key)) {
             rec.last_used_at = now;
@@ -1614,7 +1617,7 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
 }
 
 pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8, snapshot: RateLimitSnapshot) void {
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_key, account_key)) {
             if (rec.last_usage) |*u| {
@@ -1744,7 +1747,7 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         if (removed[i]) {
             const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_key);
             defer allocator.free(preferred_path);
-            std.fs.cwd().deleteFile(preferred_path) catch {};
+            fs.cwd().deleteFile(preferred_path) catch {};
             freeAccountRecord(allocator, rec);
             continue;
         }
@@ -1765,7 +1768,7 @@ fn deleteRemovedAccountBackups(
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
@@ -1776,7 +1779,7 @@ fn deleteRemovedAccountBackups(
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const path = try fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         defer allocator.free(path);
 
         var info = @import("auth.zig").parseAuthInfo(allocator, path) catch continue;
@@ -1799,7 +1802,7 @@ fn isRemovedAccountKey(reg: *const Registry, removed: []const bool, record_key: 
 
 pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     if (reg.accounts.items.len == 0) return null;
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
@@ -1991,7 +1994,7 @@ pub fn accountFromAuth(
         .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
-        .created_at = std.time.timestamp(),
+        .created_at = time_compat.timestamp(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -2087,7 +2090,7 @@ fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMa
         .alias = try allocator.dupe(u8, alias),
         .plan = null,
         .auth_mode = null,
-        .created_at = readInt(obj.get("created_at")) orelse std.time.timestamp(),
+        .created_at = readInt(obj.get("created_at")) orelse time_compat.timestamp(),
         .last_used_at = readInt(obj.get("last_used_at")),
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
@@ -2143,7 +2146,7 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         .account_name = try parseOptionalStoredStringAlloc(allocator, obj.get("account_name")),
         .plan = null,
         .auth_mode = null,
-        .created_at = readInt(obj.get("created_at")) orelse std.time.timestamp(),
+        .created_at = readInt(obj.get("created_at")) orelse time_compat.timestamp(),
         .last_used_at = readInt(obj.get("last_used_at")),
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
@@ -2193,7 +2196,7 @@ fn resolveLegacySnapshotPathForEmail(
     email: []const u8,
 ) ![]u8 {
     const legacy_path = try legacyAccountAuthPath(allocator, codex_home, email);
-    if (std.fs.cwd().openFile(legacy_path, .{})) |file| {
+    if (fs.cwd().openFile(legacy_path, .{})) |file| {
         file.close();
         return legacy_path;
     } else |_| {
@@ -2202,7 +2205,7 @@ fn resolveLegacySnapshotPathForEmail(
 
     const accounts_dir = try backupDir(allocator, codex_home);
     defer allocator.free(accounts_dir);
-    var dir = std.fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return err,
     };
@@ -2214,7 +2217,7 @@ fn resolveLegacySnapshotPathForEmail(
         if (!std.mem.endsWith(u8, entry.name, ".auth.json")) continue;
         if (std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
+        const path = try fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
         errdefer allocator.free(path);
         const info = @import("auth.zig").parseAuthInfo(allocator, path) catch {
             allocator.free(path);
@@ -2287,7 +2290,7 @@ fn migrateLegacyRecord(
     const old_legacy_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
     defer allocator.free(old_legacy_path);
     if (std.mem.eql(u8, legacy_path, old_legacy_path)) {
-        std.fs.cwd().deleteFile(old_legacy_path) catch {};
+        fs.cwd().deleteFile(old_legacy_path) catch {};
     }
 
     const should_activate = if (legacy_active_email) |active_email|
@@ -2454,7 +2457,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
-    const cwd = std.fs.cwd();
+    const cwd = fs.cwd();
     const data = blk: {
         var file = cwd.openFile(path, .{}) catch |err| {
             if (err == error.FileNotFound) {
@@ -2508,34 +2511,34 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
 
 fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
     const allocator = std.heap.page_allocator;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, std.time.nanoTimestamp() });
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, time_compat.nanoTimestamp() });
     defer allocator.free(temp_path);
-    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, std.time.nanoTimestamp() });
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, time_compat.nanoTimestamp() });
     defer allocator.free(backup_path);
 
     {
-        var file = try std.fs.cwd().createFile(temp_path, .{ .truncate = true });
+        var file = try fs.cwd().createFile(temp_path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(data);
         try file.sync();
     }
 
     const had_original = blk: {
-        std.fs.cwd().rename(path, backup_path) catch |err| switch (err) {
+        fs.cwd().rename(path, backup_path) catch |err| switch (err) {
             error.FileNotFound => break :blk false,
             else => return err,
         };
         break :blk true;
     };
     errdefer {
-        std.fs.cwd().deleteFile(temp_path) catch {};
+        fs.cwd().deleteFile(temp_path) catch {};
         if (had_original) {
-            std.fs.cwd().rename(backup_path, path) catch {};
+            fs.cwd().rename(backup_path, path) catch {};
         }
     }
-    try std.fs.cwd().rename(temp_path, path);
+    try fs.cwd().rename(temp_path, path);
     if (had_original) {
-        std.fs.cwd().deleteFile(backup_path) catch |err| switch (err) {
+        fs.cwd().deleteFile(backup_path) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
@@ -2547,7 +2550,7 @@ fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
         return writeRegistryFileReplace(path, data);
     }
     var buf: [4096]u8 = undefined;
-    var atomic_file = try std.fs.cwd().atomicFile(path, .{ .write_buffer = &buf });
+    var atomic_file = try fs.cwd().atomicFile(path, .{ .write_buffer = &buf });
     defer atomic_file.deinit();
     try atomic_file.file_writer.interface.writeAll(data);
     try atomic_file.finish();
@@ -2777,7 +2780,7 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    if (std.fs.cwd().openFile(auth_path, .{})) |file| {
+    if (fs.cwd().openFile(auth_path, .{})) |file| {
         file.close();
     } else |_| {
         return false;

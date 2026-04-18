@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
 const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
@@ -24,11 +26,11 @@ const ansi = struct {
 };
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty();
+    return fs.File.stdout().isTty();
 }
 
 fn stderrColorEnabled() bool {
-    return std.fs.File.stderr().isTty();
+    return fs.File.stderr().isTty();
 }
 
 pub const ListOptions = struct {
@@ -796,7 +798,7 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
 
 pub fn printUsageError(usage_err: *const UsageError) !void {
     var buffer: [2048]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
@@ -835,7 +837,7 @@ pub fn printImportReport(report: *const registry.ImportReport) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     var stderr_buffer: [4096]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    var stderr_writer = fs.File.stderr().writer(&stderr_buffer);
     try writeImportReport(stdout.out(), &stderr_writer.interface, report);
 }
 
@@ -904,7 +906,7 @@ pub fn writeHintPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
 
 pub fn printAccountNotFoundError(query: []const u8) !void {
     var buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
@@ -914,7 +916,7 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
 
 pub fn printRemoveRequiresTtyError() !void {
     var buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
@@ -926,7 +928,7 @@ pub fn printRemoveRequiresTtyError() !void {
 
 pub fn printInvalidRemoveSelectionError() !void {
     var buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
@@ -988,7 +990,7 @@ pub fn writeRemoveConfirmationTo(out: *std.Io.Writer, labels: []const []const u8
 
 pub fn printRemoveConfirmationUnavailableError(labels: []const []const u8) !void {
     var buffer: [1024]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     const use_color = stderrColorEnabled();
     try writeMatchedAccountsListTo(out, labels);
@@ -1007,7 +1009,7 @@ pub fn confirmRemoveMatches(labels: []const []const u8) !bool {
     try out.flush();
 
     var buf: [64]u8 = undefined;
-    const n = try std.fs.File.stdin().read(&buf);
+    const n = try fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     return line.len == 1 and (line[0] == 'y' or line[0] == 'Y');
 }
@@ -1031,7 +1033,7 @@ pub fn printRemoveSummary(labels: []const []const u8) !void {
 
 fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void {
     var buffer: [512]u8 = undefined;
-    var writer = std.fs.File.stderr().writer(&buffer);
+    var writer = fs.File.stderr().writer(&buffer);
     const out = &writer.interface;
     try writeCodexLoginLaunchFailureHintTo(out, err_name, use_color);
     try out.flush();
@@ -1060,7 +1062,7 @@ pub fn codexLoginArgs(opts: LoginOptions) []const []const u8 {
 
 fn ensureCodexLoginSucceeded(term: std.process.Child.Term) !void {
     switch (term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) return;
             return error.CodexLoginFailed;
         },
@@ -1069,11 +1071,16 @@ fn ensureCodexLoginSucceeded(term: std.process.Child.Term) !void {
 }
 
 pub fn runCodexLogin(opts: LoginOptions) !void {
-    var child = std.process.Child.init(codexLoginArgs(opts), std.heap.page_allocator);
-    child.stdin_behavior = .Inherit;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-    const term = child.spawnAndWait() catch |err| {
+    var child = std.process.spawn(fs.io(), .{
+        .argv = codexLoginArgs(opts),
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
+        return err;
+    };
+    const term = child.wait(fs.io()) catch |err| {
         writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
         return err;
     };
@@ -1125,7 +1132,7 @@ pub fn selectAccountsToRemoveWithUsageOverrides(
     if (comptime builtin.os.tag == .windows) {
         return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
-    if (shouldUseNumberedRemoveSelector(false, std.fs.File.stdin().isTty())) {
+    if (shouldUseNumberedRemoveSelector(false, fs.File.stdin().isTty())) {
         return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
     return selectRemoveInteractive(allocator, reg, usage_overrides) catch selectRemoveWithNumbers(allocator, reg, usage_overrides);
@@ -1183,7 +1190,7 @@ fn selectWithNumbers(
     try out.flush();
 
     var buf: [64]u8 = undefined;
-    const n = try std.fs.File.stdin().read(&buf);
+    const n = try fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (line.len == 0) {
         if (active_idx) |i| return accountIdForSelectable(&rows, reg, i);
@@ -1219,7 +1226,7 @@ fn selectWithNumbersFromIndices(
     try out.flush();
 
     var buf: [64]u8 = undefined;
-    const n = try std.fs.File.stdin().read(&buf);
+    const n = try fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (line.len == 0) {
         if (active_idx) |i| return accountIdForSelectable(&rows, reg, i);
@@ -1241,7 +1248,7 @@ fn selectInteractiveFromIndices(
     var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try std.fs.cwd().openFile("/dev/tty", .{});
+    var tty = try fs.cwd().openFile("/dev/tty", .{});
     defer tty.close();
 
     const term = try std.posix.tcgetattr(tty.handle);
@@ -1367,7 +1374,7 @@ fn selectRemoveWithNumbers(
     try out.flush();
 
     var buf: [256]u8 = undefined;
-    const n = try std.fs.File.stdin().read(&buf);
+    const n = try fs.File.stdin().read(&buf);
     const line = std.mem.trim(u8, buf[0..n], " \n\r\t");
     if (line.len == 0) return null;
     if (!isStrictRemoveSelectionLine(line)) return error.InvalidRemoveSelectionInput;
@@ -1424,7 +1431,7 @@ fn selectInteractive(
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try std.fs.cwd().openFile("/dev/tty", .{});
+    var tty = try fs.cwd().openFile("/dev/tty", .{});
     defer tty.close();
 
     const term = try std.posix.tcgetattr(tty.handle);
@@ -1533,7 +1540,7 @@ fn selectRemoveInteractive(
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try std.fs.cwd().openFile("/dev/tty", .{});
+    var tty = try fs.cwd().openFile("/dev/tty", .{});
     defer tty.close();
 
     const term = try std.posix.tcgetattr(tty.handle);
@@ -1923,7 +1930,7 @@ fn buildSwitchRowsWithUsageOverrides(
         .rate_week = "WEEKLY".len,
         .last = "LAST".len,
     };
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
@@ -1997,7 +2004,7 @@ fn buildSwitchRowsFromIndicesWithUsageOverrides(
         .rate_week = "WEEKLY".len,
         .last = "LAST".len,
     };
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
@@ -2061,7 +2068,7 @@ fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_
 fn formatRateLimitSwitchAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(allocator, "-", .{});
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
         return try std.fmt.allocPrint(allocator, "100%", .{});

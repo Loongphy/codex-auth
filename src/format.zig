@@ -1,4 +1,6 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
 const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
@@ -15,7 +17,7 @@ const ansi = struct {
 };
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty();
+    return fs.File.stdout().isTty();
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
@@ -88,7 +90,7 @@ fn writeAccountsTableWithUsageOverrides(
         headers[3].len,
         headers[4].len,
     };
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
     defer display.deinit(std.heap.page_allocator);
     const idx_width = @max(@as(usize, 2), indexWidth(display.selectable_row_indices.len));
@@ -306,7 +308,7 @@ fn resetPartsAlloc(reset_at: i64, now: i64) !ResetParts {
 fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
         return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
@@ -323,7 +325,7 @@ fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
 fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
         return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
@@ -591,7 +593,7 @@ fn tableTotalWidth(widths: []const usize) usize {
 }
 
 fn terminalWidth() usize {
-    const stdout_file = std.fs.File.stdout();
+    const stdout_file = fs.File.stdout();
     if (!stdout_file.isTty()) return 0;
 
     if (comptime builtin.os.tag == .windows) {
@@ -701,7 +703,7 @@ test "truncateAlloc respects max_len" {
 }
 
 test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const window = registry.RateLimitWindow{
         .used_percent = 100.0,
         .window_minutes = 300,
