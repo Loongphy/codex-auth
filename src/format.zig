@@ -597,11 +597,12 @@ fn terminalWidth() usize {
     if (!stdout_file.isTty()) return 0;
 
     if (comptime builtin.os.tag == .windows) {
-        var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stdout_file.handle, &info) == std.os.windows.FALSE) {
-            return 0;
+        var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
+        switch (get_console_info.operate(fs.io(), stdout_file.toIoFile()) catch return 0) {
+            .SUCCESS => {},
+            else => return 0,
         }
-        const width = @as(i32, info.srWindow.Right) - @as(i32, info.srWindow.Left) + 1;
+        const width = @as(i32, get_console_info.Data.dwWindowSize.X);
         if (width <= 0) return 0;
         return @as(usize, @intCast(width));
     } else {
@@ -773,4 +774,3 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
 }
-

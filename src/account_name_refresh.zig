@@ -1,4 +1,3 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const fs = @import("compat_fs.zig");
 const auth = @import("auth.zig");
@@ -53,29 +52,6 @@ fn candidateIsNewer(candidate: *const auth.AuthInfo, best: *const auth.AuthInfo)
 }
 
 fn tryExclusiveLock(file: fs.File) !bool {
-    if (builtin.os.tag == .windows) {
-        const windows = std.os.windows;
-        const range_off: windows.LARGE_INTEGER = 0;
-        const range_len: windows.LARGE_INTEGER = 1;
-        var io_status_block: windows.IO_STATUS_BLOCK = undefined;
-        windows.LockFile(
-            file.handle,
-            null,
-            null,
-            null,
-            &io_status_block,
-            &range_off,
-            &range_len,
-            null,
-            windows.TRUE,
-            windows.TRUE,
-        ) catch |err| switch (err) {
-            error.WouldBlock => return false,
-            else => |e| return e,
-        };
-        return true;
-    }
-
     return try file.tryLock(.exclusive);
 }
 

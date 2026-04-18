@@ -83,7 +83,7 @@ pub const File = struct {
     pub const Permissions = std.Io.File.Permissions;
     pub const Stat = std.Io.File.Stat;
 
-    fn toIoFile(self: File) std.Io.File {
+    pub fn toIoFile(self: File) std.Io.File {
         return .{
             .handle = self.handle,
             .flags = self.flags,
