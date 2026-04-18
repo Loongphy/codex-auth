@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const time_compat = @import("compat_time.zig");
 const fs = @import("compat_fs.zig");
@@ -251,6 +252,9 @@ fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep
 
     const stat = try file.stat();
     if (stat.size == 0) return null;
+    if (comptime builtin.os.tag == .windows) {
+        return scanFileForUsageStreaming(allocator, file, keep_latest_unusable);
+    }
 
     var map = try file.createMemoryMap(.{
         .len = @intCast(stat.size),
@@ -260,6 +264,66 @@ fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep
     defer map.destroy(fs.io());
 
     return scanUsageEventSliceBackwards(allocator, map.memory, keep_latest_unusable);
+}
+
+fn scanFileForUsageStreaming(
+    allocator: std.mem.Allocator,
+    file: fs.File,
+    keep_latest_unusable: bool,
+) !?ParsedUsageEvent {
+    var read_buffer: [8192]u8 = undefined;
+    var file_reader = file.reader(&read_buffer);
+    const reader = &file_reader.interface;
+    var line_buffer: std.Io.Writer.Allocating = .init(allocator);
+    defer line_buffer.deinit();
+    var last: ?ParsedUsageEvent = null;
+
+    while (true) {
+        line_buffer.clearRetainingCapacity();
+        const line_len = reader.streamDelimiterLimit(
+            &line_buffer.writer,
+            '\n',
+            .limited(max_rollout_line_bytes),
+        ) catch |err| switch (err) {
+            error.StreamTooLong => {
+                _ = reader.discardDelimiterInclusive('\n') catch |discard_err| switch (discard_err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+                };
+                continue;
+            },
+            error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+            error.WriteFailed => return error.OutOfMemory,
+        };
+        const line = line_buffer.written();
+        const next_byte: ?u8 = reader.peekByte() catch |err| switch (err) {
+            error.EndOfStream => null,
+            error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+        };
+        if (next_byte) |byte| {
+            std.debug.assert(byte == '\n');
+            _ = reader.discardDelimiterInclusive('\n') catch |err| switch (err) {
+                error.EndOfStream => unreachable,
+                error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+            };
+        } else if (line_len == 0) {
+            break;
+        }
+        const trimmed = std.mem.trim(u8, line, " \r\t");
+        if (trimmed.len == 0) continue;
+        if (parseUsageEventLine(allocator, trimmed)) |event| {
+            if (!keep_latest_unusable and event.snapshot == null) {
+                continue;
+            }
+            if (last) |*prev| {
+                if (prev.snapshot) |*snapshot| {
+                    registry.freeRateLimitSnapshot(allocator, snapshot);
+                }
+            }
+            last = event;
+        }
+    }
+    return last;
 }
 
 fn scanUsageEventSliceBackwards(
