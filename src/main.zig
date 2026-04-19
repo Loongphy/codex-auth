@@ -1468,43 +1468,11 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     if (opts.query) |query| {
-        const usage_api_enabled = apiModeUsesApi(false, opts.api_mode);
-        const account_api_enabled = apiModeUsesApi(false, opts.api_mode);
-        var usage_state: ?ForegroundUsageRefreshState = null;
-        defer if (usage_state) |*state| state.deinit(allocator);
-
-        if (usage_api_enabled or account_api_enabled) {
-            try ensureForegroundNodeAvailableWithApiEnabled(
-                allocator,
-                codex_home,
-                &reg,
-                .switch_account,
-                usage_api_enabled,
-                account_api_enabled,
-            );
-            usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
-                allocator,
-                codex_home,
-                &reg,
-                usage_api.fetchUsageForAuthPathDetailed,
-                initForegroundUsagePool,
-                null,
-                usage_api_enabled,
-            );
-            try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
-                allocator,
-                codex_home,
-                &reg,
-                .switch_account,
-                defaultAccountFetcher,
-                account_api_enabled,
-            );
-        }
+        std.debug.assert(opts.api_mode == .default);
 
         var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
         defer resolution.deinit(allocator);
 
-        const usage_overrides = if (usage_state) |*state| state.usage_overrides else null;
         const selected_account_key = switch (resolution) {
             .not_found => {
                 try cli.printAccountNotFoundError(query);
@@ -1515,7 +1483,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 allocator,
                 &reg,
                 matches.items,
-                usage_overrides,
+                null,
             ),
         };
         if (selected_account_key == null) return;
@@ -1741,36 +1709,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    var usage_state: ?ForegroundUsageRefreshState = null;
-    defer if (usage_state) |*state| state.deinit(allocator);
-    if (opts.api_mode == .force_api) {
-        try ensureForegroundNodeAvailableWithApiEnabled(
-            allocator,
-            codex_home,
-            &reg,
-            .remove_account,
-            true,
-            true,
-        );
-        usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
-            allocator,
-            codex_home,
-            &reg,
-            usage_api.fetchUsageForAuthPathDetailed,
-            initForegroundUsagePool,
-            null,
-            true,
-        );
-        try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
-            allocator,
-            codex_home,
-            &reg,
-            .remove_account,
-            defaultAccountFetcher,
-            true,
-        );
-    }
-    const usage_overrides = if (usage_state) |*state| state.usage_overrides else null;
+    const usage_overrides: ?[]const ?[]const u8 = null;
 
     var selected: ?[]usize = null;
     if (opts.all) {

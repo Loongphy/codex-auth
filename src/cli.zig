@@ -60,7 +60,6 @@ pub const SwitchOptions = struct {
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
     all: bool,
-    api_mode: ApiMode = .default,
 };
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
@@ -326,6 +325,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             }
             opts.query = try allocator.dupe(u8, arg);
         }
+        if (opts.query != null and opts.api_mode != .default) {
+            if (opts.query) |query| allocator.free(query);
+            return usageErrorResult(
+                allocator,
+                .switch_account,
+                "`switch <query>` does not support `--api` or `--skip-api`.",
+                .{},
+            );
+        }
         return .{ .command = .{ .switch_account = opts } };
     }
 
@@ -338,25 +346,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         errdefer freeOwnedStringList(allocator, selectors.items);
         defer selectors.deinit(allocator);
         var all = false;
-        var api_mode: ApiMode = .default;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--api")) {
-                switch (api_mode) {
-                    .default => api_mode = .force_api,
-                    .force_api => return usageErrorResult(allocator, .remove_account, "duplicate `--api` for `remove`.", .{}),
-                    .skip_api => return usageErrorResult(allocator, .remove_account, "`--api` cannot be combined with `--skip-api` for `remove`.", .{}),
-                }
-                continue;
-            }
-            if (std.mem.eql(u8, arg, "--skip-api")) {
-                switch (api_mode) {
-                    .default => api_mode = .skip_api,
-                    .skip_api => return usageErrorResult(allocator, .remove_account, "duplicate `--skip-api` for `remove`.", .{}),
-                    .force_api => return usageErrorResult(allocator, .remove_account, "`--skip-api` cannot be combined with `--api` for `remove`.", .{}),
-                }
-                continue;
+            if (std.mem.eql(u8, arg, "--api") or std.mem.eql(u8, arg, "--skip-api")) {
+                return usageErrorResult(
+                    allocator,
+                    .remove_account,
+                    "`remove` does not support `--api` or `--skip-api`.",
+                    .{},
+                );
             }
             if (std.mem.eql(u8, arg, "--all")) {
                 if (all or selectors.items.len != 0) {
@@ -376,7 +375,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         return .{ .command = .{ .remove_account = .{
             .selectors = try selectors.toOwnedSlice(allocator),
             .all = all,
-            .api_mode = api_mode,
         } } };
     }
 
@@ -624,8 +622,8 @@ pub fn writeHelp(
         .{ .name = "status", .description = "Show auto-switch and usage API status" },
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
-        .{ .name = "switch [<query>] [--api|--skip-api]", .description = "Switch the active account" },
-        .{ .name = "remove [<query>...] [--all] [--api|--skip-api]", .description = "Remove one or more accounts" },
+        .{ .name = "switch [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
+        .{ .name = "remove [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -771,8 +769,8 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .status => "Show auto-switch, service, and usage API status.",
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
-        .switch_account => "Switch the active account interactively, by query, or by list row number.",
-        .remove_account => "Remove one or more accounts by query or list row number.",
+        .switch_account => "Switch the active account interactively, or by query using stored local data.",
+        .remove_account => "Remove one or more accounts by query or list row number using stored local data.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
@@ -807,12 +805,12 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch [--api|--skip-api]\n");
-            try out.writeAll("  codex-auth switch [--api|--skip-api] <query>\n");
+            try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
-            try out.writeAll("  codex-auth remove [--api|--skip-api]\n");
-            try out.writeAll("  codex-auth remove [--api|--skip-api] <query> [<query>...]\n");
-            try out.writeAll("  codex-auth remove [--api|--skip-api] --all\n");
+            try out.writeAll("  codex-auth remove\n");
+            try out.writeAll("  codex-auth remove <query> [<query>...]\n");
+            try out.writeAll("  codex-auth remove --all\n");
         },
         .clean => try out.writeAll("  codex-auth clean\n"),
         .config => {
@@ -856,13 +854,15 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
-            try out.writeAll("  codex-auth switch work --api\n");
-            try out.writeAll("  codex-auth switch 02 --skip-api\n");
+            try out.writeAll("  codex-auth switch --api\n");
+            try out.writeAll("  codex-auth switch --skip-api\n");
+            try out.writeAll("  codex-auth switch work\n");
+            try out.writeAll("  codex-auth switch 02\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
-            try out.writeAll("  codex-auth remove --skip-api 01 03\n");
-            try out.writeAll("  codex-auth remove --api work\n");
+            try out.writeAll("  codex-auth remove 01 03\n");
+            try out.writeAll("  codex-auth remove work personal\n");
             try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");
             try out.writeAll("  codex-auth remove --all\n");
         },

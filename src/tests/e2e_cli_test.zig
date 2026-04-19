@@ -1423,7 +1423,7 @@ test "Scenario: Given list with skip-api when running list then it does not requ
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
-test "Scenario: Given switch query with api override when api config is disabled then it still requires api refresh executables" {
+test "Scenario: Given switch query with api flag when running switch then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1439,7 +1439,6 @@ test "Scenario: Given switch query with api override when api config is disabled
         .{ .email = "active@example.com", .alias = "active" },
         .{ .email = "backup@example.com", .alias = "backup" },
     });
-    try setRegistryApiConfig(gpa, home_root, false, false);
 
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
@@ -1456,7 +1455,44 @@ test "Scenario: Given switch query with api override when api config is disabled
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given switch query with skip-api flag when running switch then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "--skip-api", "02" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
@@ -1636,7 +1672,7 @@ test "Scenario: Given remove with multiple selectors when running remove then it
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "beta@example.com"));
 }
 
-test "Scenario: Given remove with api override when api config is disabled then it still requires api refresh executables" {
+test "Scenario: Given remove with api flag when running remove then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1652,7 +1688,6 @@ test "Scenario: Given remove with api override when api config is disabled then 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
-    try setRegistryApiConfig(gpa, home_root, false, false);
 
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
@@ -1669,7 +1704,44 @@ test "Scenario: Given remove with api override when api config is disabled then 
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given remove with skip-api flag when running remove then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "remove", "--skip-api", "01" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {

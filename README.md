@@ -96,8 +96,10 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 |---------|-------------|
 | `codex-auth list [--debug] [--api|--skip-api]` | List all accounts. `--api` forces a live refresh, while `--skip-api` uses only stored local usage and team-name data. |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
-| `codex-auth switch [<query>] [--api|--skip-api]` | Switch the active account interactively or by `<query>` (row number, alias, or fuzzy match). `--api` forces a live refresh first; `--skip-api` stays local-only. |
-| `codex-auth remove [<query>...] [--all] [--api|--skip-api]` | Remove accounts interactively or by one or more selectors (row number, alias, or fuzzy match). Default behavior is local-only; `--api` forces a live refresh first. |
+| `codex-auth switch [--api|--skip-api]` | Switch the active account interactively. `--api` forces a live refresh first; `--skip-api` stays local-only. |
+| `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
+| `codex-auth remove [<query>...]` | Remove accounts interactively or by one or more selectors (row number, alias, or fuzzy match) using stored local data only. |
+| `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
 ### Import
@@ -140,7 +142,6 @@ It does not call the usage API or `accounts/check`, so transient live-refresh fa
 
 Interactive `switch` shows email, 5h, weekly, and last activity.
 Without `<query>`, it follows the configured refresh mode before opening the picker.
-With `<query>`, it resolves locally by default.
 Use `--api` to force a foreground refresh first, or `--skip-api` to stay on stored local data only.
 
 ```shell
@@ -153,30 +154,30 @@ codex-auth switch --skip-api
 
 `<query>` can be a displayed row number, an alias, or a fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
+`switch <query>` always resolves from stored local data and does not accept `--api` or `--skip-api`.
 
 ```shell
 codex-auth switch 02                 # switch by displayed row number
 codex-auth switch john               # fuzzy match by email or alias
 codex-auth switch work               # match by alias set during import
-codex-auth switch --api work         # force refresh before resolving the selector
-codex-auth switch --skip-api 02      # local-only row-number selection
 ```
 
 If `<query>` matches multiple accounts, the command falls back to interactive selection.
 
 ### Remove Accounts
 
-`remove` is local-only by default and does not refresh from APIs before deleting.
-Use `--api` to force a foreground refresh first, or `--skip-api` to make that local-only choice explicit.
+`remove` always uses stored local data and does not refresh from APIs before deleting.
 Each selector supports the same query forms as `switch`: row number, alias, or fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
 You can pass multiple selectors in one command.
+Selector-based `remove` does not accept `--api` or `--skip-api`.
 
 ```shell
 codex-auth remove
-codex-auth remove --skip-api 01 03
-codex-auth remove --api work personal
+codex-auth remove 01 03
+codex-auth remove work personal
 codex-auth remove 01 jane@example.com
+codex-auth remove --all
 ```
 
 If any selector matches multiple accounts, `remove` asks for confirmation in interactive terminals before deleting.
