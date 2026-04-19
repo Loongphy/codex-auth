@@ -1533,10 +1533,14 @@ pub fn selectAccountWithUsageOverrides(
     reg: *registry.Registry,
     usage_overrides: ?[]const ?[]const u8,
 ) !?[]const u8 {
-    return if (comptime builtin.os.tag == .windows)
-        selectWithNumbers(allocator, reg, usage_overrides)
-    else
-        try selectInteractive(allocator, reg, usage_overrides);
+    if (shouldUseNumberedSwitchSelector(
+        comptime builtin.os.tag == .windows,
+        std.Io.File.stdin().isTty(app_runtime.io()) catch false,
+        std.Io.File.stdout().isTty(app_runtime.io()) catch false,
+    )) {
+        return selectWithNumbers(allocator, reg, usage_overrides);
+    }
+    return try selectInteractive(allocator, reg, usage_overrides);
 }
 
 pub const SwitchSelectionDisplay = struct {
@@ -1585,7 +1589,11 @@ pub fn selectAccountWithLiveUpdates(
     defer current_display.deinit(allocator);
     if (current_display.reg.accounts.items.len == 0) return null;
 
-    if (comptime builtin.os.tag == .windows) {
+    if (shouldUseNumberedSwitchSelector(
+        comptime builtin.os.tag == .windows,
+        std.Io.File.stdin().isTty(app_runtime.io()) catch false,
+        std.Io.File.stdout().isTty(app_runtime.io()) catch false,
+    )) {
         const selected_account_key = try selectWithNumbers(allocator, &current_display.reg, current_display.usage_overrides);
         return try dupeOptionalAccountKey(allocator, selected_account_key);
     }
@@ -1750,10 +1758,18 @@ pub fn selectAccountFromIndicesWithUsageOverrides(
 ) !?[]const u8 {
     if (indices.len == 0) return null;
     if (indices.len == 1) return reg.accounts.items[indices[0]].account_key;
-    return if (comptime builtin.os.tag == .windows)
-        selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides)
-    else
-        try selectInteractiveFromIndices(allocator, reg, indices, usage_overrides);
+    if (shouldUseNumberedSwitchSelector(
+        comptime builtin.os.tag == .windows,
+        std.Io.File.stdin().isTty(app_runtime.io()) catch false,
+        std.Io.File.stdout().isTty(app_runtime.io()) catch false,
+    )) {
+        return selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides);
+    }
+    return try selectInteractiveFromIndices(allocator, reg, indices, usage_overrides);
+}
+
+pub fn shouldUseNumberedSwitchSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
+    return is_windows or !stdin_is_tty or !stdout_is_tty;
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {

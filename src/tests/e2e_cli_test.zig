@@ -69,13 +69,6 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 
     if (cli_build_ready) return;
 
-    const exe_path = try builtCliPathAlloc(allocator, project_root);
-    defer allocator.free(exe_path);
-    if (fs.accessAbsolute(exe_path, .{})) |_| {
-        cli_build_ready = true;
-        return;
-    } else |_| {}
-
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     const global_cache_dir = if (env_map.get("ZIG_GLOBAL_CACHE_DIR")) |dir|
