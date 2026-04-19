@@ -151,8 +151,15 @@ const node_request_script =
 ;
 
 const node_batch_request_script =
-    \\const fs = require("node:fs");
-    \\const payloadPath = process.argv[1];
+    \\const readStdin = () => new Promise((resolve, reject) => {
+    \\  let data = "";
+    \\  process.stdin.setEncoding("utf8");
+    \\  process.stdin.on("data", (chunk) => {
+    \\    data += chunk;
+    \\  });
+    \\  process.stdin.on("end", () => resolve(data));
+    \\  process.stdin.on("error", reject);
+    \\});
     \\const encode = (value) => Buffer.from(value ?? "", "utf8").toString("base64");
     \\const emit = (body, status, outcome) => {
     \\  process.stdout.write(encode(body));
@@ -174,7 +181,7 @@ const node_batch_request_script =
     \\} else {
     \\  void (async () => {
     \\    try {
-    \\      const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+    \\      const payload = JSON.parse(await readStdin());
     \\      const requests = Array.isArray(payload?.requests) ? payload.requests : [];
     \\      const endpoint = String(payload?.endpoint ?? "");
     \\      const timeoutMs = Number(payload?.timeout_ms ?? 0);
@@ -365,20 +372,14 @@ fn runNodeGetJsonBatchCommand(
         .requests = requests,
     }, .{}, &payload_writer.writer);
 
-    const payload_path = try writeBatchPayloadTempFileAlloc(allocator, payload_writer.written());
-    defer {
-        deleteFileIfExists(payload_path);
-        allocator.free(payload_path);
-    }
-
-    const result = runChildCaptureWithOutputLimit(
+    const result = runChildCaptureWithInputAndOutputLimit(
         allocator,
         &.{
             node_executable,
             "-e",
             node_batch_request_script,
-            payload_path,
         },
+        payload_writer.written(),
         computeBatchChildTimeoutMs(requests.len, @max(@as(usize, 1), max_concurrency)),
         &env_map,
         computeBatchChildOutputLimitBytes(requests.len),
@@ -419,12 +420,23 @@ fn runChildCapture(
     timeout_ms: u64,
     env_map: ?*const std.process.Environ.Map,
 ) !ChildCaptureResult {
-    return runChildCaptureWithOutputLimit(allocator, argv, timeout_ms, env_map, default_max_output_bytes);
+    return runChildCaptureWithInputAndOutputLimit(allocator, argv, null, timeout_ms, env_map, default_max_output_bytes);
 }
 
 fn runChildCaptureWithOutputLimit(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
+    timeout_ms: u64,
+    env_map: ?*const std.process.Environ.Map,
+    output_limit_bytes: usize,
+) !ChildCaptureResult {
+    return runChildCaptureWithInputAndOutputLimit(allocator, argv, null, timeout_ms, env_map, output_limit_bytes);
+}
+
+fn runChildCaptureWithInputAndOutputLimit(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    stdin_bytes: ?[]const u8,
     timeout_ms: u64,
     env_map: ?*const std.process.Environ.Map,
     output_limit_bytes: usize,
@@ -436,13 +448,19 @@ fn runChildCaptureWithOutputLimit(
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = argv,
         .environ_map = effective_env_map,
-        .stdin = .ignore,
+        .stdin = if (stdin_bytes != null) .pipe else .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
     }) catch |err| switch (err) {
         else => return err,
     };
     errdefer child.kill(app_runtime.io());
+
+    if (stdin_bytes) |bytes| {
+        try child.stdin.?.writeStreamingAll(app_runtime.io(), bytes);
+        child.stdin.?.close(app_runtime.io());
+        child.stdin = null;
+    }
 
     var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
     var multi_reader: std.Io.File.MultiReader = undefined;
@@ -457,8 +475,14 @@ fn runChildCaptureWithOutputLimit(
     } };
 
     while (multi_reader.fill(64, timeout)) |_| {
-        if (stdout_reader.buffered().len > output_limit_bytes) return error.StreamTooLong;
-        if (stderr_reader.buffered().len > output_limit_bytes) return error.StreamTooLong;
+        if (stdout_reader.buffered().len > output_limit_bytes) {
+            child.kill(app_runtime.io());
+            return error.StreamTooLong;
+        }
+        if (stderr_reader.buffered().len > output_limit_bytes) {
+            child.kill(app_runtime.io());
+            return error.StreamTooLong;
+        }
     } else |err| switch (err) {
         error.EndOfStream => {},
         error.Timeout => {
@@ -500,56 +524,6 @@ fn computeBatchChildTimeoutMs(request_count: usize, max_concurrency: usize) u64 
 
 fn computeBatchChildOutputLimitBytes(request_count: usize) usize {
     return std.math.mul(usize, default_max_output_bytes, @max(@as(usize, 1), request_count)) catch std.math.maxInt(usize);
-}
-
-fn writeBatchPayloadTempFileAlloc(allocator: std.mem.Allocator, payload_bytes: []const u8) ![]u8 {
-    const temp_dir = try resolveTempDirAlloc(allocator);
-    defer allocator.free(temp_dir);
-
-    const now_ns = @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds());
-    var attempt: usize = 0;
-    while (attempt < 16) : (attempt += 1) {
-        const file_name = try std.fmt.allocPrint(allocator, "codex-auth-batch-{d}-{d}.json", .{ now_ns, attempt });
-        defer allocator.free(file_name);
-
-        const path = try std.fs.path.join(allocator, &.{ temp_dir, file_name });
-        var file = std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{ .exclusive = true }) catch |err| {
-            allocator.free(path);
-            if (err == error.PathAlreadyExists) continue;
-            return err;
-        };
-        errdefer {
-            file.close(app_runtime.io());
-            deleteFileIfExists(path);
-            allocator.free(path);
-        }
-        try file.writeStreamingAll(app_runtime.io(), payload_bytes);
-        file.close(app_runtime.io());
-        return path;
-    }
-    return error.PathAlreadyExists;
-}
-
-fn resolveTempDirAlloc(allocator: std.mem.Allocator) ![]u8 {
-    return switch (builtin.os.tag) {
-        .windows => getEnvVarOwned(allocator, "TEMP") catch getEnvVarOwned(allocator, "TMP") catch allocator.dupe(u8, "."),
-        else => getEnvVarOwned(allocator, "TMPDIR") catch getEnvVarOwned(allocator, "TMP") catch getEnvVarOwned(allocator, "TEMP") catch allocator.dupe(u8, "/tmp"),
-    };
-}
-
-fn deleteFileIfExists(path: []const u8) void {
-    if (std.fs.path.isAbsolute(path)) {
-        std.Io.Dir.deleteFileAbsolute(app_runtime.io(), path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => {},
-        };
-        return;
-    }
-
-    std.Io.Dir.cwd().deleteFile(app_runtime.io(), path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => {},
-    };
 }
 
 fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
