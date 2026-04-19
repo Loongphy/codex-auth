@@ -825,7 +825,7 @@ test "v2 registry migrates active email records to current schema" {
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
 
-test "ensureAccountsDir hardens codex home and accounts directories to 0700" {
+test "ensureAccountsDir hardens accounts directory without changing codex home permissions" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -842,11 +842,11 @@ test "ensureAccountsDir hardens codex home and accounts directories to 0700" {
 
     const accounts_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts" });
     defer gpa.free(accounts_path);
-    try expectModeUnix(codex_home, 0o700);
+    try expectModeUnix(codex_home, 0o755);
     try expectModeUnix(accounts_path, 0o700);
 }
 
-test "copyFile hardens destination to 0600" {
+test "copyManagedFile hardens destination to 0600" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -860,7 +860,7 @@ test "copyFile hardens destination to 0600" {
     const dest = try fs.path.join(gpa, &[_][]const u8{ codex_home, "dest.json" });
     defer gpa.free(dest);
 
-    try registry.copyFile(src, dest);
+    try registry.copyManagedFile(src, dest);
     try expectModeUnix(dest, 0o600);
 }
 
@@ -970,7 +970,7 @@ test "auth backup rotation" {
     try std.testing.expect(count <= 5);
 }
 
-test "sync active auth hardens matching files even when contents are unchanged" {
+test "sync active auth leaves auth json permissions unchanged while hardening matching snapshot" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1006,8 +1006,53 @@ test "sync active auth hardens matching files even when contents are unchanged" 
 
     const changed = try registry.syncActiveAccountFromAuth(gpa, codex_home, &reg);
     try std.testing.expect(!changed);
-    try expectModeUnix(auth_path, 0o600);
+    try expectModeUnix(auth_path, 0o644);
     try expectModeUnix(snapshot_path, 0o600);
+}
+
+test "replaceActiveAuthWithAccountByKey preserves existing auth json permissions" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "user@example.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const active_auth = try authJsonWithEmailPlan(gpa, "other@example.com", "plus");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
+
+    const account_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
+    defer gpa.free(account_auth);
+    const account_key = try accountKeyForEmailAlloc(gpa, "user@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = account_auth });
+    try setModeUnix(snapshot_path, 0o600);
+
+    const auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(auth_path);
+    try setModeUnix(auth_path, 0o644);
+
+    try registry.replaceActiveAuthWithAccountByKey(gpa, codex_home, &reg, account_key);
+
+    var auth_file = try fs.cwd().openFile(auth_path, .{});
+    defer auth_file.close();
+    const auth_bytes = try auth_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(auth_bytes);
+    try std.testing.expectEqualStrings(account_auth, auth_bytes);
+    try expectModeUnix(auth_path, 0o644);
 }
 
 test "sync active auth matches by email and updates account auth" {

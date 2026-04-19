@@ -1403,7 +1403,6 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     try cli.runCodexLogin(opts);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
-    try registry.hardenSensitiveFile(auth_path);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
@@ -1418,7 +1417,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     defer allocator.free(dest);
 
     try registry.ensureAccountsDir(allocator, codex_home);
-    try registry.copyFile(auth_path, dest);
+    try registry.copyManagedFile(auth_path, dest);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
