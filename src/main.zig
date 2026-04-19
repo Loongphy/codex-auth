@@ -1903,23 +1903,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    const needs_selector = !opts.all and opts.selectors.len == 0;
-    var usage_state: ?ForegroundUsageRefreshState = null;
-    defer if (usage_state) |*state| state.deinit(allocator);
-
-    if (needs_selector) {
-        try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .remove_account);
-        usage_state = try refreshForegroundUsageForDisplay(
-            allocator,
-            codex_home,
-            &reg,
-        );
-    }
-
-    const usage_overrides: ?[]const ?[]const u8 = if (usage_state) |*state|
-        state.usage_overrides
-    else
-        null;
+    const usage_overrides: ?[]const ?[]const u8 = null;
 
     var selected: ?[]usize = null;
     if (opts.all) {
