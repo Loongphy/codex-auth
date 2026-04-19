@@ -19,17 +19,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 
 ## File Permissions
 
-- On Unix-like systems, `codex-auth` hardens these directories to `0700`:
-  - `<codex_home>/`
-  - `<codex_home>/accounts/`
-- On Unix-like systems, `codex-auth` hardens these sensitive files to `0600` when it creates, rewrites, or syncs them:
-  - `<codex_home>/auth.json`
-  - `<codex_home>/accounts/registry.json`
-  - `<codex_home>/accounts/<account file key>.auth.json`
-  - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
-  - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
-- Lock files under `<codex_home>/accounts/` are not secrets; they rely on the parent `0700` directory instead of extra per-file hardening.
-- On Windows, POSIX mode bits are skipped.
+File-permission behavior is documented in [docs/permissions.md](./permissions.md).
 
 `codex-auth` resolves `codex_home` in this order:
 

@@ -466,12 +466,12 @@ pub fn copyFile(src: []const u8, dest: []const u8) !void {
 }
 
 pub fn copyManagedFile(src: []const u8, dest: []const u8) !void {
-    try copyFile(src, dest);
+    try copyFileWithPermissions(src, dest, private_file_permissions);
     try hardenSensitiveFile(dest);
 }
 
 fn replaceFilePreservingPermissions(src: []const u8, dest: []const u8) !void {
-    const permissions = (try existingFilePermissions(dest)) orelse fs.File.Permissions.default_file;
+    const permissions = try existingFilePermissions(dest);
     try copyFileWithPermissions(src, dest, permissions);
 }
 
@@ -2605,7 +2605,10 @@ fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
         return writeRegistryFileReplace(path, data);
     }
     var buf: [4096]u8 = undefined;
-    var atomic_file = try fs.cwd().atomicFile(path, .{ .write_buffer = &buf });
+    var atomic_file = try fs.cwd().atomicFile(path, .{
+        .write_buffer = &buf,
+        .permissions = private_file_permissions,
+    });
     defer atomic_file.deinit();
     try atomic_file.file_writer.interface.writeAll(data);
     try atomic_file.finish();

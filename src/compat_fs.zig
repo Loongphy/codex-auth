@@ -203,6 +203,7 @@ pub const Dir = struct {
     };
     pub const AtomicFileOptions = struct {
         write_buffer: []u8 = &.{},
+        permissions: File.Permissions = .default_file,
     };
     pub const AtomicFile = struct {
         inner: std.Io.File.Atomic,
@@ -287,6 +288,7 @@ pub const Dir = struct {
 
     pub fn atomicFile(self: Dir, sub_path: []const u8, options: AtomicFileOptions) !AtomicFile {
         var atomic = try self.inner.createFileAtomic(io(), sub_path, .{
+            .permissions = options.permissions,
             .replace = true,
         });
         return .{

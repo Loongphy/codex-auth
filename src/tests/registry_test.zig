@@ -846,7 +846,7 @@ test "ensureAccountsDir hardens accounts directory without changing codex home p
     try expectModeUnix(accounts_path, 0o700);
 }
 
-test "copyManagedFile hardens destination to 0600" {
+test "copyManagedFile creates destination with 0600 regardless of source mode" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -857,11 +857,30 @@ test "copyManagedFile hardens destination to 0600" {
     try tmp.dir.writeFile(.{ .sub_path = "source.json", .data = "secret" });
     const src = try fs.path.join(gpa, &[_][]const u8{ codex_home, "source.json" });
     defer gpa.free(src);
+    try setModeUnix(src, 0o644);
     const dest = try fs.path.join(gpa, &[_][]const u8{ codex_home, "dest.json" });
     defer gpa.free(dest);
 
     try registry.copyManagedFile(src, dest);
     try expectModeUnix(dest, 0o600);
+}
+
+test "saveRegistry creates registry.json with 0600 on first write" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    try expectModeUnix(registry_path, 0o600);
 }
 
 test "saveRegistry hardens registry.json to 0600 even when contents are unchanged" {
@@ -1053,6 +1072,47 @@ test "replaceActiveAuthWithAccountByKey preserves existing auth json permissions
     defer gpa.free(auth_bytes);
     try std.testing.expectEqualStrings(account_auth, auth_bytes);
     try expectModeUnix(auth_path, 0o644);
+}
+
+test "activateAccountByKey preserves snapshot permissions when auth json is created" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "user@example.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const account_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
+    defer gpa.free(account_auth);
+    const account_key = try accountKeyForEmailAlloc(gpa, "user@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = account_auth });
+    try setModeUnix(snapshot_path, 0o600);
+
+    const auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(auth_path);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(auth_path));
+
+    try registry.activateAccountByKey(gpa, codex_home, &reg, account_key);
+
+    var auth_file = try fs.cwd().openFile(auth_path, .{});
+    defer auth_file.close();
+    const auth_bytes = try auth_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(auth_bytes);
+    try std.testing.expectEqualStrings(account_auth, auth_bytes);
+    try expectModeUnix(auth_path, 0o600);
 }
 
 test "sync active auth matches by email and updates account auth" {
