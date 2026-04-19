@@ -1771,22 +1771,28 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     if (interactive_remove) {
         if (usage_api_enabled) {
-            usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+            usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
                 allocator,
                 codex_home,
                 &reg,
                 null,
                 usage_api_enabled,
-            );
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => null,
+            };
         }
-        try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+        maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
             allocator,
             codex_home,
             &reg,
             .remove_account,
             defaultAccountFetcher,
             account_api_enabled,
-        );
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {},
+        };
     }
 
     const usage_overrides = if (usage_state) |state| state.usage_overrides else null;

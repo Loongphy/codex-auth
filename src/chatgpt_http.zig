@@ -469,10 +469,11 @@ fn runChildCaptureWithInputAndOutputLimit(
 
     const stdout_reader = multi_reader.reader(0);
     const stderr_reader = multi_reader.reader(1);
-    const timeout = std.Io.Timeout{ .duration = .{
+    const timeout_duration = std.Io.Timeout{ .duration = .{
         .clock = .awake,
         .raw = .fromMilliseconds(@intCast(timeout_ms)),
     } };
+    const timeout = timeout_duration.toDeadline(app_runtime.io());
 
     while (multi_reader.fill(64, timeout)) |_| {
         if (stdout_reader.buffered().len > output_limit_bytes) {
@@ -1168,6 +1169,63 @@ test "run child capture times out stalled child process" {
     defer result.deinit(allocator);
 
     try std.testing.expect(result.timed_out);
+}
+
+test "run child capture times out child that trickles output" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script_name = switch (builtin.os.tag) {
+        .windows => "trickle.ps1",
+        else => "trickle.sh",
+    };
+    const script_data = switch (builtin.os.tag) {
+        .windows =>
+        \\for ($i = 0; $i -lt 30; $i++) {
+        \\  [Console]::Out.Write(".")
+        \\  [Console]::Out.Flush()
+        \\  Start-Sleep -Milliseconds 100
+        \\}
+        ,
+        else =>
+        \\#!/bin/sh
+        \\i=0
+        \\while [ "$i" -lt 30 ]; do
+        \\  printf '.'
+        \\  sleep 0.1
+        \\  i=$((i + 1))
+        \\done
+        ,
+    };
+
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = script_name,
+        .data = script_data,
+    });
+
+    if (builtin.os.tag != .windows) {
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
+    }
+
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
+    defer allocator.free(script_path);
+
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
+        else => &[_][]const u8{script_path},
+    };
+
+    const result = runChildCapture(allocator, argv, 1000, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.SkipZigTest,
+        else => return err,
+    };
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.timed_out);
+    try std.testing.expect(result.stdout.len > 0);
 }
 
 test "run child capture accepts larger custom output limits for batched payloads" {

@@ -1786,7 +1786,7 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
 }
 
-test "Scenario: Given interactive remove with api flag when running remove then it requires api refresh executables" {
+test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it falls back to stored data" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1803,23 +1803,32 @@ test "Scenario: Given interactive remove with api flag when running remove then 
         .{ .email = "beta@example.com", .alias = "" },
     });
 
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
 
-    const result = try runCliWithIsolatedHomeAndPath(
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
         gpa,
         project_root,
         home_root,
         empty_path,
         &[_][]const u8{ "remove", "--api" },
+        "2\n",
     );
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectFailure(result);
-    try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {

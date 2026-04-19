@@ -193,9 +193,11 @@ If exactly one account matches, it is removed immediately.
 If multiple accounts match in a TTY session, the command prints the matched account labels using the same display grouping as `list` and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
 If multiple accounts match and stdin is not a TTY, the command exits non-zero instead of reading the pipe as confirmation input; the user must refine the query or rerun it interactively.
 
-When `api.usage = true`, `codex-auth remove` without a query or `--all` refreshes usage for all stored accounts before rendering account choices, using a maximum concurrency of `3`. The remove picker shows the same per-row usage overlays as `list` / interactive `switch`, including non-`200` HTTP statuses and `MissingAuth` in both usage columns when applicable.
+Interactive `codex-auth remove` stays local-only by default, even when `api.usage = true`, so deletion is not blocked on foreground refresh work.
 
-When `api.usage = false`, `codex-auth remove` without a query or `--all` keeps the existing local-only behavior and can refresh only the active account from the newest local rollout data.
+`codex-auth remove --api` performs a best-effort usage refresh for picker display before rendering account choices, using a maximum concurrency of `3`. When that refresh completes, the remove picker shows the same per-row usage overlays as `list` / interactive `switch`, including non-`200` HTTP statuses and `MissingAuth` in both usage columns when applicable. If the refresh setup or request path fails, `remove` silently falls back to the stored local snapshot and still lets the user delete accounts.
+
+`codex-auth remove --skip-api` keeps the interactive picker local-only explicitly.
 
 In the interactive remove picker, `q` quits without deleting accounts.
 
