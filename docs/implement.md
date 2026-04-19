@@ -199,7 +199,7 @@ If multiple accounts match and stdin is not a TTY, the command exits non-zero in
 
 Interactive `codex-auth remove` stays local-only by default, even when `api.usage = true`, so deletion is not blocked on foreground refresh work.
 
-`codex-auth remove --api` performs a best-effort usage refresh for picker display before rendering account choices, using a maximum concurrency of `3`. When that refresh completes, the remove picker shows the same per-row usage overlays as `list` / interactive `switch`, including non-`200` HTTP statuses and `MissingAuth` in both usage columns when applicable. If the refresh setup or request path fails, `remove` silently falls back to the stored local snapshot and still lets the user delete accounts.
+`codex-auth remove --api` performs a best-effort usage refresh attempt for picker display before rendering account choices, using a maximum concurrency of `3`. When per-account live results are available, the remove picker shows the same per-row usage overlays as `list` / interactive `switch`: successful rows show live usage data, while rows with non-`200` responses or missing auth can show status/error overlays such as `403` and `MissingAuth` in both usage columns. Refresh problems never block deletion: if the live refresh path cannot produce picker data, `remove` still uses the stored registry list, and attempted live refreshes may still emit setup warnings.
 
 `codex-auth remove --skip-api` keeps the interactive picker local-only explicitly.
 

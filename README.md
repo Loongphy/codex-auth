@@ -98,7 +98,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
 | `codex-auth switch [--api|--skip-api]` | Switch the active account interactively. `--api` forces a live refresh first; `--skip-api` stays local-only. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
-| `codex-auth remove [--api|--skip-api] [<query>...]` | Interactive remove stays local-only by default; `--api` does a best-effort refresh for picker display, while selector-based removal still resolves from stored local data only. |
+| `codex-auth remove [--api|--skip-api] [<query>...]` | Interactive remove stays local-only by default; `--api` attempts a best-effort live refresh for picker display, while selector-based removal still resolves from stored local data only. |
 | `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
@@ -167,7 +167,7 @@ If `<query>` matches multiple accounts, the command falls back to interactive se
 ### Remove Accounts
 
 Interactive `remove` stays local-only by default so deletion is not blocked by API refresh work.
-Use `--api` only when you want a best-effort foreground refresh for picker display; if usage or team-name refresh fails, `remove` falls back to stored local data and still proceeds. `--skip-api` keeps the picker local-only explicitly.
+Use `--api` only when you want a best-effort foreground refresh attempt for picker display. Successful rows show live API data when it is available; rows that cannot refresh may show live error overlays such as `403`, `TimedOut`, or `MissingAuth` instead. The command still deletes accounts from the stored registry data when the live refresh path cannot complete, so the list remains usable for deletion. `--skip-api` keeps the picker local-only explicitly.
 Each selector supports the same query forms as `switch`: row number, alias, or fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
 You can pass multiple selectors in one command.
