@@ -1,7 +1,9 @@
 const std = @import("std");
+const time_compat = @import("compat_time.zig");
+const fs = @import("compat_fs.zig");
 const builtin = @import("builtin");
+const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
-const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
 const c = @cImport({
@@ -11,43 +13,78 @@ const c = @cImport({
 const ansi = struct {
     const reset = "\x1b[0m";
     const dim = "\x1b[2m";
+    const red = "\x1b[31m";
+    const bold_red = "\x1b[1;31m";
     const green = "\x1b[32m";
 };
 
 fn colorEnabled() bool {
-    return std.fs.File.stdout().isTty();
+    return fs.File.stdout().isTty();
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
-    if (registry.resolvePlan(rec)) |p| return @tagName(p);
+    if (registry.resolveDisplayPlan(rec)) |p| return registry.planLabel(p);
     return missing;
 }
 
-fn accountEmailCellLen(rec: *const registry.AccountRecord) usize {
-    if (rec.alias.len == 0) return rec.email.len;
-    return rec.alias.len + rec.email.len + 2;
+pub fn printAccounts(reg: *registry.Registry) !void {
+    try printAccountsWithUsageOverrides(reg, null);
 }
 
-fn formatAccountEmailCellAlloc(rec: *const registry.AccountRecord) ![]u8 {
-    if (rec.alias.len == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{rec.email});
-    return std.fmt.allocPrint(std.heap.page_allocator, "({s}){s}", .{ rec.alias, rec.email });
+pub fn printAccountsWithUsageOverrides(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) !void {
+    try printAccountsTable(reg, usage_overrides);
 }
 
-pub fn printAccounts(allocator: std.mem.Allocator, reg: *registry.Registry, fmt: cli.OutputFormat) !void {
-    switch (fmt) {
-        .table => try printAccountsTable(reg),
-        .json => try printAccountsJson(reg),
-        .csv => try printAccountsCsv(reg),
-        .compact => try printAccountsCompact(reg),
-    }
-    _ = allocator;
-}
-
-fn printAccountsTable(reg: *registry.Registry) !void {
+fn printAccountsTable(reg: *registry.Registry, usage_overrides: ?[]const ?[]const u8) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    const headers = [_][]const u8{ "EMAIL", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
+    try writeAccountsTableWithUsageOverrides(out, reg, colorEnabled(), usage_overrides);
+    try out.flush();
+}
+
+fn writeAccountsTable(out: *std.Io.Writer, reg: *registry.Registry, use_color: bool) !void {
+    try writeAccountsTableWithUsageOverrides(out, reg, use_color, null);
+}
+
+fn usageOverrideForAccount(
+    usage_overrides: ?[]const ?[]const u8,
+    account_idx: usize,
+) ?[]const u8 {
+    const overrides = usage_overrides orelse return null;
+    if (account_idx >= overrides.len) return null;
+    return overrides[account_idx];
+}
+
+fn usageCellTextAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+    max_width: usize,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
+    return formatRateLimitUiAlloc(window, max_width);
+}
+
+fn usageCellFullTextAlloc(
+    allocator: std.mem.Allocator,
+    window: ?registry.RateLimitWindow,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
+    return formatRateLimitFullAlloc(window);
+}
+
+fn writeAccountsTableWithUsageOverrides(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+) !void {
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -55,31 +92,38 @@ fn printAccountsTable(reg: *registry.Registry) !void {
         headers[3].len,
         headers[4].len,
     };
-    const now = std.time.timestamp();
-    const prefix_len: usize = 2;
+    const now = time_compat.timestamp();
+    var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
+    defer display.deinit(std.heap.page_allocator);
+    const idx_width = @max(@as(usize, 2), indexWidth(display.selectable_row_indices.len));
+    const prefix_len: usize = 2 + idx_width + 1;
     const sep_len: usize = 2;
 
-    for (reg.accounts.items) |rec| {
-        const plan = planDisplay(&rec, "-");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitFullAlloc(rate_5h);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitFullAlloc(rate_week);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
-        defer std.heap.page_allocator.free(last_str);
+    for (display.rows) |row| {
+        const indent: usize = @as(usize, row.depth) * 2;
+        widths[0] = @max(widths[0], row.account_cell.len + indent);
+        if (row.account_index) |account_idx| {
+            const rec = reg.accounts.items[account_idx];
+            const plan = planDisplay(&rec, "-");
+            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
+            defer std.heap.page_allocator.free(rate_5h_str);
+            const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
+            defer std.heap.page_allocator.free(rate_week_str);
+            const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
+            defer std.heap.page_allocator.free(last_str);
 
-        widths[0] = @max(widths[0], accountEmailCellLen(&rec));
-        widths[1] = @max(widths[1], plan.len);
-        widths[2] = @max(widths[2], rate_5h_str.len);
-        widths[3] = @max(widths[3], rate_week_str.len);
-        widths[4] = @max(widths[4], last_str.len);
+            widths[1] = @max(widths[1], plan.len);
+            widths[2] = @max(widths[2], rate_5h_str.len);
+            widths[3] = @max(widths[3], rate_week_str.len);
+            widths[4] = @max(widths[4], last_str.len);
+        }
     }
 
     adjustListWidths(&widths, prefix_len, sep_len);
 
-    const use_color = colorEnabled();
     const h0 = try truncateAlloc(headers[0], widths[0]);
     defer std.heap.page_allocator.free(h0);
     const h1 = try truncateAlloc(headers[1], widths[1]);
@@ -95,7 +139,7 @@ fn printAccountsTable(reg: *registry.Registry) !void {
     defer std.heap.page_allocator.free(h4);
 
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("  ");
+    try writeRepeat(out, ' ', prefix_len);
     try writePadded(out, h0, widths[0]);
     try out.writeAll("  ");
     try writePadded(out, h1, widths[1]);
@@ -111,118 +155,72 @@ fn printAccountsTable(reg: *registry.Registry) !void {
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
 
-    for (reg.accounts.items) |rec| {
-        const email = try formatAccountEmailCellAlloc(&rec);
-        defer std.heap.page_allocator.free(email);
-        const plan = planDisplay(&rec, "-");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitUiAlloc(rate_5h, widths[2]);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitUiAlloc(rate_week, widths[3]);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
-        defer std.heap.page_allocator.free(last);
-        const email_cell = try truncateAlloc(email, widths[0]);
-        defer std.heap.page_allocator.free(email_cell);
-        const plan_cell = try truncateAlloc(plan, widths[1]);
-        defer std.heap.page_allocator.free(plan_cell);
-        const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[2]);
-        defer std.heap.page_allocator.free(rate_5h_cell);
-        const rate_week_cell = try truncateAlloc(rate_week_str, widths[3]);
-        defer std.heap.page_allocator.free(rate_week_cell);
-        const last_cell = try truncateAlloc(last, widths[4]);
-        defer std.heap.page_allocator.free(last_cell);
-        const is_active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
-        if (use_color) {
-            if (is_active) {
-                try out.writeAll(ansi.green);
-            } else {
-                try out.writeAll(ansi.dim);
+    var selectable_counter: usize = 0;
+    for (display.rows) |row| {
+        if (row.account_index) |account_idx| {
+            const rec = reg.accounts.items[account_idx];
+            const plan = planDisplay(&rec, "-");
+            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+            const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[2], usage_override);
+            defer std.heap.page_allocator.free(rate_5h_str);
+            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[3], usage_override);
+            defer std.heap.page_allocator.free(rate_week_str);
+            const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
+            defer std.heap.page_allocator.free(last);
+            const indent: usize = @as(usize, row.depth) * 2;
+            const indent_to_print: usize = @min(indent, widths[0]);
+            const account_cell = try truncateAlloc(row.account_cell, widths[0] - indent_to_print);
+            defer std.heap.page_allocator.free(account_cell);
+            const plan_cell = try truncateAlloc(plan, widths[1]);
+            defer std.heap.page_allocator.free(plan_cell);
+            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[2]);
+            defer std.heap.page_allocator.free(rate_5h_cell);
+            const rate_week_cell = try truncateAlloc(rate_week_str, widths[3]);
+            defer std.heap.page_allocator.free(rate_week_cell);
+            const last_cell = try truncateAlloc(last, widths[4]);
+            defer std.heap.page_allocator.free(last_cell);
+            if (use_color) {
+                if (usage_override != null) {
+                    if (row.is_active) {
+                        try out.writeAll(ansi.bold_red);
+                    } else {
+                        try out.writeAll(ansi.red);
+                    }
+                } else if (row.is_active) {
+                    try out.writeAll(ansi.green);
+                } else {
+                    try out.writeAll(ansi.dim);
+                }
             }
+            try out.writeAll(if (row.is_active) "* " else "  ");
+            try writeIndexPadded(out, selectable_counter + 1, idx_width);
+            try out.writeAll(" ");
+            try writeRepeat(out, ' ', indent_to_print);
+            try writePadded(out, account_cell, widths[0] - indent_to_print);
+            try out.writeAll("  ");
+            try writePadded(out, plan_cell, widths[1]);
+            try out.writeAll("  ");
+            try writePadded(out, rate_5h_cell, widths[2]);
+            try out.writeAll("  ");
+            try writePadded(out, rate_week_cell, widths[3]);
+            try out.writeAll("  ");
+            try writePadded(out, last_cell, widths[4]);
+            try out.writeAll("\n");
+            if (use_color) try out.writeAll(ansi.reset);
+            selectable_counter += 1;
+        } else {
+            const account_cell = try truncateAlloc(row.account_cell, widths[0]);
+            defer std.heap.page_allocator.free(account_cell);
+            if (use_color) try out.writeAll(ansi.dim);
+            try writeRepeat(out, ' ', prefix_len);
+            try writePadded(out, account_cell, widths[0]);
+            try out.writeAll("\n");
+            if (use_color) try out.writeAll(ansi.reset);
         }
-        try out.writeAll(if (is_active) "* " else "  ");
-        try writePadded(out, email_cell, widths[0]);
-        try out.writeAll("  ");
-        try writePadded(out, plan_cell, widths[1]);
-        try out.writeAll("  ");
-        try writePadded(out, rate_5h_cell, widths[2]);
-        try out.writeAll("  ");
-        try writePadded(out, rate_week_cell, widths[3]);
-        try out.writeAll("  ");
-        try writePadded(out, last_cell, widths[4]);
-        try out.writeAll("\n");
-        if (use_color) try out.writeAll(ansi.reset);
     }
-
-    try out.flush();
 }
-
-fn printAccountsJson(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    const dump = RegistryOut{ .version = reg.version, .active_email = reg.active_email, .accounts = reg.accounts.items };
-    try std.json.Stringify.value(dump, .{ .whitespace = .indent_2 }, out);
-    try out.writeAll("\n");
-    try out.flush();
-}
-
-fn printAccountsCsv(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try out.writeAll("active,email,plan,limit_5h,limit_weekly,last_used\n");
-    for (reg.accounts.items) |rec| {
-        const active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
-        const email = rec.email;
-        const plan = planDisplay(&rec, "");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last = if (rec.last_used_at) |t| try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{t}) else "";
-        defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
-        try out.print(
-            "{s},{s},{s},{s},{s},{s}\n",
-            .{ if (active) "1" else "0", email, plan, rate_5h_str, rate_week_str, last },
-        );
-    }
-    try out.flush();
-}
-
-fn printAccountsCompact(reg: *registry.Registry) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    for (reg.accounts.items) |rec| {
-        const active = if (reg.active_email) |k| std.mem.eql(u8, k, rec.email) else false;
-        const email = rec.email;
-        const plan = planDisplay(&rec, "-");
-        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
-        const rate_5h_str = try formatRateLimitStatusAlloc(rate_5h);
-        defer std.heap.page_allocator.free(rate_5h_str);
-        const rate_week_str = try formatRateLimitStatusAlloc(rate_week);
-        defer std.heap.page_allocator.free(rate_week_str);
-        const last = if (rec.last_used_at) |t| try formatTimestampAlloc(t) else "-";
-        defer if (rec.last_used_at != null) std.heap.page_allocator.free(last) else {};
-        try out.print(
-            "{s}{s} ({s}) 5h:{s} week:{s} last:{s}\n",
-            .{ if (active) "* " else "  ", email, plan, rate_5h_str, rate_week_str, last },
-        );
-    }
-    try out.flush();
-}
-
-
-const RegistryOut = struct {
-    version: u32,
-    active_email: ?[]const u8,
-    accounts: []const registry.AccountRecord,
-};
 
 fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
     if (usage == null) return null;
@@ -233,20 +231,6 @@ fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_
         if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
     }
     return if (fallback_primary) usage.?.primary else usage.?.secondary;
-}
-
-fn formatRateLimitStatusAlloc(window: ?registry.RateLimitWindow) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
-    const reset_at = window.?.resets_at.?;
-    if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
-    }
-    const remaining = remainingPercent(window.?.used_percent);
-    const time_str = try formatResetTimeAlloc(reset_at, now);
-    defer std.heap.page_allocator.free(time_str);
-    return std.fmt.allocPrint(std.heap.page_allocator, "{d}% {s}", .{ remaining, time_str });
 }
 
 const ResetParts = struct {
@@ -332,10 +316,10 @@ fn resetPartsAlloc(reset_at: i64, now: i64) !ResetParts {
 fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
+        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(reset_at, now);
@@ -349,10 +333,10 @@ fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
 fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    const now = std.time.timestamp();
+    const now = time_compat.timestamp();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100% -", .{});
+        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(reset_at, now);
@@ -360,7 +344,7 @@ fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8
 
     const candidates_same = [_][]const u8{
         try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time }),
-        try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{ remaining }),
+        try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining}),
     };
     defer std.heap.page_allocator.free(candidates_same[0]);
     defer std.heap.page_allocator.free(candidates_same[1]);
@@ -376,7 +360,7 @@ fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8
     defer std.heap.page_allocator.free(candidate_date);
     const candidate_time = try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time });
     defer std.heap.page_allocator.free(candidate_time);
-    const candidate_percent = try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{ remaining });
+    const candidate_percent = try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining});
     defer std.heap.page_allocator.free(candidate_percent);
 
     if (width >= candidate_full.len or width == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_full});
@@ -617,15 +601,16 @@ fn tableTotalWidth(widths: []const usize) usize {
 }
 
 fn terminalWidth() usize {
-    const stdout_file = std.fs.File.stdout();
+    const stdout_file = fs.File.stdout();
     if (!stdout_file.isTty()) return 0;
 
     if (comptime builtin.os.tag == .windows) {
-        var info: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-        if (std.os.windows.kernel32.GetConsoleScreenBufferInfo(stdout_file.handle, &info) == std.os.windows.FALSE) {
-            return 0;
+        var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
+        switch (get_console_info.operate(fs.io(), stdout_file.toIoFile()) catch return 0) {
+            .SUCCESS => {},
+            else => return 0,
         }
-        const width = @as(i32, info.srWindow.Right) - @as(i32, info.srWindow.Left) + 1;
+        const width = @as(i32, get_console_info.Data.dwWindowSize.X);
         if (width <= 0) return 0;
         return @as(usize, @intCast(width));
     } else {
@@ -648,25 +633,64 @@ fn truncateAlloc(value: []const u8, max_len: usize) ![]u8 {
     return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0 .. max_len - 1]});
 }
 
-fn formatTimestampAlloc(ts: i64) ![]u8 {
-    if (ts < 0) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(ts, &tm)) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
+fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
+    var buf: [16]u8 = undefined;
+    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
+    if (idx_str.len < width) {
+        var pad: usize = width - idx_str.len;
+        while (pad > 0) : (pad -= 1) {
+            try out.writeAll("0");
+        }
     }
+    try out.writeAll(idx_str);
+}
 
-    const year = @as(u32, @intCast(tm.tm_year + 1900));
-    const month = @as(u32, @intCast(tm.tm_mon + 1));
-    const day = @as(u32, @intCast(tm.tm_mday));
-    const hour = @as(u32, @intCast(tm.tm_hour));
-    const min = @as(u32, @intCast(tm.tm_min));
-    const sec = @as(u32, @intCast(tm.tm_sec));
+fn indexWidth(count: usize) usize {
+    var n = count;
+    var width: usize = 1;
+    while (n >= 10) : (n /= 10) {
+        width += 1;
+    }
+    return width;
+}
 
-    return std.fmt.allocPrint(
-        std.heap.page_allocator,
-        "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}",
-        .{ year, month, day, hour, min, sec },
-    );
+fn makeTestRegistry() registry.Registry {
+    return .{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+}
+
+fn appendTestAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    record_key: []const u8,
+    email: []const u8,
+    alias: []const u8,
+    plan: registry.PlanType,
+) !void {
+    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const chatgpt_user_id = record_key[0..sep];
+    const chatgpt_account_id = record_key[sep + 2 ..];
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, chatgpt_account_id),
+        .chatgpt_user_id = try allocator.dupe(u8, chatgpt_user_id),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, alias),
+        .account_name = null,
+        .plan = plan,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
 }
 
 test "printTableRow handles long cells without underflow" {
@@ -685,4 +709,95 @@ test "truncateAlloc respects max_len" {
     const out2 = try truncateAlloc("abcdef", 1);
     defer std.heap.page_allocator.free(out2);
     try std.testing.expect(out2.len == 1);
+}
+
+test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
+    const now = time_compat.timestamp();
+    const window = registry.RateLimitWindow{
+        .used_percent = 100.0,
+        .window_minutes = 300,
+        .resets_at = now - 60,
+    };
+
+    const formatted = try formatRateLimitFullAlloc(window);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expectEqualStrings("100%", formatted);
+}
+
+test "writeAccountsTable shows zero-padded row numbers for selectable accounts" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Als's Workspace");
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
+}
+
+test "writeAccountsTable shows usage override statuses for failed refreshes" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "403" };
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
+}
+
+
+test "writeAccountsTable highlights usage override rows in red when color is enabled" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "403" };
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, true, &usage_overrides);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+}
+
+test "writeAccountsTable prefers usage snapshot plan labels over stored auth plan" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .plus);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .team,
+    };
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
 }

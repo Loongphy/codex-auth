@@ -22,8 +22,20 @@ export const platformPackages = [
     os: "linux",
     cpu: "x64",
     binaryName: "codex-auth",
+    binaryFiles: ["codex-auth"],
     archiveName: "codex-auth-Linux-X64.tar.gz",
     zigTarget: "x86_64-linux-gnu"
+  },
+  {
+    id: "linux-arm64",
+    packageName: "@loongphy/codex-auth-linux-arm64",
+    packageDirName: "codex-auth-linux-arm64",
+    os: "linux",
+    cpu: "arm64",
+    binaryName: "codex-auth",
+    binaryFiles: ["codex-auth"],
+    archiveName: "codex-auth-Linux-ARM64.tar.gz",
+    zigTarget: "aarch64-linux-gnu"
   },
   {
     id: "darwin-x64",
@@ -32,6 +44,7 @@ export const platformPackages = [
     os: "darwin",
     cpu: "x64",
     binaryName: "codex-auth",
+    binaryFiles: ["codex-auth"],
     archiveName: "codex-auth-macOS-X64.tar.gz",
     zigTarget: "x86_64-macos-none"
   },
@@ -42,6 +55,7 @@ export const platformPackages = [
     os: "darwin",
     cpu: "arm64",
     binaryName: "codex-auth",
+    binaryFiles: ["codex-auth"],
     archiveName: "codex-auth-macOS-ARM64.tar.gz",
     zigTarget: "aarch64-macos-none"
   },
@@ -52,8 +66,20 @@ export const platformPackages = [
     os: "win32",
     cpu: "x64",
     binaryName: "codex-auth.exe",
+    binaryFiles: ["codex-auth.exe", "codex-auth-auto.exe"],
     archiveName: "codex-auth-Windows-X64.zip",
     zigTarget: "x86_64-windows-gnu"
+  },
+  {
+    id: "win32-arm64",
+    packageName: "@loongphy/codex-auth-win32-arm64",
+    packageDirName: "codex-auth-win32-arm64",
+    os: "win32",
+    cpu: "arm64",
+    binaryName: "codex-auth.exe",
+    binaryFiles: ["codex-auth.exe", "codex-auth-auto.exe"],
+    archiveName: "codex-auth-Windows-ARM64.zip",
+    zigTarget: "aarch64-windows-gnu"
   }
 ];
 

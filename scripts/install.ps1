@@ -90,6 +90,12 @@ try {
   $DestBin = Join-Path $InstallDir "codex-auth.exe"
   Copy-Item -Path $SourceBin -Destination $DestBin -Force
 
+  $SourceAutoBin = Join-Path $TempDir "codex-auth-auto.exe"
+  if (Test-Path $SourceAutoBin) {
+    $DestAutoBin = Join-Path $InstallDir "codex-auth-auto.exe"
+    Copy-Item -Path $SourceAutoBin -Destination $DestAutoBin -Force
+  }
+
   Write-Success "codex-auth installed successfully!"
   Write-Info "Path : $DestBin"
 } finally {

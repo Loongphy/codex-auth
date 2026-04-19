@@ -19,17 +19,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.1
+          version: 0.16.0
 
       - name: Zig test
         run: |
           zig version
-          zig build test
+          zig test src/main.zig -lc
 
       - name: Build native binary
         run: zig build -Doptimize=ReleaseSafe
@@ -45,6 +45,10 @@ jobs:
             zig_target: x86_64-linux-gnu
             binary_name: codex-auth
             archive_name: codex-auth-Linux-X64.tar.gz
+          - id: linux-arm64
+            zig_target: aarch64-linux-gnu
+            binary_name: codex-auth
+            archive_name: codex-auth-Linux-ARM64.tar.gz
           - id: darwin-x64
             zig_target: x86_64-macos-none
             binary_name: codex-auth
@@ -57,20 +61,25 @@ jobs:
             zig_target: x86_64-windows-gnu
             binary_name: codex-auth.exe
             archive_name: codex-auth-Windows-X64.zip
+          - id: win32-arm64
+            zig_target: aarch64-windows-gnu
+            binary_name: codex-auth.exe
+            archive_name: codex-auth-Windows-ARM64.zip
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.1
+          version: 0.16.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
+          package-manager-cache: false
 
       - name: Check versions
         run: node scripts/npm/check-versions.mjs ${{ github.ref_name }}
@@ -83,17 +92,20 @@ jobs:
         run: |
           mkdir -p "artifacts/${{ matrix.id }}/binary"
           cp "zig-out/bin/${{ matrix.binary_name }}" "artifacts/${{ matrix.id }}/binary/${{ matrix.binary_name }}"
+          if [[ "${{ matrix.id }}" == win32-* ]]; then
+            cp "zig-out/bin/codex-auth-auto.exe" "artifacts/${{ matrix.id }}/binary/codex-auth-auto.exe"
+          fi
           if [[ "${{ matrix.archive_name }}" == *.zip ]]; then
             (
               cd "artifacts/${{ matrix.id }}/binary"
-              zip -q "../${{ matrix.archive_name }}" "${{ matrix.binary_name }}"
+              zip -q "../${{ matrix.archive_name }}" ./*
             )
           else
             tar -czf "artifacts/${{ matrix.id }}/${{ matrix.archive_name }}" -C "artifacts/${{ matrix.id }}/binary" "${{ matrix.binary_name }}"
           fi
 
       - name: Upload artifact bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.id }}
           path: artifacts
@@ -104,12 +116,12 @@ jobs:
     needs: [build-test, release-assets]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Build release notes
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           CURRENT_TAG: ${{ github.ref_name }}
         with:
@@ -121,13 +133,84 @@ jobs:
             const repo = context.repo.repo;
             const currentTag = process.env.CURRENT_TAG;
 
+            function parseTag(tag) {
+              const match = /^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(tag);
+              if (!match) return null;
+              return {
+                tag,
+                major: Number(match[1]),
+                minor: Number(match[2]),
+                patch: Number(match[3]),
+                prerelease: match[4] ?? null,
+              };
+            }
+
+            function compareIdentifiers(a, b) {
+              const aIsNumeric = /^\d+$/.test(a);
+              const bIsNumeric = /^\d+$/.test(b);
+              if (aIsNumeric && bIsNumeric) {
+                return Number(a) - Number(b);
+              }
+              if (aIsNumeric) return -1;
+              if (bIsNumeric) return 1;
+              return a.localeCompare(b);
+            }
+
+            function compareSemver(a, b) {
+              if (a.major !== b.major) return a.major - b.major;
+              if (a.minor !== b.minor) return a.minor - b.minor;
+              if (a.patch !== b.patch) return a.patch - b.patch;
+              if (a.prerelease == null && b.prerelease == null) return 0;
+              if (a.prerelease == null) return 1;
+              if (b.prerelease == null) return -1;
+
+              const aParts = a.prerelease.split(".");
+              const bParts = b.prerelease.split(".");
+              const len = Math.max(aParts.length, bParts.length);
+              for (let i = 0; i < len; i += 1) {
+                const aPart = aParts[i];
+                const bPart = bParts[i];
+                if (aPart == null) return -1;
+                if (bPart == null) return 1;
+                const cmp = compareIdentifiers(aPart, bPart);
+                if (cmp !== 0) return cmp;
+              }
+              return 0;
+            }
+
+            function choosePreviousTag(tags, current) {
+              const olderTags = tags
+                .filter((tag) => tag.tag !== current.tag)
+                .filter((tag) => compareSemver(tag, current) < 0)
+                .sort((a, b) => compareSemver(b, a));
+
+              if (current.prerelease == null) {
+                return olderTags.find((tag) => tag.prerelease == null)?.tag ?? null;
+              }
+
+              const sameCorePrerelease = olderTags.find(
+                (tag) =>
+                  tag.major === current.major &&
+                  tag.minor === current.minor &&
+                  tag.patch === current.patch &&
+                  tag.prerelease != null,
+              );
+              if (sameCorePrerelease) return sameCorePrerelease.tag;
+
+              return olderTags.find((tag) => tag.prerelease == null)?.tag ?? olderTags[0]?.tag ?? null;
+            }
+
             const allTags = cp
               .execSync("git tag --sort=-version:refname", { encoding: "utf8" })
               .split("\n")
               .map((s) => s.trim())
               .filter(Boolean);
 
-            const previousTag = allTags.find((t) => t !== currentTag) ?? null;
+            const parsedTags = allTags.map(parseTag).filter(Boolean);
+            const parsedCurrentTag = parseTag(currentTag);
+            const previousTag = parsedCurrentTag
+              ? choosePreviousTag(parsedTags, parsedCurrentTag)
+              : allTags.find((t) => t !== currentTag) ?? null;
 
             let compareCommits = [];
             if (previousTag) {
@@ -173,15 +256,15 @@ jobs:
             fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body_path: release-notes.md
           files: |
             release-assets/*/*.tar.gz
@@ -196,16 +279,17 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -253,9 +337,11 @@ jobs:
         run: |
           for dir in \
             codex-auth-linux-x64 \
+            codex-auth-linux-arm64 \
             codex-auth-darwin-x64 \
             codex-auth-darwin-arm64 \
-            codex-auth-win32-x64
+            codex-auth-win32-x64 \
+            codex-auth-win32-arm64
           do
             npm publish "./dist/npm/${dir}" --access public --tag "${NPM_DIST_TAG}"
           done

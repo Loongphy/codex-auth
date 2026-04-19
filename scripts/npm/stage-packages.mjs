@@ -64,7 +64,11 @@ function writePlatformPackage(outputDir, rootPackage, platformPackage, sourceBin
     }
   };
 
-  copyFile(sourceBinary, path.join(dir, "bin", platformPackage.binaryName), platformPackage.os === "win32" ? undefined : 0o755);
+  const binaryFiles = platformPackage.binaryFiles ?? [platformPackage.binaryName];
+  for (const binaryFile of binaryFiles) {
+    const sourcePath = path.join(path.dirname(sourceBinary), binaryFile);
+    copyFile(sourcePath, path.join(dir, "bin", binaryFile), platformPackage.os === "win32" ? undefined : 0o755);
+  }
   copyFile(rootReadmePath, path.join(dir, "README.md"));
   copyFile(rootLicensePath, path.join(dir, "LICENSE"));
   writeJson(path.join(dir, "package.json"), manifest);

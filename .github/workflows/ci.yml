@@ -22,17 +22,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.1
+          version: 0.16.0
 
       - name: Zig test
         run: |
           zig version
-          zig build test
-
-      - name: Build native binary
-        run: zig build -Doptimize=ReleaseSafe
+          zig test src/main.zig -lc

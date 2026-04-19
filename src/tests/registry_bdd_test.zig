@@ -1,15 +1,16 @@
 const std = @import("std");
+const fs = @import("../compat_fs.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const SyncBddContext = struct {
     allocator: std.mem.Allocator,
-    tmp: std.testing.TmpDir,
+    tmp: fs.TmpDir,
     codex_home: []u8,
     reg: registry.Registry,
 
     fn givenCleanCodexHome(allocator: std.mem.Allocator) !SyncBddContext {
-        var tmp = std.testing.tmpDir(.{});
+        var tmp = fs.tmpDir(.{});
         const codex_home = try tmp.dir.realpathAlloc(allocator, ".");
         return SyncBddContext{
             .allocator = allocator,
@@ -42,8 +43,10 @@ const SyncBddContext = struct {
     }
 
     fn thenActiveEmailShouldBe(self: *SyncBddContext, expected: []const u8) !void {
-        try std.testing.expect(self.reg.active_email != null);
-        try std.testing.expect(std.mem.eql(u8, self.reg.active_email.?, expected));
+        const idx = bdd.findAccountIndexByEmail(&self.reg, expected) orelse return error.TestExpectedEqual;
+        const expected_account_id = self.reg.accounts.items[idx].account_key;
+        try std.testing.expect(self.reg.active_account_key != null);
+        try std.testing.expect(std.mem.eql(u8, self.reg.active_account_key.?, expected_account_id));
     }
 
     fn thenAccountShouldExist(self: *SyncBddContext, email: []const u8) !void {
@@ -54,7 +57,9 @@ const SyncBddContext = struct {
     fn thenAccountAuthShouldMatchActive(self: *SyncBddContext, email: []const u8) !void {
         const active_auth_path = try registry.activeAuthPath(self.allocator, self.codex_home);
         defer self.allocator.free(active_auth_path);
-        const account_auth_path = try registry.accountAuthPath(self.allocator, self.codex_home, email);
+        const account_id = try bdd.accountKeyForEmailAlloc(self.allocator, email);
+        defer self.allocator.free(account_id);
+        const account_auth_path = try registry.accountAuthPath(self.allocator, self.codex_home, account_id);
         defer self.allocator.free(account_auth_path);
 
         const active_data = try bdd.readFileAlloc(self.allocator, active_auth_path);
@@ -83,17 +88,59 @@ test "Scenario: Given empty registry when syncing auth then auto import and acti
     try ctx.thenAccountAuthShouldMatchActive("auto@example.com");
 }
 
-test "Scenario: Given auth without email when syncing then keep registry unchanged" {
+test "Scenario: Given auth without email when syncing then sync is skipped" {
     const gpa = std.testing.allocator;
     var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
     defer ctx.deinit();
 
     try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
-    try registry.setActiveAccount(gpa, &ctx.reg, "keep@example.com");
+    const keep_account_id = try bdd.accountKeyForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccountKey(gpa, &ctx.reg, keep_account_id);
 
     const invalid_auth = try bdd.authJsonWithoutEmail(gpa);
     defer gpa.free(invalid_auth);
     try ctx.givenActiveAuthJson(invalid_auth);
+
+    const changed = try ctx.whenSyncActiveAccountFromAuth();
+
+    try std.testing.expect(!changed);
+    try ctx.thenAccountCountShouldBe(1);
+    try ctx.thenActiveEmailShouldBe("keep@example.com");
+}
+
+test "Scenario: Given auth without account id when syncing then sync is skipped" {
+    const gpa = std.testing.allocator;
+    var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
+    defer ctx.deinit();
+
+    try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
+    const keep_account_id = try bdd.accountKeyForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccountKey(gpa, &ctx.reg, keep_account_id);
+
+    const invalid_auth = try bdd.authJsonWithoutAccountId(gpa, "legacy@example.com", "pro");
+    defer gpa.free(invalid_auth);
+    try ctx.givenActiveAuthJson(invalid_auth);
+
+    const changed = try ctx.whenSyncActiveAccountFromAuth();
+
+    try std.testing.expect(!changed);
+    try ctx.thenAccountCountShouldBe(1);
+    try ctx.thenActiveEmailShouldBe("keep@example.com");
+}
+
+test "Scenario: Given malformed auth json when syncing then sync is skipped" {
+    const gpa = std.testing.allocator;
+    var ctx = try SyncBddContext.givenCleanCodexHome(gpa);
+    defer ctx.deinit();
+
+    try ctx.givenRegisteredAccount("keep@example.com", "keep", .pro);
+    const keep_account_id = try bdd.accountKeyForEmailAlloc(gpa, "keep@example.com");
+    defer gpa.free(keep_account_id);
+    try registry.setActiveAccountKey(gpa, &ctx.reg, keep_account_id);
+
+    try ctx.givenActiveAuthJson("{");
 
     const changed = try ctx.whenSyncActiveAccountFromAuth();
 
@@ -108,7 +155,9 @@ test "Scenario: Given unmatched active auth email when syncing then append accou
     defer ctx.deinit();
 
     try ctx.givenRegisteredAccount("old@example.com", "old", .free);
-    try registry.setActiveAccount(gpa, &ctx.reg, "old@example.com");
+    const old_account_id = try bdd.accountKeyForEmailAlloc(gpa, "old@example.com");
+    defer gpa.free(old_account_id);
+    try registry.setActiveAccountKey(gpa, &ctx.reg, old_account_id);
 
     const active_auth = try bdd.authJsonWithEmailPlan(gpa, "new@example.com", "team");
     defer gpa.free(active_auth);

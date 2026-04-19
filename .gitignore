@@ -6,3 +6,6 @@ dist/
 
 # IDE/Editor
 .idea/
+
+# Local benchmarking workspace
+benchmark/
