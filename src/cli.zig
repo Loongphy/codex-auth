@@ -67,6 +67,7 @@ pub const SwitchOptions = struct {
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
     all: bool,
+    api_mode: ApiMode = .default,
 };
 pub const CleanOptions = struct {};
 pub const AutoAction = enum { enable, disable };
@@ -353,16 +354,33 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         errdefer freeOwnedStringList(allocator, selectors.items);
         defer selectors.deinit(allocator);
         var all = false;
+        var api_mode: ApiMode = .default;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--api") or std.mem.eql(u8, arg, "--skip-api")) {
-                return usageErrorResult(
-                    allocator,
-                    .remove_account,
-                    "`remove` does not support `--api` or `--skip-api`.",
-                    .{},
-                );
+            if (std.mem.eql(u8, arg, "--api")) {
+                switch (api_mode) {
+                    .default => api_mode = .force_api,
+                    .force_api => {
+                        return usageErrorResult(allocator, .remove_account, "duplicate `--api` for `remove`.", .{});
+                    },
+                    .skip_api => {
+                        return usageErrorResult(allocator, .remove_account, "`--api` cannot be combined with `--skip-api` for `remove`.", .{});
+                    },
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--skip-api")) {
+                switch (api_mode) {
+                    .default => api_mode = .skip_api,
+                    .skip_api => {
+                        return usageErrorResult(allocator, .remove_account, "duplicate `--skip-api` for `remove`.", .{});
+                    },
+                    .force_api => {
+                        return usageErrorResult(allocator, .remove_account, "`--skip-api` cannot be combined with `--api` for `remove`.", .{});
+                    },
+                }
+                continue;
             }
             if (std.mem.eql(u8, arg, "--all")) {
                 if (all or selectors.items.len != 0) {
@@ -379,9 +397,18 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             }
             try selectors.append(allocator, try allocator.dupe(u8, arg));
         }
+        if (api_mode != .default and (all or selectors.items.len != 0)) {
+            return usageErrorResult(
+                allocator,
+                .remove_account,
+                "`remove <query>` and `remove --all` do not support `--api` or `--skip-api`.",
+                .{},
+            );
+        }
         return .{ .command = .{ .remove_account = .{
             .selectors = try selectors.toOwnedSlice(allocator),
             .all = all,
+            .api_mode = api_mode,
         } } };
     }
 
@@ -815,7 +842,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
-            try out.writeAll("  codex-auth remove\n");
+            try out.writeAll("  codex-auth remove [--api|--skip-api]\n");
             try out.writeAll("  codex-auth remove <query> [<query>...]\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
@@ -868,6 +895,8 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
+            try out.writeAll("  codex-auth remove --api\n");
+            try out.writeAll("  codex-auth remove --skip-api\n");
             try out.writeAll("  codex-auth remove 01 03\n");
             try out.writeAll("  codex-auth remove work personal\n");
             try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");

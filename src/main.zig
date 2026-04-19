@@ -1903,7 +1903,42 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    const usage_overrides: ?[]const ?[]const u8 = null;
+    const interactive_remove = !opts.all and opts.selectors.len == 0;
+    const usage_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
+    const account_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
+
+    var usage_state: ?ForegroundUsageRefreshState = null;
+    defer if (usage_state) |*state| state.deinit(allocator);
+
+    if (interactive_remove) {
+        try ensureForegroundNodeAvailableWithApiEnabled(
+            allocator,
+            codex_home,
+            &reg,
+            .remove_account,
+            usage_api_enabled,
+            account_api_enabled,
+        );
+        if (usage_api_enabled) {
+            usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+                allocator,
+                codex_home,
+                &reg,
+                null,
+                usage_api_enabled,
+            );
+        }
+        try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+            allocator,
+            codex_home,
+            &reg,
+            .remove_account,
+            defaultAccountFetcher,
+            account_api_enabled,
+        );
+    }
+
+    const usage_overrides = if (usage_state) |state| state.usage_overrides else null;
 
     var selected: ?[]usize = null;
     if (opts.all) {
