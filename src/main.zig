@@ -1866,14 +1866,12 @@ const SwitchLiveRuntime = struct {
 
         var in_flight = false;
         var next_refresh_not_before_ms: i64 = now_ms;
-        var last_round_duration_ms: ?i64 = null;
         var mode_label: []const u8 = "stored";
         var refresh_error_name: ?[]u8 = null;
 
         self.mutex.lockUncancelable(io);
         in_flight = self.in_flight;
         next_refresh_not_before_ms = self.next_refresh_not_before_ms;
-        last_round_duration_ms = self.last_refresh_duration_ms;
         mode_label = self.mode_label;
         if (self.last_refresh_error_name) |error_name| {
             refresh_error_name = try allocator.dupe(u8, error_name);
@@ -1882,18 +1880,12 @@ const SwitchLiveRuntime = struct {
         defer if (refresh_error_name) |value| allocator.free(value);
 
         const refresh_state = if (in_flight)
-            try allocator.dupe(u8, "running")
+            try allocator.dupe(u8, "Refresh running")
         else if (next_refresh_not_before_ms <= now_ms)
-            try allocator.dupe(u8, "due")
+            try allocator.dupe(u8, "Refresh due")
         else
-            try std.fmt.allocPrint(allocator, "in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
+            try std.fmt.allocPrint(allocator, "Refresh in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
         defer allocator.free(refresh_state);
-
-        const round_state = if (last_round_duration_ms) |duration_ms|
-            try std.fmt.allocPrint(allocator, "{d}s", .{@divFloor(duration_ms + 999, 1000)})
-        else
-            try allocator.dupe(u8, "-");
-        defer allocator.free(round_state);
 
         const error_suffix = if (refresh_error_name) |value|
             try std.fmt.allocPrint(allocator, " | Error: {s}", .{value})
@@ -1903,13 +1895,8 @@ const SwitchLiveRuntime = struct {
 
         return std.fmt.allocPrint(
             allocator,
-            "Live refresh: {s} | Next: {s} | Last round: {s}{s}",
-            .{
-                mode_label,
-                refresh_state,
-                round_state,
-                error_suffix,
-            },
+            "Live refresh: {s} | {s}{s}",
+            .{ mode_label, refresh_state, error_suffix },
         );
     }
 };

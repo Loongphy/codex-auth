@@ -65,13 +65,13 @@ fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
 
 fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k, Enter select, Esc or q quit\n");
+    try out.writeAll("Keys: ↑/↓ or j/k, 1-9 type, Backspace edit, Enter select, Esc or q quit\n");
     if (use_color) try out.writeAll(ansi.reset);
 }
 
 fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, Enter delete, Esc or q quit\n");
+    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Backspace edit, Enter delete, Esc or q quit\n");
     if (use_color) try out.writeAll(ansi.reset);
 }
 
@@ -1623,6 +1623,7 @@ pub fn selectAccountWithLiveUpdates(
         const borrowed = current_display.borrowed();
         var rows = try buildSwitchRowsWithUsageOverrides(allocator, borrowed.reg, borrowed.usage_overrides);
         defer rows.deinit(allocator);
+        try filterErroredRowsFromSelectableIndices(allocator, &rows);
         if (rows.selectable_row_indices.len == 0) return null;
 
         var selected_idx = if (selected_account_key) |key|
@@ -1868,6 +1869,8 @@ fn selectWithNumbers(
     if (reg.accounts.items.len == 0) return null;
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
+    try filterErroredRowsFromSelectableIndices(allocator, &rows);
+    if (rows.selectable_row_indices.len == 0) return null;
     const use_color = colorEnabled();
     const active_idx = activeSelectableIndex(&rows);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
@@ -1904,6 +1907,8 @@ fn selectWithNumbersFromIndices(
 
     var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
+    try filterErroredRowsFromSelectableIndices(allocator, &rows);
+    if (rows.selectable_row_indices.len == 0) return null;
     const use_color = colorEnabled();
     const active_idx = activeSelectableIndex(&rows);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
@@ -1936,6 +1941,8 @@ fn selectInteractiveFromIndices(
     if (indices.len == 0) return null;
     var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
+    try filterErroredRowsFromSelectableIndices(allocator, &rows);
+    if (rows.selectable_row_indices.len == 0) return null;
 
     var tui = try TuiSession.init();
     defer tui.deinit();
@@ -2116,6 +2123,8 @@ fn selectInteractive(
     if (reg.accounts.items.len == 0) return null;
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
+    try filterErroredRowsFromSelectableIndices(allocator, &rows);
+    if (rows.selectable_row_indices.len == 0) return null;
 
     var tui = try TuiSession.init();
     defer tui.deinit();
@@ -2397,7 +2406,8 @@ fn renderSwitchList(
             continue;
         }
 
-        const is_selected = selected != null and selected.? == selectable_counter;
+        const is_selectable = !row.has_error;
+        const is_selected = is_selectable and selected != null and selected.? == selectable_counter;
         const is_active = row.is_active;
         if (use_color) {
             if (row.has_error) {
@@ -2415,7 +2425,11 @@ fn renderSwitchList(
             }
         }
         try out.writeAll(if (is_selected) "> " else "  ");
-        try writeIndexPadded(out, selectable_counter + 1, idx_width);
+        if (is_selectable) {
+            try writeIndexPadded(out, selectable_counter + 1, idx_width);
+        } else {
+            try writeRepeat(out, ' ', idx_width);
+        }
         try out.writeAll(" ");
         const indent: usize = @as(usize, row.depth) * 2;
         const indent_to_print: usize = @min(indent, widths.email);
@@ -2434,7 +2448,7 @@ fn renderSwitchList(
         }
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.reset);
-        selectable_counter += 1;
+        if (is_selectable) selectable_counter += 1;
     }
 }
 
@@ -2607,6 +2621,24 @@ const SwitchRows = struct {
         allocator.free(self.selectable_row_indices);
     }
 };
+
+fn filterErroredRowsFromSelectableIndices(allocator: std.mem.Allocator, rows: *SwitchRows) !void {
+    var selectable_count: usize = 0;
+    for (rows.selectable_row_indices) |row_idx| {
+        if (!rows.items[row_idx].has_error) selectable_count += 1;
+    }
+
+    const filtered = try allocator.alloc(usize, selectable_count);
+    var next_idx: usize = 0;
+    for (rows.selectable_row_indices) |row_idx| {
+        if (rows.items[row_idx].has_error) continue;
+        filtered[next_idx] = row_idx;
+        next_idx += 1;
+    }
+
+    allocator.free(rows.selectable_row_indices);
+    rows.selectable_row_indices = filtered;
+}
 
 fn usageOverrideForAccount(
     usage_overrides: ?[]const ?[]const u8,
@@ -2988,6 +3020,46 @@ test "Scenario: Given usage overrides when rendering switch list then failed row
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.count(u8, output, "401") >= 2);
+}
+
+test "Scenario: Given usage overrides when selecting switch accounts then errored rows are skipped" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "healthy@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "failed@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    try std.testing.expectEqual(@as(usize, 1), rows.selectable_row_indices.len);
+    try std.testing.expect(std.mem.eql(u8, accountIdForSelectable(&rows, &reg, 0), "user-1::acc-1"));
+}
+
+test "Scenario: Given usage overrides when rendering switch list then errored rows do not show selection numbers" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "healthy@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "failed@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "01 healthy@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "02 failed@example.com") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "failed@example.com") != null);
 }
 
 test "Scenario: Given usage overrides when rendering remove list then failed rows show response status in both usage columns" {
