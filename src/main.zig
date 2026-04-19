@@ -12,12 +12,16 @@ const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
 const io_util = @import("io_util.zig");
+const timefmt = @import("timefmt.zig");
 const usage_api = @import("usage_api.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
 const foreground_usage_refresh_concurrency: usize = 3;
+const switch_live_api_refresh_interval_ms: i64 = 30_000;
+const switch_live_local_refresh_interval_ms: i64 = 10_000;
+const switch_live_stored_refresh_interval_ms: i64 = 10_000;
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
@@ -79,6 +83,13 @@ pub const ForegroundUsageRefreshState = struct {
         allocator.free(self.outcomes);
         self.* = undefined;
     }
+};
+
+const SwitchLiveRecordFields = struct {
+    account_name: ?[]const u8,
+    last_usage: ?registry.RateLimitSnapshot,
+    last_usage_at: ?i64,
+    last_local_rollout: ?registry.RolloutSignature,
 };
 
 const SwitchQueryResolution = union(enum) {
@@ -339,7 +350,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         reg,
@@ -347,6 +358,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
         initForegroundUsagePool,
         null,
         reg.api.usage,
+        true,
     );
 }
 
@@ -357,7 +369,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     usage_fetcher: UsageFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         reg,
@@ -365,6 +377,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
         pool_init,
         null,
         reg.api.usage,
+        true,
     );
 }
 
@@ -376,7 +389,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         reg,
@@ -384,6 +397,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
         pool_init,
         debug_logger,
         reg.api.usage,
+        true,
     );
 }
 
@@ -396,6 +410,28 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
     debug_logger: ?*ForegroundUsageDebugLogger,
     usage_api_enabled: bool,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        pool_init,
+        debug_logger,
+        usage_api_enabled,
+        true,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+    usage_api_enabled: bool,
+    persist_registry: bool,
+) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
 
@@ -407,7 +443,7 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
     if (!usage_api_enabled) {
         state.local_only_mode = true;
         if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
-            try registry.saveRegistry(allocator, codex_home, reg);
+            if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
         }
         if (debug_logger) |logger| {
             try logger.print("[debug] usage refresh skipped: mode=local-only; only the active account can refresh from local rollout data\n", .{});
@@ -484,7 +520,7 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
         }
     }
 
-    if (registry_changed) {
+    if (persist_registry and registry_changed) {
         try registry.saveRegistry(allocator, codex_home, reg);
     }
 
@@ -819,6 +855,26 @@ fn maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
     fetcher: AccountFetchFn,
     account_api_enabled: bool,
 ) !void {
+    _ = try maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        fetcher,
+        account_api_enabled,
+        true,
+    );
+}
+
+fn maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    fetcher: AccountFetchFn,
+    account_api_enabled: bool,
+    persist_registry: bool,
+) !bool {
     const changed = switch (target) {
         .list, .remove_account => try refreshAccountNamesForListWithAccountApiEnabled(
             allocator,
@@ -835,8 +891,9 @@ fn maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
             account_api_enabled,
         ),
     };
-    if (!changed) return;
-    try registry.saveRegistry(allocator, codex_home, reg);
+    if (!changed) return false;
+    if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
+    return true;
 }
 
 fn defaultAccountFetcher(
@@ -1462,12 +1519,12 @@ fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 }
 
 fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.SwitchOptions) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
-    }
     if (opts.query) |query| {
+        var reg = try registry.loadRegistry(allocator, codex_home);
+        defer reg.deinit(allocator);
+        if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
+            try registry.saveRegistry(allocator, codex_home, &reg);
+        }
         std.debug.assert(opts.api_mode == .default);
 
         var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
@@ -1489,52 +1546,583 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         if (selected_account_key == null) return;
         try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
         try registry.saveRegistry(allocator, codex_home, &reg);
+        try cli.printSwitchedAccount(allocator, &reg, selected_account_key.?);
         return;
     }
 
-    if (apiModeUsesStoredDataOnly(opts.api_mode)) {
-        const selected_account_key = try cli.selectAccount(allocator, &reg);
-        if (selected_account_key == null) return;
-        try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
-        try registry.saveRegistry(allocator, codex_home, &reg);
-        return;
+    const live_allocator = std.heap.smp_allocator;
+
+    const loaded = try loadSwitchSelectionDisplay(live_allocator, codex_home, opts.api_mode);
+    var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
+    errdefer if (initial_display) |*display| display.deinit(live_allocator);
+
+    const selected_account_key = blk: {
+        var runtime = SwitchLiveRuntime.init(live_allocator, codex_home, opts.api_mode, loaded.policy);
+        defer runtime.deinit();
+
+        const controller: cli.SwitchLiveController = .{
+            .context = @ptrCast(&runtime),
+            .maybe_start_refresh = switchLiveRuntimeMaybeStartRefresh,
+            .maybe_take_updated_display = switchLiveRuntimeMaybeTakeUpdatedDisplay,
+            .build_status_line = switchLiveRuntimeBuildStatusLine,
+        };
+
+        const transferred_display = initial_display.?;
+        initial_display = null;
+        break :blk try cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller);
+    };
+    defer if (selected_account_key) |account_key| live_allocator.free(@constCast(account_key));
+
+    if (selected_account_key == null) return;
+
+    var reg = try registry.loadRegistry(live_allocator, codex_home);
+    defer reg.deinit(live_allocator);
+    if (try registry.syncActiveAccountFromAuth(live_allocator, codex_home, &reg)) {
+        try registry.saveRegistry(live_allocator, codex_home, &reg);
+    }
+    try registry.activateAccountByKey(live_allocator, codex_home, &reg, selected_account_key.?);
+    try registry.saveRegistry(live_allocator, codex_home, &reg);
+    try cli.printSwitchedAccount(live_allocator, &reg, selected_account_key.?);
+}
+
+const SwitchLiveRefreshPolicy = struct {
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+    interval_ms: i64,
+    label: []const u8,
+};
+
+const SwitchLoadedDisplay = struct {
+    display: cli.OwnedSwitchSelectionDisplay,
+    policy: SwitchLiveRefreshPolicy,
+};
+
+const SwitchLiveRuntime = struct {
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    api_mode: cli.ApiMode,
+    io_impl: std.Io.Threaded,
+    mutex: std.Io.Mutex = .init,
+    refresh_task: ?std.Io.Future(void) = null,
+    updated_display: ?cli.OwnedSwitchSelectionDisplay = null,
+    in_flight: bool = false,
+    next_refresh_not_before_ms: i64,
+    last_refresh_started_at_ms: ?i64 = null,
+    last_refresh_finished_at_ms: ?i64 = null,
+    last_refresh_duration_ms: ?i64 = null,
+    last_refresh_error_name: ?[]u8 = null,
+    refresh_interval_ms: i64,
+    mode_label: []const u8,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        codex_home: []const u8,
+        api_mode: cli.ApiMode,
+        initial_policy: SwitchLiveRefreshPolicy,
+    ) @This() {
+        const io_impl = std.Io.Threaded.init(allocator, .{
+            .concurrent_limit = .limited(1),
+        });
+        const now_ms = time_compat.milliTimestamp();
+        return .{
+            .allocator = allocator,
+            .codex_home = codex_home,
+            .api_mode = api_mode,
+            .io_impl = io_impl,
+            .next_refresh_not_before_ms = now_ms + initial_policy.interval_ms,
+            .refresh_interval_ms = initial_policy.interval_ms,
+            .mode_label = initial_policy.label,
+        };
     }
 
-    const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
-    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+    fn deinit(self: *@This()) void {
+        self.awaitRefresh();
+        if (self.updated_display) |*display| display.deinit(self.allocator);
+        if (self.last_refresh_error_name) |name| self.allocator.free(name);
+        self.io_impl.deinit();
+        self.* = undefined;
+    }
+
+    fn awaitRefresh(self: *@This()) void {
+        const io = self.io_impl.io();
+        var future: ?std.Io.Future(void) = null;
+        self.mutex.lockUncancelable(io);
+        if (self.refresh_task) |task| {
+            future = task;
+            self.refresh_task = null;
+        }
+        self.mutex.unlock(io);
+        if (future) |*task| task.await(io);
+    }
+
+    fn maybeStartRefresh(self: *@This()) void {
+        const io = self.io_impl.io();
+        const now_ms = time_compat.milliTimestamp();
+
+        self.mutex.lockUncancelable(io);
+        if (self.in_flight or self.refresh_task != null or now_ms < self.next_refresh_not_before_ms) {
+            self.mutex.unlock(io);
+            return;
+        }
+        self.in_flight = true;
+        self.last_refresh_started_at_ms = now_ms;
+        self.mutex.unlock(io);
+
+        const future = io.concurrent(runSwitchLiveRefreshRound, .{self}) catch |err| {
+            const finished_ms = time_compat.milliTimestamp();
+            const error_name = self.allocator.dupe(u8, @errorName(err)) catch null;
+
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            if (self.last_refresh_error_name) |name| self.allocator.free(name);
+            self.last_refresh_error_name = error_name;
+            self.last_refresh_finished_at_ms = finished_ms;
+            self.last_refresh_duration_ms = finished_ms - now_ms;
+            self.next_refresh_not_before_ms = finished_ms + self.refresh_interval_ms;
+            self.in_flight = false;
+            return;
+        };
+
+        self.mutex.lockUncancelable(io);
+        self.refresh_task = future;
+        self.mutex.unlock(io);
+    }
+
+    fn maybeTakeUpdatedDisplay(self: *@This()) ?cli.OwnedSwitchSelectionDisplay {
+        const io = self.io_impl.io();
+        var future: ?std.Io.Future(void) = null;
+        var display: ?cli.OwnedSwitchSelectionDisplay = null;
+
+        self.mutex.lockUncancelable(io);
+        if (!self.in_flight and self.refresh_task != null) {
+            future = self.refresh_task;
+            self.refresh_task = null;
+        }
+        if (self.updated_display) |owned_display| {
+            display = owned_display;
+            self.updated_display = null;
+        }
+        self.mutex.unlock(io);
+
+        if (future) |*task| task.await(io);
+        return display;
+    }
+
+    fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.SwitchSelectionDisplay) ![]u8 {
+        const io = self.io_impl.io();
+        const now_ms = time_compat.milliTimestamp();
+        const now_s = time_compat.timestamp();
+
+        var in_flight = false;
+        var next_refresh_not_before_ms: i64 = now_ms;
+        var last_round_duration_ms: ?i64 = null;
+        var mode_label: []const u8 = "stored";
+        var refresh_error_name: ?[]u8 = null;
+
+        self.mutex.lockUncancelable(io);
+        in_flight = self.in_flight;
+        next_refresh_not_before_ms = self.next_refresh_not_before_ms;
+        last_round_duration_ms = self.last_refresh_duration_ms;
+        mode_label = self.mode_label;
+        if (self.last_refresh_error_name) |error_name| {
+            refresh_error_name = try allocator.dupe(u8, error_name);
+        }
+        self.mutex.unlock(io);
+        defer if (refresh_error_name) |value| allocator.free(value);
+
+        const refresh_state = if (in_flight)
+            try allocator.dupe(u8, "running")
+        else if (next_refresh_not_before_ms <= now_ms)
+            try allocator.dupe(u8, "due")
+        else
+            try std.fmt.allocPrint(allocator, "in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
+        defer allocator.free(refresh_state);
+
+        const round_state = if (last_round_duration_ms) |duration_ms|
+            try std.fmt.allocPrint(allocator, "{d}s", .{@divFloor(duration_ms + 999, 1000)})
+        else
+            try allocator.dupe(u8, "-");
+        defer allocator.free(round_state);
+
+        const error_suffix = if (refresh_error_name) |value|
+            try std.fmt.allocPrint(allocator, " | Error: {s}", .{value})
+        else
+            try allocator.dupe(u8, "");
+        defer allocator.free(error_suffix);
+
+        const active_account_key = trackedActiveAccountKey(display.reg);
+        if (active_account_key == null) {
+            return std.fmt.allocPrint(
+                allocator,
+                "Active: - | 5H - | Weekly - | Last - | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
+                .{
+                    mode_label,
+                    refresh_state,
+                    round_state,
+                    error_suffix,
+                },
+            );
+        }
+
+        const active_idx = registry.findAccountIndexByAccountKey(display.reg, active_account_key.?) orelse {
+            return std.fmt.allocPrint(
+                allocator,
+                "Active: - | 5H - | Weekly - | Last - | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
+                .{
+                    mode_label,
+                    refresh_state,
+                    round_state,
+                    error_suffix,
+                },
+            );
+        };
+        const rec = &display.reg.accounts.items[active_idx];
+        const active_label = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
+        defer allocator.free(active_label);
+        const remaining_5h = try formatRemainingPercentAlloc(allocator, registry.resolveRateWindow(rec.last_usage, 300, true));
+        defer allocator.free(remaining_5h);
+        const remaining_weekly = try formatRemainingPercentAlloc(allocator, registry.resolveRateWindow(rec.last_usage, 10080, false));
+        defer allocator.free(remaining_weekly);
+        const last_activity = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_used_at, now_s);
+        defer allocator.free(last_activity);
+
+        return std.fmt.allocPrint(
+            allocator,
+            "Active: {s} | 5H {s} | Weekly {s} | Last {s} | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
+            .{
+                active_label,
+                remaining_5h,
+                remaining_weekly,
+                last_activity,
+                mode_label,
+                refresh_state,
+                round_state,
+                error_suffix,
+            },
+        );
+    }
+};
+
+fn switchLiveRefreshPolicy(reg: *const registry.Registry, api_mode: cli.ApiMode) SwitchLiveRefreshPolicy {
+    if (apiModeUsesStoredDataOnly(api_mode)) {
+        return .{
+            .usage_api_enabled = false,
+            .account_api_enabled = false,
+            .interval_ms = switch_live_stored_refresh_interval_ms,
+            .label = "stored",
+        };
+    }
+
+    const usage_api_enabled = apiModeUsesApi(reg.api.usage, api_mode);
+    const account_api_enabled = apiModeUsesApi(reg.api.account, api_mode);
+    if (usage_api_enabled or account_api_enabled) {
+        return .{
+            .usage_api_enabled = usage_api_enabled,
+            .account_api_enabled = account_api_enabled,
+            .interval_ms = switch_live_api_refresh_interval_ms,
+            .label = "api",
+        };
+    }
+
+    return .{
+        .usage_api_enabled = false,
+        .account_api_enabled = false,
+        .interval_ms = switch_live_local_refresh_interval_ms,
+        .label = "local",
+    };
+}
+
+fn findAccountIndexByAccountKeyConst(reg: *const registry.Registry, account_key: []const u8) ?usize {
+    for (reg.accounts.items, 0..) |rec, idx| {
+        if (std.mem.eql(u8, rec.account_key, account_key)) return idx;
+    }
+    return null;
+}
+
+fn optionalBytesEqual(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+fn switchLiveUsageFieldsEqual(
+    maybe_a: ?*const registry.AccountRecord,
+    maybe_b: ?*const registry.AccountRecord,
+) bool {
+    const a_usage = if (maybe_a) |rec| rec.last_usage else null;
+    const b_usage = if (maybe_b) |rec| rec.last_usage else null;
+    if (!registry.rateLimitSnapshotsEqual(a_usage, b_usage)) return false;
+
+    const a_last_usage_at = if (maybe_a) |rec| rec.last_usage_at else null;
+    const b_last_usage_at = if (maybe_b) |rec| rec.last_usage_at else null;
+    if (a_last_usage_at != b_last_usage_at) return false;
+
+    const a_last_local_rollout = if (maybe_a) |rec| rec.last_local_rollout else null;
+    const b_last_local_rollout = if (maybe_b) |rec| rec.last_local_rollout else null;
+    return registry.rolloutSignaturesEqual(a_last_local_rollout, b_last_local_rollout);
+}
+
+fn switchLiveAccountNameEqual(
+    maybe_a: ?*const registry.AccountRecord,
+    maybe_b: ?*const registry.AccountRecord,
+) bool {
+    const a_account_name = if (maybe_a) |rec| rec.account_name else null;
+    const b_account_name = if (maybe_b) |rec| rec.account_name else null;
+    return optionalBytesEqual(a_account_name, b_account_name);
+}
+
+fn replaceOptionalOwnedString(
+    allocator: std.mem.Allocator,
+    target: *?[]u8,
+    value: ?[]const u8,
+) !bool {
+    if (optionalBytesEqual(target.*, value)) return false;
+    const replacement = if (value) |text| try allocator.dupe(u8, text) else null;
+    if (target.*) |existing| allocator.free(existing);
+    target.* = replacement;
+    return true;
+}
+
+fn applySwitchLiveUsageDeltaToLatest(
+    allocator: std.mem.Allocator,
+    latest: *registry.Registry,
+    base_rec: ?*const registry.AccountRecord,
+    refreshed_rec: *const registry.AccountRecord,
+) !bool {
+    if (switchLiveUsageFieldsEqual(base_rec, refreshed_rec)) return false;
+
+    const latest_idx = findAccountIndexByAccountKeyConst(latest, refreshed_rec.account_key) orelse return false;
+    const latest_rec = &latest.accounts.items[latest_idx];
+    if (!switchLiveUsageFieldsEqual(base_rec, latest_rec)) return false;
+
+    if (refreshed_rec.last_usage) |snapshot| {
+        const cloned_snapshot = try registry.cloneRateLimitSnapshot(allocator, snapshot);
+        registry.updateUsage(allocator, latest, refreshed_rec.account_key, cloned_snapshot);
+        latest.accounts.items[latest_idx].last_usage_at = refreshed_rec.last_usage_at;
+    }
+    if (refreshed_rec.last_local_rollout) |signature| {
+        try registry.setAccountLastLocalRollout(
+            allocator,
+            &latest.accounts.items[latest_idx],
+            signature.path,
+            signature.event_timestamp_ms,
+        );
+    }
+    return true;
+}
+
+fn applySwitchLiveAccountNameDeltaToLatest(
+    allocator: std.mem.Allocator,
+    latest: *registry.Registry,
+    base_rec: ?*const registry.AccountRecord,
+    refreshed_rec: *const registry.AccountRecord,
+) !bool {
+    if (switchLiveAccountNameEqual(base_rec, refreshed_rec)) return false;
+
+    const latest_idx = findAccountIndexByAccountKeyConst(latest, refreshed_rec.account_key) orelse return false;
+    const latest_rec = &latest.accounts.items[latest_idx];
+    if (!switchLiveAccountNameEqual(base_rec, latest_rec)) return false;
+
+    return try replaceOptionalOwnedString(allocator, &latest_rec.account_name, refreshed_rec.account_name);
+}
+
+fn allocEmptySwitchUsageOverrides(allocator: std.mem.Allocator, len: usize) ![]?[]const u8 {
+    const usage_overrides = try allocator.alloc(?[]const u8, len);
+    for (usage_overrides) |*usage_override| usage_override.* = null;
+    return usage_overrides;
+}
+
+fn mapSwitchUsageOverridesToLatest(
+    allocator: std.mem.Allocator,
+    latest: *const registry.Registry,
+    refreshed: *const registry.Registry,
+    usage_overrides: []const ?[]const u8,
+) ![]?[]const u8 {
+    const mapped = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len);
+    errdefer {
+        for (mapped) |value| {
+            if (value) |text| allocator.free(text);
+        }
+        allocator.free(mapped);
+    }
+
+    for (refreshed.accounts.items, 0..) |rec, refreshed_idx| {
+        const usage_override = usage_overrides[refreshed_idx] orelse continue;
+        const latest_idx = findAccountIndexByAccountKeyConst(latest, rec.account_key) orelse continue;
+        mapped[latest_idx] = try allocator.dupe(u8, usage_override);
+    }
+    return mapped;
+}
+
+fn mergeSwitchLiveRefreshIntoLatest(
+    allocator: std.mem.Allocator,
+    latest: *registry.Registry,
+    base: *const registry.Registry,
+    refreshed: *const registry.Registry,
+) !bool {
+    var changed = false;
+    for (refreshed.accounts.items) |*refreshed_rec| {
+        const base_idx = findAccountIndexByAccountKeyConst(base, refreshed_rec.account_key);
+        const base_rec = if (base_idx) |idx| &base.accounts.items[idx] else null;
+        if (try applySwitchLiveUsageDeltaToLatest(allocator, latest, base_rec, refreshed_rec)) {
+            changed = true;
+        }
+        if (try applySwitchLiveAccountNameDeltaToLatest(allocator, latest, base_rec, refreshed_rec)) {
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+fn takeOwnedSwitchSelectionDisplay(
+    allocator: std.mem.Allocator,
+    reg: registry.Registry,
+    usage_state: *ForegroundUsageRefreshState,
+) cli.OwnedSwitchSelectionDisplay {
+    const usage_overrides = usage_state.usage_overrides;
+    allocator.free(usage_state.outcomes);
+    usage_state.* = undefined;
+    return .{
+        .reg = reg,
+        .usage_overrides = usage_overrides,
+    };
+}
+
+fn loadSwitchSelectionDisplay(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    api_mode: cli.ApiMode,
+) !SwitchLoadedDisplay {
+    if (apiModeUsesStoredDataOnly(api_mode)) {
+        var latest = try registry.loadRegistry(allocator, codex_home);
+        errdefer latest.deinit(allocator);
+        if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest)) {
+            try registry.saveRegistry(allocator, codex_home, &latest);
+        }
+        return .{
+            .display = .{
+                .reg = latest,
+                .usage_overrides = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len),
+            },
+            .policy = switchLiveRefreshPolicy(&latest, api_mode),
+        };
+    }
+
+    var base = try registry.loadRegistry(allocator, codex_home);
+    defer base.deinit(allocator);
+
+    var refreshed = try registry.loadRegistry(allocator, codex_home);
+    errdefer refreshed.deinit(allocator);
+    _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &refreshed);
+    const initial_policy = switchLiveRefreshPolicy(&refreshed, api_mode);
 
     try ensureForegroundNodeAvailableWithApiEnabled(
         allocator,
         codex_home,
-        &reg,
+        &refreshed,
         .switch_account,
-        usage_api_enabled,
-        account_api_enabled,
+        initial_policy.usage_api_enabled,
+        initial_policy.account_api_enabled,
     );
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
-        &reg,
+        &refreshed,
         usage_api.fetchUsageForAuthPathDetailed,
         initForegroundUsagePool,
         null,
-        usage_api_enabled,
+        initial_policy.usage_api_enabled,
+        false,
     );
-    defer usage_state.deinit(allocator);
-    try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+    errdefer usage_state.deinit(allocator);
+    _ = try maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist(
         allocator,
         codex_home,
-        &reg,
+        &refreshed,
         .switch_account,
         defaultAccountFetcher,
-        account_api_enabled,
+        initial_policy.account_api_enabled,
+        false,
     );
 
-    const selected_account_key = try cli.selectAccountWithUsageOverrides(allocator, &reg, usage_state.usage_overrides);
-    if (selected_account_key == null) return;
+    var latest = try registry.loadRegistry(allocator, codex_home);
+    errdefer latest.deinit(allocator);
+    var latest_changed = try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest);
 
-    try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
-    try registry.saveRegistry(allocator, codex_home, &reg);
+    if (try mergeSwitchLiveRefreshIntoLatest(allocator, &latest, &base, &refreshed)) {
+        latest_changed = true;
+    }
+
+    if (latest_changed) try registry.saveRegistry(allocator, codex_home, &latest);
+    const mapped_usage_overrides = try mapSwitchUsageOverridesToLatest(
+        allocator,
+        &latest,
+        &refreshed,
+        usage_state.usage_overrides,
+    );
+    usage_state.deinit(allocator);
+    refreshed.deinit(allocator);
+
+    return .{
+        .display = .{
+            .reg = latest,
+            .usage_overrides = mapped_usage_overrides,
+        },
+        .policy = switchLiveRefreshPolicy(&latest, api_mode),
+    };
+}
+
+fn runSwitchLiveRefreshRound(runtime: *SwitchLiveRuntime) void {
+    const io = runtime.io_impl.io();
+    const started_ms = time_compat.milliTimestamp();
+    const loaded = loadSwitchSelectionDisplay(runtime.allocator, runtime.codex_home, runtime.api_mode) catch |err| {
+        const finished_ms = time_compat.milliTimestamp();
+        const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
+
+        runtime.mutex.lockUncancelable(io);
+        defer runtime.mutex.unlock(io);
+        if (runtime.last_refresh_error_name) |name| runtime.allocator.free(name);
+        runtime.last_refresh_error_name = error_name;
+        runtime.last_refresh_finished_at_ms = finished_ms;
+        runtime.last_refresh_duration_ms = finished_ms - (runtime.last_refresh_started_at_ms orelse started_ms);
+        runtime.next_refresh_not_before_ms = finished_ms + runtime.refresh_interval_ms;
+        runtime.in_flight = false;
+        return;
+    };
+
+    const finished_ms = time_compat.milliTimestamp();
+    runtime.mutex.lockUncancelable(io);
+    defer runtime.mutex.unlock(io);
+
+    if (runtime.updated_display) |*display| display.deinit(runtime.allocator);
+    runtime.updated_display = loaded.display;
+    runtime.refresh_interval_ms = loaded.policy.interval_ms;
+    runtime.mode_label = loaded.policy.label;
+    if (runtime.last_refresh_error_name) |name| runtime.allocator.free(name);
+    runtime.last_refresh_error_name = null;
+    runtime.last_refresh_finished_at_ms = finished_ms;
+    runtime.last_refresh_duration_ms = finished_ms - (runtime.last_refresh_started_at_ms orelse started_ms);
+    runtime.next_refresh_not_before_ms = finished_ms + runtime.refresh_interval_ms;
+    runtime.in_flight = false;
+}
+
+fn switchLiveRuntimeMaybeStartRefresh(context: *anyopaque) !void {
+    const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
+    runtime.maybeStartRefresh();
+}
+
+fn switchLiveRuntimeMaybeTakeUpdatedDisplay(context: *anyopaque) !?cli.OwnedSwitchSelectionDisplay {
+    const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
+    return runtime.maybeTakeUpdatedDisplay();
+}
+
+fn switchLiveRuntimeBuildStatusLine(
+    context: *anyopaque,
+    allocator: std.mem.Allocator,
+    display: cli.SwitchSelectionDisplay,
+) ![]u8 {
+    const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
+    return runtime.buildStatusLine(allocator, display);
 }
 
 pub fn resolveSwitchQueryLocally(

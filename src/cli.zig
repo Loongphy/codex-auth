@@ -25,6 +25,254 @@ const ansi = struct {
     const bold = "\x1b[1m";
 };
 
+const tui_poll_error_mask: i16 = std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
+const tui_escape_sequence_timeout_ms: i32 = 100;
+
+const TuiNavigation = enum {
+    up,
+    down,
+};
+
+const TuiEscapeClassification = union(enum) {
+    incomplete,
+    ignore,
+    navigation: TuiNavigation,
+};
+
+const TuiEscapeAction = enum {
+    quit,
+    ignore,
+    move_up,
+    move_down,
+};
+
+const TuiEscapeReadResult = struct {
+    action: TuiEscapeAction,
+    buffered_bytes_consumed: usize,
+};
+
+fn writeTuiEnterTo(out: *std.Io.Writer) !void {
+    try out.writeAll("\x1b[?1049h\x1b[?25l");
+    try out.writeAll("\x1b[H\x1b[J");
+}
+
+fn writeTuiExitTo(out: *std.Io.Writer) !void {
+    try out.writeAll("\x1b[?25h\x1b[?1049l");
+}
+
+fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
+    try out.writeAll("\x1b[H\x1b[J");
+}
+
+const TuiSession = struct {
+    tty: fs.File,
+    saved_termios: std.posix.termios,
+    writer_buffer: [4096]u8 = undefined,
+    writer: fs.File.Writer = undefined,
+
+    fn init() !@This() {
+        var tty = try fs.cwd().openFile("/dev/tty", .{});
+        errdefer tty.close();
+
+        const saved_termios = try std.posix.tcgetattr(tty.handle);
+        var raw = saved_termios;
+        raw.lflag.ICANON = false;
+        raw.lflag.ECHO = false;
+        raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
+        raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
+        try std.posix.tcsetattr(tty.handle, .FLUSH, raw);
+
+        var session = @This(){
+            .tty = tty,
+            .saved_termios = saved_termios,
+        };
+        session.writer = session.tty.writer(&session.writer_buffer);
+        try session.enter();
+        return session;
+    }
+
+    fn deinit(self: *@This()) void {
+        const writer = self.out();
+        writeTuiExitTo(writer) catch {};
+        writer.flush() catch {};
+        std.posix.tcsetattr(self.tty.handle, .FLUSH, self.saved_termios) catch {};
+        self.tty.close();
+        self.* = undefined;
+    }
+
+    fn out(self: *@This()) *std.Io.Writer {
+        return &self.writer.interface;
+    }
+
+    fn read(self: *@This(), buffer: []u8) !usize {
+        return try self.tty.read(buffer);
+    }
+
+    fn enter(self: *@This()) !void {
+        const writer = self.out();
+        try writeTuiEnterTo(writer);
+        try writer.flush();
+    }
+
+    fn resetFrame(self: *@This()) !void {
+        try writeTuiResetFrameTo(self.out());
+    }
+};
+
+fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
+    if (seq.len == 0) return .incomplete;
+
+    return switch (seq[0]) {
+        '[' => blk: {
+            if (seq.len == 1) break :blk .incomplete;
+            const final = seq[seq.len - 1];
+            if (final == 'A' or final == 'B') {
+                for (seq[1 .. seq.len - 1]) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                }
+                break :blk .{ .navigation = if (final == 'A') .up else .down };
+            }
+            if (final >= '@' and final <= '~') break :blk .ignore;
+            break :blk .incomplete;
+        },
+        'O' => blk: {
+            if (seq.len == 1) break :blk .incomplete;
+            const code = seq[1];
+            if (code == 'A' or code == 'B') {
+                break :blk .{ .navigation = if (code == 'A') .up else .down };
+            }
+            break :blk .ignore;
+        },
+        else => .ignore,
+    };
+}
+
+fn readTuiEscapeAction(
+    tty: fs.File,
+    buffered_tail: []const u8,
+    poll_error_mask: i16,
+    timeout_ms: i32,
+) !TuiEscapeReadResult {
+    var seq: [8]u8 = undefined;
+    var seq_len: usize = 0;
+    var buffered_bytes_consumed: usize = 0;
+
+    while (true) {
+        switch (classifyTuiEscapeSuffix(seq[0..seq_len])) {
+            .navigation => |direction| {
+                return .{
+                    .action = switch (direction) {
+                        .up => .move_up,
+                        .down => .move_down,
+                    },
+                    .buffered_bytes_consumed = buffered_bytes_consumed,
+                };
+            },
+            .ignore => return .{
+                .action = .ignore,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+            },
+            .incomplete => {},
+        }
+
+        if (buffered_bytes_consumed < buffered_tail.len) {
+            if (seq_len == seq.len) {
+                return .{
+                    .action = .ignore,
+                    .buffered_bytes_consumed = buffered_bytes_consumed,
+                };
+            }
+            seq[seq_len] = buffered_tail[buffered_bytes_consumed];
+            seq_len += 1;
+            buffered_bytes_consumed += 1;
+            continue;
+        }
+
+        if (seq_len == seq.len) {
+            return .{
+                .action = .ignore,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+            };
+        }
+
+        var fds = [_]std.posix.pollfd{.{
+            .fd = tty.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        const ready = try std.posix.poll(&fds, timeout_ms);
+        if (ready == 0) {
+            return .{
+                .action = if (seq_len == 0) .quit else .ignore,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+            };
+        }
+        if ((fds[0].revents & poll_error_mask) != 0) {
+            return .{
+                .action = .quit,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+            };
+        }
+
+        const read_n = try tty.read(seq[seq_len .. seq_len + 1]);
+        if (read_n == 0) {
+            return .{
+                .action = if (seq_len == 0) .quit else .ignore,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+            };
+        }
+        seq_len += read_n;
+    }
+}
+
+test "Scenario: Given tty arrow escape suffixes when classifying them then both CSI and SS3 arrows are recognized" {
+    switch (classifyTuiEscapeSuffix("[A")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[1;2B")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.down, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("OA")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "Scenario: Given unrelated tty escape suffixes when classifying them then they are ignored instead of acting like quit" {
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("x"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[200~"));
+    try std.testing.expectEqual(TuiEscapeClassification.incomplete, classifyTuiEscapeSuffix("["));
+}
+
+test "Scenario: Given shared TUI screen lifecycle when writing it then switch and remove can stay inside the alternate screen" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try writeTuiEnterTo(&aw.writer);
+    try writeTuiExitTo(&aw.writer);
+
+    try std.testing.expectEqualStrings(
+        "\x1b[?1049h\x1b[?25l" ++
+            "\x1b[H\x1b[J" ++
+            "\x1b[?25h\x1b[?1049l",
+        aw.written(),
+    );
+}
+
+test "Scenario: Given shared TUI frame redraw when writing it then it clears only the alternate screen frame instead of appending full screens" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try writeTuiResetFrameTo(&aw.writer);
+
+    try std.testing.expectEqualStrings("\x1b[H\x1b[J", aw.written());
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2J\x1b[H") == null);
+}
+
 fn colorEnabled() bool {
     return fs.File.stdout().isTty();
 }
@@ -1133,6 +1381,27 @@ pub fn printRemoveSummary(labels: []const []const u8) !void {
     try out.flush();
 }
 
+pub fn printSwitchedAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+) !void {
+    const label = if (registry.findAccountIndexByAccountKey(reg, account_key)) |idx|
+        try display_rows.buildPreferredAccountLabelAlloc(allocator, &reg.accounts.items[idx], reg.accounts.items[idx].email)
+    else
+        try allocator.dupe(u8, account_key);
+    defer allocator.free(label);
+
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    const use_color = colorEnabled();
+    if (use_color) try out.writeAll(ansi.bold_green);
+    try out.print("Switched to {s}\n", .{label});
+    if (use_color) try out.writeAll(ansi.reset);
+    try out.flush();
+}
+
 fn writeCodexLoginLaunchFailureHint(err_name: []const u8, use_color: bool) !void {
     var buffer: [512]u8 = undefined;
     var writer = fs.File.stderr().writer(&buffer);
@@ -1204,6 +1473,208 @@ pub fn selectAccountWithUsageOverrides(
         selectInteractive(allocator, reg, usage_overrides) catch selectWithNumbers(allocator, reg, usage_overrides);
 }
 
+pub const SwitchSelectionDisplay = struct {
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+};
+
+pub const OwnedSwitchSelectionDisplay = struct {
+    reg: registry.Registry,
+    usage_overrides: []?[]const u8,
+
+    pub fn borrowed(self: *@This()) SwitchSelectionDisplay {
+        return .{
+            .reg = &self.reg,
+            .usage_overrides = self.usage_overrides,
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.usage_overrides) |usage_override| {
+            if (usage_override) |value| allocator.free(value);
+        }
+        allocator.free(self.usage_overrides);
+        self.reg.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+pub const SwitchLiveController = struct {
+    context: *anyopaque,
+    maybe_start_refresh: *const fn (context: *anyopaque) anyerror!void,
+    maybe_take_updated_display: *const fn (context: *anyopaque) anyerror!?OwnedSwitchSelectionDisplay,
+    build_status_line: *const fn (
+        context: *anyopaque,
+        allocator: std.mem.Allocator,
+        display: SwitchSelectionDisplay,
+    ) anyerror![]u8,
+};
+
+pub fn selectAccountWithLiveUpdates(
+    allocator: std.mem.Allocator,
+    initial_display: OwnedSwitchSelectionDisplay,
+    controller: SwitchLiveController,
+) !?[]const u8 {
+    var current_display = initial_display;
+    defer current_display.deinit(allocator);
+    if (current_display.reg.accounts.items.len == 0) return null;
+
+    if (comptime builtin.os.tag == .windows) {
+        const selected_account_key = try selectWithNumbers(allocator, &current_display.reg, current_display.usage_overrides);
+        return try dupeOptionalAccountKey(allocator, selected_account_key);
+    }
+
+    var tui = TuiSession.init() catch {
+        const selected_account_key = try selectWithNumbers(allocator, &current_display.reg, current_display.usage_overrides);
+        return try dupeOptionalAccountKey(allocator, selected_account_key);
+    };
+    defer tui.deinit();
+
+    const out = tui.out();
+    const use_color = tui.tty.isTty();
+    const ui_tick_ms: i32 = 1000;
+
+    var selected_account_key = if (current_display.reg.active_account_key) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+    defer if (selected_account_key) |key| allocator.free(key);
+
+    var number_buf: [8]u8 = undefined;
+    var number_len: usize = 0;
+
+    while (true) {
+        if (try controller.maybe_take_updated_display(controller.context)) |updated| {
+            current_display.deinit(allocator);
+            current_display = updated;
+        }
+
+        const borrowed = current_display.borrowed();
+        var rows = try buildSwitchRowsWithUsageOverrides(allocator, borrowed.reg, borrowed.usage_overrides);
+        defer rows.deinit(allocator);
+        if (rows.selectable_row_indices.len == 0) return null;
+
+        var selected_idx = if (selected_account_key) |key|
+            selectableIndexForAccountKey(&rows, borrowed.reg, key) orelse activeSelectableIndex(&rows) orelse 0
+        else
+            activeSelectableIndex(&rows) orelse 0;
+        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+
+        const status_line = try controller.build_status_line(controller.context, allocator, borrowed);
+        defer allocator.free(status_line);
+
+        try tui.resetFrame();
+        try renderSwitchScreen(
+            out,
+            borrowed.reg,
+            rows.items,
+            @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)),
+            rows.widths,
+            selected_idx,
+            use_color,
+            status_line,
+        );
+        try out.flush();
+
+        var fds = [_]std.posix.pollfd{.{
+            .fd = tui.tty.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        const ready = try std.posix.poll(&fds, ui_tick_ms);
+        if (ready == 0) {
+            try controller.maybe_start_refresh(controller.context);
+            continue;
+        }
+        if ((fds[0].revents & tui_poll_error_mask) != 0) return null;
+
+        var b: [8]u8 = undefined;
+        const n = try tui.read(&b);
+        if (n == 0) return null;
+
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (b[i] == 0x1b) {
+                const escape = try readTuiEscapeAction(
+                    tui.tty,
+                    b[i + 1 .. n],
+                    tui_poll_error_mask,
+                    tui_escape_sequence_timeout_ms,
+                );
+                switch (escape.action) {
+                    .move_up => {
+                        if (selected_idx > 0) {
+                            selected_idx -= 1;
+                            try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                            number_len = 0;
+                        }
+                    },
+                    .move_down => {
+                        if (selected_idx + 1 < rows.selectable_row_indices.len) {
+                            selected_idx += 1;
+                            try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                            number_len = 0;
+                        }
+                    },
+                    .quit => return null,
+                    .ignore => {},
+                }
+                i += escape.buffered_bytes_consumed;
+                continue;
+            }
+
+            if (b[i] == '\r' or b[i] == '\n') {
+                if (number_len > 0) {
+                    const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                    if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                        return try dupSelectedAccountKey(allocator, &rows, borrowed.reg, parsed - 1);
+                    }
+                }
+                return try dupSelectedAccountKey(allocator, &rows, borrowed.reg, selected_idx);
+            }
+            if (isQuitKey(b[i])) return null;
+
+            if (b[i] == 'k' and selected_idx > 0) {
+                selected_idx -= 1;
+                try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                number_len = 0;
+                continue;
+            }
+            if (b[i] == 'j' and selected_idx + 1 < rows.selectable_row_indices.len) {
+                selected_idx += 1;
+                try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                number_len = 0;
+                continue;
+            }
+            if (b[i] == 0x7f or b[i] == 0x08) {
+                if (number_len > 0) {
+                    number_len -= 1;
+                    if (number_len > 0) {
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            selected_idx = parsed - 1;
+                            try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        }
+                    }
+                }
+                continue;
+            }
+            if (b[i] >= '0' and b[i] <= '9') {
+                if (number_len < number_buf.len) {
+                    number_buf[number_len] = b[i];
+                    number_len += 1;
+                    const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                    if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                        selected_idx = parsed - 1;
+                        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                    }
+                }
+                continue;
+            }
+        }
+    }
+}
+
 pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
     return selectAccountFromIndicesWithUsageOverrides(allocator, reg, indices, null);
 }
@@ -1265,9 +1736,46 @@ fn accountIdForSelectable(rows: *const SwitchRows, reg: *registry.Registry, sele
     return reg.accounts.items[account_idx].account_key;
 }
 
+fn dupSelectedAccountKey(
+    allocator: std.mem.Allocator,
+    rows: *const SwitchRows,
+    reg: *registry.Registry,
+    selectable_idx: usize,
+) ![]const u8 {
+    return try allocator.dupe(u8, accountIdForSelectable(rows, reg, selectable_idx));
+}
+
+fn dupeOptionalAccountKey(allocator: std.mem.Allocator, account_key: ?[]const u8) !?[]const u8 {
+    return if (account_key) |value| try allocator.dupe(u8, value) else null;
+}
+
 fn accountIndexForSelectable(rows: *const SwitchRows, selectable_idx: usize) usize {
     const row_idx = rows.selectable_row_indices[selectable_idx];
     return rows.items[row_idx].account_index.?;
+}
+
+fn selectableIndexForAccountKey(
+    rows: *const SwitchRows,
+    reg: *registry.Registry,
+    account_key: []const u8,
+) ?usize {
+    for (rows.selectable_row_indices, 0..) |row_idx, selectable_idx| {
+        const account_idx = rows.items[row_idx].account_index orelse continue;
+        if (std.mem.eql(u8, reg.accounts.items[account_idx].account_key, account_key)) return selectable_idx;
+    }
+    return null;
+}
+
+fn replaceSelectedAccountKeyForSelectable(
+    allocator: std.mem.Allocator,
+    selected_account_key: *?[]u8,
+    rows: *const SwitchRows,
+    reg: *registry.Registry,
+    selectable_idx: usize,
+) !void {
+    const next_key = try allocator.dupe(u8, accountIdForSelectable(rows, reg, selectable_idx));
+    if (selected_account_key.*) |current_key| allocator.free(current_key);
+    selected_account_key.* = next_key;
 }
 
 fn selectWithNumbers(
@@ -1350,31 +1858,19 @@ fn selectInteractiveFromIndices(
     var rows = try buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try fs.cwd().openFile("/dev/tty", .{});
-    defer tty.close();
-
-    const term = try std.posix.tcgetattr(tty.handle);
-    var raw = term;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
-    try std.posix.tcsetattr(tty.handle, .FLUSH, raw);
-    defer std.posix.tcsetattr(tty.handle, .FLUSH, term) catch {};
-
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
+    var tui = try TuiSession.init();
+    defer tui.deinit();
+    const out = tui.out();
     const active_idx = activeSelectableIndex(&rows);
     var idx: usize = active_idx orelse 0;
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
-    const use_color = colorEnabled();
+    const use_color = tui.tty.isTty();
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
     const widths = rows.widths;
 
     while (true) {
-        try out.writeAll("\x1b[2J\x1b[H");
+        try tui.resetFrame();
         try out.writeAll("Select account to activate:\n\n");
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
@@ -1384,23 +1880,34 @@ fn selectInteractiveFromIndices(
         try out.flush();
 
         var b: [8]u8 = undefined;
-        const n = try tty.read(&b);
+        const n = try tui.read(&b);
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
-                if (i + 2 < n and b[i + 1] == '[') {
-                    const code = b[i + 2];
-                    if (code == 'A' and idx > 0) {
-                        idx -= 1;
-                        number_len = 0;
-                    } else if (code == 'B' and idx + 1 < rows.selectable_row_indices.len) {
-                        idx += 1;
-                        number_len = 0;
-                    }
-                    i += 2;
-                    continue;
+                const escape = try readTuiEscapeAction(
+                    tui.tty,
+                    b[i + 1 .. n],
+                    tui_poll_error_mask,
+                    tui_escape_sequence_timeout_ms,
+                );
+                switch (escape.action) {
+                    .move_up => {
+                        if (idx > 0) {
+                            idx -= 1;
+                            number_len = 0;
+                        }
+                    },
+                    .move_down => {
+                        if (idx + 1 < rows.selectable_row_indices.len) {
+                            idx += 1;
+                            number_len = 0;
+                        }
+                    },
+                    .quit => return null,
+                    .ignore => {},
                 }
-                return null;
+                i += escape.buffered_bytes_consumed;
+                continue;
             }
 
             if (b[i] == '\r' or b[i] == '\n') {
@@ -1533,21 +2040,9 @@ fn selectInteractive(
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try fs.cwd().openFile("/dev/tty", .{});
-    defer tty.close();
-
-    const term = try std.posix.tcgetattr(tty.handle);
-    var raw = term;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
-    try std.posix.tcsetattr(tty.handle, .FLUSH, raw);
-    defer std.posix.tcsetattr(tty.handle, .FLUSH, term) catch {};
-
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
+    var tui = try TuiSession.init();
+    defer tui.deinit();
+    const out = tui.out();
     const active_idx = activeSelectableIndex(&rows);
     var idx: usize = active_idx orelse 0;
     var number_buf: [8]u8 = undefined;
@@ -1557,7 +2052,7 @@ fn selectInteractive(
     const widths = rows.widths;
 
     while (true) {
-        try out.writeAll("\x1b[2J\x1b[H");
+        try tui.resetFrame();
         try out.writeAll("Select account to activate:\n\n");
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
@@ -1567,23 +2062,34 @@ fn selectInteractive(
         try out.flush();
 
         var b: [8]u8 = undefined;
-        const n = try tty.read(&b);
+        const n = try tui.read(&b);
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
-                if (i + 2 < n and b[i + 1] == '[') {
-                    const code = b[i + 2];
-                    if (code == 'A' and idx > 0) {
-                        idx -= 1;
-                        number_len = 0;
-                    } else if (code == 'B' and idx + 1 < rows.selectable_row_indices.len) {
-                        idx += 1;
-                        number_len = 0;
-                    }
-                    i += 2;
-                    continue;
+                const escape = try readTuiEscapeAction(
+                    tui.tty,
+                    b[i + 1 .. n],
+                    tui_poll_error_mask,
+                    tui_escape_sequence_timeout_ms,
+                );
+                switch (escape.action) {
+                    .move_up => {
+                        if (idx > 0) {
+                            idx -= 1;
+                            number_len = 0;
+                        }
+                    },
+                    .move_down => {
+                        if (idx + 1 < rows.selectable_row_indices.len) {
+                            idx += 1;
+                            number_len = 0;
+                        }
+                    },
+                    .quit => return null,
+                    .ignore => {},
                 }
-                return null;
+                i += escape.buffered_bytes_consumed;
+                continue;
             }
 
             if (b[i] == '\r' or b[i] == '\n') {
@@ -1642,25 +2148,13 @@ fn selectRemoveInteractive(
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
 
-    var tty = try fs.cwd().openFile("/dev/tty", .{});
-    defer tty.close();
-
-    const term = try std.posix.tcgetattr(tty.handle);
-    var raw = term;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
-    try std.posix.tcsetattr(tty.handle, .FLUSH, raw);
-    defer std.posix.tcsetattr(tty.handle, .FLUSH, term) catch {};
-
     var checked = try allocator.alloc(bool, rows.selectable_row_indices.len);
     defer allocator.free(checked);
     @memset(checked, false);
 
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
+    var tui = try TuiSession.init();
+    defer tui.deinit();
+    const out = tui.out();
     var idx: usize = 0;
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
@@ -1669,7 +2163,7 @@ fn selectRemoveInteractive(
     const widths = rows.widths;
 
     while (true) {
-        try out.writeAll("\x1b[2J\x1b[H");
+        try tui.resetFrame();
         try out.writeAll("Select accounts to delete:\n\n");
         try renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color);
         try out.writeAll("\n");
@@ -1679,23 +2173,34 @@ fn selectRemoveInteractive(
         try out.flush();
 
         var b: [8]u8 = undefined;
-        const n = try tty.read(&b);
+        const n = try tui.read(&b);
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
-                if (i + 2 < n and b[i + 1] == '[') {
-                    const code = b[i + 2];
-                    if (code == 'A' and idx > 0) {
-                        idx -= 1;
-                        number_len = 0;
-                    } else if (code == 'B' and idx + 1 < rows.selectable_row_indices.len) {
-                        idx += 1;
-                        number_len = 0;
-                    }
-                    i += 2;
-                    continue;
+                const escape = try readTuiEscapeAction(
+                    tui.tty,
+                    b[i + 1 .. n],
+                    tui_poll_error_mask,
+                    tui_escape_sequence_timeout_ms,
+                );
+                switch (escape.action) {
+                    .move_up => {
+                        if (idx > 0) {
+                            idx -= 1;
+                            number_len = 0;
+                        }
+                    },
+                    .move_down => {
+                        if (idx + 1 < rows.selectable_row_indices.len) {
+                            idx += 1;
+                            number_len = 0;
+                        }
+                    },
+                    .quit => return null,
+                    .ignore => {},
                 }
-                return null;
+                i += escape.buffered_bytes_consumed;
+                continue;
             }
 
             if (b[i] == '\r' or b[i] == '\n') {
@@ -1754,6 +2259,30 @@ fn selectRemoveInteractive(
             }
         }
     }
+}
+
+fn renderSwitchScreen(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    selected: ?usize,
+    use_color: bool,
+    status_line: []const u8,
+) !void {
+    try out.writeAll("Select account to activate:\n\n");
+    try renderSwitchList(out, reg, rows, idx_width, widths, selected, use_color);
+    try out.writeAll("\n");
+    if (status_line.len != 0) {
+        if (use_color) try out.writeAll(ansi.dim);
+        try out.writeAll(status_line);
+        try out.writeAll("\n");
+        if (use_color) try out.writeAll(ansi.reset);
+    }
+    if (use_color) try out.writeAll(ansi.dim);
+    try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
+    if (use_color) try out.writeAll(ansi.reset);
 }
 
 fn renderSwitchList(
