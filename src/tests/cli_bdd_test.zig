@@ -853,7 +853,7 @@ test "Scenario: Given remove query with skip-api flag when parsing then usage er
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "does not support");
+    try expectUsageError(result, .remove_account, "do not support");
 }
 
 test "Scenario: Given remove query with api flag when parsing then usage error is returned" {
@@ -862,7 +862,7 @@ test "Scenario: Given remove query with api flag when parsing then usage error i
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "does not support");
+    try expectUsageError(result, .remove_account, "do not support");
 }
 
 test "Scenario: Given remove all with api flag when parsing then usage error is returned" {
@@ -871,7 +871,7 @@ test "Scenario: Given remove all with api flag when parsing then usage error is 
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "does not support");
+    try expectUsageError(result, .remove_account, "do not support");
 }
 
 test "Scenario: Given remove with unexpected flag when parsing then usage error is returned" {

@@ -1747,7 +1747,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -1783,7 +1783,7 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
 }
 
 test "Scenario: Given interactive remove with api flag when running remove then it requires api refresh executables" {

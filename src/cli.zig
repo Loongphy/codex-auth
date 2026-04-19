@@ -398,6 +398,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             try selectors.append(allocator, try allocator.dupe(u8, arg));
         }
         if (api_mode != .default and (all or selectors.items.len != 0)) {
+            freeOwnedStringList(allocator, selectors.items);
             return usageErrorResult(
                 allocator,
                 .remove_account,
