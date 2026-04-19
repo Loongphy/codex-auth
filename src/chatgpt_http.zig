@@ -27,7 +27,7 @@ pub const node_executable_env = "CODEX_AUTH_NODE_EXECUTABLE";
 pub const node_use_env_proxy_env = "NODE_USE_ENV_PROXY";
 pub const node_requirement_hint = "Node.js 22+ is required for ChatGPT API refresh. Install Node.js 22+ or use the npm package.";
 
-const max_output_bytes = 1024 * 1024;
+const default_max_output_bytes = 1024 * 1024;
 
 fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return try app_runtime.currentEnviron().createMap(allocator);
@@ -151,7 +151,8 @@ const node_request_script =
 ;
 
 const node_batch_request_script =
-    \\const chunks = [];
+    \\const fs = require("node:fs");
+    \\const payloadPath = process.argv[1];
     \\const encode = (value) => Buffer.from(value ?? "", "utf8").toString("base64");
     \\const emit = (body, status, outcome) => {
     \\  process.stdout.write(encode(body));
@@ -171,62 +172,57 @@ const node_batch_request_script =
     \\if (!Number.isInteger(nodeMajor) || nodeMajor < 22 || typeof fetch !== "function" || typeof AbortSignal?.timeout !== "function") {
     \\  emitAndExit("Node.js 22+ is required.", 0, "node-too-old");
     \\} else {
-    \\  process.stdin.setEncoding("utf8");
-    \\  process.stdin.on("data", (chunk) => chunks.push(chunk));
-    \\  process.stdin.on("end", () => {
-    \\    void (async () => {
-    \\      try {
-    \\        const payload = JSON.parse(chunks.join(""));
-    \\        const requests = Array.isArray(payload?.requests) ? payload.requests : [];
-    \\        const endpoint = String(payload?.endpoint ?? "");
-    \\        const timeoutMs = Number(payload?.timeout_ms ?? 0);
-    \\        const userAgent = String(payload?.user_agent ?? "");
-    \\        const requestedConcurrency = Math.max(1, Number(payload?.concurrency ?? 1) || 1);
-    \\        const workerCount = Math.max(1, Math.min(requestedConcurrency, Math.max(1, requests.length)));
-    \\        const results = new Array(requests.length);
-    \\        let nextIndex = 0;
-    \\        const runOne = async (index) => {
-    \\          const req = requests[index] ?? {};
-    \\          try {
-    \\            const response = await fetch(endpoint, {
-    \\              method: "GET",
-    \\              headers: {
-    \\                "Authorization": "Bearer " + String(req.access_token ?? ""),
-    \\                "ChatGPT-Account-Id": String(req.account_id ?? ""),
-    \\                "User-Agent": userAgent,
-    \\              },
-    \\              signal: AbortSignal.timeout(timeoutMs),
-    \\            });
-    \\            results[index] = {
-    \\              body: encode(await response.text()),
-    \\              status: response.status,
-    \\              outcome: "ok",
-    \\            };
-    \\          } catch (error) {
-    \\            const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
-    \\            results[index] = {
-    \\              body: encode(error?.message ?? ""),
-    \\              status: 0,
-    \\              outcome: isTimeout ? "timeout" : "error",
-    \\            };
-    \\          }
-    \\        };
-    \\        await Promise.all(Array.from({ length: workerCount }, async () => {
-    \\          while (true) {
-    \\            const index = nextIndex++;
-    \\            if (index >= requests.length) return;
-    \\            await runOne(index);
-    \\          }
-    \\        }));
-    \\        emit(JSON.stringify(results), 200, "ok");
-    \\      } catch (error) {
-    \\        emitAndExit(error?.message ?? "", 0, "error");
-    \\      }
-    \\    })().catch((error) => {
+    \\  void (async () => {
+    \\    try {
+    \\      const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+    \\      const requests = Array.isArray(payload?.requests) ? payload.requests : [];
+    \\      const endpoint = String(payload?.endpoint ?? "");
+    \\      const timeoutMs = Number(payload?.timeout_ms ?? 0);
+    \\      const userAgent = String(payload?.user_agent ?? "");
+    \\      const requestedConcurrency = Math.max(1, Number(payload?.concurrency ?? 1) || 1);
+    \\      const workerCount = Math.max(1, Math.min(requestedConcurrency, Math.max(1, requests.length)));
+    \\      const results = new Array(requests.length);
+    \\      let nextIndex = 0;
+    \\      const runOne = async (index) => {
+    \\        const req = requests[index] ?? {};
+    \\        try {
+    \\          const response = await fetch(endpoint, {
+    \\            method: "GET",
+    \\            headers: {
+    \\              "Authorization": "Bearer " + String(req.access_token ?? ""),
+    \\              "ChatGPT-Account-Id": String(req.account_id ?? ""),
+    \\              "User-Agent": userAgent,
+    \\            },
+    \\            signal: AbortSignal.timeout(timeoutMs),
+    \\          });
+    \\          results[index] = {
+    \\            body: encode(await response.text()),
+    \\            status: response.status,
+    \\            outcome: "ok",
+    \\          };
+    \\        } catch (error) {
+    \\          const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
+    \\          results[index] = {
+    \\            body: encode(error?.message ?? ""),
+    \\            status: 0,
+    \\            outcome: isTimeout ? "timeout" : "error",
+    \\          };
+    \\        }
+    \\      };
+    \\      await Promise.all(Array.from({ length: workerCount }, async () => {
+    \\        while (true) {
+    \\          const index = nextIndex++;
+    \\          if (index >= requests.length) return;
+    \\          await runOne(index);
+    \\        }
+    \\      }));
+    \\      emit(JSON.stringify(results), 200, "ok");
+    \\    } catch (error) {
     \\      emitAndExit(error?.message ?? "", 0, "error");
-    \\    });
+    \\    }
+    \\  })().catch((error) => {
+    \\    emitAndExit(error?.message ?? "", 0, "error");
     \\  });
-    \\  process.stdin.resume();
     \\}
 ;
 
@@ -369,16 +365,23 @@ fn runNodeGetJsonBatchCommand(
         .requests = requests,
     }, .{}, &payload_writer.writer);
 
-    const result = runChildCaptureWithInput(
+    const payload_path = try writeBatchPayloadTempFileAlloc(allocator, payload_writer.written());
+    defer {
+        deleteFileIfExists(payload_path);
+        allocator.free(payload_path);
+    }
+
+    const result = runChildCaptureWithOutputLimit(
         allocator,
         &.{
             node_executable,
             "-e",
             node_batch_request_script,
+            payload_path,
         },
         computeBatchChildTimeoutMs(requests.len, @max(@as(usize, 1), max_concurrency)),
         &env_map,
-        payload_writer.written(),
+        computeBatchChildOutputLimitBytes(requests.len),
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.FileNotFound => {
@@ -416,15 +419,15 @@ fn runChildCapture(
     timeout_ms: u64,
     env_map: ?*const std.process.Environ.Map,
 ) !ChildCaptureResult {
-    return runChildCaptureWithInput(allocator, argv, timeout_ms, env_map, null);
+    return runChildCaptureWithOutputLimit(allocator, argv, timeout_ms, env_map, default_max_output_bytes);
 }
 
-fn runChildCaptureWithInput(
+fn runChildCaptureWithOutputLimit(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     timeout_ms: u64,
     env_map: ?*const std.process.Environ.Map,
-    stdin_bytes: ?[]const u8,
+    output_limit_bytes: usize,
 ) !ChildCaptureResult {
     var local_env_map = try getEnvMap(allocator);
     defer local_env_map.deinit();
@@ -433,24 +436,13 @@ fn runChildCaptureWithInput(
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = argv,
         .environ_map = effective_env_map,
-        .stdin = if (stdin_bytes != null) .pipe else .ignore,
+        .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
     }) catch |err| switch (err) {
         else => return err,
     };
     errdefer child.kill(app_runtime.io());
-
-    if (stdin_bytes) |input| {
-        if (child.stdin) |*stdin_file| {
-            var stdin_buffer: [4096]u8 = undefined;
-            var stdin_writer = stdin_file.writer(app_runtime.io(), &stdin_buffer);
-            try stdin_writer.interface.writeAll(input);
-            try stdin_writer.interface.flush();
-            stdin_file.close(app_runtime.io());
-            child.stdin = null;
-        }
-    }
 
     var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
     var multi_reader: std.Io.File.MultiReader = undefined;
@@ -465,8 +457,8 @@ fn runChildCaptureWithInput(
     } };
 
     while (multi_reader.fill(64, timeout)) |_| {
-        if (stdout_reader.buffered().len > max_output_bytes) return error.StreamTooLong;
-        if (stderr_reader.buffered().len > max_output_bytes) return error.StreamTooLong;
+        if (stdout_reader.buffered().len > output_limit_bytes) return error.StreamTooLong;
+        if (stderr_reader.buffered().len > output_limit_bytes) return error.StreamTooLong;
     } else |err| switch (err) {
         error.EndOfStream => {},
         error.Timeout => {
@@ -504,6 +496,60 @@ fn computeBatchChildTimeoutMs(request_count: usize, max_concurrency: usize) u64 
     const safe_concurrency = @max(@as(usize, 1), max_concurrency);
     const waves = @max(@as(usize, 1), (request_count + safe_concurrency - 1) / safe_concurrency);
     return @as(u64, @intCast(waves)) * request_timeout_ms_value + 2000;
+}
+
+fn computeBatchChildOutputLimitBytes(request_count: usize) usize {
+    return std.math.mul(usize, default_max_output_bytes, @max(@as(usize, 1), request_count)) catch std.math.maxInt(usize);
+}
+
+fn writeBatchPayloadTempFileAlloc(allocator: std.mem.Allocator, payload_bytes: []const u8) ![]u8 {
+    const temp_dir = try resolveTempDirAlloc(allocator);
+    defer allocator.free(temp_dir);
+
+    const now_ns = @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds());
+    var attempt: usize = 0;
+    while (attempt < 16) : (attempt += 1) {
+        const file_name = try std.fmt.allocPrint(allocator, "codex-auth-batch-{d}-{d}.json", .{ now_ns, attempt });
+        defer allocator.free(file_name);
+
+        const path = try std.fs.path.join(allocator, &.{ temp_dir, file_name });
+        var file = std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{ .exclusive = true }) catch |err| {
+            allocator.free(path);
+            if (err == error.PathAlreadyExists) continue;
+            return err;
+        };
+        errdefer {
+            file.close(app_runtime.io());
+            deleteFileIfExists(path);
+            allocator.free(path);
+        }
+        try file.writeStreamingAll(app_runtime.io(), payload_bytes);
+        file.close(app_runtime.io());
+        return path;
+    }
+    return error.PathAlreadyExists;
+}
+
+fn resolveTempDirAlloc(allocator: std.mem.Allocator) ![]u8 {
+    return switch (builtin.os.tag) {
+        .windows => getEnvVarOwned(allocator, "TEMP") catch getEnvVarOwned(allocator, "TMP") catch allocator.dupe(u8, "."),
+        else => getEnvVarOwned(allocator, "TMPDIR") catch getEnvVarOwned(allocator, "TMP") catch getEnvVarOwned(allocator, "TEMP") catch allocator.dupe(u8, "/tmp"),
+    };
+}
+
+fn deleteFileIfExists(path: []const u8) void {
+    if (std.fs.path.isAbsolute(path)) {
+        std.Io.Dir.deleteFileAbsolute(app_runtime.io(), path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => {},
+        };
+        return;
+    }
+
+    std.Io.Dir.cwd().deleteFile(app_runtime.io(), path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {},
+    };
 }
 
 fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
@@ -1097,6 +1143,12 @@ test "parse batch node http output decodes per-request bodies" {
     try std.testing.expectEqual(BatchItemOutcome.timeout, parsed.items[1].outcome);
 }
 
+test "batch child output limit scales with request count" {
+    try std.testing.expectEqual(default_max_output_bytes, computeBatchChildOutputLimitBytes(1));
+    try std.testing.expectEqual(default_max_output_bytes * 2, computeBatchChildOutputLimitBytes(2));
+    try std.testing.expectEqual(default_max_output_bytes * 8, computeBatchChildOutputLimitBytes(8));
+}
+
 test "run child capture times out stalled child process" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -1142,6 +1194,69 @@ test "run child capture times out stalled child process" {
     defer result.deinit(allocator);
 
     try std.testing.expect(result.timed_out);
+}
+
+test "run child capture accepts larger custom output limits for batched payloads" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script_name = switch (builtin.os.tag) {
+        .windows => "large-output.ps1",
+        else => "large-output.sh",
+    };
+    const script_data = switch (builtin.os.tag) {
+        .windows =>
+        \\$chunk = 'a' * 4096
+        \\for ($i = 0; $i -lt 320; $i++) {
+        \\  [Console]::Out.Write($chunk)
+        \\}
+        ,
+        else =>
+        \\#!/bin/sh
+        \\head -c 1310720 /dev/zero | tr '\000' 'a'
+        ,
+    };
+
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = script_name,
+        .data = script_data,
+    });
+
+    if (builtin.os.tag != .windows) {
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
+    }
+
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
+    defer allocator.free(script_path);
+
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
+        else => &[_][]const u8{script_path},
+    };
+
+    try std.testing.expectError(
+        error.StreamTooLong,
+        runChildCaptureWithOutputLimit(allocator, argv, child_process_timeout_ms_value, null, default_max_output_bytes),
+    );
+
+    const result = try runChildCaptureWithOutputLimit(
+        allocator,
+        argv,
+        child_process_timeout_ms_value,
+        null,
+        computeBatchChildOutputLimitBytes(2),
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(!result.timed_out);
+    switch (result.term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expect(result.stdout.len > default_max_output_bytes);
 }
 
 test "ensure executable available returns NodeJsRequired for missing path" {

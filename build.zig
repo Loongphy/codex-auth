@@ -1,5 +1,10 @@
 const std = @import("std");
 
+fn linkWindowsTaskSchedulerLibraries(module: *std.Build.Module) void {
+    module.linkSystemLibrary("ole32", .{});
+    module.linkSystemLibrary("oleaut32", .{});
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -10,6 +15,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    if (is_windows) {
+        linkWindowsTaskSchedulerLibraries(main_module);
+    }
     const exe = b.addExecutable(.{
         .name = "codex-auth",
         .root_module = main_module,
@@ -23,6 +31,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
+        linkWindowsTaskSchedulerLibraries(auto_module);
         const auto_exe = b.addExecutable(.{
             .name = "codex-auth-auto",
             .root_module = auto_module,
@@ -44,6 +53,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    if (is_windows) {
+        linkWindowsTaskSchedulerLibraries(test_module);
+    }
     const tests = b.addTest(.{
         .name = "codex-auth-test",
         .root_module = test_module,
