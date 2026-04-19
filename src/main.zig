@@ -47,7 +47,6 @@ const ForegroundUsagePoolInitFn = *const fn (
     allocator: std.mem.Allocator,
     n_jobs: usize,
 ) anyerror!void;
-const NodeAvailabilityFn = *const fn (allocator: std.mem.Allocator) anyerror!void;
 const BackgroundRefreshLockAcquirer = *const fn (
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -508,7 +507,7 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
-    if (batch_fetcher) |fetch_batch| {
+    if (batch_fetcher) |fetch_batch| batch_fetch: {
         var auth_path_arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
         defer auth_path_arena_state.deinit();
         const auth_path_arena = auth_path_arena_state.allocator();
@@ -521,11 +520,29 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
             }
         }
 
-        const batch_results = try fetch_batch(
+        const batch_results = fetch_batch(
             allocator,
             auth_paths,
             @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
-        );
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                const error_name = @errorName(err);
+                for (worker_results, 0..) |*worker_result, idx| {
+                    worker_result.* = .{ .error_name = error_name };
+                    if (debug_context) |debug| {
+                        printForegroundUsageDebugWorkerResult(
+                            auth_path_arena,
+                            debug.logger,
+                            debug.label_state.labels[idx],
+                            reg.accounts.items[idx].last_usage,
+                            worker_result.*,
+                        );
+                    }
+                }
+                break :batch_fetch;
+            },
+        };
         defer {
             for (batch_results) |*batch_result| batch_result.deinit(allocator);
             allocator.free(batch_results);
@@ -1220,148 +1237,6 @@ fn shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(
     return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
 }
 
-fn shouldPreflightNodeForAccountNameRefresh(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !bool {
-    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.account,
-    );
-}
-
-fn shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    account_api_enabled: bool,
-) !bool {
-    switch (target) {
-        .list, .switch_account, .remove_account => {},
-    }
-
-    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
-
-    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
-    defer info.deinit(allocator);
-
-    return info.access_token != null and info.chatgpt_account_id != null;
-}
-
-fn shouldPreflightNodeForForegroundTarget(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !bool {
-    return try shouldPreflightNodeForForegroundTargetWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-    );
-}
-
-fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-) !bool {
-    if (usage_api_enabled and reg.accounts.items.len > 0) return true;
-    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        account_api_enabled,
-    );
-}
-
-fn ensureForegroundNodeAvailable(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !void {
-    try ensureForegroundNodeAvailableWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-) !void {
-    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        usage_api_enabled,
-        account_api_enabled,
-        chatgpt_http.ensureNodeExecutableAvailable,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithChecker(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    checker: NodeAvailabilityFn,
-) !void {
-    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-        checker,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-    checker: NodeAvailabilityFn,
-) !void {
-    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        usage_api_enabled,
-        account_api_enabled,
-    )) return;
-    try checker(allocator);
-}
-
 pub fn shouldScheduleBackgroundAccountNameRefresh(reg: *registry.Registry) bool {
     if (!reg.api.account) return false;
 
@@ -1562,14 +1437,6 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
 
-    try ensureForegroundNodeAvailableWithApiEnabled(
-        allocator,
-        codex_home,
-        &reg,
-        .list,
-        usage_api_enabled,
-        account_api_enabled,
-    );
     var debug_stdout: io_util.Stdout = undefined;
     var debug_logger: ?ForegroundUsageDebugLogger = null;
     if (opts.debug) {
@@ -1699,14 +1566,6 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
 
-    try ensureForegroundNodeAvailableWithApiEnabled(
-        allocator,
-        codex_home,
-        &reg,
-        .switch_account,
-        usage_api_enabled,
-        account_api_enabled,
-    );
     var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
         allocator,
         codex_home,
@@ -1911,14 +1770,6 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     defer if (usage_state) |*state| state.deinit(allocator);
 
     if (interactive_remove) {
-        try ensureForegroundNodeAvailableWithApiEnabled(
-            allocator,
-            codex_home,
-            &reg,
-            .remove_account,
-            usage_api_enabled,
-            account_api_enabled,
-        );
         if (usage_api_enabled) {
             usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
                 allocator,
@@ -2119,292 +1970,6 @@ test "background account-name refresh returns early when another refresh holds t
         TestState.lockUnavailable,
     );
     try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
-}
-
-test "foreground node preflight fails fast when usage refresh needs node" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight fails fast when account-name refresh needs node" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-
-        fn appendAccount(
-            allocator: std.mem.Allocator,
-            reg: *registry.Registry,
-            record_key: []const u8,
-            email: []const u8,
-            plan: registry.PlanType,
-        ) !void {
-            const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
-            const user_id = record_key[0..sep];
-            const account_id = record_key[sep + 2 ..];
-            try reg.accounts.append(allocator, .{
-                .account_key = try allocator.dupe(u8, record_key),
-                .chatgpt_account_id = try allocator.dupe(u8, account_id),
-                .chatgpt_user_id = try allocator.dupe(u8, user_id),
-                .email = try allocator.dupe(u8, email),
-                .alias = try allocator.dupe(u8, ""),
-                .account_name = null,
-                .plan = plan,
-                .auth_mode = .chatgpt,
-                .created_at = 1,
-                .last_used_at = null,
-                .last_usage = null,
-                .last_usage_at = null,
-                .last_local_rollout = null,
-            });
-        }
-
-        fn authJsonWithIds(
-            allocator: std.mem.Allocator,
-            email: []const u8,
-            plan: []const u8,
-            chatgpt_user_id: []const u8,
-            chatgpt_account_id: []const u8,
-        ) ![]u8 {
-            const encoder = std.base64.url_safe_no_pad.Encoder;
-            const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-            const payload = try std.fmt.allocPrint(
-                allocator,
-                "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
-                .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
-            );
-            defer allocator.free(payload);
-
-            const header_b64 = try allocator.alloc(u8, encoder.calcSize(header.len));
-            defer allocator.free(header_b64);
-            _ = encoder.encode(header_b64, header);
-            const payload_b64 = try allocator.alloc(u8, encoder.calcSize(payload.len));
-            defer allocator.free(payload_b64);
-            _ = encoder.encode(payload_b64, payload);
-            const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ header_b64, ".", payload_b64, ".sig" });
-            defer allocator.free(jwt);
-
-            return try std.fmt.allocPrint(
-                allocator,
-                "{{\"tokens\":{{\"access_token\":\"access-{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
-                .{ email, chatgpt_account_id, jwt },
-            );
-        }
-
-        fn writeActiveAuth(
-            allocator: std.mem.Allocator,
-            codex_home: []const u8,
-            email: []const u8,
-            plan: []const u8,
-            chatgpt_user_id: []const u8,
-            chatgpt_account_id: []const u8,
-        ) !void {
-            const auth_path = try registry.activeAuthPath(allocator, codex_home);
-            defer allocator.free(auth_path);
-
-            const auth_json = try authJsonWithIds(
-                allocator,
-                email,
-                plan,
-                chatgpt_user_id,
-                chatgpt_account_id,
-            );
-            defer allocator.free(auth_json);
-            try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = auth_path, .data = auth_json });
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-
-    const user_id = "user-shared";
-    const primary_record_key = "user-shared::acct-primary";
-    const secondary_record_key = "user-shared::acct-secondary";
-    try TestState.appendAccount(gpa, &reg, primary_record_key, "team@example.com", .team);
-    try TestState.appendAccount(gpa, &reg, secondary_record_key, "team@example.com", .team);
-    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
-    try TestState.writeActiveAuth(gpa, codex_home, "team@example.com", "team", user_id, "acct-primary");
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight can be forced on when command api override enables usage refresh" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-    reg.api.account = false;
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .list, true, false, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight can be forced on for remove when command api override enables usage refresh" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-    reg.api.account = false;
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .remove_account, true, false, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
 }
 
 test "handled cli errors include missing node" {

@@ -134,7 +134,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         requests.items,
         max_concurrency,
     ) catch |err| switch (err) {
-        error.OutOfMemory, error.NodeJsRequired => return err,
+        error.OutOfMemory => return err,
         else => {
             const error_name = @errorName(err);
             for (request_indexes, 0..) |request_idx, idx| {
