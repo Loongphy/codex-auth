@@ -183,15 +183,25 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     }
 }
 
-fn writeApiRefreshDisabledConfig(dir: fs.Dir) !void {
-    try dir.writeFile(.{
-        .sub_path = ".codex/config.toml",
-        .data =
-        \\[api]
-        \\usage = false
-        \\account = false
-        ,
-    });
+fn fakeNodeCommandPath() []const u8 {
+    return if (builtin.os.tag == .windows) "fake-node-bin/node.cmd" else "fake-node-bin/node";
+}
+
+fn writeFailingFakeNode(dir: fs.Dir) !void {
+    try dir.makePath("fake-node-bin");
+    var script_buf: [160]u8 = undefined;
+    const script = if (builtin.os.tag == .windows)
+        try std.fmt.bufPrint(&script_buf, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo v22.0.0\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n", .{})
+    else
+        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo v22.0.0\n  exit 0\nfi\nexit 1\n", .{});
+    const sub_path = fakeNodeCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
 }
 
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
@@ -659,14 +669,18 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex");
-    try writeApiRefreshDisabledConfig(tmp.dir);
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const email = "fresh@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "plus");
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = auth_json });
 
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -711,7 +725,11 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex/accounts");
-    try writeApiRefreshDisabledConfig(tmp.dir);
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const email = "legacy@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "team");
@@ -1539,7 +1557,11 @@ test "Scenario: Given auth json already points at another registry account when 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
-    try writeApiRefreshDisabledConfig(tmp.dir);
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -1563,7 +1585,7 @@ test "Scenario: Given auth json already points at another registry account when 
     try fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
     try fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
 
-    const remove_result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "beta@" }, "");
+    const remove_result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{ "remove", "beta@" });
     defer gpa.free(remove_result.stdout);
     defer gpa.free(remove_result.stderr);
 
@@ -1582,7 +1604,7 @@ test "Scenario: Given auth json already points at another registry account when 
     try std.testing.expect(loaded_after_remove.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded_after_remove.active_account_key.?, alpha_key));
 
-    const list_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const list_result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(list_result.stdout);
     defer gpa.free(list_result.stderr);
 
