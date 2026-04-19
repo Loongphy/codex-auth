@@ -1682,12 +1682,12 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 &reg,
                 matches.items,
                 null,
-            ) catch |err| switch (err) {
-                error.TuiRequiresTty => {
+            ) catch |err| {
+                if (err == error.TuiRequiresTty) {
                     try cli.printSwitchRequiresTtyError();
                     return error.SwitchSelectionRequiresTty;
-                },
-                else => return err,
+                }
+                return err;
             },
         };
         if (selected_account_key == null) return;
@@ -1715,12 +1715,12 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
         const transferred_display = initial_display.?;
         initial_display = null;
-        break :blk cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| switch (err) {
-            error.TuiRequiresTty => {
+        break :blk cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| {
+            if (err == error.TuiRequiresTty) {
                 try cli.printSwitchRequiresTtyError();
                 return error.SwitchSelectionRequiresTty;
-            },
-            else => return err,
+            }
+            return err;
         };
     };
     defer if (selected_account_key) |account_key| live_allocator.free(@constCast(account_key));
@@ -2493,16 +2493,16 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             allocator,
             &reg,
             usage_overrides,
-        ) catch |err| switch (err) {
-            error.InvalidRemoveSelectionInput => {
+        ) catch |err| {
+            if (err == error.InvalidRemoveSelectionInput) {
                 try cli.printInvalidRemoveSelectionError();
                 return error.InvalidRemoveSelectionInput;
-            },
-            error.TuiRequiresTty => {
+            }
+            if (err == error.TuiRequiresTty) {
                 try cli.printRemoveRequiresTtyError();
                 return error.RemoveSelectionRequiresTty;
-            },
-            else => return err,
+            }
+            return err;
         };
     }
     if (selected == null) return;

@@ -24,7 +24,8 @@ const ansi = struct {
     const bold = "\x1b[1m";
 };
 
-const tui_poll_error_mask: i16 = std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
+const tui_poll_input_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.IN;
+const tui_poll_error_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
 const tui_escape_sequence_timeout_ms: i32 = 100;
 
 const TuiNavigation = enum {
@@ -49,6 +50,28 @@ const TuiEscapeReadResult = struct {
     action: TuiEscapeAction,
     buffered_bytes_consumed: usize,
 };
+
+const TuiPollResult = enum {
+    ready,
+    timeout,
+    closed,
+};
+
+fn pollTuiInput(file: std.Io.File, timeout_ms: i32, poll_error_mask: i16) !TuiPollResult {
+    if (comptime builtin.os.tag == .windows) {
+        return .closed;
+    } else {
+        var fds = [_]std.posix.pollfd{.{
+            .fd = file.handle,
+            .events = tui_poll_input_mask,
+            .revents = 0,
+        }};
+        const ready = try std.posix.poll(&fds, timeout_ms);
+        if (ready == 0) return .timeout;
+        if ((fds[0].revents & poll_error_mask) != 0) return .closed;
+        return .ready;
+    }
+}
 
 fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l");
@@ -75,10 +98,12 @@ fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.reset);
 }
 
+const TuiSavedState = if (builtin.os.tag == .windows) void else std.posix.termios;
+
 const TuiSession = struct {
     input: std.Io.File,
     output: std.Io.File,
-    saved_termios: std.posix.termios,
+    saved_termios: TuiSavedState = if (builtin.os.tag == .windows) {} else undefined,
     writer_buffer: [4096]u8 = undefined,
     writer: std.Io.File.Writer = undefined,
 
@@ -86,6 +111,10 @@ const TuiSession = struct {
         const input = std.Io.File.stdin();
         const output = std.Io.File.stdout();
         if (!(try input.isTty(app_runtime.io())) or !(try output.isTty(app_runtime.io()))) {
+            return error.TuiRequiresTty;
+        }
+
+        if (comptime builtin.os.tag == .windows) {
             return error.TuiRequiresTty;
         }
 
@@ -112,7 +141,9 @@ const TuiSession = struct {
         const writer = self.out();
         writeTuiExitTo(writer) catch {};
         writer.flush() catch {};
-        std.posix.tcsetattr(self.input.handle, .FLUSH, self.saved_termios) catch {};
+        if (comptime builtin.os.tag != .windows) {
+            std.posix.tcsetattr(self.input.handle, .FLUSH, self.saved_termios) catch {};
+        }
         self.* = undefined;
     }
 
@@ -211,23 +242,16 @@ fn readTuiEscapeAction(
             };
         }
 
-        var fds = [_]std.posix.pollfd{.{
-            .fd = tty.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&fds, timeout_ms);
-        if (ready == 0) {
-            return .{
+        switch (try pollTuiInput(tty, timeout_ms, poll_error_mask)) {
+            .timeout => return .{
                 .action = if (seq_len == 0) .quit else .ignore,
                 .buffered_bytes_consumed = buffered_bytes_consumed,
-            };
-        }
-        if ((fds[0].revents & poll_error_mask) != 0) {
-            return .{
+            },
+            .closed => return .{
                 .action = .quit,
                 .buffered_bytes_consumed = buffered_bytes_consumed,
-            };
+            },
+            .ready => {},
         }
 
         const read_n = try readFileOnce(tty, seq[seq_len .. seq_len + 1]);
@@ -1648,17 +1672,14 @@ pub fn selectAccountWithLiveUpdates(
         );
         try out.flush();
 
-        var fds = [_]std.posix.pollfd{.{
-            .fd = tui.input.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&fds, ui_tick_ms);
-        if (ready == 0) {
-            try controller.maybe_start_refresh(controller.context);
-            continue;
+        switch (try pollTuiInput(tui.input, ui_tick_ms, tui_poll_error_mask)) {
+            .timeout => {
+                try controller.maybe_start_refresh(controller.context);
+                continue;
+            },
+            .closed => return null,
+            .ready => {},
         }
-        if ((fds[0].revents & tui_poll_error_mask) != 0) return null;
 
         var b: [8]u8 = undefined;
         const n = try tui.read(&b);
