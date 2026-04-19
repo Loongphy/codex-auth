@@ -1,32 +1,32 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
+const app_runtime = @import("runtime.zig");
 const auth = @import("auth.zig");
 const registry = @import("registry.zig");
 
 pub const BackgroundRefreshLock = struct {
-    file: fs.File,
+    file: std.Io.File,
 
     pub fn acquire(allocator: std.mem.Allocator, codex_home: []const u8) !?BackgroundRefreshLock {
         try registry.ensureAccountsDir(allocator, codex_home);
-        const path = try fs.path.join(allocator, &[_][]const u8{
+        const path = try std.fs.path.join(allocator, &[_][]const u8{
             codex_home,
             "accounts",
             registry.account_name_refresh_lock_file_name,
         });
         defer allocator.free(path);
 
-        var file = try fs.cwd().createFile(path, .{ .read = true, .truncate = false });
-        errdefer file.close();
+        var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{ .read = true, .truncate = false });
+        errdefer file.close(app_runtime.io());
         if (!(try tryExclusiveLock(file))) {
-            file.close();
+            file.close(app_runtime.io());
             return null;
         }
         return .{ .file = file };
     }
 
     pub fn release(self: *BackgroundRefreshLock) void {
-        self.file.unlock();
-        self.file.close();
+        self.file.unlock(app_runtime.io());
+        self.file.close(app_runtime.io());
     }
 };
 
@@ -51,8 +51,8 @@ fn candidateIsNewer(candidate: *const auth.AuthInfo, best: *const auth.AuthInfo)
     return std.mem.order(u8, candidate_refresh, best_refresh) == .gt;
 }
 
-fn tryExclusiveLock(file: fs.File) !bool {
-    return try file.tryLock(.exclusive);
+fn tryExclusiveLock(file: std.Io.File) !bool {
+    return try file.tryLock(app_runtime.io(), .exclusive);
 }
 
 fn storedAuthInfoSupportsAccountNameRefresh(info: *const auth.AuthInfo) bool {

@@ -47,7 +47,8 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
 - `list --api` forces foreground usage refresh for this command even when `api.usage = false`; `list --skip-api` skips foreground usage refresh completely and renders only the stored registry data
 - interactive `switch` follows the configured foreground usage mode by default; `switch <query>` always resolves selectors locally from stored data and does not accept `--api` or `--skip-api`
-- `remove` always resolves selectors from stored local data and does not accept `--api` or `--skip-api`
+- interactive `remove` stays local-only by default; `remove --api` does a best-effort foreground usage refresh attempt for picker display only. Successful rows show live usage data; rows that cannot refresh may show HTTP/error overlays in the picker instead. Refresh problems do not block deletion, and setup or batch-level failures still fall back to the stored registry list
+- `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--api` or `--skip-api`
 - `switch` does not refresh usage again after the new account is activated
 - the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
 - the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
@@ -61,7 +62,8 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - Single-file `import` refreshes immediately for the imported auth context.
 - `list --api` forces synchronous `accounts/check` refresh for this command even when `api.account = false`; `list --skip-api` skips it and uses stored metadata only.
 - interactive `switch` follows the configured account-name refresh mode by default; `switch <query>` always stays local-only and does not accept `--api` or `--skip-api`.
-- `remove` always stays local-only and does not accept `--api` or `--skip-api`.
+- interactive `remove` stays local-only by default; `remove --api` does a best-effort synchronous `accounts/check` refresh for picker display only, and account-name refresh failures leave the stored metadata in place without blocking deletion.
+- `remove <query>` and `remove --all` always stay local-only and do not accept `--api` or `--skip-api`.
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.
 - the auto-switch daemon still uses a grouped-scope scan during each cycle when `auto_switch.enabled = true`.
 - daemon refreshes load the request auth context from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.

@@ -17,6 +17,10 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`
 
+## File Permissions
+
+File-permission behavior is documented in [docs/permissions.md](./permissions.md).
+
 `codex-auth` resolves `codex_home` in this order:
 
 1. `CODEX_HOME` when it is set to a non-empty existing directory
@@ -193,9 +197,11 @@ If exactly one account matches, it is removed immediately.
 If multiple accounts match in a TTY session, the command prints the matched account labels using the same display grouping as `list` and asks for confirmation with `Confirm delete? [y/N]:`; only `y` or `Y` proceeds.
 If multiple accounts match and stdin is not a TTY, the command exits non-zero instead of reading the pipe as confirmation input; the user must refine the query or rerun it interactively.
 
-When `api.usage = true`, `codex-auth remove` without a query or `--all` refreshes usage for all stored accounts before rendering account choices, using a maximum concurrency of `3`. The remove picker shows the same per-row usage overlays as `list` / interactive `switch`, including non-`200` HTTP statuses and `MissingAuth` in both usage columns when applicable.
+Interactive `codex-auth remove` stays local-only by default, even when `api.usage = true`, so deletion is not blocked on foreground refresh work.
 
-When `api.usage = false`, `codex-auth remove` without a query or `--all` keeps the existing local-only behavior and can refresh only the active account from the newest local rollout data.
+`codex-auth remove --api` performs a best-effort usage refresh attempt for picker display before rendering account choices, using a maximum concurrency of `3`. When per-account live results are available, the remove picker shows the same per-row usage overlays as `list` / interactive `switch`: successful rows show live usage data, while rows with non-`200` responses or missing auth can show status/error overlays such as `403` and `MissingAuth` in both usage columns. Refresh problems never block deletion: if the live refresh path cannot produce picker data, `remove` still uses the stored registry list, and attempted live refreshes may still emit setup warnings.
+
+`codex-auth remove --skip-api` keeps the interactive picker local-only explicitly.
 
 In the interactive remove picker, `q` quits without deleting accounts.
 

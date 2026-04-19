@@ -8,4 +8,4 @@ dist/
 .idea/
 
 # Local benchmarking workspace
-benchmark/
+benchmark/*

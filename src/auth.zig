@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
+const app_runtime = @import("runtime.zig");
 const registry = @import("registry.zig");
 
 pub const AuthInfo = struct {
@@ -51,10 +51,12 @@ fn recordKeyAlloc(
 }
 
 pub fn parseAuthInfo(allocator: std.mem.Allocator, auth_path: []const u8) !AuthInfo {
-    var file = try fs.cwd().openFile(auth_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().openFile(app_runtime.io(), auth_path, .{});
+    defer file.close(app_runtime.io());
 
-    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(app_runtime.io(), &read_buffer);
+    const data = try file_reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024));
     defer allocator.free(data);
 
     return try parseAuthInfoData(allocator, data);

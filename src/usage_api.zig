@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
 const auth = @import("auth.zig");
 const chatgpt_http = @import("chatgpt_http.zig");
 const registry = @import("registry.zig");
@@ -10,6 +9,20 @@ pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
     missing_auth: bool = false,
+};
+
+pub const BatchUsageFetchResult = struct {
+    snapshot: ?registry.RateLimitSnapshot = null,
+    status_code: ?u16 = null,
+    missing_auth: bool = false,
+    error_name: ?[]const u8 = null,
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.snapshot) |*snapshot| {
+            registry.freeRateLimitSnapshot(allocator, snapshot);
+            self.snapshot = null;
+        }
+    }
 };
 
 const UsageHttpResult = struct {
@@ -48,6 +61,99 @@ pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []
     const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
 
     return try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+}
+
+pub fn fetchUsageForAuthPathsDetailedBatch(
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+) ![]BatchUsageFetchResult {
+    const results = try allocator.alloc(BatchUsageFetchResult, auth_paths.len);
+    errdefer allocator.free(results);
+    for (results) |*result| result.* = .{};
+
+    if (auth_paths.len == 0) return results;
+
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var requests = std.ArrayList(chatgpt_http.BatchRequest).empty;
+    defer requests.deinit(arena);
+
+    const request_indexes = try arena.alloc(?usize, auth_paths.len);
+    for (request_indexes) |*slot| slot.* = null;
+
+    for (auth_paths, 0..) |auth_path, idx| {
+        var info = auth.parseAuthInfo(arena, auth_path) catch |err| {
+            results[idx].error_name = @errorName(err);
+            continue;
+        };
+        defer info.deinit(arena);
+
+        if (info.auth_mode != .chatgpt) {
+            results[idx].missing_auth = true;
+            continue;
+        }
+        const access_token = info.access_token orelse {
+            results[idx].missing_auth = true;
+            continue;
+        };
+        const chatgpt_account_id = info.chatgpt_account_id orelse {
+            results[idx].missing_auth = true;
+            continue;
+        };
+
+        var existing_request_index: ?usize = null;
+        for (requests.items, 0..) |request, request_idx| {
+            if (std.mem.eql(u8, request.access_token, access_token) and
+                std.mem.eql(u8, request.account_id, chatgpt_account_id))
+            {
+                existing_request_index = request_idx;
+                break;
+            }
+        }
+
+        if (existing_request_index) |request_idx| {
+            request_indexes[idx] = request_idx;
+            continue;
+        }
+
+        try requests.append(arena, .{
+            .access_token = try arena.dupe(u8, access_token),
+            .account_id = try arena.dupe(u8, chatgpt_account_id),
+        });
+        request_indexes[idx] = requests.items.len - 1;
+    }
+
+    if (requests.items.len == 0) return results;
+
+    var http_results = try chatgpt_http.runGetJsonBatchCommand(
+        allocator,
+        default_usage_endpoint,
+        requests.items,
+        max_concurrency,
+    );
+    defer http_results.deinit(allocator);
+
+    for (request_indexes, 0..) |request_idx, result_idx| {
+        const unique_idx = request_idx orelse continue;
+        const http_result = http_results.items[unique_idx];
+        results[result_idx].status_code = http_result.status_code;
+        switch (http_result.outcome) {
+            .ok => {
+                if (http_result.body.len == 0) continue;
+                results[result_idx].snapshot = parseUsageResponse(allocator, http_result.body) catch |err| {
+                    results[result_idx].error_name = @errorName(err);
+                    continue;
+                };
+            },
+            .timeout => results[result_idx].error_name = @errorName(error.TimedOut),
+            .failed => results[result_idx].error_name = @errorName(error.RequestFailed),
+        }
+    }
+
+    return results;
 }
 
 pub fn fetchUsageForToken(

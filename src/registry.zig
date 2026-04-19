@@ -1,7 +1,5 @@
 const std = @import("std");
-const time_compat = @import("compat_time.zig");
-const fs = @import("compat_fs.zig");
-const process_compat = @import("compat_process.zig");
+const app_runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 const account_api = @import("account_api.zig");
 const c_time = @cImport({
@@ -15,6 +13,26 @@ pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
 pub const account_name_refresh_lock_file_name = "account-name-refresh.lock";
+const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+    .windows => .default_file,
+    else => .fromMode(0o600),
+};
+const private_dir_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+    .windows => .default_dir,
+    else => .fromMode(0o700),
+};
+
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
@@ -22,6 +40,19 @@ fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
         buf[i] = std.ascii.toLower(ch);
     }
     return buf;
+}
+
+fn realPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) {
+        return try app_runtime.realPathFileAbsoluteAlloc(allocator, path);
+    }
+    return try app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
+}
+
+fn readFileAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_bytes: usize) ![]u8 {
+    var read_buffer: [4096]u8 = undefined;
+    var file_reader = file.reader(app_runtime.io(), &read_buffer);
+    return try file_reader.interface.allocRemaining(allocator, .limited(max_bytes));
 }
 
 pub const RateLimitWindow = struct {
@@ -277,7 +308,7 @@ fn replaceOptionalStringAlloc(
 }
 
 fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
-    const val = process_compat.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+    const val = getEnvVarOwned(allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return null,
         else => return err,
     };
@@ -289,9 +320,9 @@ fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8
 }
 
 fn resolveExistingCodexHomeOverride(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const stat = fs.cwd().statFile(path) catch |err| switch (err) {
+    const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
         error.IsDir => {
-            return fs.realpathAlloc(allocator, path) catch |realpath_err| {
+            return realPathAlloc(allocator, path) catch |realpath_err| {
                 logCodexHomeResolutionError("failed to canonicalize CODEX_HOME `{s}`: {s}", .{ path, @errorName(realpath_err) });
                 return realpath_err;
             };
@@ -309,7 +340,7 @@ fn resolveExistingCodexHomeOverride(allocator: std.mem.Allocator, path: []const 
         logCodexHomeResolutionError("CODEX_HOME points to `{s}`, but that path is not a directory", .{path});
         return error.NotDir;
     }
-    return fs.realpathAlloc(allocator, path) catch |err| {
+    return realPathAlloc(allocator, path) catch |err| {
         logCodexHomeResolutionError("failed to canonicalize CODEX_HOME `{s}`: {s}", .{ path, @errorName(err) });
         return err;
     };
@@ -333,10 +364,10 @@ pub fn resolveCodexHomeFromEnv(
         if (path.len != 0) return try resolveExistingCodexHomeOverride(allocator, path);
     }
     if (home) |path| {
-        if (path.len != 0) return try fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     if (user_profile) |path| {
-        if (path.len != 0) return try fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     return error.EnvironmentVariableNotFound;
 }
@@ -362,14 +393,32 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
     return error.EnvironmentVariableNotFound;
 }
 
+fn hardenPathPermissions(path: []const u8, permissions: std.Io.File.Permissions) !void {
+    if (builtin.os.tag == .windows) return;
+    try std.Io.Dir.cwd().setFilePermissions(app_runtime.io(), path, permissions, .{});
+}
+
+pub fn hardenSensitiveFile(path: []const u8) !void {
+    try hardenPathPermissions(path, private_file_permissions);
+}
+
+fn hardenSensitiveDir(path: []const u8) !void {
+    try hardenPathPermissions(path, private_dir_permissions);
+}
+
+fn ensurePrivateDir(path: []const u8) !void {
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), path);
+    try hardenSensitiveDir(path);
+}
+
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const accounts_dir = try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
-    try fs.cwd().makePath(accounts_dir);
+    try ensurePrivateDir(accounts_dir);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
 }
 
 fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -408,7 +457,7 @@ fn accountSnapshotFileName(allocator: std.mem.Allocator, account_key: []const u8
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
     const filename = try accountSnapshotFileName(allocator, account_key);
     defer allocator.free(filename);
-    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8) ![]u8 {
@@ -416,21 +465,47 @@ fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, e
     defer allocator.free(key);
     const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
     defer allocator.free(filename);
-    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
+}
+
+fn copyFileWithPermissions(src: []const u8, dest: []const u8, permissions: ?std.Io.File.Permissions) !void {
+    try std.Io.Dir.cwd().copyFile(src, std.Io.Dir.cwd(), dest, app_runtime.io(), .{ .permissions = permissions });
+}
+
+fn existingFilePermissions(path: []const u8) !?std.Io.File.Permissions {
+    const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    return stat.permissions;
 }
 
 pub fn copyFile(src: []const u8, dest: []const u8) !void {
-    try fs.cwd().copyFile(src, fs.cwd(), dest, .{});
+    try copyFileWithPermissions(src, dest, null);
+}
+
+pub fn copyManagedFile(src: []const u8, dest: []const u8) !void {
+    try copyFileWithPermissions(src, dest, private_file_permissions);
+    try hardenSensitiveFile(dest);
+}
+
+fn replaceFilePreservingPermissions(src: []const u8, dest: []const u8) !void {
+    const permissions = try existingFilePermissions(dest);
+    try copyFileWithPermissions(src, dest, permissions);
 }
 
 fn writeFile(path: []const u8, data: []const u8) !void {
-    var file = try fs.cwd().createFile(path, .{ .truncate = true });
-    defer file.close();
-    try file.writeAll(data);
+    var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{
+        .truncate = true,
+        .permissions = private_file_permissions,
+    });
+    defer file.close(app_runtime.io());
+    try file.writeStreamingAll(app_runtime.io(), data);
+    try hardenSensitiveFile(path);
 }
 
 const max_backups: usize = 5;
@@ -442,7 +517,7 @@ pub const CleanSummary = struct {
 };
 
 fn fileExists(path: []const u8) !bool {
-    fs.cwd().access(path, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().access(app_runtime.io(), path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -450,13 +525,13 @@ fn fileExists(path: []const u8) !bool {
 }
 
 fn readFileIfExists(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    const cwd = fs.cwd();
-    var file = cwd.openFile(path, .{}) catch |err| {
+    const cwd = std.Io.Dir.cwd();
+    var file = cwd.openFile(app_runtime.io(), path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
-    defer file.close();
-    return try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    defer file.close(app_runtime.io());
+    return try readFileAlloc(file, allocator, 10 * 1024 * 1024);
 }
 
 fn filesEqual(allocator: std.mem.Allocator, a_path: []const u8, b_path: []const u8) !bool {
@@ -475,12 +550,8 @@ fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []cons
     return std.mem.eql(u8, data.?, bytes);
 }
 
-fn ensureDir(path: []const u8) !void {
-    try fs.cwd().makePath(path);
-}
-
 fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
 }
 
 fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
@@ -530,7 +601,7 @@ fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
 }
 
 fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) ![]u8 {
-    const timestamp = try formatBackupTimestamp(allocator, time_compat.timestamp());
+    const timestamp = try formatBackupTimestamp(allocator, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds());
     defer allocator.free(timestamp);
     const base = try std.fmt.allocPrint(allocator, "{s}.bak.{s}", .{ base_name, timestamp });
     defer allocator.free(base);
@@ -542,11 +613,11 @@ fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []co
         else
             try std.fmt.allocPrint(allocator, "{s}.{d}", .{ base, attempt });
 
-        const path = try fs.path.join(allocator, &[_][]const u8{ dir, name });
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, name });
         allocator.free(name);
 
-        if (fs.cwd().openFile(path, .{})) |file| {
-            file.close();
+        if (std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{})) |file| {
+            file.close(app_runtime.io());
             allocator.free(path);
             continue;
         } else |_| {
@@ -571,16 +642,16 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
         list.deinit(allocator);
     }
 
-    var dir_handle = try fs.cwd().openDir(dir, .{ .iterate = true });
-    defer dir_handle.close();
+    var dir_handle = try std.Io.Dir.cwd().openDir(app_runtime.io(), dir, .{ .iterate = true });
+    defer dir_handle.close(app_runtime.io());
 
     var it = dir_handle.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.startsWith(u8, entry.name, base_name)) continue;
         if (!std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) continue;
 
-        const stat = try dir_handle.statFile(entry.name);
+        const stat = try dir_handle.statFile(app_runtime.io(), entry.name, .{});
         const name = try allocator.dupe(u8, entry.name);
         try list.append(allocator, .{ .name = name, .mtime = stat.mtime.nanoseconds });
     }
@@ -591,17 +662,17 @@ fn pruneBackups(allocator: std.mem.Allocator, dir: []const u8, base_name: []cons
     var i: usize = max;
     while (i < list.items.len) : (i += 1) {
         const old = list.items[i].name;
-        dir_handle.deleteFile(old) catch {};
+        dir_handle.deleteFile(app_runtime.io(), old) catch {};
     }
 }
 
 fn countBackupsByBaseName(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) !usize {
     var count: usize = 0;
-    var dir_handle = try fs.cwd().openDir(dir, .{ .iterate = true });
-    defer dir_handle.close();
+    var dir_handle = try std.Io.Dir.cwd().openDir(app_runtime.io(), dir, .{ .iterate = true });
+    defer dir_handle.close(app_runtime.io());
 
     var it = dir_handle.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.startsWith(u8, entry.name, base_name)) continue;
         if (!std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) continue;
@@ -617,8 +688,8 @@ fn resolveStrictAccountAuthPath(
     account_key: []const u8,
 ) ![]u8 {
     const path = try accountAuthPath(allocator, codex_home, account_key);
-    if (fs.cwd().openFile(path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{})) |file| {
+        file.close(app_runtime.io());
         return path;
     } else |err| {
         allocator.free(path);
@@ -651,12 +722,12 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     const reg_path = try registryPath(allocator, codex_home);
     defer allocator.free(reg_path);
 
-    var cwd = fs.cwd();
-    var dir_handle = cwd.openDir(dir, .{}) catch |err| switch (err) {
+    var cwd = std.Io.Dir.cwd();
+    var dir_handle = cwd.openDir(app_runtime.io(), dir, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => return err,
     };
-    dir_handle.close();
+    dir_handle.close(app_runtime.io());
 
     const auth_before = try countBackupsByBaseName(allocator, dir, "auth.json");
     const registry_before = try countBackupsByBaseName(allocator, dir, "registry.json");
@@ -679,17 +750,17 @@ pub fn cleanAccountsBackups(allocator: std.mem.Allocator, codex_home: []const u8
     defer reg.deinit(allocator);
 
     var stale_snapshot_files_removed: usize = 0;
-    var accounts_dir = try fs.cwd().openDir(dir, .{ .iterate = true });
-    defer accounts_dir.close();
+    var accounts_dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), dir, .{ .iterate = true });
+    defer accounts_dir.close(app_runtime.io());
     var it = accounts_dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (isAllowedAccountsEntry(&reg, entry.name)) {
             continue;
         }
 
         switch (entry.kind) {
-            .file, .sym_link => try accounts_dir.deleteFile(entry.name),
-            .directory => try accounts_dir.deleteTree(entry.name),
+            .file, .sym_link => try accounts_dir.deleteFile(app_runtime.io(), entry.name),
+            .directory => try accounts_dir.deleteTree(app_runtime.io(), entry.name),
             else => continue,
         }
         stale_snapshot_files_removed += 1;
@@ -710,17 +781,17 @@ pub fn backupAuthIfChanged(
 ) !void {
     const dir = try backupDir(allocator, codex_home);
     defer allocator.free(dir);
-    try ensureDir(dir);
+    try ensureAccountsDir(allocator, codex_home);
 
     if (!(try filesEqual(allocator, current_auth_path, new_auth_path))) {
-        if (fs.cwd().openFile(current_auth_path, .{})) |file| {
-            file.close();
+        if (std.Io.Dir.cwd().openFile(app_runtime.io(), current_auth_path, .{})) |file| {
+            file.close(app_runtime.io());
         } else |_| {
             return;
         }
         const backup = try makeBackupPath(allocator, dir, "auth.json");
         defer allocator.free(backup);
-        try fs.cwd().copyFile(current_auth_path, fs.cwd(), backup, .{});
+        try copyManagedFile(current_auth_path, backup);
         try pruneBackups(allocator, dir, "auth.json", max_backups);
     }
 }
@@ -733,21 +804,21 @@ fn backupRegistryIfChanged(
 ) !void {
     const dir = try backupDir(allocator, codex_home);
     defer allocator.free(dir);
-    try ensureDir(dir);
+    try ensureAccountsDir(allocator, codex_home);
 
     if (try fileEqualsBytes(allocator, current_registry_path, new_registry_bytes)) {
         return;
     }
 
-    if (fs.cwd().openFile(current_registry_path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(app_runtime.io(), current_registry_path, .{})) |file| {
+        file.close(app_runtime.io());
     } else |_| {
         return;
     }
 
     const backup = try makeBackupPath(allocator, dir, "registry.json");
     defer allocator.free(backup);
-    try fs.cwd().copyFile(current_registry_path, fs.cwd(), backup, .{});
+    try copyManagedFile(current_registry_path, backup);
     try pruneBackups(allocator, dir, "registry.json", max_backups);
 }
 
@@ -877,14 +948,14 @@ fn loadPurgeCarryForwardConfig(allocator: std.mem.Allocator, codex_home: []const
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
-    const cwd = fs.cwd();
-    var file = cwd.openFile(path, .{}) catch |err| switch (err) {
+    const cwd = std.Io.Dir.cwd();
+    var file = cwd.openFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{},
         else => return err,
     };
-    defer file.close();
+    defer file.close(app_runtime.io());
 
-    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const data = try readFileAlloc(file, allocator, 10 * 1024 * 1024);
     defer allocator.free(data);
 
     return parsePurgeCarryForwardConfig(allocator, data);
@@ -1005,7 +1076,7 @@ fn importDisplayLabelFromName(allocator: std.mem.Allocator, name: []const u8) ![
 }
 
 fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return importDisplayLabelFromName(allocator, fs.path.basename(path));
+    return importDisplayLabelFromName(allocator, std.fs.path.basename(path));
 }
 
 fn importReasonLabel(err: anyerror) []const u8 {
@@ -1069,7 +1140,7 @@ pub fn importCpaPath(
     }
 
     const path = auth_path.?;
-    const stat = fs.cwd().statFile(path) catch |err| switch (err) {
+    const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), path, .{}) catch |err| switch (err) {
         error.IsDir => {
             if (explicit_alias != null) {
                 std.log.warn("--alias is ignored when importing a directory: {s}", .{path});
@@ -1110,7 +1181,7 @@ pub fn importAuthPath(
     auth_path: []const u8,
     explicit_alias: ?[]const u8,
 ) !ImportReport {
-    const stat = fs.cwd().statFile(auth_path) catch |err| switch (err) {
+    const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), auth_path, .{}) catch |err| switch (err) {
         error.IsDir => {
             if (explicit_alias != null) {
                 std.log.warn("--alias is ignored when importing a directory: {s}", .{auth_path});
@@ -1147,7 +1218,7 @@ pub fn importAuthPath(
 fn defaultCpaImportPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try resolveUserHome(allocator);
     defer allocator.free(home);
-    return try fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
+    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
 }
 
 fn importCpaFile(
@@ -1157,10 +1228,10 @@ fn importCpaFile(
     auth_file: []const u8,
     explicit_alias: ?[]const u8,
 ) !ImportOutcome {
-    var file = try fs.cwd().openFile(auth_file, .{});
-    defer file.close();
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), auth_file, .{});
+    defer file.close(app_runtime.io());
 
-    const data = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const data = try readFileAlloc(file, allocator, 10 * 1024 * 1024);
     defer allocator.free(data);
 
     const converted = try @import("auth.zig").convertCpaAuthJson(allocator, data);
@@ -1227,7 +1298,7 @@ fn importAuthInfo(
     defer allocator.free(dest);
 
     try ensureAccountsDir(allocator, codex_home);
-    try copyFile(auth_file, dest);
+    try copyManagedFile(auth_file, dest);
 
     const record = try accountFromAuth(allocator, alias, info);
     try upsertAccount(allocator, reg, record);
@@ -1246,11 +1317,11 @@ fn importCpaDirectory(
     errdefer report.deinit(allocator);
     report.source_label = try allocator.dupe(u8, source_label);
 
-    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = std.Io.Dir.cwd().openDir(app_runtime.io(), dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => if (missing_ok) return report else return err,
         else => return err,
     };
-    defer dir.close();
+    defer dir.close(app_runtime.io());
 
     var names = std.ArrayList([]u8).empty;
     defer {
@@ -1259,7 +1330,7 @@ fn importCpaDirectory(
     }
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isImportConfigFile(entry.name)) continue;
         try names.append(allocator, try allocator.dupe(u8, entry.name));
@@ -1268,7 +1339,7 @@ fn importCpaDirectory(
     std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
 
     for (names.items) |name| {
-        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
@@ -1289,8 +1360,8 @@ fn importAuthDirectory(
     reg: *Registry,
     dir_path: []const u8,
 ) !ImportReport {
-    var dir = try fs.cwd().openDir(dir_path, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), dir_path, .{ .iterate = true });
+    defer dir.close(app_runtime.io());
 
     var names = std.ArrayList([]u8).empty;
     defer {
@@ -1299,7 +1370,7 @@ fn importAuthDirectory(
     }
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isImportConfigFile(entry.name)) continue;
         try names.append(allocator, try allocator.dupe(u8, entry.name));
@@ -1311,7 +1382,7 @@ fn importAuthDirectory(
     errdefer report.deinit(allocator);
     report.source_label = try allocator.dupe(u8, dir_path);
     for (names.items) |name| {
-        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
@@ -1343,11 +1414,11 @@ fn importAccountsSnapshotDirectory(
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
-    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = std.Io.Dir.cwd().openDir(app_runtime.io(), dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return report,
         else => return err,
     };
-    defer dir.close();
+    defer dir.close(app_runtime.io());
 
     var candidates = std.ArrayList(PurgeImportCandidate).empty;
     defer {
@@ -1356,18 +1427,18 @@ fn importAccountsSnapshotDirectory(
     }
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isPurgeImportAuthFile(entry.name)) continue;
 
-        const file_path = try fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         var file_path_owned = true;
         errdefer if (file_path_owned) allocator.free(file_path);
 
         const label = try importDisplayLabelFromName(allocator, entry.name);
         defer allocator.free(label);
 
-        const stat = dir.statFile(entry.name) catch |err| {
+        const stat = dir.statFile(app_runtime.io(), entry.name, .{}) catch |err| {
             if (!isImportSkippableBatchEntryError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             file_path_owned = false;
@@ -1540,8 +1611,8 @@ fn syncCurrentAuthBestEffort(
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    if (fs.cwd().openFile(auth_path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(app_runtime.io(), auth_path, .{})) |file| {
+        file.close(app_runtime.io());
     } else |_| {
         return null;
     }
@@ -1555,7 +1626,7 @@ fn syncCurrentAuthBestEffort(
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
     try ensureAccountsDir(allocator, codex_home);
-    try copyFile(auth_path, dest);
+    try copyManagedFile(auth_path, dest);
 
     if (existing_idx) |idx| {
         const email = info.email.?;
@@ -1606,8 +1677,8 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
         allocator.free(k);
     }
     reg.active_account_key = new_active_account_key;
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
-    const now = time_compat.timestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_key, account_key)) {
             rec.last_used_at = now;
@@ -1617,7 +1688,7 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
 }
 
 pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8, snapshot: RateLimitSnapshot) void {
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_key, account_key)) {
             if (rec.last_usage) |*u| {
@@ -1669,7 +1740,7 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
         defer allocator.free(dest);
 
         try ensureAccountsDir(allocator, codex_home);
-        try copyFile(auth_path, dest);
+        try copyManagedFile(auth_path, dest);
 
         var record = try accountFromAuth(allocator, "", &info);
         var record_owned = true;
@@ -1707,8 +1778,10 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
     const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
     defer allocator.free(dest);
     if (!(try fileEqualsBytes(allocator, dest, auth_bytes))) {
-        try copyFile(auth_path, dest);
+        try copyManagedFile(auth_path, dest);
         changed = true;
+    } else {
+        try hardenSensitiveFile(dest);
     }
 
     try setActiveAccountKey(allocator, reg, rec_account_key);
@@ -1747,7 +1820,7 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         if (removed[i]) {
             const preferred_path = try accountAuthPath(allocator, codex_home, rec.account_key);
             defer allocator.free(preferred_path);
-            fs.cwd().deleteFile(preferred_path) catch {};
+            std.Io.Dir.cwd().deleteFile(app_runtime.io(), preferred_path) catch {};
             freeAccountRecord(allocator, rec);
             continue;
         }
@@ -1768,18 +1841,18 @@ fn deleteRemovedAccountBackups(
     const dir_path = try backupDir(allocator, codex_home);
     defer allocator.free(dir_path);
 
-    var dir = fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = std.Io.Dir.cwd().openDir(app_runtime.io(), dir_path, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
-    defer dir.close();
+    defer dir.close(app_runtime.io());
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         defer allocator.free(path);
 
         var info = @import("auth.zig").parseAuthInfo(allocator, path) catch continue;
@@ -1788,7 +1861,7 @@ fn deleteRemovedAccountBackups(
         const record_key = info.record_key orelse continue;
         if (!isRemovedAccountKey(reg, removed, record_key)) continue;
 
-        dir.deleteFile(entry.name) catch {};
+        dir.deleteFile(app_runtime.io(), entry.name) catch {};
     }
 }
 
@@ -1802,7 +1875,7 @@ fn isRemovedAccountKey(reg: *const Registry, removed: []const bool, record_key: 
 
 pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     if (reg.accounts.items.len == 0) return null;
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
@@ -1945,7 +2018,7 @@ pub fn activateAccountByKey(
     defer allocator.free(dest);
 
     try backupAuthIfChanged(allocator, codex_home, dest, src);
-    try copyFile(src, dest);
+    try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
@@ -1962,7 +2035,8 @@ pub fn replaceActiveAuthWithAccountByKey(
     const dest = try activeAuthPath(allocator, codex_home);
     defer allocator.free(dest);
 
-    try copyFile(src, dest);
+    try ensureAccountsDir(allocator, codex_home);
+    try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKey(allocator, reg, account_key);
 }
 
@@ -1994,7 +2068,7 @@ pub fn accountFromAuth(
         .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
-        .created_at = time_compat.timestamp(),
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -2090,7 +2164,7 @@ fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMa
         .alias = try allocator.dupe(u8, alias),
         .plan = null,
         .auth_mode = null,
-        .created_at = readInt(obj.get("created_at")) orelse time_compat.timestamp(),
+        .created_at = readInt(obj.get("created_at")) orelse std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = readInt(obj.get("last_used_at")),
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
@@ -2146,7 +2220,7 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         .account_name = try parseOptionalStoredStringAlloc(allocator, obj.get("account_name")),
         .plan = null,
         .auth_mode = null,
-        .created_at = readInt(obj.get("created_at")) orelse time_compat.timestamp(),
+        .created_at = readInt(obj.get("created_at")) orelse std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = readInt(obj.get("last_used_at")),
         .last_usage = null,
         .last_usage_at = readInt(obj.get("last_usage_at")),
@@ -2187,7 +2261,7 @@ fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json
 
 fn maybeCopyFile(src: []const u8, dest: []const u8) !void {
     if (std.mem.eql(u8, src, dest)) return;
-    try copyFile(src, dest);
+    try copyManagedFile(src, dest);
 }
 
 fn resolveLegacySnapshotPathForEmail(
@@ -2196,8 +2270,8 @@ fn resolveLegacySnapshotPathForEmail(
     email: []const u8,
 ) ![]u8 {
     const legacy_path = try legacyAccountAuthPath(allocator, codex_home, email);
-    if (fs.cwd().openFile(legacy_path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(app_runtime.io(), legacy_path, .{})) |file| {
+        file.close(app_runtime.io());
         return legacy_path;
     } else |_| {
         allocator.free(legacy_path);
@@ -2205,19 +2279,19 @@ fn resolveLegacySnapshotPathForEmail(
 
     const accounts_dir = try backupDir(allocator, codex_home);
     defer allocator.free(accounts_dir);
-    var dir = fs.cwd().openDir(accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
+    var dir = std.Io.Dir.cwd().openDir(app_runtime.io(), accounts_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return error.FileNotFound,
         else => return err,
     };
-    defer dir.close();
+    defer dir.close(app_runtime.io());
 
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".auth.json")) continue;
         if (std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
         errdefer allocator.free(path);
         const info = @import("auth.zig").parseAuthInfo(allocator, path) catch {
             allocator.free(path);
@@ -2290,7 +2364,7 @@ fn migrateLegacyRecord(
     const old_legacy_path = try legacyAccountAuthPath(allocator, codex_home, legacy.email);
     defer allocator.free(old_legacy_path);
     if (std.mem.eql(u8, legacy_path, old_legacy_path)) {
-        fs.cwd().deleteFile(old_legacy_path) catch {};
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), old_legacy_path) catch {};
     }
 
     const should_activate = if (legacy_active_email) |active_email|
@@ -2457,17 +2531,17 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
-    const cwd = fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     const data = blk: {
-        var file = cwd.openFile(path, .{}) catch |err| {
+        var file = cwd.openFile(app_runtime.io(), path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 return defaultRegistry();
             }
             return err;
         };
-        defer file.close();
+        defer file.close(app_runtime.io());
 
-        break :blk try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+        break :blk try readFileAlloc(file, allocator, 10 * 1024 * 1024);
     };
     defer allocator.free(data);
 
@@ -2511,38 +2585,42 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
 
 fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
     const allocator = std.heap.page_allocator;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, time_compat.nanoTimestamp() });
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
     defer allocator.free(temp_path);
-    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, time_compat.nanoTimestamp() });
+    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
     defer allocator.free(backup_path);
 
     {
-        var file = try fs.cwd().createFile(temp_path, .{ .truncate = true });
-        defer file.close();
-        try file.writeAll(data);
-        try file.sync();
+        var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), temp_path, .{
+            .truncate = true,
+            .permissions = private_file_permissions,
+        });
+        defer file.close(app_runtime.io());
+        try file.writeStreamingAll(app_runtime.io(), data);
+        try file.sync(app_runtime.io());
     }
 
     const had_original = blk: {
-        fs.cwd().rename(path, backup_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().rename(path, std.Io.Dir.cwd(), backup_path, app_runtime.io()) catch |err| switch (err) {
             error.FileNotFound => break :blk false,
             else => return err,
         };
         break :blk true;
     };
     errdefer {
-        fs.cwd().deleteFile(temp_path) catch {};
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), temp_path) catch {};
         if (had_original) {
-            fs.cwd().rename(backup_path, path) catch {};
+            std.Io.Dir.cwd().rename(backup_path, std.Io.Dir.cwd(), path, app_runtime.io()) catch {};
         }
     }
-    try fs.cwd().rename(temp_path, path);
+    try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), path, app_runtime.io());
     if (had_original) {
-        fs.cwd().deleteFile(backup_path) catch |err| switch (err) {
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), backup_path) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
     }
+    try hardenSensitiveFile(path);
 }
 
 fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
@@ -2550,10 +2628,16 @@ fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
         return writeRegistryFileReplace(path, data);
     }
     var buf: [4096]u8 = undefined;
-    var atomic_file = try fs.cwd().atomicFile(path, .{ .write_buffer = &buf });
-    defer atomic_file.deinit();
-    try atomic_file.file_writer.interface.writeAll(data);
-    try atomic_file.finish();
+    var atomic_file = try std.Io.Dir.cwd().createFileAtomic(app_runtime.io(), path, .{
+        .replace = true,
+        .permissions = private_file_permissions,
+    });
+    defer atomic_file.deinit(app_runtime.io());
+    var file_writer = atomic_file.file.writer(app_runtime.io(), &buf);
+    try file_writer.interface.writeAll(data);
+    try file_writer.interface.flush();
+    try atomic_file.replace(app_runtime.io());
+    try hardenSensitiveFile(path);
 }
 
 pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !void {
@@ -2577,6 +2661,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
     const data = aw.written();
 
     if (try fileEqualsBytes(allocator, path, data)) {
+        try hardenSensitiveFile(path);
         return;
     }
 
@@ -2780,8 +2865,8 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
     const auth_path = try activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    if (fs.cwd().openFile(auth_path, .{})) |file| {
-        file.close();
+    if (std.Io.Dir.cwd().openFile(app_runtime.io(), auth_path, .{})) |file| {
+        file.close(app_runtime.io());
     } else |_| {
         return false;
     }
@@ -2798,7 +2883,7 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
     defer allocator.free(dest);
 
     try ensureAccountsDir(allocator, codex_home);
-    try copyFile(auth_path, dest);
+    try copyManagedFile(auth_path, dest);
 
     const record = try accountFromAuth(allocator, "", &info);
     try upsertAccount(allocator, reg, record);

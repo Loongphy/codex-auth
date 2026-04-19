@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs = @import("../compat_fs.zig");
+const app_runtime = @import("../runtime.zig");
 const registry = @import("../registry.zig");
 const usage_api = @import("../usage_api.zig");
 
@@ -108,19 +108,19 @@ test "parse usage api response maps prolite plan" {
 
 test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing auth" {
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(app_runtime.io(), .{
         .sub_path = "auth.json",
         .data =
-            \\{
-            \\  "OPENAI_API_KEY": "sk-test"
-            \\}
+        \\{
+        \\  "OPENAI_API_KEY": "sk-test"
+        \\}
         ,
     });
 
-    const auth_path = try tmp.dir.realpathAlloc(gpa, "auth.json");
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const result = try usage_api.fetchUsageForAuthPathDetailed(gpa, auth_path);

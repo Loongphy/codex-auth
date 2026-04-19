@@ -1,7 +1,6 @@
 const std = @import("std");
-const time_compat = @import("../compat_time.zig");
+const app_runtime = @import("../runtime.zig");
 const fs = @import("../compat_fs.zig");
-const process_compat = @import("../compat_process.zig");
 const builtin = @import("builtin");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -12,13 +11,25 @@ const e2e_project_root_env = "CODEX_AUTH_E2E_PROJECT_ROOT";
 var cli_build_ready = false;
 var cli_build_mutex: std.Io.Mutex = .init;
 
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
+
 const SeedAccount = struct {
     email: []const u8,
     alias: []const u8,
 };
 
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
-    const project_root = process_compat.getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
+    const project_root = getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
@@ -65,7 +76,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
         return;
     } else |_| {}
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     const global_cache_dir = if (env_map.get("ZIG_GLOBAL_CACHE_DIR")) |dir|
         try allocator.dupe(u8, dir)
@@ -115,7 +126,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 
 fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "codex-auth.exe" else "codex-auth";
-    const install_prefix = process_compat.getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
+    const install_prefix = getEnvVarOwned(allocator, e2e_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
     };
@@ -172,8 +183,29 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     }
 }
 
+fn fakeNodeCommandPath() []const u8 {
+    return if (builtin.os.tag == .windows) "fake-node-bin/node.cmd" else "fake-node-bin/node";
+}
+
+fn writeFailingFakeNode(dir: fs.Dir) !void {
+    try dir.makePath("fake-node-bin");
+    var script_buf: [160]u8 = undefined;
+    const script = if (builtin.os.tag == .windows)
+        try std.fmt.bufPrint(&script_buf, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo v22.0.0\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n", .{})
+    else
+        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo v22.0.0\n  exit 0\nfi\nexit 1\n", .{});
+    const sub_path = fakeNodeCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
@@ -194,7 +226,7 @@ fn runCliWithIsolatedHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -220,7 +252,7 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -247,7 +279,7 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -274,7 +306,7 @@ fn runCliWithIsolatedHomeAndPath(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -302,7 +334,7 @@ fn runCliWithIsolatedHomeAndPathAndStdin(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -371,7 +403,7 @@ fn runCliWithIsolatedHomeAndStdin(
     try argv.append(allocator, exe_path);
     try argv.appendSlice(allocator, args);
 
-    var env_map = try process_compat.getEnvMap(allocator);
+    var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("HOME", home_root);
     try env_map.put("USERPROFILE", home_root);
@@ -483,7 +515,7 @@ fn seedRegistryWithAccounts(
 
     const active_key = try bdd.accountKeyForEmailAlloc(allocator, active_email);
     reg.active_account_key = active_key;
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -523,7 +555,7 @@ fn appendCustomAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = time_compat.timestamp(),
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -723,13 +755,18 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex");
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const email = "fresh@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "plus");
     defer gpa.free(auth_json);
     try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = auth_json });
 
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -774,6 +811,11 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex/accounts");
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const email = "legacy@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "team");
@@ -808,7 +850,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
         ,
     });
 
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
@@ -1423,6 +1465,37 @@ test "Scenario: Given list with skip-api when running list then it does not requ
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
+test "Scenario: Given list with debug and no accounts when running list then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "list", "--debug" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
 test "Scenario: Given switch query with api flag when running switch then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1672,7 +1745,7 @@ test "Scenario: Given remove with multiple selectors when running remove then it
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "beta@example.com"));
 }
 
-test "Scenario: Given remove with api flag when running remove then it returns a usage error" {
+test "Scenario: Given remove query with api flag when running remove then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1705,10 +1778,10 @@ test "Scenario: Given remove with api flag when running remove then it returns a
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
 }
 
-test "Scenario: Given remove with skip-api flag when running remove then it returns a usage error" {
+test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1741,7 +1814,52 @@ test "Scenario: Given remove with skip-api flag when running remove then it retu
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it falls back to stored data" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "remove", "--api" },
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {
@@ -1774,6 +1892,51 @@ test "Scenario: Given remove without selectors when running remove then it does 
         home_root,
         empty_path,
         &[_][]const u8{"remove"},
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
+}
+
+test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "remove", "--skip-api" },
         "2\n",
     );
     defer gpa.free(result.stdout);
@@ -1976,6 +2139,11 @@ test "Scenario: Given auth json already points at another registry account when 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
+    try writeFailingFakeNode(tmp.dir);
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -1999,7 +2167,7 @@ test "Scenario: Given auth json already points at another registry account when 
     try fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
     try fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
 
-    const remove_result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "beta@" }, "");
+    const remove_result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{ "remove", "beta@" });
     defer gpa.free(remove_result.stdout);
     defer gpa.free(remove_result.stderr);
 
@@ -2018,7 +2186,7 @@ test "Scenario: Given auth json already points at another registry account when 
     try std.testing.expect(loaded_after_remove.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded_after_remove.active_account_key.?, alpha_key));
 
-    const list_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const list_result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(list_result.stdout);
     defer gpa.free(list_result.stderr);
 
@@ -2188,7 +2356,7 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .team);
     try appendCustomAccount(gpa, &reg, "user-b::acct-personal", "alice@example.com", "personal", .plus);
     reg.active_account_key = try gpa.dupe(u8, "user-a::acct-work");
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "alice@" }, "y\n");
@@ -2445,7 +2613,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
         gpa.free(key);
     }
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
-    reg.active_account_activated_at_ms = time_compat.milliTimestamp();
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all" }, "");

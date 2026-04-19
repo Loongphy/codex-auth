@@ -1,5 +1,5 @@
 const std = @import("std");
-const time_compat = @import("../compat_time.zig");
+const app_runtime = @import("../runtime.zig");
 const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const auto = @import("../auto.zig");
@@ -50,7 +50,7 @@ fn appendGroupedAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
-        .created_at = time_compat.timestamp(),
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
         .last_usage_at = null,
@@ -538,7 +538,7 @@ test "Scenario: Given no-snapshot account when selecting auto candidate then it 
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "fresh@example.com"));
 }
 
@@ -569,7 +569,7 @@ test "Scenario: Given free candidate with only a primary weekly window when sele
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
@@ -600,7 +600,7 @@ test "Scenario: Given free candidate with only a secondary weekly window when se
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    const idx = auto.bestAutoSwitchCandidateIndex(&reg, time_compat.timestamp()) orelse return error.TestExpectedEqual;
+    const idx = auto.bestAutoSwitchCandidateIndex(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()) orelse return error.TestExpectedEqual;
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[idx].email, "free@example.com"));
 }
 
@@ -619,7 +619,7 @@ test "Scenario: Given free account with only a weekly window when checking curre
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given weekly remaining below threshold when checking current then auto switch is required" {
@@ -637,7 +637,7 @@ test "Scenario: Given weekly remaining below threshold when checking current the
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given custom 5h threshold when checking current then it uses configured value" {
@@ -656,7 +656,7 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given missing window_minutes in the primary slot when checking current then 5h fallback still triggers auto switch" {
@@ -674,7 +674,7 @@ test "Scenario: Given missing window_minutes in the primary slot when checking c
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given free account near exhaustion when checking current then realtime guard switches earlier than the configured threshold" {
@@ -692,7 +692,7 @@ test "Scenario: Given free account near exhaustion when checking current then re
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given stricter weekly threshold when checking current then default trigger can be suppressed" {
@@ -711,7 +711,7 @@ test "Scenario: Given stricter weekly threshold when checking current then defau
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
 
-    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, time_compat.timestamp()));
+    try std.testing.expect(!auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
 test "Scenario: Given threshold overrides when applying config then unspecified values stay unchanged" {
@@ -1375,10 +1375,10 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
 
 test "Scenario: Given a zig build run executable path when resolving the managed service binary then it prefers zig-out" {
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.makePath("zig-out/bin");
-    try tmp.dir.writeFile(.{ .sub_path = "zig-out/bin/codex-auth", .data = "" });
+    try tmp.dir.createDirPath(app_runtime.io(), "zig-out/bin");
+    try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "zig-out/bin/codex-auth", .data = "" });
 
     const path = try auto.managedServiceSelfExePathFromDir(
         gpa,
@@ -1387,7 +1387,7 @@ test "Scenario: Given a zig build run executable path when resolving the managed
     );
     defer gpa.free(path);
 
-    const expected = try tmp.dir.realpathAlloc(gpa, "zig-out/bin/codex-auth");
+    const expected = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "zig-out/bin/codex-auth");
     defer gpa.free(expected);
     try std.testing.expectEqualStrings(expected, path);
 }
@@ -2095,7 +2095,7 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-c.jsonl", .data = "{\"timestamp\":\"2025-01-01T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":null}}\n" });
     try tmp.dir.writeFile(.{ .sub_path = "sessions/run-1/rollout-d.jsonl", .data = rollout_line ++ "\n" });
 
-    const base_time = @as(i128, time_compat.nanoTimestamp());
+    const base_time = @as(i128, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()));
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-d.jsonl", .{ .mode = .read_write });
         defer file.close();
@@ -2104,17 +2104,17 @@ test "Scenario: Given latest rollout file without usable rate limits when refres
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-c.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + time_compat.ns_per_s, base_time + time_compat.ns_per_s);
+        try file.updateTimes(base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
     }
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-b.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + (2 * time_compat.ns_per_s), base_time + (2 * time_compat.ns_per_s));
+        try file.updateTimes(base_time + (2 * std.time.ns_per_s), base_time + (2 * std.time.ns_per_s));
     }
     {
         var file = try tmp.dir.openFile("sessions/run-1/rollout-a.jsonl", .{ .mode = .read_write });
         defer file.close();
-        try file.updateTimes(base_time + (3 * time_compat.ns_per_s), base_time + (3 * time_compat.ns_per_s));
+        try file.updateTimes(base_time + (3 * std.time.ns_per_s), base_time + (3 * std.time.ns_per_s));
     }
 
     try std.testing.expect(!(try auto.refreshActiveUsage(gpa, codex_home, &reg)));

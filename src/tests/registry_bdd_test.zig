@@ -1,17 +1,17 @@
 const std = @import("std");
-const fs = @import("../compat_fs.zig");
+const app_runtime = @import("../runtime.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
 
 const SyncBddContext = struct {
     allocator: std.mem.Allocator,
-    tmp: fs.TmpDir,
+    tmp: std.testing.TmpDir,
     codex_home: []u8,
     reg: registry.Registry,
 
     fn givenCleanCodexHome(allocator: std.mem.Allocator) !SyncBddContext {
-        var tmp = fs.tmpDir(.{});
-        const codex_home = try tmp.dir.realpathAlloc(allocator, ".");
+        const tmp = std.testing.tmpDir(.{});
+        const codex_home = try app_runtime.realPathFileAlloc(allocator, tmp.dir, ".");
         return SyncBddContext{
             .allocator = allocator,
             .tmp = tmp,
@@ -27,7 +27,7 @@ const SyncBddContext = struct {
     }
 
     fn givenActiveAuthJson(self: *SyncBddContext, auth_json: []const u8) !void {
-        try self.tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = auth_json });
+        try self.tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = auth_json });
     }
 
     fn givenRegisteredAccount(self: *SyncBddContext, email: []const u8, alias: []const u8, plan: ?registry.PlanType) !void {

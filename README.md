@@ -98,7 +98,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
 | `codex-auth switch [--api|--skip-api]` | Switch the active account interactively. `--api` forces a live refresh first; `--skip-api` stays local-only. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
-| `codex-auth remove [<query>...]` | Remove accounts interactively or by one or more selectors (row number, alias, or fuzzy match) using stored local data only. |
+| `codex-auth remove [--api|--skip-api] [<query>...]` | Interactive remove stays local-only by default; `--api` attempts a best-effort live refresh for picker display, while selector-based removal still resolves from stored local data only. |
 | `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
@@ -166,14 +166,17 @@ If `<query>` matches multiple accounts, the command falls back to interactive se
 
 ### Remove Accounts
 
-`remove` always uses stored local data and does not refresh from APIs before deleting.
+Interactive `remove` stays local-only by default so deletion is not blocked by API refresh work.
+Use `--api` only when you want a best-effort foreground refresh attempt for picker display. Successful rows show live API data when it is available; rows that cannot refresh may show live error overlays such as `403`, `TimedOut`, or `MissingAuth` instead. The command still deletes accounts from the stored registry data when the live refresh path cannot complete, so the list remains usable for deletion. `--skip-api` keeps the picker local-only explicitly.
 Each selector supports the same query forms as `switch`: row number, alias, or fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
 You can pass multiple selectors in one command.
-Selector-based `remove` does not accept `--api` or `--skip-api`.
+Selector-based `remove` and `remove --all` do not accept `--api` or `--skip-api`.
 
 ```shell
 codex-auth remove
+codex-auth remove --api
+codex-auth remove --skip-api
 codex-auth remove 01 03
 codex-auth remove work personal
 codex-auth remove 01 jane@example.com

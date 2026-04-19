@@ -1,5 +1,5 @@
 const std = @import("std");
-const time_compat = @import("../compat_time.zig");
+const app_runtime = @import("../runtime.zig");
 const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const auth_mod = @import("../auth.zig");
@@ -492,6 +492,56 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(?registry.PlanType, .team), reg.accounts.items[0].last_usage.?.plan_type);
     try std.testing.expectEqual(@as(f64, 18), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
+}
+
+test "Scenario: Given more than five foreground usage jobs when refreshing usage then pool init is capped at five workers" {
+    const gpa = std.testing.allocator;
+
+    const Capture = struct {
+        var observed_jobs: usize = 0;
+
+        fn fetch(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+            return .{
+                .snapshot = null,
+                .status_code = 200,
+            };
+        }
+
+        fn poolInit(allocator: std.mem.Allocator, n_jobs: usize) !void {
+            _ = allocator;
+            observed_jobs = n_jobs;
+        }
+    };
+
+    Capture.observed_jobs = 0;
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    inline for (0..7) |idx| {
+        const email = try std.fmt.allocPrint(gpa, "user-{d}@example.com", .{idx});
+        defer gpa.free(email);
+        const user_id = try std.fmt.allocPrint(gpa, "user-{d}", .{idx});
+        defer gpa.free(user_id);
+        const account_id = try std.fmt.allocPrint(gpa, "account-{d}", .{idx});
+        defer gpa.free(account_id);
+        const record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ user_id, account_id });
+        defer gpa.free(record_key);
+        try appendAccount(gpa, &reg, record_key, email, "", .team);
+    }
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+        gpa,
+        "/tmp/foreground-usage-cap-test",
+        &reg,
+        Capture.fetch,
+        Capture.poolInit,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 5), Capture.observed_jobs);
+    try std.testing.expectEqual(@as(usize, 7), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.failed);
 }
 
 test "Scenario: Given thread pool init failure when refreshing foreground usage then it falls back to serial refresh" {
@@ -1200,7 +1250,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
     try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
@@ -1255,7 +1305,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
     reg.active_account_activated_at_ms = 1;
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     reg.accounts.items[0].last_usage = .{
         .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,

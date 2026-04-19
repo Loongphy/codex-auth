@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("../compat_fs.zig");
 const cli = @import("../cli.zig");
 const registry = @import("../registry.zig");
 
@@ -761,6 +760,7 @@ test "Scenario: Given remove with positional query when parsing then selector mo
                 try std.testing.expectEqual(@as(usize, 1), opts.selectors.len);
                 try std.testing.expect(std.mem.eql(u8, opts.selectors[0], "user@example.com"));
                 try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
         },
@@ -779,6 +779,7 @@ test "Scenario: Given remove with all flag when parsing then all mode is preserv
             .remove_account => |opts| {
                 try std.testing.expectEqual(@as(usize, 0), opts.selectors.len);
                 try std.testing.expect(opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
         },
@@ -800,6 +801,7 @@ test "Scenario: Given remove with multiple selectors when parsing then all selec
                 try std.testing.expect(std.mem.eql(u8, opts.selectors[1], "b@example.com"));
                 try std.testing.expect(std.mem.eql(u8, opts.selectors[2], "03"));
                 try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
         },
@@ -807,22 +809,69 @@ test "Scenario: Given remove with multiple selectors when parsing then all selec
     }
 }
 
-test "Scenario: Given remove with skip-api flag when parsing then usage error is returned" {
+test "Scenario: Given interactive remove with skip-api flag when parsing then skip-api mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--skip-api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expectEqual(@as(usize, 0), opts.selectors.len);
+                try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.skip_api, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given interactive remove with api flag when parsing then api mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expectEqual(@as(usize, 0), opts.selectors.len);
+                try std.testing.expect(!opts.all);
+                try std.testing.expectEqual(cli.ApiMode.force_api, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove query with skip-api flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "remove", "--skip-api", "01" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "does not support");
+    try expectUsageError(result, .remove_account, "do not support");
 }
 
-test "Scenario: Given remove with api flag when parsing then usage error is returned" {
+test "Scenario: Given remove query with api flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "remove", "--api", "work" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .remove_account, "does not support");
+    try expectUsageError(result, .remove_account, "do not support");
+}
+
+test "Scenario: Given remove all with api flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--api", "--all" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .remove_account, "do not support");
 }
 
 test "Scenario: Given remove with unexpected flag when parsing then usage error is returned" {

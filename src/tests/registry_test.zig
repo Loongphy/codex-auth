@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fs = @import("../compat_fs.zig");
 const account_api = @import("../account_api.zig");
 const registry = @import("../registry.zig");
@@ -257,6 +258,17 @@ fn expectBackupNameFormat(name: []const u8, prefix: []const u8) !void {
     for (stamp) |ch| {
         try std.testing.expect(std.ascii.isDigit(ch));
     }
+}
+
+fn expectModeUnix(path: []const u8, expected_mode: u16) !void {
+    if (comptime builtin.os.tag == .windows) return;
+    const stat = try fs.cwd().statFile(path);
+    try std.testing.expectEqual(@as(std.posix.mode_t, expected_mode), stat.permissions.toMode() & 0o777);
+}
+
+fn setModeUnix(path: []const u8, mode: u16) !void {
+    if (comptime builtin.os.tag == .windows) return;
+    try fs.cwd().inner.setFilePermissions(fs.io(), path, fs.File.Permissions.fromMode(mode), .{});
 }
 
 test "registry save/load" {
@@ -813,6 +825,85 @@ test "v2 registry migrates active email records to current schema" {
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);
 }
 
+test "ensureAccountsDir hardens accounts directory without changing codex home permissions" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_root);
+    try tmp.dir.makePath("codex-home");
+
+    const codex_home = try fs.path.join(gpa, &[_][]const u8{ tmp_root, "codex-home" });
+    defer gpa.free(codex_home);
+    try setModeUnix(codex_home, 0o755);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const accounts_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts" });
+    defer gpa.free(accounts_path);
+    try expectModeUnix(codex_home, 0o755);
+    try expectModeUnix(accounts_path, 0o700);
+}
+
+test "copyManagedFile creates destination with 0600 regardless of source mode" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    try tmp.dir.writeFile(.{ .sub_path = "source.json", .data = "secret" });
+    const src = try fs.path.join(gpa, &[_][]const u8{ codex_home, "source.json" });
+    defer gpa.free(src);
+    try setModeUnix(src, 0o644);
+    const dest = try fs.path.join(gpa, &[_][]const u8{ codex_home, "dest.json" });
+    defer gpa.free(dest);
+
+    try registry.copyManagedFile(src, dest);
+    try expectModeUnix(dest, 0o600);
+}
+
+test "saveRegistry creates registry.json with 0600 on first write" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    try expectModeUnix(registry_path, 0o600);
+}
+
+test "saveRegistry hardens registry.json to 0600 even when contents are unchanged" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    try setModeUnix(registry_path, 0o644);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try expectModeUnix(registry_path, 0o600);
+}
+
 test "auth backup only on change" {
     var gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -844,12 +935,18 @@ test "auth backup only on change" {
     var verify_accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
     defer verify_accounts.close();
     var it = verify_accounts.iterate();
+    var saw_backup = false;
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
         if (std.mem.startsWith(u8, entry.name, "auth.json") and std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) {
             try expectBackupNameFormat(entry.name, "auth.json");
+            const backup_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", entry.name });
+            defer gpa.free(backup_path);
+            try expectModeUnix(backup_path, 0o600);
+            saw_backup = true;
         }
     }
+    try std.testing.expect(saw_backup);
 
     try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = "two" });
     try registry.backupAuthIfChanged(gpa, codex_home, current, new_auth);
@@ -890,6 +987,132 @@ test "auth backup rotation" {
     defer accounts.close();
     const count = try countBackups(accounts, "auth.json");
     try std.testing.expect(count <= 5);
+}
+
+test "sync active auth leaves auth json permissions unchanged while hardening matching snapshot" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "user@example.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+    try registry.setActiveAccountKey(gpa, &reg, reg.accounts.items[0].account_key);
+
+    const active_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
+
+    const account_key = try accountKeyForEmailAlloc(gpa, "user@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_name = fs.path.basename(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", snapshot_name });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = active_auth });
+
+    const auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(auth_path);
+    try setModeUnix(auth_path, 0o644);
+    try setModeUnix(snapshot_path, 0o644);
+
+    const changed = try registry.syncActiveAccountFromAuth(gpa, codex_home, &reg);
+    try std.testing.expect(!changed);
+    try expectModeUnix(auth_path, 0o644);
+    try expectModeUnix(snapshot_path, 0o600);
+}
+
+test "replaceActiveAuthWithAccountByKey preserves existing auth json permissions" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "user@example.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const active_auth = try authJsonWithEmailPlan(gpa, "other@example.com", "plus");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
+
+    const account_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
+    defer gpa.free(account_auth);
+    const account_key = try accountKeyForEmailAlloc(gpa, "user@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = account_auth });
+    try setModeUnix(snapshot_path, 0o600);
+
+    const auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(auth_path);
+    try setModeUnix(auth_path, 0o644);
+
+    try registry.replaceActiveAuthWithAccountByKey(gpa, codex_home, &reg, account_key);
+
+    var auth_file = try fs.cwd().openFile(auth_path, .{});
+    defer auth_file.close();
+    const auth_bytes = try auth_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(auth_bytes);
+    try std.testing.expectEqualStrings(account_auth, auth_bytes);
+    try expectModeUnix(auth_path, 0o644);
+}
+
+test "activateAccountByKey preserves snapshot permissions when auth json is created" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const rec = try makeAccountRecord(gpa, "user@example.com", "work", .pro, .chatgpt, 1);
+    try reg.accounts.append(gpa, rec);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const account_auth = try authJsonWithEmailPlan(gpa, "user@example.com", "pro");
+    defer gpa.free(account_auth);
+    const account_key = try accountKeyForEmailAlloc(gpa, "user@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_rel = try fs.path.join(gpa, &[_][]const u8{ "accounts", fs.path.basename(snapshot_path) });
+    defer gpa.free(snapshot_rel);
+    try tmp.dir.writeFile(.{ .sub_path = snapshot_rel, .data = account_auth });
+    try setModeUnix(snapshot_path, 0o600);
+
+    const auth_path = try registry.activeAuthPath(gpa, codex_home);
+    defer gpa.free(auth_path);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().statFile(auth_path));
+
+    try registry.activateAccountByKey(gpa, codex_home, &reg, account_key);
+
+    var auth_file = try fs.cwd().openFile(auth_path, .{});
+    defer auth_file.close();
+    const auth_bytes = try auth_file.readToEndAlloc(gpa, 1024 * 1024);
+    defer gpa.free(auth_bytes);
+    try std.testing.expectEqualStrings(account_auth, auth_bytes);
+    try expectModeUnix(auth_path, 0o600);
 }
 
 test "sync active auth matches by email and updates account auth" {
@@ -962,12 +1185,18 @@ test "registry backup only on change" {
     var verify_accounts = try tmp.dir.openDir("accounts", .{ .iterate = true });
     defer verify_accounts.close();
     var it = verify_accounts.iterate();
+    var saw_backup = false;
     while (try it.next()) |entry| {
         if (entry.kind != .file) continue;
         if (std.mem.startsWith(u8, entry.name, "registry.json") and std.mem.containsAtLeast(u8, entry.name, 1, ".bak.")) {
             try expectBackupNameFormat(entry.name, "registry.json");
+            const backup_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", entry.name });
+            defer gpa.free(backup_path);
+            try expectModeUnix(backup_path, 0o600);
+            saw_backup = true;
         }
     }
+    try std.testing.expect(saw_backup);
 
     try registry.saveRegistry(gpa, codex_home, &reg);
     const count2 = try countBackups(accounts, "registry.json");
@@ -1309,6 +1538,7 @@ test "import cpa path with single file converts to standard auth and keeps expli
     defer gpa.free(snapshot_data);
     try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"tokens\": {") != null);
     try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"refresh_token\": \"refresh-single-cpa@example.com\"") != null);
+    try expectModeUnix(snapshot_path, 0o600);
 }
 
 test "import cpa path with repeated single file reports updated on second import" {

@@ -1,7 +1,5 @@
 const std = @import("std");
-const time_compat = @import("compat_time.zig");
-const fs = @import("compat_fs.zig");
-const process_compat = @import("compat_process.zig");
+const app_runtime = @import("runtime.zig");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
@@ -18,10 +16,30 @@ const usage_api = @import("usage_api.zig");
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
-const foreground_usage_refresh_concurrency: usize = 3;
+const foreground_usage_refresh_concurrency: usize = 5;
 const switch_live_api_refresh_interval_ms: i64 = 30_000;
 const switch_live_local_refresh_interval_ms: i64 = 10_000;
 const switch_live_stored_refresh_interval_ms: i64 = 10_000;
+
+fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    return try app_runtime.currentEnviron().createMap(allocator);
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+    return try allocator.dupe(u8, value);
+}
+
+fn nowMilliseconds() i64 {
+    return std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+}
+
+fn nowSeconds() i64 {
+    return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+}
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
@@ -32,11 +50,15 @@ const UsageFetchDetailedFn = *const fn (
     allocator: std.mem.Allocator,
     auth_path: []const u8,
 ) anyerror!usage_api.UsageFetchResult;
+const UsageBatchFetchDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+) anyerror![]usage_api.BatchUsageFetchResult;
 const ForegroundUsagePoolInitFn = *const fn (
     allocator: std.mem.Allocator,
     n_jobs: usize,
 ) anyerror!void;
-const NodeAvailabilityFn = *const fn (allocator: std.mem.Allocator) anyerror!void;
 const BackgroundRefreshLockAcquirer = *const fn (
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -85,13 +107,6 @@ pub const ForegroundUsageRefreshState = struct {
     }
 };
 
-const SwitchLiveRecordFields = struct {
-    account_name: ?[]const u8,
-    last_usage: ?registry.RateLimitSnapshot,
-    last_usage_at: ?i64,
-    last_local_rollout: ?registry.RolloutSignature,
-};
-
 const SwitchQueryResolution = union(enum) {
     not_found,
     direct: []const u8,
@@ -127,8 +142,8 @@ pub const ForegroundUsageDebugLogger = struct {
     }
 
     pub fn print(self: *ForegroundUsageDebugLogger, comptime fmt: []const u8, args: anytype) !void {
-        self.mutex.lockUncancelable(fs.io());
-        defer self.mutex.unlock(fs.io());
+        self.mutex.lockUncancelable(app_runtime.io());
+        defer self.mutex.unlock(app_runtime.io());
 
         try self.writer.print(fmt, args);
         try self.writer.flush();
@@ -211,6 +226,7 @@ fn isHandledCliError(err: anyerror) bool {
     return err == error.AccountNotFound or
         err == error.CodexLoginFailed or
         err == error.NodeJsRequired or
+        err == error.SwitchSelectionRequiresTty or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput;
@@ -246,6 +262,48 @@ fn apiModeUsesStoredDataOnly(api_mode: cli.ApiMode) bool {
     return api_mode == .skip_api;
 }
 
+fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !bool {
+    if (shouldRefreshForegroundUsage(target) and usage_api_enabled and reg.accounts.items.len != 0) {
+        return true;
+    }
+
+    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
+    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) {
+        return false;
+    }
+
+    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
+    defer info.deinit(allocator);
+    return info.access_token != null and info.chatgpt_account_id != null;
+}
+
+fn ensureForegroundNodeAvailableWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !void {
+    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        usage_api_enabled,
+        account_api_enabled,
+    )) return;
+
+    try chatgpt_http.ensureNodeExecutableAvailable(allocator);
+}
+
 fn isAccountNameRefreshOnlyMode() bool {
     return hasNonEmptyEnvVar(account_name_refresh_only_env);
 }
@@ -255,7 +313,7 @@ fn isBackgroundAccountNameRefreshDisabled() bool {
 }
 
 fn hasNonEmptyEnvVar(name: []const u8) bool {
-    const value = process_compat.getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
+    const value = getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return false,
         else => return false,
     };
@@ -301,7 +359,7 @@ pub fn reconcileActiveAuthAfterRemove(
 
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
-    fs.cwd().deleteFile(auth_path) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteFile(app_runtime.io(), auth_path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
     };
@@ -350,15 +408,83 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        null,
         initForegroundUsagePool,
         null,
         reg.api.usage,
-        true,
+        false,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplay(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        null,
+        reg.api.usage,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebug(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        debug_logger,
+        reg.api.usage,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+    usage_api_enabled: bool,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+        allocator,
+        codex_home,
+        reg,
+        debug_logger,
+        usage_api_enabled,
+        false,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+    usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        usage_api.fetchUsageForAuthPathsDetailedBatch,
+        initForegroundUsagePool,
+        debug_logger,
+        usage_api_enabled,
+        batch_fetch_failures_are_fatal,
     );
 }
 
@@ -369,15 +495,16 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     usage_fetcher: UsageFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        null,
         pool_init,
         null,
         reg.api.usage,
-        true,
+        false,
     );
 }
 
@@ -389,47 +516,54 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        null,
         pool_init,
         debug_logger,
         reg.api.usage,
-        true,
+        false,
     );
 }
 
-fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
+    batch_fetcher: ?UsageBatchFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
     usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         reg,
         usage_fetcher,
+        batch_fetcher,
         pool_init,
         debug_logger,
         usage_api_enabled,
+        batch_fetch_failures_are_fatal,
         true,
     );
 }
 
-fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
+    batch_fetcher: ?UsageBatchFetchDetailedFn,
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
     usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
     persist_registry: bool,
 ) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
@@ -452,6 +586,13 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
         return state;
     }
 
+    if (reg.accounts.items.len == 0) {
+        if (debug_logger) |logger| {
+            try printForegroundUsageDebugDone(logger, &state);
+        }
+        return state;
+    }
+
     if (debug_logger) |logger| {
         debug_label_state = try buildDebugUsageLabelState(allocator, reg);
         debug_context = .{
@@ -463,13 +604,6 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
         try printForegroundUsageDebugStart(logger, reg.accounts.items.len, node_executable);
     }
 
-    if (reg.accounts.items.len == 0) {
-        if (debug_logger) |logger| {
-            try printForegroundUsageDebugDone(logger, &state);
-        }
-        return state;
-    }
-
     const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
     defer {
         for (worker_results) |*worker_result| worker_result.deinit(allocator);
@@ -477,16 +611,92 @@ fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEna
     }
     for (worker_results) |*worker_result| worker_result.* = .{};
 
-    if (reg.accounts.items.len > 1) {
-        pool_init(
+    if (batch_fetcher) |fetch_batch| batch_fetch: {
+        var auth_path_arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        defer auth_path_arena_state.deinit();
+        const auth_path_arena = auth_path_arena_state.allocator();
+
+        const auth_paths = try auth_path_arena.alloc([]const u8, reg.accounts.items.len);
+        for (reg.accounts.items, 0..) |account, idx| {
+            auth_paths[idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+            if (debug_context) |debug| {
+                try printForegroundUsageDebugRequest(debug.logger, reg, idx, debug.label_state.labels[idx]);
+            }
+        }
+
+        const batch_results = fetch_batch(
             allocator,
+            auth_paths,
             @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => {},
+            else => {
+                if (batch_fetch_failures_are_fatal) return err;
+                const error_name = @errorName(err);
+                for (worker_results, 0..) |*worker_result, idx| {
+                    worker_result.* = .{ .error_name = error_name };
+                    if (debug_context) |debug| {
+                        printForegroundUsageDebugWorkerResult(
+                            auth_path_arena,
+                            debug.logger,
+                            debug.label_state.labels[idx],
+                            reg.accounts.items[idx].last_usage,
+                            worker_result.*,
+                        );
+                    }
+                }
+                break :batch_fetch;
+            },
         };
+        defer {
+            for (batch_results) |*batch_result| batch_result.deinit(allocator);
+            allocator.free(batch_results);
+        }
+
+        for (batch_results, 0..) |*batch_result, idx| {
+            worker_results[idx] = .{
+                .status_code = batch_result.status_code,
+                .missing_auth = batch_result.missing_auth,
+                .error_name = batch_result.error_name,
+                .snapshot = batch_result.snapshot,
+            };
+            batch_result.snapshot = null;
+
+            if (debug_context) |debug| {
+                printForegroundUsageDebugWorkerResult(
+                    auth_path_arena,
+                    debug.logger,
+                    debug.label_state.labels[idx],
+                    reg.accounts.items[idx].last_usage,
+                    worker_results[idx],
+                );
+            }
+        }
+    } else {
+        var use_concurrent_usage_refresh = reg.accounts.items.len > 1;
+        if (use_concurrent_usage_refresh) {
+            pool_init(
+                allocator,
+                @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => use_concurrent_usage_refresh = false,
+            };
+        }
+
+        if (use_concurrent_usage_refresh) {
+            try runForegroundUsageRefreshWorkersConcurrently(
+                allocator,
+                codex_home,
+                reg,
+                usage_fetcher,
+                worker_results,
+                debug_context,
+            );
+        } else {
+            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
+        }
     }
-    runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, debug_context);
 
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
@@ -539,6 +749,79 @@ fn initForegroundUsagePool(
     _ = n_jobs;
 }
 
+const ForegroundUsageWorkerQueue = struct {
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
+    next_index: std.atomic.Value(usize) = .init(0),
+
+    fn run(self: *ForegroundUsageWorkerQueue) void {
+        while (true) {
+            const idx = self.next_index.fetchAdd(1, .monotonic);
+            if (idx >= self.reg.accounts.items.len) return;
+
+            if (self.debug_context) |debug| {
+                printForegroundUsageDebugRequest(debug.logger, self.reg, idx, debug.label_state.labels[idx]) catch {};
+            }
+            foregroundUsageRefreshWorker(
+                self.allocator,
+                self.codex_home,
+                self.reg,
+                idx,
+                self.usage_fetcher,
+                self.results,
+                self.debug_context,
+            );
+        }
+    }
+};
+
+fn runForegroundUsageRefreshWorkersConcurrently(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    results: []ForegroundUsageWorkerResult,
+    debug_context: ?ForegroundUsageDebugContext,
+) !void {
+    const worker_count = @min(reg.accounts.items.len, foreground_usage_refresh_concurrency);
+    if (worker_count <= 1) {
+        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, debug_context);
+        return;
+    }
+
+    var queue: ForegroundUsageWorkerQueue = .{
+        .allocator = allocator,
+        .codex_home = codex_home,
+        .reg = reg,
+        .usage_fetcher = usage_fetcher,
+        .results = results,
+        .debug_context = debug_context,
+    };
+
+    const helper_count = worker_count - 1;
+    var threads = try allocator.alloc(std.Thread, helper_count);
+    defer allocator.free(threads);
+
+    var spawned_count: usize = 0;
+    defer {
+        for (threads[0..spawned_count]) |thread| thread.join();
+    }
+
+    for (threads) |*thread| {
+        thread.* = std.Thread.spawn(.{}, ForegroundUsageWorkerQueue.run, .{&queue}) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => break,
+        };
+        spawned_count += 1;
+    }
+
+    queue.run();
+}
+
 fn runForegroundUsageRefreshWorkersSerially(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -564,7 +847,7 @@ fn foregroundUsageRefreshWorker(
     results: []ForegroundUsageWorkerResult,
     debug_context: ?ForegroundUsageDebugContext,
 ) void {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -709,7 +992,7 @@ fn formatRemainingPercentAlloc(
     allocator: std.mem.Allocator,
     window: ?registry.RateLimitWindow,
 ) ![]const u8 {
-    const remaining = registry.remainingPercentAt(window, time_compat.timestamp()) orelse return allocator.dupe(u8, "-");
+    const remaining = registry.remainingPercentAt(window, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()) orelse return allocator.dupe(u8, "-");
     return std.fmt.allocPrint(allocator, "{d}%", .{remaining});
 }
 
@@ -1080,148 +1363,6 @@ fn shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(
     return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
 }
 
-fn shouldPreflightNodeForAccountNameRefresh(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !bool {
-    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.account,
-    );
-}
-
-fn shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    account_api_enabled: bool,
-) !bool {
-    switch (target) {
-        .list, .switch_account, .remove_account => {},
-    }
-
-    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
-
-    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
-    defer info.deinit(allocator);
-
-    return info.access_token != null and info.chatgpt_account_id != null;
-}
-
-fn shouldPreflightNodeForForegroundTarget(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !bool {
-    return try shouldPreflightNodeForForegroundTargetWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-    );
-}
-
-fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-) !bool {
-    if (usage_api_enabled and reg.accounts.items.len > 0) return true;
-    return try shouldPreflightNodeForAccountNameRefreshWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        account_api_enabled,
-    );
-}
-
-fn ensureForegroundNodeAvailable(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-) !void {
-    try ensureForegroundNodeAvailableWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-) !void {
-    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        usage_api_enabled,
-        account_api_enabled,
-        chatgpt_http.ensureNodeExecutableAvailable,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithChecker(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    checker: NodeAvailabilityFn,
-) !void {
-    try ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        reg.api.usage,
-        reg.api.account,
-        checker,
-    );
-}
-
-fn ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    target: ForegroundUsageRefreshTarget,
-    usage_api_enabled: bool,
-    account_api_enabled: bool,
-    checker: NodeAvailabilityFn,
-) !void {
-    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        target,
-        usage_api_enabled,
-        account_api_enabled,
-    )) return;
-    try checker(allocator);
-}
-
 pub fn shouldScheduleBackgroundAccountNameRefresh(reg: *registry.Registry) bool {
     if (!reg.api.account) return false;
 
@@ -1307,7 +1448,7 @@ fn runBackgroundAccountNameRefreshWithLockAcquirer(
 }
 
 fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
-    var env_map = process_compat.getEnvMap(allocator) catch |err| {
+    var env_map = getEnvMap(allocator) catch |err| {
         std.log.warn("background account metadata refresh skipped: {s}", .{@errorName(err)});
         return;
     };
@@ -1317,10 +1458,10 @@ fn spawnBackgroundAccountNameRefresh(allocator: std.mem.Allocator) !void {
     try env_map.put(disable_background_account_name_refresh_env, "1");
     try env_map.put(skip_service_reconcile_env, "1");
 
-    const self_exe = try fs.selfExePathAlloc(allocator);
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
     defer allocator.free(self_exe);
 
-    _ = try std.process.spawn(fs.io(), .{
+    _ = try std.process.spawn(app_runtime.io(), .{
         .argv = &[_][]const u8{ self_exe, "list" },
         .environ_map = &env_map,
         .stdin = .ignore,
@@ -1369,13 +1510,15 @@ fn loadSingleFileImportAuthInfo(
             },
         },
         .cpa => blk: {
-            var file = fs.cwd().openFile(opts.auth_path.?, .{}) catch |err| {
+            var file = std.Io.Dir.cwd().openFile(app_runtime.io(), opts.auth_path.?, .{}) catch |err| {
                 std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
                 return null;
             };
-            defer file.close();
+            defer file.close(app_runtime.io());
 
-            const data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch |err| switch (err) {
+            var read_buffer: [4096]u8 = undefined;
+            var file_reader = file.reader(app_runtime.io(), &read_buffer);
+            const data = file_reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024)) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => {
                     std.log.warn("account metadata refresh skipped: {s}", .{@errorName(err)});
@@ -1428,6 +1571,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         usage_api_enabled,
         account_api_enabled,
     );
+
     var debug_stdout: io_util.Stdout = undefined;
     var debug_logger: ?ForegroundUsageDebugLogger = null;
     if (opts.debug) {
@@ -1435,12 +1579,10 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         debug_logger = ForegroundUsageDebugLogger.init(debug_stdout.out());
     }
 
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabled(
+    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
         allocator,
         codex_home,
         &reg,
-        usage_api.fetchUsageForAuthPathDetailed,
-        initForegroundUsagePool,
         if (debug_logger) |*logger| logger else null,
         usage_api_enabled,
     );
@@ -1474,7 +1616,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     defer allocator.free(dest);
 
     try registry.ensureAccountsDir(allocator, codex_home);
-    try registry.copyFile(auth_path, dest);
+    try registry.copyManagedFile(auth_path, dest);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
@@ -1536,17 +1678,22 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 return error.AccountNotFound;
             },
             .direct => |account_key| account_key,
-            .multiple => |matches| try cli.selectAccountFromIndicesWithUsageOverrides(
+            .multiple => |matches| cli.selectAccountFromIndicesWithUsageOverrides(
                 allocator,
                 &reg,
                 matches.items,
                 null,
-            ),
+            ) catch |err| switch (err) {
+                error.TuiRequiresTty => {
+                    try cli.printSwitchRequiresTtyError();
+                    return error.SwitchSelectionRequiresTty;
+                },
+                else => return err,
+            },
         };
         if (selected_account_key == null) return;
         try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
         try registry.saveRegistry(allocator, codex_home, &reg);
-        try cli.printSwitchedAccount(allocator, &reg, selected_account_key.?);
         return;
     }
 
@@ -1569,7 +1716,13 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
         const transferred_display = initial_display.?;
         initial_display = null;
-        break :blk try cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller);
+        break :blk cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| switch (err) {
+            error.TuiRequiresTty => {
+                try cli.printSwitchRequiresTtyError();
+                return error.SwitchSelectionRequiresTty;
+            },
+            else => return err,
+        };
     };
     defer if (selected_account_key) |account_key| live_allocator.free(@constCast(account_key));
 
@@ -1582,7 +1735,6 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
     try registry.activateAccountByKey(live_allocator, codex_home, &reg, selected_account_key.?);
     try registry.saveRegistry(live_allocator, codex_home, &reg);
-    try cli.printSwitchedAccount(live_allocator, &reg, selected_account_key.?);
 }
 
 const SwitchLiveRefreshPolicy = struct {
@@ -1623,7 +1775,7 @@ const SwitchLiveRuntime = struct {
         const io_impl = std.Io.Threaded.init(allocator, .{
             .concurrent_limit = .limited(1),
         });
-        const now_ms = time_compat.milliTimestamp();
+        const now_ms = nowMilliseconds();
         return .{
             .allocator = allocator,
             .codex_home = codex_home,
@@ -1657,7 +1809,7 @@ const SwitchLiveRuntime = struct {
 
     fn maybeStartRefresh(self: *@This()) void {
         const io = self.io_impl.io();
-        const now_ms = time_compat.milliTimestamp();
+        const now_ms = nowMilliseconds();
 
         self.mutex.lockUncancelable(io);
         if (self.in_flight or self.refresh_task != null or now_ms < self.next_refresh_not_before_ms) {
@@ -1669,7 +1821,7 @@ const SwitchLiveRuntime = struct {
         self.mutex.unlock(io);
 
         const future = io.concurrent(runSwitchLiveRefreshRound, .{self}) catch |err| {
-            const finished_ms = time_compat.milliTimestamp();
+            const finished_ms = nowMilliseconds();
             const error_name = self.allocator.dupe(u8, @errorName(err)) catch null;
 
             self.mutex.lockUncancelable(io);
@@ -1710,8 +1862,8 @@ const SwitchLiveRuntime = struct {
 
     fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.SwitchSelectionDisplay) ![]u8 {
         const io = self.io_impl.io();
-        const now_ms = time_compat.milliTimestamp();
-        const now_s = time_compat.timestamp();
+        const now_ms = nowMilliseconds();
+        const now_s = nowSeconds();
 
         var in_flight = false;
         var next_refresh_not_before_ms: i64 = now_ms;
@@ -2024,14 +2176,16 @@ fn loadSwitchSelectionDisplay(
         initial_policy.usage_api_enabled,
         initial_policy.account_api_enabled,
     );
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    var usage_state = try refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         &refreshed,
         usage_api.fetchUsageForAuthPathDetailed,
+        usage_api.fetchUsageForAuthPathsDetailedBatch,
         initForegroundUsagePool,
         null,
         initial_policy.usage_api_enabled,
+        false,
         false,
     );
     errdefer usage_state.deinit(allocator);
@@ -2074,9 +2228,9 @@ fn loadSwitchSelectionDisplay(
 
 fn runSwitchLiveRefreshRound(runtime: *SwitchLiveRuntime) void {
     const io = runtime.io_impl.io();
-    const started_ms = time_compat.milliTimestamp();
+    const started_ms = nowMilliseconds();
     const loaded = loadSwitchSelectionDisplay(runtime.allocator, runtime.codex_home, runtime.api_mode) catch |err| {
-        const finished_ms = time_compat.milliTimestamp();
+        const finished_ms = nowMilliseconds();
         const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
 
         runtime.mutex.lockUncancelable(io);
@@ -2090,7 +2244,7 @@ fn runSwitchLiveRefreshRound(runtime: *SwitchLiveRuntime) void {
         return;
     };
 
-    const finished_ms = time_compat.milliTimestamp();
+    const finished_ms = nowMilliseconds();
     runtime.mutex.lockUncancelable(io);
     defer runtime.mutex.unlock(io);
 
@@ -2217,7 +2371,7 @@ fn loadCurrentAuthState(allocator: std.mem.Allocator, codex_home: []const u8) !C
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
-    fs.cwd().access(auth_path, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().access(app_runtime.io(), auth_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{
             .record_key = null,
             .syncable = false,
@@ -2267,7 +2421,7 @@ fn selectBestRemainingAccountKeyByUsageAlloc(
 ) !?[]u8 {
     if (reg.accounts.items.len == 0) return null;
 
-    const now = time_compat.timestamp();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var best_idx: ?usize = null;
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
@@ -2297,7 +2451,41 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
-    const usage_overrides: ?[]const ?[]const u8 = null;
+    const interactive_remove = !opts.all and opts.selectors.len == 0;
+    const usage_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
+    const account_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
+
+    var usage_state: ?ForegroundUsageRefreshState = null;
+    defer if (usage_state) |*state| state.deinit(allocator);
+
+    if (interactive_remove) {
+        if (usage_api_enabled) {
+            usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+                allocator,
+                codex_home,
+                &reg,
+                null,
+                usage_api_enabled,
+                true,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => null,
+            };
+        }
+        maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+            allocator,
+            codex_home,
+            &reg,
+            .remove_account,
+            defaultAccountFetcher,
+            account_api_enabled,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {},
+        };
+    }
+
+    const usage_overrides = if (usage_state) |state| state.usage_overrides else null;
 
     var selected: ?[]usize = null;
     if (opts.all) {
@@ -2346,7 +2534,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 freeOwnedStrings(allocator, matched_labels.items);
                 matched_labels.deinit(allocator);
             }
-            if (!fs.File.stdin().isTty()) {
+            if (!(std.Io.File.stdin().isTty(app_runtime.io()) catch false)) {
                 try cli.printRemoveConfirmationUnavailableError(matched_labels.items);
                 return error.RemoveConfirmationUnavailable;
             }
@@ -2363,6 +2551,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             error.InvalidRemoveSelectionInput => {
                 try cli.printInvalidRemoveSelectionError();
                 return error.InvalidRemoveSelectionInput;
+            },
+            error.TuiRequiresTty => {
+                try cli.printRemoveRequiresTtyError();
+                return error.RemoveSelectionRequiresTty;
             },
             else => return err,
         };
@@ -2429,7 +2621,7 @@ fn handleTopLevelHelp(allocator: std.mem.Allocator, codex_home: []const u8) !voi
 fn handleClean(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const summary = try registry.cleanAccountsBackups(allocator, codex_home);
     var stdout: [256]u8 = undefined;
-    var writer = fs.File.stdout().writer(&stdout);
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &stdout);
     const out = &writer.interface;
     try out.print(
         "cleaned accounts: auth_backups={d}, registry_backups={d}, stale_entries={d}\n",
@@ -2464,10 +2656,10 @@ test "background account-name refresh returns early when another refresh holds t
     };
 
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
     TestState.fetch_count = 0;
@@ -2478,292 +2670,6 @@ test "background account-name refresh returns early when another refresh holds t
         TestState.lockUnavailable,
     );
     try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
-}
-
-test "foreground node preflight fails fast when usage refresh needs node" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight fails fast when account-name refresh needs node" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-
-        fn appendAccount(
-            allocator: std.mem.Allocator,
-            reg: *registry.Registry,
-            record_key: []const u8,
-            email: []const u8,
-            plan: registry.PlanType,
-        ) !void {
-            const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
-            const user_id = record_key[0..sep];
-            const account_id = record_key[sep + 2 ..];
-            try reg.accounts.append(allocator, .{
-                .account_key = try allocator.dupe(u8, record_key),
-                .chatgpt_account_id = try allocator.dupe(u8, account_id),
-                .chatgpt_user_id = try allocator.dupe(u8, user_id),
-                .email = try allocator.dupe(u8, email),
-                .alias = try allocator.dupe(u8, ""),
-                .account_name = null,
-                .plan = plan,
-                .auth_mode = .chatgpt,
-                .created_at = 1,
-                .last_used_at = null,
-                .last_usage = null,
-                .last_usage_at = null,
-                .last_local_rollout = null,
-            });
-        }
-
-        fn authJsonWithIds(
-            allocator: std.mem.Allocator,
-            email: []const u8,
-            plan: []const u8,
-            chatgpt_user_id: []const u8,
-            chatgpt_account_id: []const u8,
-        ) ![]u8 {
-            const encoder = std.base64.url_safe_no_pad.Encoder;
-            const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-            const payload = try std.fmt.allocPrint(
-                allocator,
-                "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
-                .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
-            );
-            defer allocator.free(payload);
-
-            const header_b64 = try allocator.alloc(u8, encoder.calcSize(header.len));
-            defer allocator.free(header_b64);
-            _ = encoder.encode(header_b64, header);
-            const payload_b64 = try allocator.alloc(u8, encoder.calcSize(payload.len));
-            defer allocator.free(payload_b64);
-            _ = encoder.encode(payload_b64, payload);
-            const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ header_b64, ".", payload_b64, ".sig" });
-            defer allocator.free(jwt);
-
-            return try std.fmt.allocPrint(
-                allocator,
-                "{{\"tokens\":{{\"access_token\":\"access-{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
-                .{ email, chatgpt_account_id, jwt },
-            );
-        }
-
-        fn writeActiveAuth(
-            allocator: std.mem.Allocator,
-            codex_home: []const u8,
-            email: []const u8,
-            plan: []const u8,
-            chatgpt_user_id: []const u8,
-            chatgpt_account_id: []const u8,
-        ) !void {
-            const auth_path = try registry.activeAuthPath(allocator, codex_home);
-            defer allocator.free(auth_path);
-
-            const auth_json = try authJsonWithIds(
-                allocator,
-                email,
-                plan,
-                chatgpt_user_id,
-                chatgpt_account_id,
-            );
-            defer allocator.free(auth_json);
-            try fs.cwd().writeFile(.{ .sub_path = auth_path, .data = auth_json });
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-
-    const user_id = "user-shared";
-    const primary_record_key = "user-shared::acct-primary";
-    const secondary_record_key = "user-shared::acct-secondary";
-    try TestState.appendAccount(gpa, &reg, primary_record_key, "team@example.com", .team);
-    try TestState.appendAccount(gpa, &reg, secondary_record_key, "team@example.com", .team);
-    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
-    try TestState.writeActiveAuth(gpa, codex_home, "team@example.com", "team", user_id, "acct-primary");
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithChecker(gpa, codex_home, &reg, .list, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight can be forced on when command api override enables usage refresh" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-    reg.api.account = false;
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .list, true, false, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
-}
-
-test "foreground node preflight can be forced on for remove when command api override enables usage refresh" {
-    const TestState = struct {
-        var check_count: usize = 0;
-
-        fn missingNode(allocator: std.mem.Allocator) !void {
-            _ = allocator;
-            check_count += 1;
-            return error.NodeJsRequired;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = registry.Registry{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer reg.deinit(gpa);
-    reg.api.usage = false;
-    reg.api.account = false;
-
-    try reg.accounts.append(gpa, .{
-        .account_key = try gpa.dupe(u8, "user-1::acct-1"),
-        .chatgpt_account_id = try gpa.dupe(u8, "acct-1"),
-        .chatgpt_user_id = try gpa.dupe(u8, "user-1"),
-        .email = try gpa.dupe(u8, "alpha@example.com"),
-        .alias = try gpa.dupe(u8, ""),
-        .account_name = null,
-        .plan = .plus,
-        .auth_mode = .chatgpt,
-        .created_at = 1,
-        .last_used_at = null,
-        .last_usage = null,
-        .last_usage_at = null,
-        .last_local_rollout = null,
-    });
-
-    TestState.check_count = 0;
-    try std.testing.expectError(
-        error.NodeJsRequired,
-        ensureForegroundNodeAvailableWithCheckerUsingApiEnabled(gpa, codex_home, &reg, .remove_account, true, false, TestState.missingNode),
-    );
-    try std.testing.expectEqual(@as(usize, 1), TestState.check_count);
 }
 
 test "handled cli errors include missing node" {

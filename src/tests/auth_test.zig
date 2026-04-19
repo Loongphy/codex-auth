@@ -1,5 +1,5 @@
 const std = @import("std");
-const fs = @import("../compat_fs.zig");
+const app_runtime = @import("../runtime.zig");
 const auth = @import("../auth.zig");
 const bdd = @import("bdd_helpers.zig");
 
@@ -27,18 +27,17 @@ test "parse auth info from jwt" {
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
-    const json = try std.fmt.allocPrint(gpa,
+    const json = try std.fmt.allocPrint(
+        gpa,
         "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
         .{ chatgpt_account_id, jwt },
     );
     defer gpa.free(json);
 
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = json });
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(tmp_path);
-    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = json });
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -59,12 +58,10 @@ test "parse auth info from jwt" {
 
 test "api key auth" {
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(tmp_path);
-    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = "{\"OPENAI_API_KEY\":\"sk-test\"}" });
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
     const info = try auth.parseAuthInfo(gpa, auth_path);
     defer info.deinit(gpa);
@@ -73,15 +70,13 @@ test "api key auth" {
 
 test "parse auth info does not leak duplicated tokens when id token is missing" {
     const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{
+    try tmp.dir.writeFile(app_runtime.io(), .{
         .sub_path = "auth.json",
         .data = "{\"tokens\":{\"access_token\":\"access-user@example.com\",\"account_id\":\"67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\"}}",
     });
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(tmp_path);
-    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     const info = try auth.parseAuthInfo(gpa, auth_path);
@@ -107,18 +102,17 @@ test "parse auth info frees allocations on account mismatch" {
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
-    const json = try std.fmt.allocPrint(gpa,
+    const json = try std.fmt.allocPrint(
+        gpa,
         "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
         .{ token_account_id, jwt },
     );
     defer gpa.free(json);
 
-    var tmp = fs.tmpDir(.{});
+    var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = json });
-    const tmp_path = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(tmp_path);
-    const auth_path = try fs.path.join(gpa, &[_][]const u8{ tmp_path, "auth.json" });
+    try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "auth.json", .data = json });
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
     defer gpa.free(auth_path);
 
     try std.testing.expectError(error.AccountIdMismatch, auth.parseAuthInfo(gpa, auth_path));

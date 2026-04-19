@@ -1,34 +1,23 @@
 const std = @import("std");
 
+fn linkWindowsTaskSchedulerLibraries(module: *std.Build.Module) void {
+    module.linkSystemLibrary("ole32", .{});
+    module.linkSystemLibrary("oleaut32", .{});
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const is_windows = target.result.os.tag == .windows;
-    const compat_fs = b.createModule(.{
-        .root_source_file = b.path("src/compat_fs.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const compat_process = b.createModule(.{
-        .root_source_file = b.path("src/compat_process.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const compat_time = b.createModule(.{
-        .root_source_file = b.path("src/compat_time.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    compat_time.addImport("compat_fs", compat_fs);
     const main_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    main_module.addImport("compat_fs", compat_fs);
-    main_module.addImport("compat_process", compat_process);
-    main_module.addImport("compat_time", compat_time);
+    if (is_windows) {
+        linkWindowsTaskSchedulerLibraries(main_module);
+    }
     const exe = b.addExecutable(.{
         .name = "codex-auth",
         .root_module = main_module,
@@ -42,9 +31,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
         });
-        auto_module.addImport("compat_fs", compat_fs);
-        auto_module.addImport("compat_process", compat_process);
-        auto_module.addImport("compat_time", compat_time);
+        linkWindowsTaskSchedulerLibraries(auto_module);
         const auto_exe = b.addExecutable(.{
             .name = "codex-auth-auto",
             .root_module = auto_module,
@@ -66,9 +53,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    test_module.addImport("compat_fs", compat_fs);
-    test_module.addImport("compat_process", compat_process);
-    test_module.addImport("compat_time", compat_time);
+    if (is_windows) {
+        linkWindowsTaskSchedulerLibraries(test_module);
+    }
     const tests = b.addTest(.{
         .name = "codex-auth-test",
         .root_module = test_module,

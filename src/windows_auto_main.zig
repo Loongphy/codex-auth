@@ -1,5 +1,4 @@
 const std = @import("std");
-const fs = @import("compat_fs.zig");
 const auto = @import("auto.zig");
 const registry = @import("registry.zig");
 
