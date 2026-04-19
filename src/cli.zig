@@ -996,6 +996,26 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
+    if (queries.len == 0) return;
+    if (queries.len == 1) {
+        return printAccountNotFoundError(queries[0]);
+    }
+
+    var buffer: [1024]u8 = undefined;
+    var writer = fs.File.stderr().writer(&buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" no account matches: ");
+    for (queries, 0..) |query, idx| {
+        if (idx != 0) try out.writeAll(", ");
+        try out.writeAll(query);
+    }
+    try out.writeAll(".\n");
+    try out.flush();
+}
+
 pub fn printRemoveRequiresTtyError() !void {
     var buffer: [512]u8 = undefined;
     var writer = fs.File.stderr().writer(&buffer);

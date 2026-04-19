@@ -1779,6 +1779,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     } else if (opts.selectors.len != 0) {
         var selected_list = std.ArrayList(usize).empty;
         defer selected_list.deinit(allocator);
+        var missing_selectors = std.ArrayList([]const u8).empty;
+        defer missing_selectors.deinit(allocator);
         var requires_confirmation = false;
 
         for (opts.selectors) |selector| {
@@ -1793,8 +1795,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             defer matches.deinit(allocator);
 
             if (matches.items.len == 0) {
-                try cli.printAccountNotFoundError(selector);
-                return error.AccountNotFound;
+                try missing_selectors.append(allocator, selector);
+                continue;
             }
             if (matches.items.len > 1) {
                 requires_confirmation = true;
@@ -1806,6 +1808,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             }
         }
 
+        if (missing_selectors.items.len != 0) {
+            try cli.printAccountNotFoundErrors(missing_selectors.items);
+            return error.AccountNotFound;
+        }
         if (selected_list.items.len == 0) return;
         if (requires_confirmation) {
             var matched_labels = try cli.buildRemoveLabels(allocator, &reg, selected_list.items);

@@ -1987,6 +1987,39 @@ test "Scenario: Given remove query with no matches when running remove then it e
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
 
+test "Scenario: Given multiple remove queries with no matches when running remove then it reports all missing selectors together" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "remove", "112222", "222222" },
+        "",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("error: no account matches: 112222, 222222.\n", result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+}
+
 test "Scenario: Given non-tty remove with invalid selection input when running remove then it fails without deleting accounts" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
