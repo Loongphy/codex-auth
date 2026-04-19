@@ -183,6 +183,17 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     }
 }
 
+fn writeApiRefreshDisabledConfig(dir: fs.Dir) !void {
+    try dir.writeFile(.{
+        .sub_path = ".codex/config.toml",
+        .data =
+        \\[api]
+        \\usage = false
+        \\account = false
+        ,
+    });
+}
+
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
@@ -648,6 +659,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex");
+    try writeApiRefreshDisabledConfig(tmp.dir);
 
     const email = "fresh@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "plus");
@@ -699,6 +711,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex/accounts");
+    try writeApiRefreshDisabledConfig(tmp.dir);
 
     const email = "legacy@example.com";
     const auth_json = try bdd.authJsonWithEmailPlan(gpa, email, "team");
@@ -1526,6 +1539,7 @@ test "Scenario: Given auth json already points at another registry account when 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
+    try writeApiRefreshDisabledConfig(tmp.dir);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
