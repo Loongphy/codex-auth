@@ -249,6 +249,48 @@ fn apiModeUsesStoredDataOnly(api_mode: cli.ApiMode) bool {
     return api_mode == .skip_api;
 }
 
+fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !bool {
+    if (shouldRefreshForegroundUsage(target) and usage_api_enabled and reg.accounts.items.len != 0) {
+        return true;
+    }
+
+    const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
+    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) {
+        return false;
+    }
+
+    var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
+    defer info.deinit(allocator);
+    return info.access_token != null and info.chatgpt_account_id != null;
+}
+
+fn ensureForegroundNodeAvailableWithApiEnabled(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    target: ForegroundUsageRefreshTarget,
+    usage_api_enabled: bool,
+    account_api_enabled: bool,
+) !void {
+    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
+        allocator,
+        codex_home,
+        reg,
+        target,
+        usage_api_enabled,
+        account_api_enabled,
+    )) return;
+
+    try chatgpt_http.ensureNodeExecutableAvailable(allocator);
+}
+
 fn isAccountNameRefreshOnlyMode() bool {
     return hasNonEmptyEnvVar(account_name_refresh_only_env);
 }
@@ -362,6 +404,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
         initForegroundUsagePool,
         null,
         reg.api.usage,
+        false,
     );
 }
 
@@ -401,6 +444,24 @@ fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
     debug_logger: ?*ForegroundUsageDebugLogger,
     usage_api_enabled: bool,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+        allocator,
+        codex_home,
+        reg,
+        debug_logger,
+        usage_api_enabled,
+        false,
+    );
+}
+
+fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    debug_logger: ?*ForegroundUsageDebugLogger,
+    usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
+) !ForegroundUsageRefreshState {
     return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabled(
         allocator,
         codex_home,
@@ -410,6 +471,7 @@ fn refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
         initForegroundUsagePool,
         debug_logger,
         usage_api_enabled,
+        batch_fetch_failures_are_fatal,
     );
 }
 
@@ -429,6 +491,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
         pool_init,
         null,
         reg.api.usage,
+        false,
     );
 }
 
@@ -449,6 +512,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
         pool_init,
         debug_logger,
         reg.api.usage,
+        false,
     );
 }
 
@@ -461,6 +525,7 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
     pool_init: ForegroundUsagePoolInitFn,
     debug_logger: ?*ForegroundUsageDebugLogger,
     usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
 ) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
@@ -482,6 +547,13 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
         return state;
     }
 
+    if (reg.accounts.items.len == 0) {
+        if (debug_logger) |logger| {
+            try printForegroundUsageDebugDone(logger, &state);
+        }
+        return state;
+    }
+
     if (debug_logger) |logger| {
         debug_label_state = try buildDebugUsageLabelState(allocator, reg);
         debug_context = .{
@@ -491,13 +563,6 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
         const node_executable = try chatgpt_http.resolveNodeExecutableForDebugAlloc(allocator);
         defer allocator.free(node_executable);
         try printForegroundUsageDebugStart(logger, reg.accounts.items.len, node_executable);
-    }
-
-    if (reg.accounts.items.len == 0) {
-        if (debug_logger) |logger| {
-            try printForegroundUsageDebugDone(logger, &state);
-        }
-        return state;
     }
 
     const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
@@ -527,6 +592,7 @@ fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEn
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
+                if (batch_fetch_failures_are_fatal) return err;
                 const error_name = @errorName(err);
                 for (worker_results, 0..) |*worker_result, idx| {
                     worker_result.* = .{ .error_name = error_name };
@@ -1437,6 +1503,15 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
 
+    try ensureForegroundNodeAvailableWithApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .list,
+        usage_api_enabled,
+        account_api_enabled,
+    );
+
     var debug_stdout: io_util.Stdout = undefined;
     var debug_logger: ?ForegroundUsageDebugLogger = null;
     if (opts.debug) {
@@ -1565,6 +1640,15 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+
+    try ensureForegroundNodeAvailableWithApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .switch_account,
+        usage_api_enabled,
+        account_api_enabled,
+    );
 
     var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
         allocator,
@@ -1771,12 +1855,13 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     if (interactive_remove) {
         if (usage_api_enabled) {
-            usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabled(
+            usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
                 allocator,
                 codex_home,
                 &reg,
                 null,
                 usage_api_enabled,
+                true,
             ) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => null,

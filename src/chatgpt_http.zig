@@ -488,13 +488,14 @@ fn runChildCaptureWithInputAndOutputLimit(
         error.EndOfStream => {},
         error.Timeout => {
             child.kill(app_runtime.io());
-            const stdout = try allocator.alloc(u8, 0);
-            errdefer allocator.free(stdout);
-            const stderr = try allocator.alloc(u8, 0);
+            const stdout = try multi_reader.toOwnedSlice(0);
+            defer std.heap.page_allocator.free(stdout);
+            const stderr = try multi_reader.toOwnedSlice(1);
+            defer std.heap.page_allocator.free(stderr);
             return .{
                 .term = .{ .unknown = 0 },
-                .stdout = stdout,
-                .stderr = stderr,
+                .stdout = try allocator.dupe(u8, stdout),
+                .stderr = try allocator.dupe(u8, stderr),
                 .timed_out = true,
             };
         },

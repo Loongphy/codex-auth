@@ -128,21 +128,12 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     if (requests.items.len == 0) return results;
 
-    var http_results = chatgpt_http.runGetJsonBatchCommand(
+    var http_results = try chatgpt_http.runGetJsonBatchCommand(
         allocator,
         default_usage_endpoint,
         requests.items,
         max_concurrency,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => {
-            const error_name = @errorName(err);
-            for (request_indexes, 0..) |request_idx, idx| {
-                if (request_idx != null) results[idx].error_name = error_name;
-            }
-            return results;
-        },
-    };
+    );
     defer http_results.deinit(allocator);
 
     for (request_indexes, 0..) |request_idx, result_idx| {
