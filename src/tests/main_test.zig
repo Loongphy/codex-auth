@@ -331,10 +331,10 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
 }
 
-test "Scenario: Given foreground usage refresh targets when checking refresh policy then list, switch, and remove all refresh" {
+test "Scenario: Given foreground usage refresh targets when checking refresh policy then only list and switch refresh" {
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.list));
     try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.switch_account));
-    try std.testing.expect(main_mod.shouldRefreshForegroundUsage(.remove_account));
+    try std.testing.expect(!main_mod.shouldRefreshForegroundUsage(.remove_account));
 }
 
 test "Scenario: Given switch query with one local match when resolving locally then it returns the target account directly" {
@@ -346,6 +346,23 @@ test "Scenario: Given switch query with one local match when resolving locally t
     try appendAccount(gpa, &reg, secondary_record_key, "backup@example.com", "secondary", .plus);
 
     var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "backup@");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query with a display number when resolving locally then it uses the list ordering" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "02");
     defer resolution.deinit(gpa);
 
     switch (resolution) {

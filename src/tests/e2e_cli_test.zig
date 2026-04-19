@@ -318,6 +318,76 @@ fn runCliWithIsolatedHomeAndPath(
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
+fn runCliWithIsolatedHomeAndPathAndStdin(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    args: []const []const u8,
+    stdin_data: []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
+
+    var child = std.process.spawn(fs.io(), .{
+        .argv = argv.items,
+        .cwd = .{ .path = project_root },
+        .environ_map = &env_map,
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.SkipZigTest,
+        else => return err,
+    };
+    defer child.kill(fs.io());
+
+    if (child.stdin) |stdin_pipe| {
+        try fs.wrapFile(stdin_pipe).writeAll(stdin_data);
+        fs.wrapFile(stdin_pipe).close();
+        child.stdin = null;
+    }
+
+    var multi_reader_buffer: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var multi_reader: std.Io.File.MultiReader = undefined;
+    multi_reader.init(allocator, fs.io(), multi_reader_buffer.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer multi_reader.deinit();
+
+    const stdout_reader = multi_reader.reader(0);
+    const stderr_reader = multi_reader.reader(1);
+
+    while (multi_reader.fill(64, .none)) |_| {
+        if (stdout_reader.buffered().len > 1024 * 1024) return error.StreamTooLong;
+        if (stderr_reader.buffered().len > 1024 * 1024) return error.StreamTooLong;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+
+    try multi_reader.checkAnyError();
+    const term = try child.wait(fs.io());
+
+    return .{
+        .stdout = try multi_reader.toOwnedSlice(0),
+        .stderr = try multi_reader.toOwnedSlice(1),
+        .term = term,
+    };
+}
+
 fn runCliWithIsolatedHomeAndStdin(
     allocator: std.mem.Allocator,
     project_root: []const u8,
@@ -446,6 +516,22 @@ fn seedRegistryWithAccounts(
     const active_key = try bdd.accountKeyForEmailAlloc(allocator, active_email);
     reg.active_account_key = active_key;
     reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+    try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn setRegistryApiConfig(
+    allocator: std.mem.Allocator,
+    home_root: []const u8,
+    usage_enabled: bool,
+    account_enabled: bool,
+) !void {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    reg.api.usage = usage_enabled;
+    reg.api.account = account_enabled;
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -1306,6 +1392,220 @@ test "Scenario: Given switch query with a direct local match when running switch
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
 }
 
+test "Scenario: Given list with api override when api config is disabled then it still requires api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+    });
+    try setRegistryApiConfig(gpa, home_root, false, false);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "list", "--api" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+}
+
+test "Scenario: Given list with skip-api when running list then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "list", "--skip-api" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
+test "Scenario: Given switch query with api flag when running switch then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "--api", "02" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given switch query with skip-api flag when running switch then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "--skip-api", "02" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try bdd.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try bdd.authJsonWithEmailPlan(gpa, "active@example.com", "team");
+    defer gpa.free(active_auth);
+    const backup_auth = try bdd.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "--skip-api" },
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const auth_after = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after);
+    try std.testing.expectEqualStrings(backup_auth, auth_after);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+}
+
 test "Scenario: Given remove query with one match when running remove then it deletes immediately and prints a summary" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1368,6 +1668,167 @@ test "Scenario: Given remove query with one match when running remove then it de
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-020202", .{}));
     var keeper_backup = try tmp.dir.openFile(".codex/accounts/auth.json.bak.20260320-030303", .{});
     keeper_backup.close();
+}
+
+test "Scenario: Given remove with multiple selectors when running remove then it deletes all selected accounts" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "beta@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHomeAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "remove", "01", "keeper@example.com" },
+        "",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings(
+        "Removed 2 account(s): alpha@example.com, keeper@example.com\n",
+        result.stdout,
+    );
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "beta@example.com"));
+}
+
+test "Scenario: Given remove with api flag when running remove then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "remove", "--api", "01" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given remove with skip-api flag when running remove then it returns a usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "remove", "--skip-api", "01" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+}
+
+test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{"remove"},
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
 }
 
 test "Scenario: Given active account removal with a replacement when running remove then it does not recreate a backup for the deleted auth" {
@@ -1641,6 +2102,39 @@ test "Scenario: Given remove query with no matches when running remove then it e
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings("error: no account matches 'tmp2'.\n", result.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+}
+
+test "Scenario: Given multiple remove queries with no matches when running remove then it reports all missing selectors together" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "remove", "112222", "222222" },
+        "",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("error: no account matches: 112222, 222222.\n", result.stderr);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }

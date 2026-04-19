@@ -40,8 +40,15 @@ fn readFileOnce(file: std.Io.File, buffer: []u8) !usize {
     };
 }
 
+pub const ApiMode = enum {
+    default,
+    force_api,
+    skip_api,
+};
+
 pub const ListOptions = struct {
     debug: bool = false,
+    api_mode: ApiMode = .default,
 };
 pub const LoginOptions = struct {
     device_auth: bool = false,
@@ -53,9 +60,12 @@ pub const ImportOptions = struct {
     purge: bool,
     source: ImportSource,
 };
-pub const SwitchOptions = struct { query: ?[]u8 };
-pub const RemoveOptions = struct {
+pub const SwitchOptions = struct {
     query: ?[]u8,
+    api_mode: ApiMode = .default,
+};
+pub const RemoveOptions = struct {
+    selectors: [][]const u8,
     all: bool,
 };
 pub const CleanOptions = struct {};
@@ -154,6 +164,22 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                     return usageErrorResult(allocator, .list, "duplicate `--debug` for `list`.", .{});
                 }
                 opts.debug = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--api")) {
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .force_api,
+                    .force_api => return usageErrorResult(allocator, .list, "duplicate `--api` for `list`.", .{}),
+                    .skip_api => return usageErrorResult(allocator, .list, "`--api` cannot be combined with `--skip-api` for `list`.", .{}),
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--skip-api")) {
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .skip_api,
+                    .skip_api => return usageErrorResult(allocator, .list, "duplicate `--skip-api` for `list`.", .{}),
+                    .force_api => return usageErrorResult(allocator, .list, "`--skip-api` cannot be combined with `--api` for `list`.", .{}),
+                }
                 continue;
             }
             if (isHelpFlag(arg)) {
@@ -264,21 +290,58 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             return .{ .command = .{ .help = .switch_account } };
         }
 
-        var query: ?[]u8 = null;
+        var opts: SwitchOptions = .{ .query = null };
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.eql(u8, arg, "--api")) {
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .force_api,
+                    .force_api => {
+                        if (opts.query) |query| allocator.free(query);
+                        return usageErrorResult(allocator, .switch_account, "duplicate `--api` for `switch`.", .{});
+                    },
+                    .skip_api => {
+                        if (opts.query) |query| allocator.free(query);
+                        return usageErrorResult(allocator, .switch_account, "`--api` cannot be combined with `--skip-api` for `switch`.", .{});
+                    },
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--skip-api")) {
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .skip_api,
+                    .skip_api => {
+                        if (opts.query) |query| allocator.free(query);
+                        return usageErrorResult(allocator, .switch_account, "duplicate `--skip-api` for `switch`.", .{});
+                    },
+                    .force_api => {
+                        if (opts.query) |query| allocator.free(query);
+                        return usageErrorResult(allocator, .switch_account, "`--skip-api` cannot be combined with `--api` for `switch`.", .{});
+                    },
+                }
+                continue;
+            }
             if (std.mem.startsWith(u8, arg, "-")) {
-                if (query) |e| allocator.free(e);
+                if (opts.query) |query| allocator.free(query);
                 return usageErrorResult(allocator, .switch_account, "unknown flag `{s}` for `switch`.", .{arg});
             }
-            if (query != null) {
-                if (query) |e| allocator.free(e);
+            if (opts.query != null) {
+                if (opts.query) |query| allocator.free(query);
                 return usageErrorResult(allocator, .switch_account, "unexpected extra query `{s}` for `switch`.", .{arg});
             }
-            query = try allocator.dupe(u8, arg);
+            opts.query = try allocator.dupe(u8, arg);
         }
-        return .{ .command = .{ .switch_account = .{ .query = query } } };
+        if (opts.query != null and opts.api_mode != .default) {
+            if (opts.query) |query| allocator.free(query);
+            return usageErrorResult(
+                allocator,
+                .switch_account,
+                "`switch <query>` does not support `--api` or `--skip-api`.",
+                .{},
+            );
+        }
+        return .{ .command = .{ .switch_account = opts } };
     }
 
     if (std.mem.eql(u8, cmd, "remove")) {
@@ -286,33 +349,40 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             return .{ .command = .{ .help = .remove_account } };
         }
 
-        var query: ?[]u8 = null;
+        var selectors = std.ArrayList([]const u8).empty;
+        errdefer freeOwnedStringList(allocator, selectors.items);
+        defer selectors.deinit(allocator);
         var all = false;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
+            if (std.mem.eql(u8, arg, "--api") or std.mem.eql(u8, arg, "--skip-api")) {
+                return usageErrorResult(
+                    allocator,
+                    .remove_account,
+                    "`remove` does not support `--api` or `--skip-api`.",
+                    .{},
+                );
+            }
             if (std.mem.eql(u8, arg, "--all")) {
-                if (all or query != null) {
-                    if (query) |q| allocator.free(q);
+                if (all or selectors.items.len != 0) {
                     return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
                 }
                 all = true;
                 continue;
             }
             if (std.mem.startsWith(u8, arg, "-")) {
-                if (query) |q| allocator.free(q);
                 return usageErrorResult(allocator, .remove_account, "unknown flag `{s}` for `remove`.", .{arg});
             }
-            if (query != null or all) {
-                if (query) |q| allocator.free(q);
-                if (all) {
-                    return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
-                }
-                return usageErrorResult(allocator, .remove_account, "unexpected extra selector `{s}` for `remove`.", .{arg});
+            if (all) {
+                return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
             }
-            query = try allocator.dupe(u8, arg);
+            try selectors.append(allocator, try allocator.dupe(u8, arg));
         }
-        return .{ .command = .{ .remove_account = .{ .query = query, .all = all } } };
+        return .{ .command = .{ .remove_account = .{
+            .selectors = try selectors.toOwnedSlice(allocator),
+            .all = all,
+        } } };
     }
 
     if (std.mem.eql(u8, cmd, "clean")) {
@@ -419,10 +489,11 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
             if (opts.alias) |a| allocator.free(a);
         },
         .switch_account => |*opts| {
-            if (opts.query) |e| allocator.free(e);
+            if (opts.query) |query| allocator.free(query);
         },
         .remove_account => |*opts| {
-            if (opts.query) |q| allocator.free(q);
+            freeOwnedStringList(allocator, opts.selectors);
+            allocator.free(opts.selectors);
         },
         else => {},
     }
@@ -495,6 +566,10 @@ fn freeImportOptions(allocator: std.mem.Allocator, auth_path: ?[]u8, alias: ?[]u
     if (alias) |value| allocator.free(value);
 }
 
+fn freeOwnedStringList(allocator: std.mem.Allocator, items: []const []const u8) void {
+    for (items) |item| allocator.free(@constCast(item));
+}
+
 pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const registry.ApiConfig) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -554,8 +629,8 @@ pub fn writeHelp(
         .{ .name = "status", .description = "Show auto-switch and usage API status" },
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
-        .{ .name = "switch [<query>]", .description = "Switch the active account" },
-        .{ .name = "remove [<query>|--all]", .description = "Remove one or more accounts" },
+        .{ .name = "switch [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
+        .{ .name = "remove [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -701,8 +776,8 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .status => "Show auto-switch, service, and usage API status.",
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
-        .switch_account => "Switch the active account interactively or by query.",
-        .remove_account => "Remove one or more accounts.",
+        .switch_account => "Switch the active account interactively, or by query using stored local data.",
+        .remove_account => "Remove one or more accounts by query or list row number using stored local data.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
@@ -724,7 +799,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
-        .list => try out.writeAll("  codex-auth list [--debug]\n"),
+        .list => try out.writeAll("  codex-auth list [--debug] [--api|--skip-api]\n"),
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -736,12 +811,12 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import --purge [<path>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth switch\n");
+            try out.writeAll("  codex-auth switch [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
-            try out.writeAll("  codex-auth remove <query>\n");
+            try out.writeAll("  codex-auth remove <query> [<query>...]\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
         .clean => try out.writeAll("  codex-auth clean\n"),
@@ -771,6 +846,8 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .list => {
             try out.writeAll("  codex-auth list\n");
             try out.writeAll("  codex-auth list --debug\n");
+            try out.writeAll("  codex-auth list --api\n");
+            try out.writeAll("  codex-auth list --skip-api\n");
         },
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
@@ -784,11 +861,16 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
-            try out.writeAll("  codex-auth switch john@example.com\n");
+            try out.writeAll("  codex-auth switch --api\n");
+            try out.writeAll("  codex-auth switch --skip-api\n");
+            try out.writeAll("  codex-auth switch work\n");
+            try out.writeAll("  codex-auth switch 02\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
-            try out.writeAll("  codex-auth remove john@example.com\n");
+            try out.writeAll("  codex-auth remove 01 03\n");
+            try out.writeAll("  codex-auth remove work personal\n");
+            try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
         .clean => try out.writeAll("  codex-auth clean\n"),
@@ -921,6 +1003,26 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
+    if (queries.len == 0) return;
+    if (queries.len == 1) {
+        return printAccountNotFoundError(queries[0]);
+    }
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" no account matches: ");
+    for (queries, 0..) |query, idx| {
+        if (idx != 0) try out.writeAll(", ");
+        try out.writeAll(query);
+    }
+    try out.writeAll(".\n");
+    try out.flush();
+}
+
 pub fn printRemoveRequiresTtyError() !void {
     var buffer: [512]u8 = undefined;
     var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
@@ -929,7 +1031,7 @@ pub fn printRemoveRequiresTtyError() !void {
     try writeErrorPrefixTo(out, use_color);
     try out.writeAll(" interactive remove requires a TTY.\n");
     try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Use `codex-auth remove <query>` or `codex-auth remove --all` instead.\n");
+    try out.writeAll(" Use `codex-auth remove <query>...` or `codex-auth remove --all` instead.\n");
     try out.flush();
 }
 
@@ -1705,7 +1807,13 @@ fn renderSwitchList(
         const is_selected = selected != null and selected.? == selectable_counter;
         const is_active = row.is_active;
         if (use_color) {
-            if (is_selected) {
+            if (row.has_error) {
+                if (is_selected or is_active) {
+                    try out.writeAll(ansi.bold_red);
+                } else {
+                    try out.writeAll(ansi.red);
+                }
+            } else if (is_selected) {
                 try out.writeAll(ansi.bold_green);
             } else if (is_active) {
                 try out.writeAll(ansi.green);
@@ -1784,7 +1892,13 @@ fn renderRemoveList(
         const is_checked = checked[selectable_counter];
         const is_active = row.is_active;
         if (use_color) {
-            if (is_cursor) {
+            if (row.has_error) {
+                if (is_cursor or is_checked or is_active) {
+                    try out.writeAll(ansi.bold_red);
+                } else {
+                    try out.writeAll(ansi.red);
+                }
+            } else if (is_cursor) {
                 try out.writeAll(ansi.bold_green);
             } else if (is_checked or is_active) {
                 try out.writeAll(ansi.green);
@@ -1878,6 +1992,7 @@ const SwitchRow = struct {
     last: []u8,
     depth: u8,
     is_active: bool,
+    has_error: bool,
     is_header: bool,
 
     fn deinit(self: *SwitchRow, allocator: std.mem.Allocator) void {
@@ -1957,6 +2072,7 @@ fn buildSwitchRowsWithUsageOverrides(
                 .last = last,
                 .depth = display_row.depth,
                 .is_active = display_row.is_active,
+                .has_error = usage_override != null,
                 .is_header = false,
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
@@ -1974,6 +2090,7 @@ fn buildSwitchRowsWithUsageOverrides(
                 .last = try allocator.dupe(u8, ""),
                 .depth = display_row.depth,
                 .is_active = false,
+                .has_error = false,
                 .is_header = true,
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
@@ -2031,6 +2148,7 @@ fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .last = last,
                 .depth = display_row.depth,
                 .is_active = display_row.is_active,
+                .has_error = usage_override != null,
                 .is_header = false,
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
@@ -2048,6 +2166,7 @@ fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .last = try allocator.dupe(u8, ""),
                 .depth = display_row.depth,
                 .is_active = false,
+                .has_error = false,
                 .is_header = true,
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
@@ -2298,6 +2417,49 @@ test "Scenario: Given usage overrides when rendering remove list then failed row
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.count(u8, output, "401") >= 2);
+}
+
+test "Scenario: Given usage overrides when rendering switch list with color then failed rows are highlighted red" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+}
+
+test "Scenario: Given usage overrides when rendering remove list with color then failed rows are highlighted red" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
+
+    const usage_overrides = [_]?[]const u8{ null, "401" };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+
+    var checked = [_]bool{ false, false };
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, null, &checked, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
 }
 
 test "Scenario: Given a usage snapshot plan when building switch rows then the displayed plan prefers it over the stored auth plan" {

@@ -94,10 +94,12 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth list [--debug]` | List all accounts |
+| `codex-auth list [--debug] [--api|--skip-api]` | List all accounts. `--api` forces a live refresh, while `--skip-api` uses only stored local usage and team-name data. |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
-| `codex-auth switch [<email>]` | Switch active account interactively or by partial match |
-| `codex-auth remove` | Remove accounts with interactive multi-select |
+| `codex-auth switch [--api|--skip-api]` | Switch the active account interactively. `--api` forces a live refresh first; `--skip-api` stays local-only. |
+| `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
+| `codex-auth remove [<query>...]` | Remove accounts interactively or by one or more selectors (row number, alias, or fuzzy match) using stored local data only. |
+| `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
 ### Import
@@ -128,33 +130,57 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 ```shell
 codex-auth list
 codex-auth list --debug
+codex-auth list --api        # force usage/team-name API refresh, even if config api is disabled
+codex-auth list --skip-api   # use only stored registry data; skip usage/team-name API refresh
 ```
+
+`--api` forces the foreground usage and team-name refresh path for this command only.
+`--skip-api` keeps the current local snapshot exactly as stored in `registry.json`.
+It does not call the usage API or `accounts/check`, so transient live-refresh failures such as `401` and `403` are not preserved in this mode.
 
 ### Switch Account
 
-Interactive: shows email, 5h, weekly, and last activity.
+Interactive `switch` shows email, 5h, weekly, and last activity.
+Without `<query>`, it follows the configured refresh mode before opening the picker.
+Use `--api` to force a foreground refresh first, or `--skip-api` to stay on stored local data only.
 
 ```shell
 codex-auth switch
+codex-auth switch --api
+codex-auth switch --skip-api
 ```
 
 ![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
 
-Non-interactive: fuzzy match by email or alias.
+`<query>` can be a displayed row number, an alias, or a fuzzy email/alias match.
+The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
+`switch <query>` always resolves from stored local data and does not accept `--api` or `--skip-api`.
 
 ```shell
-codex-auth switch john             # match any account containing "john"
-codex-auth switch john@gmail.com   # match by full or partial email
-codex-auth switch work             # match by alias set during import
+codex-auth switch 02                 # switch by displayed row number
+codex-auth switch john               # fuzzy match by email or alias
+codex-auth switch work               # match by alias set during import
 ```
 
-If the keyword matches multiple accounts, the command falls back to interactive selection. Press `q` to quit without switching.
+If `<query>` matches multiple accounts, the command falls back to interactive selection.
 
 ### Remove Accounts
 
+`remove` always uses stored local data and does not refresh from APIs before deleting.
+Each selector supports the same query forms as `switch`: row number, alias, or fuzzy email/alias match.
+The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
+You can pass multiple selectors in one command.
+Selector-based `remove` does not accept `--api` or `--skip-api`.
+
 ```shell
 codex-auth remove
+codex-auth remove 01 03
+codex-auth remove work personal
+codex-auth remove 01 jane@example.com
+codex-auth remove --all
 ```
+
+If any selector matches multiple accounts, `remove` asks for confirmation in interactive terminals before deleting.
 
 ### Login (Add Account)
 

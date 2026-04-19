@@ -41,12 +41,13 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 - `api.usage = true`: foreground refresh uses the usage API.
 - `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- when `api.usage = true`, `list`, interactive `switch`, and `remove` without a query or `--all` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
-- when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` / `remove` row shows that response status in both usage columns until a later successful refresh replaces it
-- when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` / `remove` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
+- when `api.usage = true`, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
+- when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
+- when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
-- `switch <query>` does not perform a foreground usage refresh before activation or before showing a local multi-match picker
-- `remove <query>` and `remove --all` do not perform a foreground usage refresh before deletion
+- `list --api` forces foreground usage refresh for this command even when `api.usage = false`; `list --skip-api` skips foreground usage refresh completely and renders only the stored registry data
+- interactive `switch` follows the configured foreground usage mode by default; `switch <query>` always resolves selectors locally from stored data and does not accept `--api` or `--skip-api`
+- `remove` always resolves selectors from stored local data and does not accept `--api` or `--skip-api`
 - `switch` does not refresh usage again after the new account is activated
 - the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
 - the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
@@ -58,10 +59,10 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
-- `list` refreshes synchronously before rendering and waits for `accounts/check` when the active user scope qualifies.
-- interactive `switch` refreshes synchronously before showing the picker and waits for `accounts/check` when the current active user scope qualifies.
-- `switch <query>` skips foreground account-name refresh and uses stored metadata only.
-- `list` and interactive `switch` load the request auth context from the current active `auth.json`.
+- `list --api` forces synchronous `accounts/check` refresh for this command even when `api.account = false`; `list --skip-api` skips it and uses stored metadata only.
+- interactive `switch` follows the configured account-name refresh mode by default; `switch <query>` always stays local-only and does not accept `--api` or `--skip-api`.
+- `remove` always stays local-only and does not accept `--api` or `--skip-api`.
+- `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.
 - the auto-switch daemon still uses a grouped-scope scan during each cycle when `auto_switch.enabled = true`.
 - daemon refreshes load the request auth context from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
 - when multiple stored ChatGPT snapshots exist for one grouped scope, daemon refreshes pick the snapshot with the newest `last_refresh`.
@@ -76,7 +77,7 @@ Request failures and unparseable responses are non-fatal and leave stored `accou
 Grouped account-name refresh always operates on one `chatgpt_user_id` scope at a time.
 
 - `login` and single-file `import` start from the just-parsed auth info
-- `list` and interactive `switch` start from the current active auth info
+- `list` and interactive `switch` start from the current active auth info when foreground refresh is enabled
 - the auto-switch daemon scans registry-backed grouped scopes and refreshes each qualifying scope independently
 
 That scope includes:
