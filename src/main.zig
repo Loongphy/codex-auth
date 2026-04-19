@@ -10,7 +10,6 @@ const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
 const io_util = @import("io_util.zig");
-const timefmt = @import("timefmt.zig");
 const usage_api = @import("usage_api.zig");
 
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
@@ -1861,9 +1860,9 @@ const SwitchLiveRuntime = struct {
     }
 
     fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.SwitchSelectionDisplay) ![]u8 {
+        _ = display;
         const io = self.io_impl.io();
         const now_ms = nowMilliseconds();
-        const now_s = nowSeconds();
 
         var in_flight = false;
         var next_refresh_not_before_ms: i64 = now_ms;
@@ -1902,50 +1901,10 @@ const SwitchLiveRuntime = struct {
             try allocator.dupe(u8, "");
         defer allocator.free(error_suffix);
 
-        const active_account_key = trackedActiveAccountKey(display.reg);
-        if (active_account_key == null) {
-            return std.fmt.allocPrint(
-                allocator,
-                "Active: - | 5H - | Weekly - | Last - | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
-                .{
-                    mode_label,
-                    refresh_state,
-                    round_state,
-                    error_suffix,
-                },
-            );
-        }
-
-        const active_idx = registry.findAccountIndexByAccountKey(display.reg, active_account_key.?) orelse {
-            return std.fmt.allocPrint(
-                allocator,
-                "Active: - | 5H - | Weekly - | Last - | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
-                .{
-                    mode_label,
-                    refresh_state,
-                    round_state,
-                    error_suffix,
-                },
-            );
-        };
-        const rec = &display.reg.accounts.items[active_idx];
-        const active_label = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
-        defer allocator.free(active_label);
-        const remaining_5h = try formatRemainingPercentAlloc(allocator, registry.resolveRateWindow(rec.last_usage, 300, true));
-        defer allocator.free(remaining_5h);
-        const remaining_weekly = try formatRemainingPercentAlloc(allocator, registry.resolveRateWindow(rec.last_usage, 10080, false));
-        defer allocator.free(remaining_weekly);
-        const last_activity = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_used_at, now_s);
-        defer allocator.free(last_activity);
-
         return std.fmt.allocPrint(
             allocator,
-            "Active: {s} | 5H {s} | Weekly {s} | Last {s} | Mode: {s} | Refresh: {s} | Last round: {s}{s}",
+            "Live refresh: {s} | Next: {s} | Last round: {s}{s}",
             .{
-                active_label,
-                remaining_5h,
-                remaining_weekly,
-                last_activity,
                 mode_label,
                 refresh_state,
                 round_state,

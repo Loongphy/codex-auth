@@ -63,6 +63,18 @@ fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[H\x1b[J");
 }
 
+fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.dim);
+    try out.writeAll("Keys: ↑/↓ or j/k, Enter select, Esc or q quit\n");
+    if (use_color) try out.writeAll(ansi.reset);
+}
+
+fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
+    if (use_color) try out.writeAll(ansi.dim);
+    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, Enter delete, Esc or q quit\n");
+    if (use_color) try out.writeAll(ansi.reset);
+}
+
 const TuiSession = struct {
     input: std.Io.File,
     output: std.Io.File,
@@ -1925,9 +1937,7 @@ fn selectInteractiveFromIndices(
         try out.writeAll("Select account to activate:\n\n");
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
-        if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
-        if (use_color) try out.writeAll(ansi.reset);
+        try writeSwitchTuiFooter(out, use_color);
         try out.flush();
 
         var b: [8]u8 = undefined;
@@ -2107,9 +2117,7 @@ fn selectInteractive(
         try out.writeAll("Select account to activate:\n\n");
         try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
         try out.writeAll("\n");
-        if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
-        if (use_color) try out.writeAll(ansi.reset);
+        try writeSwitchTuiFooter(out, use_color);
         try out.flush();
 
         var b: [8]u8 = undefined;
@@ -2218,9 +2226,7 @@ fn selectRemoveInteractive(
         try out.writeAll("Select accounts to delete:\n\n");
         try renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color);
         try out.writeAll("\n");
-        if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, Enter delete, 1-9 type, Backspace edit, Esc or q quit\n");
-        if (use_color) try out.writeAll(ansi.reset);
+        try writeRemoveTuiFooter(out, use_color);
         try out.flush();
 
         var b: [8]u8 = undefined;
@@ -2331,9 +2337,7 @@ fn renderSwitchScreen(
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.reset);
     }
-    if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k, Enter select, 1-9 type, Backspace edit, Esc or q quit\n");
-    if (use_color) try out.writeAll(ansi.reset);
+    try writeSwitchTuiFooter(out, use_color);
 }
 
 fn renderSwitchList(
