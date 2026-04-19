@@ -764,7 +764,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
         ,
     });
 
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"list"});
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{"list"});
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
