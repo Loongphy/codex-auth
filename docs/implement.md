@@ -17,6 +17,10 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`
 
+## File Permissions
+
+File-permission behavior is documented in [docs/permissions.md](./permissions.md).
+
 `codex-auth` resolves `codex_home` in this order:
 
 1. `CODEX_HOME` when it is set to a non-empty existing directory
