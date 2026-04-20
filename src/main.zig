@@ -210,6 +210,36 @@ pub const ForegroundUsageRefreshTarget = enum {
     remove_account,
 };
 
+const LiveTtyTarget = enum {
+    list,
+    switch_account,
+    remove_account,
+};
+
+fn liveTtyPreflightError(target: LiveTtyTarget, stdin_is_tty: bool, stdout_is_tty: bool) ?anyerror {
+    if (stdin_is_tty and stdout_is_tty) return null;
+    return switch (target) {
+        .list => error.ListLiveRequiresTty,
+        .switch_account => error.SwitchSelectionRequiresTty,
+        .remove_account => error.RemoveSelectionRequiresTty,
+    };
+}
+
+fn ensureLiveTty(target: LiveTtyTarget) !void {
+    const err = liveTtyPreflightError(
+        target,
+        std.Io.File.stdin().isTty(app_runtime.io()) catch false,
+        std.Io.File.stdout().isTty(app_runtime.io()) catch false,
+    ) orelse return;
+
+    switch (target) {
+        .list => try cli.printListRequiresTtyError(),
+        .switch_account => try cli.printSwitchRequiresTtyError(),
+        .remove_account => try cli.printRemoveRequiresTtyError(),
+    }
+    return err;
+}
+
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
     return target == .list or target == .switch_account;
 }
@@ -1191,6 +1221,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
 
     if (opts.live) {
+        try ensureLiveTty(.list);
         const live_allocator = std.heap.smp_allocator;
         const strict_refresh = opts.api_mode == .force_api;
         const loaded = try loadSwitchSelectionDisplay(
@@ -1401,6 +1432,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
 
+    try ensureLiveTty(.switch_account);
     const live_allocator = std.heap.smp_allocator;
     const strict_refresh = opts.api_mode == .force_api;
     const loaded = try loadSwitchSelectionDisplay(
@@ -1605,13 +1637,13 @@ const SwitchLiveRuntime = struct {
         var refresh_error_name: ?[]u8 = null;
 
         self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         in_flight = self.in_flight;
         next_refresh_not_before_ms = self.next_refresh_not_before_ms;
         mode_label = self.mode_label;
         if (self.last_refresh_error_name) |error_name| {
             refresh_error_name = try allocator.dupe(u8, error_name);
         }
-        self.mutex.unlock(io);
         defer if (refresh_error_name) |value| allocator.free(value);
 
         const refresh_state = if (in_flight)
@@ -2388,6 +2420,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     const interactive_remove = !opts.all and opts.selectors.len == 0;
     if (interactive_remove and opts.live) {
+        try ensureLiveTty(.remove_account);
         const live_allocator = std.heap.smp_allocator;
         const strict_refresh = opts.api_mode == .force_api;
         const loaded = try loadSwitchSelectionDisplay(
@@ -2657,6 +2690,60 @@ test "live fallback display preserves the refresh error name" {
     defer if (loaded.refresh_error_name) |name| gpa.free(name);
 
     try std.testing.expectEqualStrings("NodeJsRequired", loaded.refresh_error_name.?);
+}
+
+test "live tty preflight reports command-specific errors" {
+    try std.testing.expect(liveTtyPreflightError(.list, true, true) == null);
+    try std.testing.expect(liveTtyPreflightError(.switch_account, true, true) == null);
+    try std.testing.expect(liveTtyPreflightError(.remove_account, true, true) == null);
+
+    try std.testing.expect(liveTtyPreflightError(.list, false, true).? == error.ListLiveRequiresTty);
+    try std.testing.expect(liveTtyPreflightError(.switch_account, true, false).? == error.SwitchSelectionRequiresTty);
+    try std.testing.expect(liveTtyPreflightError(.remove_account, false, false).? == error.RemoveSelectionRequiresTty);
+}
+
+test "buildStatusLine releases mutex on allocation failure" {
+    const gpa = std.testing.allocator;
+
+    var reg: registry.Registry = .{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+
+    var runtime = SwitchLiveRuntime.init(
+        gpa,
+        ".",
+        .list,
+        .default,
+        false,
+        .{
+            .usage_api_enabled = false,
+            .account_api_enabled = false,
+            .interval_ms = switch_live_local_refresh_interval_ms,
+            .label = "local",
+        },
+        try gpa.dupe(u8, "NodeJsRequired"),
+    );
+    defer runtime.deinit();
+
+    var failing_allocator_state = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    const failing_allocator = failing_allocator_state.allocator();
+
+    try std.testing.expectError(
+        error.OutOfMemory,
+        runtime.buildStatusLine(failing_allocator, .{
+            .reg = &reg,
+            .usage_overrides = null,
+        }),
+    );
+
+    try std.testing.expect(runtime.mutex.tryLock());
+    runtime.mutex.unlock(app_runtime.io());
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.

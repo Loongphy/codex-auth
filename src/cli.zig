@@ -4061,7 +4061,7 @@ fn renderSwitchList(
                 try out.writeAll(ansi.dim);
             }
         }
-        try out.writeAll(if (is_selected) "> " else "  ");
+        try out.writeAll(if (is_selected) "> " else if (is_active) "* " else "  ");
         try writeIndexPadded(out, displayed_counter + 1, idx_width);
         try out.writeAll(" ");
         const indent: usize = @as(usize, row.depth) * 2;
@@ -4076,9 +4076,6 @@ fn renderSwitchList(
         try writeTruncatedPadded(out, row.rate_week, widths.rate_week);
         try out.writeAll("  ");
         try writeTruncatedPadded(out, row.last, widths.last);
-        if (is_active) {
-            try out.writeAll("  [ACTIVE]");
-        }
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.reset);
         displayed_counter += 1;
@@ -4794,6 +4791,52 @@ test "Scenario: Given usage overrides when rendering switch list then errored ro
     try std.testing.expect(std.mem.indexOf(u8, output, "02 ") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "healthy@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "failed@example.com") != null);
+}
+
+test "Scenario: Given an active account when rendering switch list then non-selected active rows use the list marker" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "selected@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "active@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-2");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, 0, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "> 01 selected@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "* 02 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+}
+
+test "Scenario: Given the active account is selected when rendering switch list then the cursor marker wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "other@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, 0, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "> 01 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "* 01 active@example.com") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
 }
 
 test "Scenario: Given switch live feedback when rendering switch screen then the action message stays below the footer" {

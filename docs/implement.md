@@ -329,6 +329,7 @@ Latest rollout `.jsonl` rate limit record shape (from an `event_msg` + `token_co
   - non-workspace duplicate plans (`Free`, `Plus`, `Pro`, `Pro Lite`) do not use `#1` / `#2`; they should use another disambiguator such as an account or user suffix
 - Single-account emails still render as one flat row; when an alias is set, that row shows `(alias)email`.
 - The switch/remove UI shows `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`, and preserves grouped child indentation.
+- In `switch` and `remove`, typed row numbers are treated as an explicit manual override and resolve against displayed rows, not only the filtered arrow-key/live selectable set. This keeps environment/setup-error rows manually reachable when an operator intentionally enters the number.
 - Usage limit cells show remaining percent plus reset time: `NN% (HH:MM)` for same-day resets, or `NN% (HH:MM on D Mon)` when the reset is on a different day.
 - `LAST ACTIVITY` is derived from `last_usage_at` and rendered as a relative time like `Now` or `2m ago`.
 - `PLAN` comes from the auth claim when available, and falls back to the last usage snapshot's `plan_type` (for example raw values like `free`, `plus`, `prolite`, `team` are shown as `Free`, `Plus`, `Pro Lite`, `Team`).
