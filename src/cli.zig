@@ -215,13 +215,13 @@ fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
 
 fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k, 1-9 type, Backspace edit, Enter select, Esc or q quit\n");
+    try out.writeAll("Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n");
     if (use_color) try out.writeAll(ansi.reset);
 }
 
 fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Backspace edit, Enter delete, Esc or q quit\n");
+    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n");
     if (use_color) try out.writeAll(ansi.reset);
 }
 
@@ -600,7 +600,6 @@ pub const ApiMode = enum {
 };
 
 pub const ListOptions = struct {
-    debug: bool = false,
     live: bool = false,
     api_mode: ApiMode = .default,
 };
@@ -717,13 +716,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
-            if (std.mem.eql(u8, arg, "--debug")) {
-                if (opts.debug) {
-                    return usageErrorResult(allocator, .list, "duplicate `--debug` for `list`.", .{});
-                }
-                opts.debug = true;
-                continue;
-            }
             if (std.mem.eql(u8, arg, "--live")) {
                 if (opts.live) {
                     return usageErrorResult(allocator, .list, "duplicate `--live` for `list`.", .{});
@@ -754,9 +746,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                 return usageErrorResult(allocator, .list, "unknown flag `{s}` for `list`.", .{arg});
             }
             return usageErrorResult(allocator, .list, "unexpected argument `{s}` for `list`.", .{arg});
-        }
-        if (opts.debug and opts.live) {
-            return usageErrorResult(allocator, .list, "`--debug` cannot be combined with `--live` for `list`.", .{});
         }
         return .{ .command = .{ .list = opts } };
     }
@@ -1423,7 +1412,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
-        .list => try out.writeAll("  codex-auth list [--debug|--live] [--api|--skip-api]\n"),
+        .list => try out.writeAll("  codex-auth list [--live] [--api|--skip-api]\n"),
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -1469,7 +1458,6 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .list => {
             try out.writeAll("  codex-auth list\n");
-            try out.writeAll("  codex-auth list --debug\n");
             try out.writeAll("  codex-auth list --live\n");
             try out.writeAll("  codex-auth list --api\n");
             try out.writeAll("  codex-auth list --skip-api\n");

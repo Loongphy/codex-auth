@@ -1458,37 +1458,6 @@ test "Scenario: Given list with skip-api when running list then it does not requ
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
-test "Scenario: Given list with debug and no accounts when running list then it does not require api refresh executables" {
-    const gpa = std.testing.allocator;
-    const project_root = try projectRootAlloc(gpa);
-    defer gpa.free(project_root);
-    try buildCliBinary(gpa, project_root);
-
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(home_root);
-
-    try tmp.dir.makePath("empty-bin");
-    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
-    defer gpa.free(empty_path);
-
-    const result = try runCliWithIsolatedHomeAndPath(
-        gpa,
-        project_root,
-        home_root,
-        empty_path,
-        &[_][]const u8{ "list", "--debug" },
-    );
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
-}
-
 test "Scenario: Given switch query with api flag when running switch then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

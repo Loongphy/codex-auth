@@ -166,21 +166,6 @@ test "Scenario: Given list with extra args when parsing then usage error is retu
     try expectUsageError(result, .list, "unexpected argument");
 }
 
-test "Scenario: Given list with debug flag when parsing then debug mode is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "list", "--debug" };
-    var result = try cli.parseArgs(gpa, &args);
-    defer cli.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .list => |opts| try std.testing.expect(opts.debug),
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
 test "Scenario: Given list with skip-api flag when parsing then local-only display mode is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "list", "--skip-api" };
@@ -209,15 +194,6 @@ test "Scenario: Given list with live flag when parsing then live mode is preserv
         },
         else => return error.TestExpectedEqual,
     }
-}
-
-test "Scenario: Given list with live and debug flags when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "list", "--live", "--debug" };
-    var result = try cli.parseArgs(gpa, &args);
-    defer cli.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .list, "`--debug` cannot be combined with `--live`");
 }
 
 test "Scenario: Given list with api flag when parsing then forced api mode is preserved" {
@@ -333,7 +309,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug|--live] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 

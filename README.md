@@ -94,7 +94,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth list [--debug] [--live] [--api|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
+| `codex-auth list [--live] [--api|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
 | `codex-auth switch [--live] [--auto] [--api|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. `--auto` requires `--live` and auto-switches away from the current account when the live view shows it as exhausted or returns a non-200 usage API status. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
@@ -130,7 +130,6 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 ```shell
 codex-auth list
-codex-auth list --debug
 codex-auth list --live
 codex-auth list --api        # force usage/team-name API refresh, even if config api is disabled
 codex-auth list --skip-api   # forbid usage/team-name API refresh for this command
