@@ -2,6 +2,8 @@
 
 This document is the single source of truth for `codex-auth` background auto-switch behavior.
 
+It does not describe the foreground `codex-auth switch --live --auto` picker mode. That live picker mode uses its own immediate display-driven trigger rules and does not read `auto_switch.threshold_5h_percent` or `auto_switch.threshold_weekly_percent`.
+
 ## Commands and Stored Config
 
 User-facing commands:

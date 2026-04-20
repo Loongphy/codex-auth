@@ -300,7 +300,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api] | switch <query>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--auto] [--api|--skip-api] | switch <query>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [<query>...] | remove --all") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
@@ -754,6 +754,34 @@ test "Scenario: Given switch interactive with live flag when parsing then live m
     }
 }
 
+test "Scenario: Given switch interactive with live auto flags when parsing then auto mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "--auto" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expect(opts.live);
+                try std.testing.expect(opts.auto);
+                try std.testing.expect(opts.query == null);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch with auto flag but without live when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--auto" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "requires `--live`");
+}
+
 test "Scenario: Given switch query with live flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "02" };
@@ -766,6 +794,15 @@ test "Scenario: Given switch query with live flag when parsing then usage error 
 test "Scenario: Given switch query with api flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "--api", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "does not support");
+}
+
+test "Scenario: Given switch query with auto flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "--auto", "02" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 

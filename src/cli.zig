@@ -617,6 +617,7 @@ pub const ImportOptions = struct {
 pub const SwitchOptions = struct {
     query: ?[]u8,
     live: bool = false,
+    auto: bool = false,
     api_mode: ApiMode = .default,
 };
 pub const RemoveOptions = struct {
@@ -866,6 +867,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                 opts.live = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--auto")) {
+                if (opts.auto) {
+                    if (opts.query) |query| allocator.free(query);
+                    return usageErrorResult(allocator, .switch_account, "duplicate `--auto` for `switch`.", .{});
+                }
+                opts.auto = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--api")) {
                 switch (opts.api_mode) {
                     .default => opts.api_mode = .force_api,
@@ -904,12 +913,16 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             }
             opts.query = try allocator.dupe(u8, arg);
         }
-        if (opts.query != null and (opts.api_mode != .default or opts.live)) {
+        if (opts.auto and !opts.live) {
+            if (opts.query) |query| allocator.free(query);
+            return usageErrorResult(allocator, .switch_account, "`--auto` requires `--live` for `switch`.", .{});
+        }
+        if (opts.query != null and (opts.api_mode != .default or opts.live or opts.auto)) {
             if (opts.query) |query| allocator.free(query);
             return usageErrorResult(
                 allocator,
                 .switch_account,
-                "`switch <query>` does not support `--live`, `--api`, or `--skip-api`.",
+                "`switch <query>` does not support `--live`, `--auto`, `--api`, or `--skip-api`.",
                 .{},
             );
         }
@@ -1237,7 +1250,7 @@ pub fn writeHelp(
         .{ .name = "status", .description = "Show auto-switch and usage API status" },
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
-        .{ .name = "switch [--live] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
+        .{ .name = "switch [--live] [--auto] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
         .{ .name = "remove [--live] [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
@@ -1419,7 +1432,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import --purge [<path>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth switch [--live] [--auto] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
@@ -1471,6 +1484,7 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
             try out.writeAll("  codex-auth switch --live\n");
+            try out.writeAll("  codex-auth switch --live --auto\n");
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
             try out.writeAll("  codex-auth switch work\n");
@@ -1922,6 +1936,7 @@ pub const SwitchLiveActionController = struct {
         allocator: std.mem.Allocator,
         account_key: []const u8,
     ) anyerror!LiveActionOutcome,
+    auto_switch: bool = false,
 };
 
 pub const RemoveLiveActionController = struct {
@@ -2290,11 +2305,13 @@ pub fn runSwitchLiveActions(
 
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
+    var auto_check_pending = controller.auto_switch;
 
     while (true) {
         if (try controller.refresh.maybe_take_updated_display(controller.refresh.context)) |updated| {
             current_display.deinit(allocator);
             current_display = updated;
+            auto_check_pending = controller.auto_switch;
         }
 
         const borrowed = current_display.borrowed();
@@ -2310,6 +2327,31 @@ pub fn runSwitchLiveActions(
             else
                 activeSelectableIndex(&rows) orelse 0;
             try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx.?);
+        }
+
+        if (auto_check_pending) {
+            if (try maybeAutoSwitchTargetKeyAlloc(allocator, borrowed, &rows)) |target_key| {
+                defer allocator.free(target_key);
+                const outcome = controller.apply_selection(controller.refresh.context, allocator, target_key) catch |err| {
+                    replaceOptionalOwnedString(
+                        allocator,
+                        &action_message,
+                        try std.fmt.allocPrint(allocator, "Auto-switch failed: {s}", .{@errorName(err)}),
+                    );
+                    replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
+                    number_len = 0;
+                    auto_check_pending = false;
+                    continue;
+                };
+                current_display.deinit(allocator);
+                current_display = outcome.updated_display;
+                replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
+                replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
+                number_len = 0;
+                auto_check_pending = controller.auto_switch;
+                continue;
+            }
+            auto_check_pending = false;
         }
 
         const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
@@ -2381,6 +2423,7 @@ pub fn runSwitchLiveActions(
                     replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
                     replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                     number_len = 0;
+                    auto_check_pending = controller.auto_switch;
                 },
                 .quit => return,
                 .backspace => {
@@ -2488,6 +2531,7 @@ pub fn runSwitchLiveActions(
                 replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
                 replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                 number_len = 0;
+                auto_check_pending = controller.auto_switch;
                 continue;
             }
             if (isQuitKey(b[i])) return;
@@ -2983,6 +3027,90 @@ fn selectedDisplayIndexForRender(
         return displayedIndexForSelectable(rows, selectable_idx);
     }
     return null;
+}
+
+fn numericUsageOverrideStatus(usage_override: ?[]const u8) ?u16 {
+    const value = usage_override orelse return null;
+    return std.fmt.parseInt(u16, value, 10) catch null;
+}
+
+fn accountHasExhaustedUsage(rec: *const registry.AccountRecord, now: i64) bool {
+    const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+    const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+    const rem_5h = registry.remainingPercentAt(rate_5h, now);
+    const rem_week = registry.remainingPercentAt(rate_week, now);
+    return (rem_5h != null and rem_5h.? == 0) or (rem_week != null and rem_week.? == 0);
+}
+
+fn shouldAutoSwitchActiveAccount(display: SwitchSelectionDisplay, now: i64) bool {
+    const active_account_key = display.reg.active_account_key orelse return false;
+    const active_idx = registry.findAccountIndexByAccountKey(display.reg, active_account_key) orelse return false;
+
+    if (numericUsageOverrideStatus(usageOverrideForAccount(display.usage_overrides, active_idx))) |status_code| {
+        return status_code != 200;
+    }
+
+    return accountHasExhaustedUsage(&display.reg.accounts.items[active_idx], now);
+}
+
+fn autoSwitchCandidateIsBetter(
+    candidate_score: ?i64,
+    candidate_last_usage_at: ?i64,
+    best_score: ?i64,
+    best_last_usage_at: i64,
+) bool {
+    if (candidate_score != null and best_score == null) return true;
+    if (candidate_score == null and best_score != null) return false;
+    if (candidate_score != null and best_score != null and candidate_score.? != best_score.?) {
+        return candidate_score.? > best_score.?;
+    }
+
+    return (candidate_last_usage_at orelse -1) > best_last_usage_at;
+}
+
+fn bestAutoSwitchCandidateSelectableIndex(
+    rows: *const SwitchRows,
+    reg: *registry.Registry,
+    now: i64,
+) ?usize {
+    const active_account_key = reg.active_account_key orelse return null;
+
+    var best_selectable_idx: ?usize = null;
+    var best_score: ?i64 = null;
+    var best_last_usage_at: i64 = -1;
+
+    for (rows.selectable_row_indices, 0..) |row_idx, selectable_idx| {
+        const account_idx = rows.items[row_idx].account_index orelse continue;
+        const rec = &reg.accounts.items[account_idx];
+        if (std.mem.eql(u8, rec.account_key, active_account_key)) continue;
+        if (accountHasExhaustedUsage(rec, now)) continue;
+
+        const candidate_score = registry.usageScoreAt(rec.last_usage, now);
+        if (best_selectable_idx == null or autoSwitchCandidateIsBetter(
+            candidate_score,
+            rec.last_usage_at,
+            best_score,
+            best_last_usage_at,
+        )) {
+            best_selectable_idx = selectable_idx;
+            best_score = candidate_score;
+            best_last_usage_at = rec.last_usage_at orelse -1;
+        }
+    }
+
+    return best_selectable_idx;
+}
+
+fn maybeAutoSwitchTargetKeyAlloc(
+    allocator: std.mem.Allocator,
+    display: SwitchSelectionDisplay,
+    rows: *const SwitchRows,
+) !?[]u8 {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    if (!shouldAutoSwitchActiveAccount(display, now)) return null;
+
+    const selectable_idx = bestAutoSwitchCandidateSelectableIndex(rows, display.reg, now) orelse return null;
+    return try accountKeyForSelectableAlloc(allocator, rows, display.reg, selectable_idx);
 }
 
 fn dupSelectedAccountKey(
@@ -4484,6 +4612,23 @@ fn appendTestAccount(
     });
 }
 
+fn testUsageSnapshot(now: i64, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+    return .{
+        .primary = .{
+            .used_percent = used_5h,
+            .window_minutes = 300,
+            .resets_at = now + 3600,
+        },
+        .secondary = .{
+            .used_percent = used_weekly,
+            .window_minutes = 10080,
+            .resets_at = now + 7 * 24 * 3600,
+        },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
 test "Scenario: Given grouped accounts when rendering switch list then child rows keep indentation" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -4542,6 +4687,89 @@ test "Scenario: Given usage overrides when selecting switch accounts then errore
 
     try std.testing.expectEqual(@as(usize, 1), rows.selectable_row_indices.len);
     try std.testing.expect(std.mem.eql(u8, accountIdForSelectable(&rows, &reg, 0), "user-1::acc-1"));
+}
+
+test "Scenario: Given exhausted active usage when picking an auto-switch target then the best healthy candidate is chosen" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup-a@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-3", "backup-b@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 100, 10);
+    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 35, 15);
+    reg.accounts.items[2].last_usage = testUsageSnapshot(now, 5, 8);
+
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
+        .reg = &reg,
+        .usage_overrides = null,
+    }, &rows);
+    defer if (target_key) |value| gpa.free(value);
+
+    try std.testing.expect(target_key != null);
+    try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
+}
+
+test "Scenario: Given an active api status error when picking an auto-switch target then a healthy candidate is chosen" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 20, 20);
+    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 10, 10);
+
+    const usage_overrides = [_]?[]const u8{ "403", null };
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
+        .reg = &reg,
+        .usage_overrides = &usage_overrides,
+    }, &rows);
+    defer if (target_key) |value| gpa.free(value);
+
+    try std.testing.expect(target_key != null);
+    try std.testing.expectEqualStrings("user-1::acc-2", target_key.?);
+}
+
+test "Scenario: Given only exhausted candidates when picking an auto-switch target then no target is returned" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 100, 10);
+    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 100, 100);
+
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
+        .reg = &reg,
+        .usage_overrides = null,
+    }, &rows);
+    defer if (target_key) |value| gpa.free(value);
+
+    try std.testing.expect(target_key == null);
 }
 
 test "Scenario: Given usage overrides when rendering switch list then errored rows still show full display numbers" {

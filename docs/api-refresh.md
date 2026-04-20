@@ -46,7 +46,11 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
 - `list --api` forces foreground usage refresh for this command even when `api.usage = false`; `list --skip-api` skips foreground usage refresh completely and renders only the stored registry data
-- interactive `switch` follows the configured foreground usage mode by default; `switch <query>` always resolves selectors locally from stored data and does not accept `--api` or `--skip-api`
+- interactive `switch` follows the configured foreground usage mode by default; `switch --live --auto` uses the same live display data source and only adds foreground auto-selection on top of that refreshed view
+- in `switch --live --auto`, the active account triggers a foreground auto-switch only when the live display shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
+- `switch --live --auto` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
+- with `--skip-api` or `api.usage = false`, only the active account can be refreshed from local rollout data; non-active foreground auto-switch candidates still come from stored registry data
+- `switch <query>` always resolves selectors locally from stored data and does not accept `--auto`, `--api`, or `--skip-api`
 - interactive `remove` stays local-only by default; `remove --api` does a best-effort foreground usage refresh attempt for picker display only. Successful rows show live usage data; rows that cannot refresh may show HTTP/error overlays in the picker instead. Refresh problems do not block deletion, and setup or batch-level failures still fall back to the stored registry list
 - `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--api` or `--skip-api`
 - `switch` does not refresh usage again after the new account is activated
@@ -61,7 +65,7 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
 - `list --api` forces synchronous `accounts/check` refresh for this command even when `api.account = false`; `list --skip-api` skips it and uses stored metadata only.
-- interactive `switch` follows the configured account-name refresh mode by default; `switch <query>` always stays local-only and does not accept `--api` or `--skip-api`.
+- interactive `switch` follows the configured account-name refresh mode by default, including `switch --live --auto`; `switch <query>` always stays local-only and does not accept `--auto`, `--api`, or `--skip-api`.
 - interactive `remove` stays local-only by default; `remove --api` does a best-effort synchronous `accounts/check` refresh for picker display only, and account-name refresh failures leave the stored metadata in place without blocking deletion.
 - `remove <query>` and `remove --all` always stay local-only and do not accept `--api` or `--skip-api`.
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.

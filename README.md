@@ -96,7 +96,7 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 |---------|-------------|
 | `codex-auth list [--debug] [--live] [--api|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
-| `codex-auth switch [--live] [--api|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. |
+| `codex-auth switch [--live] [--auto] [--api|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. `--auto` requires `--live` and auto-switches away from the current account when the live view shows it as exhausted or returns a non-200 usage API status. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
 | `codex-auth remove [--live] [--api|--skip-api]` | Interactive remove. `--live` keeps the picker open after each deletion; `--api` forces remote refresh and `--skip-api` forbids remote API use for this command. |
 | `codex-auth remove <query> [<query>...]` | Remove one or more accounts by row number, alias, email, account name, or `account_key` match using stored local data. |
@@ -144,11 +144,13 @@ codex-auth list --skip-api   # forbid usage/team-name API refresh for this comma
 
 Interactive `switch` shows email, 5h, weekly, and last activity.
 Without `<query>`, it follows the configured refresh mode before opening the picker. `switch` is single-shot by default; `switch --live` keeps the picker open after Enter and updates the footer with the latest switch result.
+`switch --live --auto` keeps watching the current live display and auto-switches only when the active account reaches `0%` on 5h or weekly, or when the usage API returns a non-200 status for the active account. Auto-switch candidates still follow the live picker rules and also skip candidates whose current 5h or weekly value is already `0%`.
 Use `--api` to force a foreground remote refresh first, or `--skip-api` to forbid remote API use and rely on local-only usage refresh where available.
 
 ```shell
 codex-auth switch
 codex-auth switch --live
+codex-auth switch --live --auto
 codex-auth switch --api
 codex-auth switch --skip-api
 ```
@@ -157,7 +159,7 @@ codex-auth switch --skip-api
 
 `<query>` can be a displayed row number, an alias, or a fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
-`switch <query>` always resolves from stored local data and does not accept `--live`, `--api`, or `--skip-api`.
+`switch <query>` always resolves from stored local data and does not accept `--live`, `--auto`, `--api`, or `--skip-api`.
 
 ```shell
 codex-auth switch 02                 # switch by displayed row number

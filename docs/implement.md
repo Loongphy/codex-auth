@@ -152,9 +152,10 @@ Important limits:
 
 ## Switching Accounts
 
-`switch` supports two modes:
+`switch` supports three foreground forms:
 
 - Interactive: `codex-auth switch`
+- Interactive live: `codex-auth switch --live [--auto] [--api|--skip-api]`
 - Non-interactive: `codex-auth switch <query>`
 
 For non-interactive switching, the target account is matched case-insensitively by:
@@ -171,11 +172,23 @@ When switching:
 2. The selected account’s `accounts/<account file key>.auth.json` is copied to `~/.codex/auth.json`.
 3. The registry’s `active_account_key` is updated to that account’s `record_key`.
 
-When `api.usage = true`, interactive `codex-auth switch` refreshes usage for all stored accounts before rendering account choices, using a maximum concurrency of `3`. When a per-account foreground usage request returns a non-`200` HTTP status, the picker shows that status in both usage columns for that row. When a stored account snapshot cannot make a ChatGPT usage request because the required ChatGPT auth fields are missing, the picker shows `MissingAuth` in both usage columns for that row. No extra usage refresh is attempted after the switch completes.
+When `api.usage = true`, interactive `codex-auth switch` refreshes usage for all stored accounts before rendering account choices, using a maximum concurrency of `3`. When a per-account foreground usage request returns a non-`200` HTTP status, the picker shows that status in both usage columns for that row. When a stored account snapshot cannot make a ChatGPT usage request because the required ChatGPT auth fields are missing, the picker shows `MissingAuth` in both usage columns for that row. No extra usage refresh is attempted after the single-shot `switch` command completes.
 
 When `api.usage = false`, interactive `codex-auth switch` keeps the existing local-only behavior and can refresh only the active account from the newest local rollout data.
 
-`codex-auth switch <query>` now stays local-only: it resolves matches from the stored registry, switches immediately on a single match, and does not wait for foreground usage or account-name API refresh before switching.
+`codex-auth switch --live` keeps the picker open after each successful switch and keeps refreshing the display in-place. `--api` and `--skip-api` still override the configured usage/account API settings for that command only.
+
+`codex-auth switch --live --auto` adds a foreground auto-switch loop on top of the live picker. It does not use the background watcher thresholds from `config auto`. Instead, it switches only when the currently active row in the live display:
+
+- shows `0%` remaining on the 5h window, or
+- shows `0%` remaining on the weekly window, or
+- shows a numeric non-`200` usage API status overlay
+
+Foreground live auto-switch candidates still use the same selectable rows as the live picker, so rows with usage/API error overlays are excluded. In addition, rows whose current displayed 5h or weekly value is already `0%` are also skipped, to avoid leaving one exhausted account for another exhausted account.
+
+When `--skip-api` or local-only usage mode is in effect, only the active account can be refreshed from local rollout data. Non-active candidates still come from the stored registry snapshot, so `switch --live --auto` is only as current as that local snapshot for non-active accounts.
+
+`codex-auth switch <query>` now stays local-only: it resolves matches from the stored registry, switches immediately on a single match, and does not wait for foreground usage or account-name API refresh before switching. This query form does not accept `--live`, `--auto`, `--api`, or `--skip-api`.
 
 Grouped account-name metadata refresh, when needed, now runs in the same foreground pre-selection phase as the interactive picker path; see [docs/api-refresh.md](./api-refresh.md).
 
