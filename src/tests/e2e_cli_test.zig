@@ -1522,7 +1522,7 @@ test "Scenario: Given switch query with api flag when running switch then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch query with skip-api flag when running switch then it returns a usage error" {
@@ -1558,7 +1558,7 @@ test "Scenario: Given switch query with skip-api flag when running switch then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
@@ -1694,6 +1694,48 @@ test "Scenario: Given remove query with one match when running remove then it de
     keeper_backup.close();
 }
 
+test "Scenario: Given remove with account key selector when running remove then it deletes the matching account" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "robot09@example.com", .alias = "" },
+        .{ .email = "keeper@example.com", .alias = "" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const removed_account_key = try bdd.accountKeyForEmailAlloc(gpa, "robot09@example.com");
+    defer gpa.free(removed_account_key);
+
+    const result = try runCliWithIsolatedHomeAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "remove", removed_account_key },
+        "",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "robot09@example.com") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "keeper@example.com"));
+}
+
 test "Scenario: Given remove with multiple selectors when running remove then it deletes all selected accounts" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1771,7 +1813,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -1807,10 +1849,10 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--api` or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
-test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it falls back to stored data" {
+test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it requires api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1845,14 +1887,12 @@ test "Scenario: Given interactive remove with api flag and missing refresh execu
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {

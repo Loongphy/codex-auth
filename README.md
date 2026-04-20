@@ -94,11 +94,12 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth list [--debug] [--api|--skip-api]` | List all accounts. `--api` forces a live refresh, while `--skip-api` uses only stored local usage and team-name data. |
+| `codex-auth list [--debug] [--live] [--api|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
 | `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
-| `codex-auth switch [--api|--skip-api]` | Switch the active account interactively. `--api` forces a live refresh first; `--skip-api` stays local-only. |
+| `codex-auth switch [--live] [--api|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
-| `codex-auth remove [--api|--skip-api] [<query>...]` | Interactive remove stays local-only by default; `--api` attempts a best-effort live refresh for picker display, while selector-based removal still resolves from stored local data only. |
+| `codex-auth remove [--live] [--api|--skip-api]` | Interactive remove. `--live` keeps the picker open after each deletion; `--api` forces remote refresh and `--skip-api` forbids remote API use for this command. |
+| `codex-auth remove <query> [<query>...]` | Remove one or more accounts by row number, alias, email, account name, or `account_key` match using stored local data. |
 | `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
 
@@ -130,22 +131,24 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 ```shell
 codex-auth list
 codex-auth list --debug
+codex-auth list --live
 codex-auth list --api        # force usage/team-name API refresh, even if config api is disabled
-codex-auth list --skip-api   # use only stored registry data; skip usage/team-name API refresh
+codex-auth list --skip-api   # forbid usage/team-name API refresh for this command
 ```
 
+`--live` keeps the list refreshing inside the terminal UI.
 `--api` forces the foreground usage and team-name refresh path for this command only.
-`--skip-api` keeps the current local snapshot exactly as stored in `registry.json`.
-It does not call the usage API or `accounts/check`, so transient live-refresh failures such as `401` and `403` are not preserved in this mode.
+`--skip-api` forbids remote refresh for this command only. Usage can still refresh locally for the active account when local rollout data exists.
 
 ### Switch Account
 
 Interactive `switch` shows email, 5h, weekly, and last activity.
-Without `<query>`, it follows the configured refresh mode before opening the picker.
-Use `--api` to force a foreground refresh first, or `--skip-api` to stay on stored local data only.
+Without `<query>`, it follows the configured refresh mode before opening the picker. `switch` is single-shot by default; `switch --live` keeps the picker open after Enter and updates the footer with the latest switch result.
+Use `--api` to force a foreground remote refresh first, or `--skip-api` to forbid remote API use and rely on local-only usage refresh where available.
 
 ```shell
 codex-auth switch
+codex-auth switch --live
 codex-auth switch --api
 codex-auth switch --skip-api
 ```
@@ -154,7 +157,7 @@ codex-auth switch --skip-api
 
 `<query>` can be a displayed row number, an alias, or a fuzzy email/alias match.
 The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
-`switch <query>` always resolves from stored local data and does not accept `--api` or `--skip-api`.
+`switch <query>` always resolves from stored local data and does not accept `--live`, `--api`, or `--skip-api`.
 
 ```shell
 codex-auth switch 02                 # switch by displayed row number

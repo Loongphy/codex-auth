@@ -18,7 +18,6 @@ const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROU
 const foreground_usage_refresh_concurrency: usize = 5;
 const switch_live_api_refresh_interval_ms: i64 = 30_000;
 const switch_live_local_refresh_interval_ms: i64 = 10_000;
-const switch_live_stored_refresh_interval_ms: i64 = 10_000;
 
 fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return try app_runtime.currentEnviron().createMap(allocator);
@@ -224,6 +223,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
 fn isHandledCliError(err: anyerror) bool {
     return err == error.AccountNotFound or
         err == error.CodexLoginFailed or
+        err == error.ListLiveRequiresTty or
         err == error.NodeJsRequired or
         err == error.SwitchSelectionRequiresTty or
         err == error.RemoveConfirmationUnavailable or
@@ -246,7 +246,7 @@ pub const ForegroundUsageRefreshTarget = enum {
 };
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list or target == .switch_account;
+    return target == .list or target == .switch_account or target == .remove_account;
 }
 
 fn apiModeUsesApi(default_enabled: bool, api_mode: cli.ApiMode) bool {
@@ -255,10 +255,6 @@ fn apiModeUsesApi(default_enabled: bool, api_mode: cli.ApiMode) bool {
         .force_api => true,
         .skip_api => false,
     };
-}
-
-fn apiModeUsesStoredDataOnly(api_mode: cli.ApiMode) bool {
-    return api_mode == .skip_api;
 }
 
 fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
@@ -1549,14 +1545,52 @@ fn loadSingleFileImportAuthInfo(
 fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
     if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
 
+    if (opts.live) {
+        const live_allocator = std.heap.smp_allocator;
+        const strict_refresh = opts.api_mode == .force_api;
+        const loaded = try loadSwitchSelectionDisplay(
+            live_allocator,
+            codex_home,
+            opts.api_mode,
+            .list,
+            strict_refresh,
+        );
+        var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
+        errdefer if (initial_display) |*display| display.deinit(live_allocator);
+
+        var runtime = SwitchLiveRuntime.init(
+            live_allocator,
+            codex_home,
+            .list,
+            opts.api_mode,
+            strict_refresh,
+            loaded.policy,
+        );
+        defer runtime.deinit();
+
+        const controller: cli.SwitchLiveController = .{
+            .context = @ptrCast(&runtime),
+            .maybe_start_refresh = switchLiveRuntimeMaybeStartRefresh,
+            .maybe_take_updated_display = switchLiveRuntimeMaybeTakeUpdatedDisplay,
+            .build_status_line = switchLiveRuntimeBuildStatusLine,
+        };
+
+        const transferred_display = initial_display.?;
+        initial_display = null;
+        cli.viewAccountsWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| {
+            if (err == error.TuiRequiresTty) {
+                try cli.printListRequiresTtyError();
+                return error.ListLiveRequiresTty;
+            }
+            return err;
+        };
+        return;
+    }
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
-    }
-    if (apiModeUsesStoredDataOnly(opts.api_mode)) {
-        try format.printAccounts(&reg);
-        return;
     }
 
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
@@ -1667,6 +1701,7 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             try registry.saveRegistry(allocator, codex_home, &reg);
         }
         std.debug.assert(opts.api_mode == .default);
+        std.debug.assert(!opts.live);
 
         var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
         defer resolution.deinit(allocator);
@@ -1696,44 +1731,74 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
 
-    const live_allocator = std.heap.smp_allocator;
+    if (!opts.live) {
+        var loaded = try loadSwitchSelectionDisplay(
+            allocator,
+            codex_home,
+            opts.api_mode,
+            .switch_account,
+            true,
+        );
+        defer loaded.display.deinit(allocator);
 
-    const loaded = try loadSwitchSelectionDisplay(live_allocator, codex_home, opts.api_mode);
-    var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
-    errdefer if (initial_display) |*display| display.deinit(live_allocator);
-
-    const selected_account_key = blk: {
-        var runtime = SwitchLiveRuntime.init(live_allocator, codex_home, opts.api_mode, loaded.policy);
-        defer runtime.deinit();
-
-        const controller: cli.SwitchLiveController = .{
-            .context = @ptrCast(&runtime),
-            .maybe_start_refresh = switchLiveRuntimeMaybeStartRefresh,
-            .maybe_take_updated_display = switchLiveRuntimeMaybeTakeUpdatedDisplay,
-            .build_status_line = switchLiveRuntimeBuildStatusLine,
-        };
-
-        const transferred_display = initial_display.?;
-        initial_display = null;
-        break :blk cli.selectAccountWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| {
+        const selected_account_key = cli.selectAccountWithUsageOverrides(
+            allocator,
+            &loaded.display.reg,
+            loaded.display.usage_overrides,
+        ) catch |err| {
             if (err == error.TuiRequiresTty) {
                 try cli.printSwitchRequiresTtyError();
                 return error.SwitchSelectionRequiresTty;
             }
             return err;
         };
-    };
-    defer if (selected_account_key) |account_key| live_allocator.free(@constCast(account_key));
-
-    if (selected_account_key == null) return;
-
-    var reg = try registry.loadRegistry(live_allocator, codex_home);
-    defer reg.deinit(live_allocator);
-    if (try registry.syncActiveAccountFromAuth(live_allocator, codex_home, &reg)) {
-        try registry.saveRegistry(live_allocator, codex_home, &reg);
+        if (selected_account_key == null) return;
+        try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
+        try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
+        return;
     }
-    try registry.activateAccountByKey(live_allocator, codex_home, &reg, selected_account_key.?);
-    try registry.saveRegistry(live_allocator, codex_home, &reg);
+
+    const live_allocator = std.heap.smp_allocator;
+    const strict_refresh = opts.api_mode == .force_api;
+    const loaded = try loadSwitchSelectionDisplay(
+        live_allocator,
+        codex_home,
+        opts.api_mode,
+        .switch_account,
+        strict_refresh,
+    );
+    var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
+    errdefer if (initial_display) |*display| display.deinit(live_allocator);
+
+    var runtime = SwitchLiveRuntime.init(
+        live_allocator,
+        codex_home,
+        .switch_account,
+        opts.api_mode,
+        strict_refresh,
+        loaded.policy,
+    );
+    defer runtime.deinit();
+
+    const controller: cli.SwitchLiveActionController = .{
+        .refresh = .{
+            .context = @ptrCast(&runtime),
+            .maybe_start_refresh = switchLiveRuntimeMaybeStartRefresh,
+            .maybe_take_updated_display = switchLiveRuntimeMaybeTakeUpdatedDisplay,
+            .build_status_line = switchLiveRuntimeBuildStatusLine,
+        },
+        .apply_selection = switchLiveRuntimeApplySelection,
+    };
+
+    const transferred_display = initial_display.?;
+    initial_display = null;
+    cli.runSwitchLiveActions(live_allocator, transferred_display, controller) catch |err| {
+        if (err == error.TuiRequiresTty) {
+            try cli.printSwitchRequiresTtyError();
+            return error.SwitchSelectionRequiresTty;
+        }
+        return err;
+    };
 }
 
 const SwitchLiveRefreshPolicy = struct {
@@ -1751,7 +1816,9 @@ const SwitchLoadedDisplay = struct {
 const SwitchLiveRuntime = struct {
     allocator: std.mem.Allocator,
     codex_home: []const u8,
+    target: ForegroundUsageRefreshTarget,
     api_mode: cli.ApiMode,
+    strict_refresh: bool,
     io_impl: std.Io.Threaded,
     mutex: std.Io.Mutex = .init,
     refresh_task: ?std.Io.Future(void) = null,
@@ -1768,7 +1835,9 @@ const SwitchLiveRuntime = struct {
     fn init(
         allocator: std.mem.Allocator,
         codex_home: []const u8,
+        target: ForegroundUsageRefreshTarget,
         api_mode: cli.ApiMode,
+        strict_refresh: bool,
         initial_policy: SwitchLiveRefreshPolicy,
     ) @This() {
         const io_impl = std.Io.Threaded.init(allocator, .{
@@ -1778,7 +1847,9 @@ const SwitchLiveRuntime = struct {
         return .{
             .allocator = allocator,
             .codex_home = codex_home,
+            .target = target,
             .api_mode = api_mode,
+            .strict_refresh = strict_refresh,
             .io_impl = io_impl,
             .next_refresh_not_before_ms = now_ms + initial_policy.interval_ms,
             .refresh_interval_ms = initial_policy.interval_ms,
@@ -1859,6 +1930,14 @@ const SwitchLiveRuntime = struct {
         return display;
     }
 
+    fn discardUpdatedDisplay(self: *@This()) void {
+        const io = self.io_impl.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.updated_display) |*display| display.deinit(self.allocator);
+        self.updated_display = null;
+    }
+
     fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.SwitchSelectionDisplay) ![]u8 {
         _ = display;
         const io = self.io_impl.io();
@@ -1866,7 +1945,7 @@ const SwitchLiveRuntime = struct {
 
         var in_flight = false;
         var next_refresh_not_before_ms: i64 = now_ms;
-        var mode_label: []const u8 = "stored";
+        var mode_label: []const u8 = "local";
         var refresh_error_name: ?[]u8 = null;
 
         self.mutex.lockUncancelable(io);
@@ -1902,15 +1981,6 @@ const SwitchLiveRuntime = struct {
 };
 
 fn switchLiveRefreshPolicy(reg: *const registry.Registry, api_mode: cli.ApiMode) SwitchLiveRefreshPolicy {
-    if (apiModeUsesStoredDataOnly(api_mode)) {
-        return .{
-            .usage_api_enabled = false,
-            .account_api_enabled = false,
-            .interval_ms = switch_live_stored_refresh_interval_ms,
-            .label = "stored",
-        };
-    }
-
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, api_mode);
     if (usage_api_enabled or account_api_enabled) {
@@ -2086,26 +2156,32 @@ fn takeOwnedSwitchSelectionDisplay(
     };
 }
 
-fn loadSwitchSelectionDisplay(
+fn loadStoredSwitchSelectionDisplay(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     api_mode: cli.ApiMode,
 ) !SwitchLoadedDisplay {
-    if (apiModeUsesStoredDataOnly(api_mode)) {
-        var latest = try registry.loadRegistry(allocator, codex_home);
-        errdefer latest.deinit(allocator);
-        if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest)) {
-            try registry.saveRegistry(allocator, codex_home, &latest);
-        }
-        return .{
-            .display = .{
-                .reg = latest,
-                .usage_overrides = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len),
-            },
-            .policy = switchLiveRefreshPolicy(&latest, api_mode),
-        };
+    var latest = try registry.loadRegistry(allocator, codex_home);
+    errdefer latest.deinit(allocator);
+    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest)) {
+        try registry.saveRegistry(allocator, codex_home, &latest);
     }
+    return .{
+        .display = .{
+            .reg = latest,
+            .usage_overrides = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len),
+        },
+        .policy = switchLiveRefreshPolicy(&latest, api_mode),
+    };
+}
 
+fn loadSwitchSelectionDisplay(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    api_mode: cli.ApiMode,
+    target: ForegroundUsageRefreshTarget,
+    strict_refresh: bool,
+) !SwitchLoadedDisplay {
     var base = try registry.loadRegistry(allocator, codex_home);
     defer base.deinit(allocator);
 
@@ -2114,15 +2190,23 @@ fn loadSwitchSelectionDisplay(
     _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &refreshed);
     const initial_policy = switchLiveRefreshPolicy(&refreshed, api_mode);
 
-    try ensureForegroundNodeAvailableWithApiEnabled(
+    ensureForegroundNodeAvailableWithApiEnabled(
         allocator,
         codex_home,
         &refreshed,
-        .switch_account,
+        target,
         initial_policy.usage_api_enabled,
         initial_policy.account_api_enabled,
-    );
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            if (strict_refresh) return err;
+            refreshed.deinit(allocator);
+            return loadStoredSwitchSelectionDisplay(allocator, codex_home, api_mode);
+        },
+    };
+
+    var usage_state = refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
         &refreshed,
@@ -2133,17 +2217,33 @@ fn loadSwitchSelectionDisplay(
         initial_policy.usage_api_enabled,
         false,
         false,
-    );
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            if (strict_refresh) return err;
+            refreshed.deinit(allocator);
+            return loadStoredSwitchSelectionDisplay(allocator, codex_home, api_mode);
+        },
+    };
     errdefer usage_state.deinit(allocator);
-    _ = try maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist(
+
+    _ = maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist(
         allocator,
         codex_home,
         &refreshed,
-        .switch_account,
+        target,
         defaultAccountFetcher,
         initial_policy.account_api_enabled,
         false,
-    );
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            if (strict_refresh) return err;
+            usage_state.deinit(allocator);
+            refreshed.deinit(allocator);
+            return loadStoredSwitchSelectionDisplay(allocator, codex_home, api_mode);
+        },
+    };
 
     var latest = try registry.loadRegistry(allocator, codex_home);
     errdefer latest.deinit(allocator);
@@ -2175,7 +2275,13 @@ fn loadSwitchSelectionDisplay(
 fn runSwitchLiveRefreshRound(runtime: *SwitchLiveRuntime) void {
     const io = runtime.io_impl.io();
     const started_ms = nowMilliseconds();
-    const loaded = loadSwitchSelectionDisplay(runtime.allocator, runtime.codex_home, runtime.api_mode) catch |err| {
+    const loaded = loadSwitchSelectionDisplay(
+        runtime.allocator,
+        runtime.codex_home,
+        runtime.api_mode,
+        runtime.target,
+        runtime.strict_refresh,
+    ) catch |err| {
         const finished_ms = nowMilliseconds();
         const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
 
@@ -2225,6 +2331,198 @@ fn switchLiveRuntimeBuildStatusLine(
     return runtime.buildStatusLine(allocator, display);
 }
 
+fn loadSwitchSelectionDisplayLenient(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    api_mode: cli.ApiMode,
+    target: ForegroundUsageRefreshTarget,
+) !SwitchLoadedDisplay {
+    return loadSwitchSelectionDisplay(allocator, codex_home, api_mode, target, false) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => try loadStoredSwitchSelectionDisplay(allocator, codex_home, api_mode),
+    };
+}
+
+fn accountLabelForKeyAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+) ![]u8 {
+    if (registry.findAccountIndexByAccountKey(reg, account_key)) |idx| {
+        return display_rows.buildPreferredAccountLabelAlloc(
+            allocator,
+            &reg.accounts.items[idx],
+            reg.accounts.items[idx].email,
+        );
+    }
+    return allocator.dupe(u8, account_key);
+}
+
+fn buildRemoveSummaryMessageAlloc(allocator: std.mem.Allocator, labels: []const []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try out.writer.print("Removed {d} account(s): ", .{labels.len});
+    for (labels, 0..) |label, idx| {
+        if (idx != 0) try out.writer.writeAll(", ");
+        try out.writer.writeAll(label);
+    }
+    return try out.toOwnedSlice();
+}
+
+fn collectAccountIndicesByKeysAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_keys: []const []const u8,
+) ![]usize {
+    var indices = std.ArrayList(usize).empty;
+    defer indices.deinit(allocator);
+
+    for (reg.accounts.items, 0..) |rec, idx| {
+        for (account_keys) |account_key| {
+            if (!std.mem.eql(u8, rec.account_key, account_key)) continue;
+            try indices.append(allocator, idx);
+            break;
+        }
+    }
+
+    return try indices.toOwnedSlice(allocator);
+}
+
+fn removeSelectedAccountsAndPersist(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    selected: []const usize,
+    selected_all: bool,
+) !void {
+    const current_active_account_key = if (trackedActiveAccountKey(reg)) |key|
+        try allocator.dupe(u8, key)
+    else
+        null;
+    defer if (current_active_account_key) |key| allocator.free(key);
+
+    var current_auth_state = try loadCurrentAuthState(allocator, codex_home);
+    defer current_auth_state.deinit(allocator);
+
+    const active_removed = if (current_active_account_key) |key|
+        selectionContainsAccountKey(reg, selected, key)
+    else
+        false;
+    const allow_auth_file_update = if (current_active_account_key) |key|
+        active_removed and ((current_auth_state.syncable and current_auth_state.record_key != null and
+            std.mem.eql(u8, current_auth_state.record_key.?, key)) or current_auth_state.missing)
+    else if (current_auth_state.missing)
+        true
+    else if (selected_all)
+        current_auth_state.syncable and current_auth_state.record_key != null and
+            selectionContainsAccountKey(reg, selected, current_auth_state.record_key.?)
+    else
+        false;
+
+    const replacement_account_key = if (active_removed)
+        try selectBestRemainingAccountKeyByUsageAlloc(allocator, reg, selected)
+    else
+        null;
+    defer if (replacement_account_key) |key| allocator.free(key);
+
+    if (replacement_account_key) |key| {
+        if (allow_auth_file_update) {
+            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, key);
+        } else {
+            try registry.setActiveAccountKey(allocator, reg, key);
+        }
+    }
+
+    try registry.removeAccounts(allocator, codex_home, reg, selected);
+    try reconcileActiveAuthAfterRemove(allocator, codex_home, reg, allow_auth_file_update);
+    try registry.saveRegistry(allocator, codex_home, reg);
+}
+
+fn switchLiveRuntimeApplySelection(
+    context: *anyopaque,
+    allocator: std.mem.Allocator,
+    account_key: []const u8,
+) !cli.LiveActionOutcome {
+    const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
+    runtime.awaitRefresh();
+    runtime.discardUpdatedDisplay();
+
+    var reg = try registry.loadRegistry(allocator, runtime.codex_home);
+    defer reg.deinit(allocator);
+    if (try registry.syncActiveAccountFromAuth(allocator, runtime.codex_home, &reg)) {
+        try registry.saveRegistry(allocator, runtime.codex_home, &reg);
+    }
+
+    try registry.activateAccountByKey(allocator, runtime.codex_home, &reg, account_key);
+    try registry.saveRegistry(allocator, runtime.codex_home, &reg);
+
+    const label = try accountLabelForKeyAlloc(allocator, &reg, account_key);
+    defer allocator.free(label);
+
+    const loaded = try loadSwitchSelectionDisplayLenient(
+        allocator,
+        runtime.codex_home,
+        runtime.api_mode,
+        runtime.target,
+    );
+    return .{
+        .updated_display = loaded.display,
+        .action_message = try std.fmt.allocPrint(allocator, "Switched to {s}", .{label}),
+    };
+}
+
+fn removeLiveRuntimeApplySelection(
+    context: *anyopaque,
+    allocator: std.mem.Allocator,
+    account_keys: []const []const u8,
+) !cli.LiveActionOutcome {
+    const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
+    runtime.awaitRefresh();
+    runtime.discardUpdatedDisplay();
+
+    var reg = try registry.loadRegistry(allocator, runtime.codex_home);
+    defer reg.deinit(allocator);
+    if (try registry.syncActiveAccountFromAuth(allocator, runtime.codex_home, &reg)) {
+        try registry.saveRegistry(allocator, runtime.codex_home, &reg);
+    }
+
+    const selected = try collectAccountIndicesByKeysAlloc(allocator, &reg, account_keys);
+    defer allocator.free(selected);
+
+    if (selected.len == 0) {
+        const loaded = try loadSwitchSelectionDisplayLenient(
+            allocator,
+            runtime.codex_home,
+            runtime.api_mode,
+            runtime.target,
+        );
+        return .{
+            .updated_display = loaded.display,
+            .action_message = try allocator.dupe(u8, "No matching accounts selected"),
+        };
+    }
+
+    var removed_labels = try cli.buildRemoveLabels(allocator, &reg, selected);
+    defer {
+        freeOwnedStrings(allocator, removed_labels.items);
+        removed_labels.deinit(allocator);
+    }
+
+    try removeSelectedAccountsAndPersist(allocator, runtime.codex_home, &reg, selected, false);
+
+    const loaded = try loadSwitchSelectionDisplayLenient(
+        allocator,
+        runtime.codex_home,
+        runtime.api_mode,
+        runtime.target,
+    );
+    return .{
+        .updated_display = loaded.display,
+        .action_message = try buildRemoveSummaryMessageAlloc(allocator, removed_labels.items),
+    };
+}
+
 pub fn resolveSwitchQueryLocally(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -2271,6 +2569,27 @@ pub fn findMatchingAccounts(
         else
             false;
         if (matches_email or matches_alias or matches_name) {
+            try matches.append(allocator, idx);
+        }
+    }
+    return matches;
+}
+
+fn findMatchingAccountsForRemove(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    query: []const u8,
+) !std.ArrayList(usize) {
+    var matches = std.ArrayList(usize).empty;
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        const matches_email = std.ascii.indexOfIgnoreCase(rec.email, query) != null;
+        const matches_alias = rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null;
+        const matches_name = if (rec.account_name) |name|
+            name.len != 0 and std.ascii.indexOfIgnoreCase(name, query) != null
+        else
+            false;
+        const matches_key = std.ascii.indexOfIgnoreCase(rec.account_key, query) != null;
+        if (matches_email or matches_alias or matches_name or matches_key) {
             try matches.append(allocator, idx);
         }
     }
@@ -2398,26 +2717,81 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 
     const interactive_remove = !opts.all and opts.selectors.len == 0;
-    const usage_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
-    const account_api_enabled = if (interactive_remove) apiModeUsesApi(false, opts.api_mode) else false;
+    if (interactive_remove and opts.live) {
+        const live_allocator = std.heap.smp_allocator;
+        const strict_refresh = opts.api_mode == .force_api;
+        const loaded = try loadSwitchSelectionDisplay(
+            live_allocator,
+            codex_home,
+            opts.api_mode,
+            .remove_account,
+            strict_refresh,
+        );
+        var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
+        errdefer if (initial_display) |*display| display.deinit(live_allocator);
+
+        var runtime = SwitchLiveRuntime.init(
+            live_allocator,
+            codex_home,
+            .remove_account,
+            opts.api_mode,
+            strict_refresh,
+            loaded.policy,
+        );
+        defer runtime.deinit();
+
+        const controller: cli.RemoveLiveActionController = .{
+            .refresh = .{
+                .context = @ptrCast(&runtime),
+                .maybe_start_refresh = switchLiveRuntimeMaybeStartRefresh,
+                .maybe_take_updated_display = switchLiveRuntimeMaybeTakeUpdatedDisplay,
+                .build_status_line = switchLiveRuntimeBuildStatusLine,
+            },
+            .apply_selection = removeLiveRuntimeApplySelection,
+        };
+
+        const transferred_display = initial_display.?;
+        initial_display = null;
+        cli.runRemoveLiveActions(live_allocator, transferred_display, controller) catch |err| {
+            if (err == error.TuiRequiresTty) {
+                try cli.printRemoveRequiresTtyError();
+                return error.RemoveSelectionRequiresTty;
+            }
+            return err;
+        };
+        return;
+    }
+
+    const usage_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.usage, opts.api_mode) else false;
+    const account_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.account, opts.api_mode) else false;
 
     var usage_state: ?ForegroundUsageRefreshState = null;
     defer if (usage_state) |*state| state.deinit(allocator);
 
     if (interactive_remove) {
-        if (usage_api_enabled) {
-            usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+        if (opts.api_mode == .force_api) {
+            try ensureForegroundNodeAvailableWithApiEnabled(
                 allocator,
                 codex_home,
                 &reg,
-                null,
+                .remove_account,
                 usage_api_enabled,
-                true,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return err,
-                else => null,
-            };
+                account_api_enabled,
+            );
         }
+
+        usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
+            allocator,
+            codex_home,
+            &reg,
+            null,
+            usage_api_enabled,
+            opts.api_mode == .force_api,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => if (opts.api_mode == .force_api) return err else null,
+        };
+
         maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
             allocator,
             codex_home,
@@ -2427,7 +2801,9 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             account_api_enabled,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => {},
+            else => {
+                if (opts.api_mode == .force_api) return err;
+            },
         };
     }
 
@@ -2452,7 +2828,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
                 continue;
             }
 
-            var matches = try findMatchingAccounts(allocator, &reg, selector);
+            var matches = try findMatchingAccountsForRemove(allocator, &reg, selector);
             defer matches.deinit(allocator);
 
             if (matches.items.len == 0) {
@@ -2515,47 +2891,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         removed_labels.deinit(allocator);
     }
 
-    const current_active_account_key = if (trackedActiveAccountKey(&reg)) |key|
-        try allocator.dupe(u8, key)
-    else
-        null;
-    defer if (current_active_account_key) |key| allocator.free(key);
-
-    var current_auth_state = try loadCurrentAuthState(allocator, codex_home);
-    defer current_auth_state.deinit(allocator);
-
-    const active_removed = if (current_active_account_key) |key|
-        selectionContainsAccountKey(&reg, selected.?, key)
-    else
-        false;
-    const allow_auth_file_update = if (current_active_account_key) |key|
-        active_removed and ((current_auth_state.syncable and current_auth_state.record_key != null and
-            std.mem.eql(u8, current_auth_state.record_key.?, key)) or current_auth_state.missing)
-    else if (current_auth_state.missing)
-        true
-    else if (opts.all)
-        current_auth_state.syncable and current_auth_state.record_key != null and
-            selectionContainsAccountKey(&reg, selected.?, current_auth_state.record_key.?)
-    else
-        false;
-
-    const replacement_account_key = if (active_removed)
-        try selectBestRemainingAccountKeyByUsageAlloc(allocator, &reg, selected.?)
-    else
-        null;
-    defer if (replacement_account_key) |key| allocator.free(key);
-
-    if (replacement_account_key) |key| {
-        if (allow_auth_file_update) {
-            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, &reg, key);
-        } else {
-            try registry.setActiveAccountKey(allocator, &reg, key);
-        }
-    }
-
-    try registry.removeAccounts(allocator, codex_home, &reg, selected.?);
-    try reconcileActiveAuthAfterRemove(allocator, codex_home, &reg, allow_auth_file_update);
-    try registry.saveRegistry(allocator, codex_home, &reg);
+    try removeSelectedAccountsAndPersist(allocator, codex_home, &reg, selected.?, opts.all);
     try cli.printRemoveSummary(removed_labels.items);
 }
 
