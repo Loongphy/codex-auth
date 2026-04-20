@@ -187,11 +187,12 @@ const SwitchLiveDebugLog = struct {
     }
 
     fn deinit(self: *@This()) void {
-        self.mutex.lockUncancelable(app_runtime.io());
-        defer self.mutex.unlock(app_runtime.io());
+        const io = app_runtime.io();
+        self.mutex.lockUncancelable(io);
 
         for (self.lines.items) |line| self.allocator.free(line);
         self.lines.deinit(self.allocator);
+        self.mutex.unlock(io);
         self.* = undefined;
     }
 
@@ -2916,22 +2917,29 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
 
-    const usage_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.usage, opts.api_mode) else false;
-    const account_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.account, opts.api_mode) else false;
+    var usage_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.usage, opts.api_mode) else false;
+    var account_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.account, opts.api_mode) else false;
 
     var usage_state: ?ForegroundUsageRefreshState = null;
     defer if (usage_state) |*state| state.deinit(allocator);
 
     if (interactive_remove) {
         if (opts.api_mode == .force_api) {
-            try ensureForegroundNodeAvailableWithApiEnabled(
+            ensureForegroundNodeAvailableWithApiEnabled(
                 allocator,
                 codex_home,
                 &reg,
                 .remove_account,
                 usage_api_enabled,
                 account_api_enabled,
-            );
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => {
+                    // Keep `remove --api` best-effort when refresh setup is unavailable.
+                    usage_api_enabled = false;
+                    account_api_enabled = false;
+                },
+            };
         }
 
         usage_state = refreshForegroundUsageForDisplayWithBatchFetcherAndDebugUsingApiEnabledWithBatchFailurePolicy(
@@ -2940,10 +2948,10 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             &reg,
             null,
             usage_api_enabled,
-            opts.api_mode == .force_api,
+            false,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => if (opts.api_mode == .force_api) return err else null,
+            else => null,
         };
 
         maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
@@ -2955,9 +2963,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             account_api_enabled,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
-            else => {
-                if (opts.api_mode == .force_api) return err;
-            },
+            else => {},
         };
     }
 
@@ -3110,6 +3116,77 @@ test "background account-name refresh returns early when another refresh holds t
 
 test "handled cli errors include missing node" {
     try std.testing.expect(isHandledCliError(error.NodeJsRequired));
+}
+
+test "live fallback display preserves the refresh error name" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+
+    var reg: registry.Registry = .{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer reg.deinit(gpa);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var loaded = try loadStoredSwitchSelectionDisplayWithRefreshError(gpa, codex_home, .default, error.NodeJsRequired);
+    defer loaded.display.deinit(gpa);
+    defer if (loaded.refresh_error_name) |name| gpa.free(name);
+
+    try std.testing.expectEqualStrings("NodeJsRequired", loaded.refresh_error_name.?);
+}
+
+test "live status line includes the latest debug details below the summary" {
+    const gpa = std.testing.allocator;
+
+    var dummy_reg: registry.Registry = .{
+        .schema_version = registry.current_schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .auto_switch = registry.defaultAutoSwitchConfig(),
+        .api = registry.defaultApiConfig(),
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+    };
+    defer dummy_reg.deinit(gpa);
+
+    var debug_log = SwitchLiveDebugLog.init(gpa);
+    defer debug_log.deinit();
+    try debug_log.appendLine("[debug] request usage: alpha@example.com account_id=acc-1");
+
+    var runtime = SwitchLiveRuntime.init(
+        gpa,
+        "",
+        .list,
+        .default,
+        false,
+        .{
+            .usage_api_enabled = true,
+            .account_api_enabled = false,
+            .interval_ms = switch_live_api_refresh_interval_ms,
+            .label = "api",
+        },
+        try gpa.dupe(u8, "NodeJsRequired"),
+        &debug_log,
+    );
+    defer runtime.deinit();
+
+    const status_line = try runtime.buildStatusLine(gpa, .{
+        .reg = &dummy_reg,
+        .usage_overrides = null,
+    });
+    defer gpa.free(status_line);
+
+    try std.testing.expect(std.mem.indexOf(u8, status_line, "Live refresh: api |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_line, "Error: NodeJsRequired") != null);
+    try std.testing.expect(std.mem.indexOf(u8, status_line, "\n[debug] request usage: alpha@example.com account_id=acc-1") != null);
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.

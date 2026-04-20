@@ -1884,7 +1884,10 @@ pub fn selectAccountWithUsageOverrides(
     )) {
         return selectWithNumbers(allocator, reg, usage_overrides);
     }
-    return try selectInteractive(allocator, reg, usage_overrides);
+    return selectInteractive(allocator, reg, usage_overrides) catch |err| switch (err) {
+        error.TuiRequiresTty => selectWithNumbers(allocator, reg, usage_overrides),
+        else => return err,
+    };
 }
 
 pub const SwitchSelectionDisplay = struct {
@@ -2893,7 +2896,10 @@ pub fn selectAccountFromIndicesWithUsageOverrides(
     )) {
         return selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides);
     }
-    return try selectInteractiveFromIndices(allocator, reg, indices, usage_overrides);
+    return selectInteractiveFromIndices(allocator, reg, indices, usage_overrides) catch |err| switch (err) {
+        error.TuiRequiresTty => selectWithNumbersFromIndices(allocator, reg, indices, usage_overrides),
+        else => return err,
+    };
 }
 
 pub fn shouldUseNumberedSwitchSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
@@ -2917,7 +2923,10 @@ pub fn selectAccountsToRemoveWithUsageOverrides(
     )) {
         return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
-    return try selectRemoveInteractive(allocator, reg, usage_overrides);
+    return selectRemoveInteractive(allocator, reg, usage_overrides) catch |err| switch (err) {
+        error.TuiRequiresTty => selectRemoveWithNumbers(allocator, reg, usage_overrides),
+        else => return err,
+    };
 }
 
 pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
@@ -3950,6 +3959,22 @@ fn renderSwitchScreen(
     }
 }
 
+const TuiStatusSections = struct {
+    summary: []const u8,
+    details: []const u8,
+};
+
+fn splitTuiStatusLine(status_line: []const u8) TuiStatusSections {
+    const newline_idx = std.mem.indexOfScalar(u8, status_line, '\n') orelse return .{
+        .summary = status_line,
+        .details = "",
+    };
+    return .{
+        .summary = status_line[0..newline_idx],
+        .details = status_line[newline_idx + 1 ..],
+    };
+}
+
 fn renderListScreen(
     out: *std.Io.Writer,
     reg: *registry.Registry,
@@ -3959,16 +3984,24 @@ fn renderListScreen(
     use_color: bool,
     status_line: []const u8,
 ) !void {
+    const status_sections = splitTuiStatusLine(status_line);
+
     try out.writeAll("Live account list:\n\n");
     try renderSwitchList(out, reg, rows, idx_width, widths, null, use_color);
     try out.writeAll("\n");
-    if (status_line.len != 0) {
+    if (status_sections.summary.len != 0) {
         if (use_color) try out.writeAll(ansi.dim);
-        try out.writeAll(status_line);
+        try out.writeAll(status_sections.summary);
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.reset);
     }
     try writeListTuiFooter(out, use_color);
+    if (status_sections.details.len != 0) {
+        if (use_color) try out.writeAll(ansi.dim);
+        try out.writeAll(status_sections.details);
+        try out.writeAll("\n");
+        if (use_color) try out.writeAll(ansi.reset);
+    }
 }
 
 fn renderRemoveScreen(
@@ -4823,6 +4856,33 @@ test "Scenario: Given switch live feedback when rendering switch screen then the
     const footer_pos = std.mem.indexOf(u8, output, "Keys:") orelse return error.TestExpectedEqual;
     const action_pos = std.mem.indexOf(u8, output, "Switched to healthy@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(action_pos > footer_pos);
+}
+
+test "Scenario: Given live list debug details when rendering then they stay below the footer" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "healthy@example.com", "", .team);
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try renderListScreen(
+        &writer,
+        &reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(accountRowCount(rows.items))),
+        rows.widths,
+        false,
+        "Live refresh: api | Refresh in 9s\n[debug] request usage: healthy@example.com account_id=acc-1",
+    );
+
+    const output = writer.buffered();
+    const footer_pos = std.mem.indexOf(u8, output, "Keys: Esc or q quit") orelse return error.TestExpectedEqual;
+    const debug_pos = std.mem.indexOf(u8, output, "[debug] request usage: healthy@example.com account_id=acc-1") orelse return error.TestExpectedEqual;
+    try std.testing.expect(debug_pos > footer_pos);
 }
 
 test "Scenario: Given usage overrides when rendering remove list then failed rows show response status in both usage columns" {

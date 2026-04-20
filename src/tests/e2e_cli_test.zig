@@ -1852,7 +1852,7 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
-test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it requires api refresh executables" {
+test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it falls back to the local picker" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1887,12 +1887,15 @@ test "Scenario: Given interactive remove with api flag and missing refresh execu
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectFailure(result);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 1 account(s): beta@example.com\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expectEqualStrings("alpha@example.com", loaded.accounts.items[0].email);
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {
