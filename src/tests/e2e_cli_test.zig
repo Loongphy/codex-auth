@@ -1890,7 +1890,6 @@ test "Scenario: Given interactive remove with api flag and missing refresh execu
     try expectSuccess(result);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 1 account(s): beta@example.com\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);

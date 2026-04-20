@@ -211,6 +211,15 @@ test "Scenario: Given list with live flag when parsing then live mode is preserv
     }
 }
 
+test "Scenario: Given list with live and debug flags when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--live", "--debug" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .list, "`--debug` cannot be combined with `--live`");
+}
+
 test "Scenario: Given list with api flag when parsing then forced api mode is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "list", "--api" };
@@ -324,7 +333,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug] [--live] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--debug|--live] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 

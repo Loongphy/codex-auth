@@ -18,7 +18,6 @@ const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROU
 const foreground_usage_refresh_concurrency: usize = 5;
 const switch_live_api_refresh_interval_ms: i64 = 30_000;
 const switch_live_local_refresh_interval_ms: i64 = 10_000;
-const switch_live_debug_max_lines: usize = 8;
 
 fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
     return try app_runtime.currentEnviron().createMap(allocator);
@@ -130,32 +129,13 @@ const DebugUsageLabelState = struct {
     }
 };
 
-const ForegroundUsageDebugMirror = struct {
-    context: *anyopaque,
-    append_line: *const fn (context: *anyopaque, line: []const u8) anyerror!void,
-};
-
 pub const ForegroundUsageDebugLogger = struct {
-    allocator: std.mem.Allocator = std.heap.smp_allocator,
     writer: ?*std.Io.Writer,
-    mirror: ?ForegroundUsageDebugMirror = null,
     mutex: std.Io.Mutex = .init,
 
     pub fn init(writer: *std.Io.Writer) ForegroundUsageDebugLogger {
         return .{
             .writer = writer,
-        };
-    }
-
-    pub fn initMirrored(
-        allocator: std.mem.Allocator,
-        writer: ?*std.Io.Writer,
-        mirror: ForegroundUsageDebugMirror,
-    ) ForegroundUsageDebugLogger {
-        return .{
-            .allocator = allocator,
-            .writer = writer,
-            .mirror = mirror,
         };
     }
 
@@ -167,78 +147,8 @@ pub const ForegroundUsageDebugLogger = struct {
             try writer.print(fmt, args);
             try writer.flush();
         }
-        if (self.mirror) |mirror| {
-            const line = try std.fmt.allocPrint(self.allocator, fmt, args);
-            defer self.allocator.free(line);
-            try mirror.append_line(mirror.context, std.mem.trim(u8, line, "\r\n"));
-        }
     }
 };
-
-const SwitchLiveDebugLog = struct {
-    allocator: std.mem.Allocator,
-    lines: std.ArrayList([]u8) = .empty,
-    mutex: std.Io.Mutex = .init,
-
-    fn init(allocator: std.mem.Allocator) @This() {
-        return .{
-            .allocator = allocator,
-        };
-    }
-
-    fn deinit(self: *@This()) void {
-        const io = app_runtime.io();
-        self.mutex.lockUncancelable(io);
-
-        for (self.lines.items) |line| self.allocator.free(line);
-        self.lines.deinit(self.allocator);
-        self.mutex.unlock(io);
-        self.* = undefined;
-    }
-
-    fn mirror(self: *@This()) ForegroundUsageDebugMirror {
-        return .{
-            .context = @ptrCast(self),
-            .append_line = switchLiveDebugLogAppendLine,
-        };
-    }
-
-    fn appendLine(self: *@This(), line: []const u8) !void {
-        const trimmed = std.mem.trim(u8, line, "\r\n");
-        if (trimmed.len == 0) return;
-
-        self.mutex.lockUncancelable(app_runtime.io());
-        defer self.mutex.unlock(app_runtime.io());
-
-        if (self.lines.items.len == switch_live_debug_max_lines) {
-            self.allocator.free(self.lines.orderedRemove(0));
-        }
-        const owned = try self.allocator.dupe(u8, trimmed);
-        errdefer self.allocator.free(owned);
-        try self.lines.append(self.allocator, owned);
-    }
-
-    fn buildTextAlloc(self: *@This(), allocator: std.mem.Allocator) !?[]u8 {
-        self.mutex.lockUncancelable(app_runtime.io());
-        defer self.mutex.unlock(app_runtime.io());
-
-        if (self.lines.items.len == 0) return null;
-
-        var out: std.Io.Writer.Allocating = .init(allocator);
-        errdefer out.deinit();
-
-        for (self.lines.items, 0..) |line, idx| {
-            if (idx != 0) try out.writer.writeAll("\n");
-            try out.writer.writeAll(line);
-        }
-        return try out.toOwnedSlice();
-    }
-};
-
-fn switchLiveDebugLogAppendLine(context: *anyopaque, line: []const u8) !void {
-    const debug_log: *SwitchLiveDebugLog = @ptrCast(@alignCast(context));
-    try debug_log.appendLine(line);
-}
 
 const ForegroundUsageDebugContext = struct {
     logger: *ForegroundUsageDebugLogger,
@@ -338,7 +248,7 @@ pub const ForegroundUsageRefreshTarget = enum {
 };
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list or target == .switch_account or target == .remove_account;
+    return target == .list or target == .switch_account;
 }
 
 fn apiModeUsesApi(default_enabled: bool, api_mode: cli.ApiMode) bool {
@@ -1640,15 +1550,12 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
     if (opts.live) {
         const live_allocator = std.heap.smp_allocator;
         const strict_refresh = opts.api_mode == .force_api;
-        var debug_log = SwitchLiveDebugLog.init(live_allocator);
-        defer debug_log.deinit();
         const loaded = try loadSwitchSelectionDisplay(
             live_allocator,
             codex_home,
             opts.api_mode,
             .list,
             strict_refresh,
-            if (opts.debug) &debug_log else null,
         );
         var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
         errdefer if (initial_display) |*display| display.deinit(live_allocator);
@@ -1661,7 +1568,6 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
             strict_refresh,
             loaded.policy,
             loaded.refresh_error_name,
-            if (opts.debug) &debug_log else null,
         );
         defer runtime.deinit();
 
@@ -1830,14 +1736,16 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
     }
 
     if (!opts.live) {
-        var loaded = try loadSwitchSelectionDisplay(
-            allocator,
-            codex_home,
-            opts.api_mode,
-            .switch_account,
-            true,
-            null,
-        );
+        var loaded = if (opts.api_mode == .skip_api)
+            try loadStoredSwitchSelectionDisplay(allocator, codex_home, opts.api_mode)
+        else
+            try loadSwitchSelectionDisplay(
+                allocator,
+                codex_home,
+                opts.api_mode,
+                .switch_account,
+                true,
+            );
         defer loaded.display.deinit(allocator);
         defer if (loaded.refresh_error_name) |name| allocator.free(name);
 
@@ -1866,7 +1774,6 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         opts.api_mode,
         .switch_account,
         strict_refresh,
-        null,
     );
     var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
     errdefer if (initial_display) |*display| display.deinit(live_allocator);
@@ -1879,7 +1786,6 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         strict_refresh,
         loaded.policy,
         loaded.refresh_error_name,
-        null,
     );
     defer runtime.deinit();
 
@@ -1936,7 +1842,6 @@ const SwitchLiveRuntime = struct {
     last_refresh_error_name: ?[]u8 = null,
     refresh_interval_ms: i64,
     mode_label: []const u8,
-    debug_log: ?*SwitchLiveDebugLog = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -1946,7 +1851,6 @@ const SwitchLiveRuntime = struct {
         strict_refresh: bool,
         initial_policy: SwitchLiveRefreshPolicy,
         initial_refresh_error_name: ?[]u8,
-        debug_log: ?*SwitchLiveDebugLog,
     ) @This() {
         const io_impl = std.Io.Threaded.init(allocator, .{
             .concurrent_limit = .limited(1),
@@ -1963,7 +1867,6 @@ const SwitchLiveRuntime = struct {
             .refresh_interval_ms = initial_policy.interval_ms,
             .mode_label = initial_policy.label,
             .last_refresh_error_name = initial_refresh_error_name,
-            .debug_log = debug_log,
         };
     }
 
@@ -2090,23 +1993,11 @@ const SwitchLiveRuntime = struct {
             try allocator.dupe(u8, "");
         defer allocator.free(error_suffix);
 
-        const base_status_line = try std.fmt.allocPrint(
+        return std.fmt.allocPrint(
             allocator,
             "Live refresh: {s} | {s}{s}",
             .{ mode_label, refresh_state, error_suffix },
         );
-        errdefer allocator.free(base_status_line);
-
-        const debug_text = if (self.debug_log) |debug_log|
-            try debug_log.buildTextAlloc(allocator)
-        else
-            null;
-        defer if (debug_text) |text| allocator.free(text);
-
-        if (debug_text) |text| {
-            return std.fmt.allocPrint(allocator, "{s}\n{s}", .{ base_status_line, text });
-        }
-        return base_status_line;
     }
 };
 
@@ -2323,7 +2214,6 @@ fn loadSwitchSelectionDisplay(
     api_mode: cli.ApiMode,
     target: ForegroundUsageRefreshTarget,
     strict_refresh: bool,
-    debug_log: ?*SwitchLiveDebugLog,
 ) !SwitchLoadedDisplay {
     var base = try registry.loadRegistry(allocator, codex_home);
     defer base.deinit(allocator);
@@ -2349,11 +2239,6 @@ fn loadSwitchSelectionDisplay(
         },
     };
 
-    var debug_logger: ?ForegroundUsageDebugLogger = null;
-    if (debug_log) |log| {
-        debug_logger = ForegroundUsageDebugLogger.initMirrored(allocator, null, log.mirror());
-    }
-
     var usage_state = refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitAndDebugUsingApiEnabledAndPersist(
         allocator,
         codex_home,
@@ -2361,7 +2246,7 @@ fn loadSwitchSelectionDisplay(
         usage_api.fetchUsageForAuthPathDetailed,
         usage_api.fetchUsageForAuthPathsDetailedBatch,
         initForegroundUsagePool,
-        if (debug_logger) |*logger| logger else null,
+        null,
         initial_policy.usage_api_enabled,
         false,
         false,
@@ -2429,7 +2314,6 @@ fn runSwitchLiveRefreshRound(runtime: *SwitchLiveRuntime) void {
         runtime.api_mode,
         runtime.target,
         runtime.strict_refresh,
-        runtime.debug_log,
     ) catch |err| {
         const finished_ms = nowMilliseconds();
         const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
@@ -2486,7 +2370,7 @@ fn loadSwitchSelectionDisplayLenient(
     api_mode: cli.ApiMode,
     target: ForegroundUsageRefreshTarget,
 ) !SwitchLoadedDisplay {
-    return loadSwitchSelectionDisplay(allocator, codex_home, api_mode, target, false, null) catch |err| switch (err) {
+    return loadSwitchSelectionDisplay(allocator, codex_home, api_mode, target, false) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => try loadStoredSwitchSelectionDisplayWithRefreshError(allocator, codex_home, api_mode, err),
     };
@@ -2878,7 +2762,6 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             opts.api_mode,
             .remove_account,
             strict_refresh,
-            null,
         );
         var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
         errdefer if (initial_display) |*display| display.deinit(live_allocator);
@@ -2891,7 +2774,6 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             strict_refresh,
             loaded.policy,
             loaded.refresh_error_name,
-            null,
         );
         defer runtime.deinit();
 
@@ -2917,8 +2799,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
 
-    var usage_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.usage, opts.api_mode) else false;
-    var account_api_enabled = if (interactive_remove) apiModeUsesApi(reg.api.account, opts.api_mode) else false;
+    var usage_api_enabled = interactive_remove and opts.api_mode == .force_api;
+    var account_api_enabled = interactive_remove and opts.api_mode == .force_api;
 
     var usage_state: ?ForegroundUsageRefreshState = null;
     defer if (usage_state) |*state| state.deinit(allocator);
@@ -3142,51 +3024,6 @@ test "live fallback display preserves the refresh error name" {
     defer if (loaded.refresh_error_name) |name| gpa.free(name);
 
     try std.testing.expectEqualStrings("NodeJsRequired", loaded.refresh_error_name.?);
-}
-
-test "live status line includes the latest debug details below the summary" {
-    const gpa = std.testing.allocator;
-
-    var dummy_reg: registry.Registry = .{
-        .schema_version = registry.current_schema_version,
-        .active_account_key = null,
-        .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = registry.defaultApiConfig(),
-        .accounts = std.ArrayList(registry.AccountRecord).empty,
-    };
-    defer dummy_reg.deinit(gpa);
-
-    var debug_log = SwitchLiveDebugLog.init(gpa);
-    defer debug_log.deinit();
-    try debug_log.appendLine("[debug] request usage: alpha@example.com account_id=acc-1");
-
-    var runtime = SwitchLiveRuntime.init(
-        gpa,
-        "",
-        .list,
-        .default,
-        false,
-        .{
-            .usage_api_enabled = true,
-            .account_api_enabled = false,
-            .interval_ms = switch_live_api_refresh_interval_ms,
-            .label = "api",
-        },
-        try gpa.dupe(u8, "NodeJsRequired"),
-        &debug_log,
-    );
-    defer runtime.deinit();
-
-    const status_line = try runtime.buildStatusLine(gpa, .{
-        .reg = &dummy_reg,
-        .usage_overrides = null,
-    });
-    defer gpa.free(status_line);
-
-    try std.testing.expect(std.mem.indexOf(u8, status_line, "Live refresh: api |") != null);
-    try std.testing.expect(std.mem.indexOf(u8, status_line, "Error: NodeJsRequired") != null);
-    try std.testing.expect(std.mem.indexOf(u8, status_line, "\n[debug] request usage: alpha@example.com account_id=acc-1") != null);
 }
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
