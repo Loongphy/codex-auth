@@ -6,9 +6,92 @@ const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
 const timefmt = @import("timefmt.zig");
 const version = @import("version.zig");
+const windows = std.os.windows;
 const c = @cImport({
     @cInclude("time.h");
 });
+const win = struct {
+    const BOOL = windows.BOOL;
+    const CHAR = windows.CHAR;
+    const DWORD = windows.DWORD;
+    const HANDLE = windows.HANDLE;
+    const SHORT = windows.SHORT;
+    const WCHAR = windows.WCHAR;
+    const WORD = windows.WORD;
+
+    const ENABLE_PROCESSED_INPUT: DWORD = 0x0001;
+    const ENABLE_LINE_INPUT: DWORD = 0x0002;
+    const ENABLE_ECHO_INPUT: DWORD = 0x0004;
+    const ENABLE_WINDOW_INPUT: DWORD = 0x0008;
+    const ENABLE_MOUSE_INPUT: DWORD = 0x0010;
+    const ENABLE_QUICK_EDIT_MODE: DWORD = 0x0040;
+    const ENABLE_EXTENDED_FLAGS: DWORD = 0x0080;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: DWORD = 0x0200;
+
+    const ENABLE_PROCESSED_OUTPUT: DWORD = 0x0001;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+    const KEY_EVENT: WORD = 0x0001;
+    const WINDOW_BUFFER_SIZE_EVENT: WORD = 0x0004;
+
+    const VK_BACK: WORD = 0x08;
+    const VK_RETURN: WORD = 0x0D;
+    const VK_ESCAPE: WORD = 0x1B;
+    const VK_UP: WORD = 0x26;
+    const VK_DOWN: WORD = 0x28;
+
+    const WAIT_OBJECT_0: DWORD = 0x00000000;
+    const WAIT_TIMEOUT: DWORD = 258;
+    const INFINITE: DWORD = 0xFFFF_FFFF;
+
+    const KEY_EVENT_RECORD = extern struct {
+        bKeyDown: BOOL,
+        wRepeatCount: WORD,
+        wVirtualKeyCode: WORD,
+        wVirtualScanCode: WORD,
+        uChar: extern union {
+            UnicodeChar: WCHAR,
+            AsciiChar: CHAR,
+        },
+        dwControlKeyState: DWORD,
+    };
+
+    const COORD = extern struct {
+        X: SHORT,
+        Y: SHORT,
+    };
+
+    const WINDOW_BUFFER_SIZE_RECORD = extern struct {
+        dwSize: COORD,
+    };
+
+    const INPUT_RECORD = extern struct {
+        EventType: WORD,
+        Event: extern union {
+            KeyEvent: KEY_EVENT_RECORD,
+            WindowBufferSizeEvent: WINDOW_BUFFER_SIZE_RECORD,
+        },
+    };
+
+    extern "kernel32" fn GetConsoleMode(
+        console_handle: HANDLE,
+        mode: *DWORD,
+    ) callconv(.winapi) BOOL;
+    extern "kernel32" fn SetConsoleMode(
+        console_handle: HANDLE,
+        mode: DWORD,
+    ) callconv(.winapi) BOOL;
+    extern "kernel32" fn ReadConsoleInputW(
+        console_input: HANDLE,
+        buffer: *INPUT_RECORD,
+        length: DWORD,
+        number_of_events_read: *DWORD,
+    ) callconv(.winapi) BOOL;
+    extern "kernel32" fn WaitForSingleObject(
+        handle: HANDLE,
+        milliseconds: DWORD,
+    ) callconv(.winapi) DWORD;
+};
 
 const ansi = struct {
     const reset = "\x1b[0m";
@@ -57,21 +140,65 @@ const TuiPollResult = enum {
     closed,
 };
 
-fn pollTuiInput(file: std.Io.File, timeout_ms: i32, poll_error_mask: i16) !TuiPollResult {
-    if (comptime builtin.os.tag == .windows) {
-        return .closed;
-    } else {
-        var fds = [_]std.posix.pollfd{.{
-            .fd = file.handle,
-            .events = tui_poll_input_mask,
-            .revents = 0,
-        }};
-        const ready = try std.posix.poll(&fds, timeout_ms);
-        if (ready == 0) return .timeout;
-        if ((fds[0].revents & poll_error_mask) != 0) return .closed;
-        return .ready;
-    }
+const TuiInputKey = union(enum) {
+    move_up,
+    move_down,
+    enter,
+    quit,
+    backspace,
+    redraw,
+    byte: u8,
+};
+
+fn windowsTuiInputMode(saved_input_mode: win.DWORD) win.DWORD {
+    var raw_input_mode = saved_input_mode |
+        win.ENABLE_EXTENDED_FLAGS |
+        win.ENABLE_WINDOW_INPUT;
+    // Keep resize events enabled for redraws, but leave mouse explicitly disabled
+    // until the TUI has a real click/scroll interaction model.
+    raw_input_mode &= ~@as(
+        win.DWORD,
+        win.ENABLE_PROCESSED_INPUT |
+            win.ENABLE_QUICK_EDIT_MODE |
+            win.ENABLE_LINE_INPUT |
+            win.ENABLE_ECHO_INPUT |
+            win.ENABLE_MOUSE_INPUT |
+            win.ENABLE_VIRTUAL_TERMINAL_INPUT,
+    );
+    return raw_input_mode;
 }
+
+fn windowsTuiOutputMode(saved_output_mode: win.DWORD) win.DWORD {
+    return saved_output_mode |
+        win.ENABLE_PROCESSED_OUTPUT |
+        win.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+}
+
+const pollTuiInput = if (builtin.os.tag == .windows)
+    struct {
+        fn call(file: std.Io.File, timeout_ms: i32, _: i16) !TuiPollResult {
+            const wait_ms: win.DWORD = if (timeout_ms < 0) win.INFINITE else @intCast(timeout_ms);
+            return switch (win.WaitForSingleObject(file.handle, wait_ms)) {
+                win.WAIT_OBJECT_0 => .ready,
+                win.WAIT_TIMEOUT => .timeout,
+                else => .closed,
+            };
+        }
+    }.call
+else
+    struct {
+        fn call(file: std.Io.File, timeout_ms: i32, poll_error_mask: i16) !TuiPollResult {
+            var fds = [_]std.posix.pollfd{.{
+                .fd = file.handle,
+                .events = tui_poll_input_mask,
+                .revents = 0,
+            }};
+            const ready = try std.posix.poll(&fds, timeout_ms);
+            if (ready == 0) return .timeout;
+            if ((fds[0].revents & poll_error_mask) != 0) return .closed;
+            return .ready;
+        }
+    }.call;
 
 fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l");
@@ -98,12 +225,25 @@ fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.reset);
 }
 
-const TuiSavedState = if (builtin.os.tag == .windows) void else std.posix.termios;
+fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u8) !void {
+    try out.writeAll(prompt);
+    if (digits.len != 0) {
+        try out.writeAll(" ");
+        try out.writeAll(digits);
+    }
+    try out.writeAll("\n");
+}
+
+const TuiSavedInputState = if (builtin.os.tag == .windows) win.DWORD else std.posix.termios;
+const TuiSavedOutputState = if (builtin.os.tag == .windows) win.DWORD else void;
 
 const TuiSession = struct {
     input: std.Io.File,
     output: std.Io.File,
-    saved_termios: TuiSavedState = if (builtin.os.tag == .windows) {} else undefined,
+    saved_input_state: TuiSavedInputState = if (builtin.os.tag == .windows) 0 else undefined,
+    saved_output_state: TuiSavedOutputState = if (builtin.os.tag == .windows) 0 else {},
+    pending_windows_key: ?TuiInputKey = null,
+    pending_windows_repeat_count: u16 = 0,
     writer_buffer: [4096]u8 = undefined,
     writer: std.Io.File.Writer = undefined,
 
@@ -115,34 +255,66 @@ const TuiSession = struct {
         }
 
         if (comptime builtin.os.tag == .windows) {
-            return error.TuiRequiresTty;
+            var saved_input_mode: win.DWORD = 0;
+            var saved_output_mode: win.DWORD = 0;
+            if (win.GetConsoleMode(input.handle, &saved_input_mode) == .FALSE) {
+                return error.TuiRequiresTty;
+            }
+            if (win.GetConsoleMode(output.handle, &saved_output_mode) == .FALSE) {
+                return error.TuiRequiresTty;
+            }
+
+            const raw_input_mode = windowsTuiInputMode(saved_input_mode);
+            if (win.SetConsoleMode(input.handle, raw_input_mode) == .FALSE) {
+                return error.TuiRequiresTty;
+            }
+            errdefer _ = win.SetConsoleMode(input.handle, saved_input_mode);
+
+            const raw_output_mode = windowsTuiOutputMode(saved_output_mode);
+            if (win.SetConsoleMode(output.handle, raw_output_mode) == .FALSE) {
+                return error.TuiRequiresTty;
+            }
+            errdefer _ = win.SetConsoleMode(output.handle, saved_output_mode);
+
+            var session = @This(){
+                .input = input,
+                .output = output,
+                .saved_input_state = saved_input_mode,
+                .saved_output_state = saved_output_mode,
+            };
+            session.writer = session.output.writer(app_runtime.io(), &session.writer_buffer);
+            try session.enter();
+            return session;
+        } else {
+            const saved_termios = try std.posix.tcgetattr(input.handle);
+            var raw = saved_termios;
+            raw.lflag.ICANON = false;
+            raw.lflag.ECHO = false;
+            raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
+            raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
+            try std.posix.tcsetattr(input.handle, .FLUSH, raw);
+            errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
+
+            var session = @This(){
+                .input = input,
+                .output = output,
+                .saved_input_state = saved_termios,
+            };
+            session.writer = session.output.writer(app_runtime.io(), &session.writer_buffer);
+            try session.enter();
+            return session;
         }
-
-        const saved_termios = try std.posix.tcgetattr(input.handle);
-        var raw = saved_termios;
-        raw.lflag.ICANON = false;
-        raw.lflag.ECHO = false;
-        raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-        raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
-        try std.posix.tcsetattr(input.handle, .FLUSH, raw);
-        errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
-
-        var session = @This(){
-            .input = input,
-            .output = output,
-            .saved_termios = saved_termios,
-        };
-        session.writer = session.output.writer(app_runtime.io(), &session.writer_buffer);
-        try session.enter();
-        return session;
     }
 
     fn deinit(self: *@This()) void {
         const writer = self.out();
         writeTuiExitTo(writer) catch {};
         writer.flush() catch {};
-        if (comptime builtin.os.tag != .windows) {
-            std.posix.tcsetattr(self.input.handle, .FLUSH, self.saved_termios) catch {};
+        if (comptime builtin.os.tag == .windows) {
+            _ = win.SetConsoleMode(self.output.handle, self.saved_output_state);
+            _ = win.SetConsoleMode(self.input.handle, self.saved_input_state);
+        } else {
+            std.posix.tcsetattr(self.input.handle, .FLUSH, self.saved_input_state) catch {};
         }
         self.* = undefined;
     }
@@ -153,6 +325,58 @@ const TuiSession = struct {
 
     fn read(self: *@This(), buffer: []u8) !usize {
         return try readFileOnce(self.input, buffer);
+    }
+
+    fn readWindowsKey(self: *@This()) !TuiInputKey {
+        if (comptime builtin.os.tag != .windows) unreachable;
+
+        if (self.pending_windows_key) |pending| {
+            if (self.pending_windows_repeat_count > 1) {
+                self.pending_windows_repeat_count -= 1;
+            } else {
+                self.pending_windows_repeat_count = 0;
+                self.pending_windows_key = null;
+            }
+            return pending;
+        }
+
+        while (true) {
+            var record: win.INPUT_RECORD = undefined;
+            var events_read: win.DWORD = 0;
+            if (win.ReadConsoleInputW(self.input.handle, &record, 1, &events_read) == .FALSE) {
+                return error.EndOfStream;
+            }
+            if (events_read == 0) continue;
+            if (record.EventType == win.WINDOW_BUFFER_SIZE_EVENT) {
+                self.pending_windows_key = null;
+                self.pending_windows_repeat_count = 0;
+                return .redraw;
+            }
+            if (record.EventType != win.KEY_EVENT) continue;
+
+            const key_event = record.Event.KeyEvent;
+            if (key_event.bKeyDown == .FALSE) continue;
+
+            const key = switch (key_event.wVirtualKeyCode) {
+                win.VK_UP => TuiInputKey.move_up,
+                win.VK_DOWN => TuiInputKey.move_down,
+                win.VK_RETURN => TuiInputKey.enter,
+                win.VK_ESCAPE => TuiInputKey.quit,
+                win.VK_BACK => TuiInputKey.backspace,
+                else => blk: {
+                    const codepoint = key_event.uChar.UnicodeChar;
+                    if (codepoint == 0 or codepoint > 0x7f) continue;
+                    break :blk TuiInputKey{ .byte = @intCast(codepoint) };
+                },
+            };
+
+            const repeat_count = if (key_event.wRepeatCount == 0) 1 else key_event.wRepeatCount;
+            if (repeat_count > 1) {
+                self.pending_windows_key = key;
+                self.pending_windows_repeat_count = repeat_count - 1;
+            }
+            return key;
+        }
     }
 
     fn enter(self: *@This()) !void {
@@ -311,6 +535,40 @@ test "Scenario: Given shared TUI frame redraw when writing it then it clears onl
 
     try std.testing.expectEqualStrings("\x1b[H\x1b[J", aw.written());
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2J\x1b[H") == null);
+}
+
+test "Scenario: Given TUI prompt with numeric input when rendering then the current digits stay inline with the title" {
+    const gpa = std.testing.allocator;
+    var with_digits: std.Io.Writer.Allocating = .init(gpa);
+    defer with_digits.deinit();
+    var without_digits: std.Io.Writer.Allocating = .init(gpa);
+    defer without_digits.deinit();
+
+    try writeTuiPromptLine(&with_digits.writer, "Select account to activate:", "123");
+    try std.testing.expectEqualStrings("Select account to activate: 123\n", with_digits.written());
+
+    try writeTuiPromptLine(&without_digits.writer, "Select account to activate:", "");
+    try std.testing.expectEqualStrings("Select account to activate:\n", without_digits.written());
+}
+
+test "Scenario: Given Windows TUI console modes when configuring them then resize stays enabled while mouse and cooked input stay disabled" {
+    const saved_input_mode: win.DWORD =
+        win.ENABLE_MOUSE_INPUT |
+        win.ENABLE_WINDOW_INPUT |
+        win.ENABLE_LINE_INPUT |
+        win.ENABLE_ECHO_INPUT;
+    const configured_input_mode = windowsTuiInputMode(saved_input_mode);
+
+    try std.testing.expect((configured_input_mode & win.ENABLE_WINDOW_INPUT) != 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_EXTENDED_FLAGS) != 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_MOUSE_INPUT) == 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_LINE_INPUT) == 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_ECHO_INPUT) == 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_VIRTUAL_TERMINAL_INPUT) == 0);
+
+    const configured_output_mode = windowsTuiOutputMode(0);
+    try std.testing.expect((configured_output_mode & win.ENABLE_PROCESSED_OUTPUT) != 0);
+    try std.testing.expect((configured_output_mode & win.ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
 }
 
 fn colorEnabled() bool {
@@ -1669,6 +1927,7 @@ pub fn selectAccountWithLiveUpdates(
             selected_idx,
             use_color,
             status_line,
+            number_buf[0..number_len],
         );
         try out.flush();
 
@@ -1679,6 +1938,74 @@ pub fn selectAccountWithLiveUpdates(
             },
             .closed => return null,
             .ready => {},
+        }
+
+        if (comptime builtin.os.tag == .windows) {
+            switch (try tui.readWindowsKey()) {
+                .move_up => {
+                    if (selected_idx > 0) {
+                        selected_idx -= 1;
+                        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        number_len = 0;
+                    }
+                },
+                .move_down => {
+                    if (selected_idx + 1 < rows.selectable_row_indices.len) {
+                        selected_idx += 1;
+                        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        number_len = 0;
+                    }
+                },
+                .enter => {
+                    if (number_len > 0) {
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            return try dupSelectedAccountKey(allocator, &rows, borrowed.reg, parsed - 1);
+                        }
+                    }
+                    return try dupSelectedAccountKey(allocator, &rows, borrowed.reg, selected_idx);
+                },
+                .quit => return null,
+                .backspace => {
+                    if (number_len > 0) {
+                        number_len -= 1;
+                        if (number_len > 0) {
+                            const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                            if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                selected_idx = parsed - 1;
+                                try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                            }
+                        }
+                    }
+                },
+                .redraw => continue,
+                .byte => |ch| {
+                    if (isQuitKey(ch)) return null;
+
+                    if (ch == 'k' and selected_idx > 0) {
+                        selected_idx -= 1;
+                        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch == 'j' and selected_idx + 1 < rows.selectable_row_indices.len) {
+                        selected_idx += 1;
+                        try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch >= '0' and ch <= '9' and number_len < number_buf.len) {
+                        number_buf[number_len] = ch;
+                        number_len += 1;
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            selected_idx = parsed - 1;
+                            try replaceSelectedAccountKeyForSelectable(allocator, &selected_account_key, &rows, borrowed.reg, selected_idx);
+                        }
+                    }
+                },
+            }
+            continue;
         }
 
         var b: [8]u8 = undefined;
@@ -1791,7 +2118,8 @@ pub fn selectAccountFromIndicesWithUsageOverrides(
 }
 
 pub fn shouldUseNumberedSwitchSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
-    return is_windows or !stdin_is_tty or !stdout_is_tty;
+    _ = is_windows;
+    return !stdin_is_tty or !stdout_is_tty;
 }
 
 pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
@@ -1803,17 +2131,19 @@ pub fn selectAccountsToRemoveWithUsageOverrides(
     reg: *registry.Registry,
     usage_overrides: ?[]const ?[]const u8,
 ) !?[]usize {
-    if (comptime builtin.os.tag == .windows) {
-        return selectRemoveWithNumbers(allocator, reg, usage_overrides);
-    }
-    if (shouldUseNumberedRemoveSelector(false, std.Io.File.stdin().isTty(app_runtime.io()) catch false)) {
+    if (shouldUseNumberedRemoveSelector(
+        comptime builtin.os.tag == .windows,
+        std.Io.File.stdin().isTty(app_runtime.io()) catch false,
+        std.Io.File.stdout().isTty(app_runtime.io()) catch false,
+    )) {
         return selectRemoveWithNumbers(allocator, reg, usage_overrides);
     }
     return try selectRemoveInteractive(allocator, reg, usage_overrides);
 }
 
-pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool) bool {
-    return is_windows or !stdin_is_tty;
+pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
+    _ = is_windows;
+    return !stdin_is_tty or !stdout_is_tty;
 }
 
 fn isQuitInput(input: []const u8) bool {
@@ -1978,11 +2308,79 @@ fn selectInteractiveFromIndices(
 
     while (true) {
         try tui.resetFrame();
-        try out.writeAll("Select account to activate:\n\n");
-        try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
-        try out.writeAll("\n");
-        try writeSwitchTuiFooter(out, use_color);
+        try renderSwitchScreen(
+            out,
+            reg,
+            rows.items,
+            idx_width,
+            widths,
+            idx,
+            use_color,
+            "",
+            number_buf[0..number_len],
+        );
         try out.flush();
+
+        if (comptime builtin.os.tag == .windows) {
+            switch (try tui.readWindowsKey()) {
+                .move_up => {
+                    if (idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                    }
+                },
+                .move_down => {
+                    if (idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                    }
+                },
+                .enter => {
+                    if (number_len > 0) {
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            return accountIdForSelectable(&rows, reg, parsed - 1);
+                        }
+                    }
+                    return accountIdForSelectable(&rows, reg, idx);
+                },
+                .quit => return null,
+                .backspace => {
+                    if (number_len > 0) {
+                        number_len -= 1;
+                        if (number_len > 0) {
+                            const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                            if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                idx = parsed - 1;
+                            }
+                        }
+                    }
+                },
+                .redraw => continue,
+                .byte => |ch| {
+                    if (isQuitKey(ch)) return null;
+                    if (ch == 'k' and idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch == 'j' and idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch >= '0' and ch <= '9' and number_len < number_buf.len) {
+                        number_buf[number_len] = ch;
+                        number_len += 1;
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            idx = parsed - 1;
+                        }
+                    }
+                },
+            }
+            continue;
+        }
 
         var b: [8]u8 = undefined;
         const n = try tui.read(&b);
@@ -2160,11 +2558,79 @@ fn selectInteractive(
 
     while (true) {
         try tui.resetFrame();
-        try out.writeAll("Select account to activate:\n\n");
-        try renderSwitchList(out, reg, rows.items, idx_width, widths, idx, use_color);
-        try out.writeAll("\n");
-        try writeSwitchTuiFooter(out, use_color);
+        try renderSwitchScreen(
+            out,
+            reg,
+            rows.items,
+            idx_width,
+            widths,
+            idx,
+            use_color,
+            "",
+            number_buf[0..number_len],
+        );
         try out.flush();
+
+        if (comptime builtin.os.tag == .windows) {
+            switch (try tui.readWindowsKey()) {
+                .move_up => {
+                    if (idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                    }
+                },
+                .move_down => {
+                    if (idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                    }
+                },
+                .enter => {
+                    if (number_len > 0) {
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            return accountIdForSelectable(&rows, reg, parsed - 1);
+                        }
+                    }
+                    return accountIdForSelectable(&rows, reg, idx);
+                },
+                .quit => return null,
+                .backspace => {
+                    if (number_len > 0) {
+                        number_len -= 1;
+                        if (number_len > 0) {
+                            const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                            if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                idx = parsed - 1;
+                            }
+                        }
+                    }
+                },
+                .redraw => continue,
+                .byte => |ch| {
+                    if (isQuitKey(ch)) return null;
+                    if (ch == 'k' and idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch == 'j' and idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch >= '0' and ch <= '9' and number_len < number_buf.len) {
+                        number_buf[number_len] = ch;
+                        number_len += 1;
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            idx = parsed - 1;
+                        }
+                    }
+                },
+            }
+            continue;
+        }
 
         var b: [8]u8 = undefined;
         const n = try tui.read(&b);
@@ -2269,11 +2735,84 @@ fn selectRemoveInteractive(
 
     while (true) {
         try tui.resetFrame();
-        try out.writeAll("Select accounts to delete:\n\n");
+        try writeTuiPromptLine(out, "Select accounts to delete:", number_buf[0..number_len]);
+        try out.writeAll("\n");
         try renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color);
         try out.writeAll("\n");
         try writeRemoveTuiFooter(out, use_color);
         try out.flush();
+
+        if (comptime builtin.os.tag == .windows) {
+            switch (try tui.readWindowsKey()) {
+                .move_up => {
+                    if (idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                    }
+                },
+                .move_down => {
+                    if (idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                    }
+                },
+                .enter => {
+                    var count: usize = 0;
+                    for (checked) |flag| {
+                        if (flag) count += 1;
+                    }
+                    if (count == 0) return null;
+                    var selected = try allocator.alloc(usize, count);
+                    var out_idx: usize = 0;
+                    for (checked, 0..) |flag, sel_idx| {
+                        if (!flag) continue;
+                        selected[out_idx] = accountIndexForSelectable(&rows, sel_idx);
+                        out_idx += 1;
+                    }
+                    return selected;
+                },
+                .quit => return null,
+                .backspace => {
+                    if (number_len > 0) {
+                        number_len -= 1;
+                        if (number_len > 0) {
+                            const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                            if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                idx = parsed - 1;
+                            }
+                        }
+                    }
+                },
+                .redraw => continue,
+                .byte => |ch| {
+                    if (isQuitKey(ch)) return null;
+                    if (ch == 'k' and idx > 0) {
+                        idx -= 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch == 'j' and idx + 1 < rows.selectable_row_indices.len) {
+                        idx += 1;
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch == ' ') {
+                        checked[idx] = !checked[idx];
+                        number_len = 0;
+                        continue;
+                    }
+                    if (ch >= '0' and ch <= '9' and number_len < number_buf.len) {
+                        number_buf[number_len] = ch;
+                        number_len += 1;
+                        const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                        if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                            idx = parsed - 1;
+                        }
+                    }
+                },
+            }
+            continue;
+        }
 
         var b: [8]u8 = undefined;
         const n = try tui.read(&b);
@@ -2373,8 +2912,10 @@ fn renderSwitchScreen(
     selected: ?usize,
     use_color: bool,
     status_line: []const u8,
+    number_input: []const u8,
 ) !void {
-    try out.writeAll("Select account to activate:\n\n");
+    try writeTuiPromptLine(out, "Select account to activate:", number_input);
+    try out.writeAll("\n");
     try renderSwitchList(out, reg, rows, idx_width, widths, selected, use_color);
     try out.writeAll("\n");
     if (status_line.len != 0) {

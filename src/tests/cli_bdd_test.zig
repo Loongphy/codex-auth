@@ -965,8 +965,14 @@ test "Scenario: Given singleton account names from different emails when buildin
     try std.testing.expectEqualStrings("beta@example.com / Workspace", labels.items[1]);
 }
 
-test "Scenario: Given selector environment when deciding remove UI then non-tty or windows use the numbered selector" {
-    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, false));
-    try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true));
-    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(true, true));
+test "Scenario: Given selector environment when deciding switch or remove UI then only non-tty streams use the numbered selector" {
+    try std.testing.expect(cli.shouldUseNumberedSwitchSelector(false, false, true));
+    try std.testing.expect(cli.shouldUseNumberedSwitchSelector(false, true, false));
+    try std.testing.expect(!cli.shouldUseNumberedSwitchSelector(false, true, true));
+    try std.testing.expect(!cli.shouldUseNumberedSwitchSelector(true, true, true));
+
+    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, false, true));
+    try std.testing.expect(cli.shouldUseNumberedRemoveSelector(false, true, false));
+    try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(false, true, true));
+    try std.testing.expect(!cli.shouldUseNumberedRemoveSelector(true, true, true));
 }
