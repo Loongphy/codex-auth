@@ -181,7 +181,7 @@ Interactive `codex-auth switch` now follows the same foreground refresh mode as 
 After a live switch action:
 
 - the in-flight refresh result, if any, is discarded
-- the current live display keeps the existing non-active row overlays until the next scheduled refresh
+- the current live display keeps the existing row overlays until the next scheduled refresh, including any existing `401` / `403` / `MissingAuth` or other usage overlay on the newly active row
 - the newly active account in the patched display is taken from the persisted `registry.json` state after the local switch succeeds
 - the `Switched to ...` message is built from that persisted registry entry as well
 - the next scheduled live refresh reapplies the current API-backed or local-rollout overlays asynchronously
@@ -193,6 +193,8 @@ After a live switch action:
 - shows a numeric non-`200` usage API status overlay
 
 Foreground live auto-switch candidates still use the same selectable rows as the live picker, so rows with usage/API error overlays are excluded. In addition, rows whose current displayed 5h or weekly value is already `0%` are skipped to avoid leaving one exhausted account for another exhausted account.
+
+When `switch --live --auto` is active, a successful manual live selection immediately re-enables the foreground auto-switch check on the patched current display instead of waiting for the next scheduled refresh. This is intentional: if the newly active row still shows an exhausted value or a numeric non-`200` usage overlay in the current display, the auto-switch loop may switch away again right away.
 
 When `--skip-api` or local-only usage mode is in effect, only the active account can be refreshed from local rollout data. Non-active candidates still come from the stored registry snapshot, so `switch --live --auto` is only as current as that local snapshot for non-active accounts.
 
