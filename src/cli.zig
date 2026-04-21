@@ -3763,7 +3763,7 @@ fn selectRemoveInteractive(
     var idx: usize = 0;
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
-    const use_color = colorEnabled();
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
     const widths = rows.widths;
 
