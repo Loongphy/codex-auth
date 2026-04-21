@@ -263,6 +263,10 @@ fn importReportMarker(outcome: registry.ImportOutcome, is_windows: bool) []const
     };
 }
 
+fn activeRowMarker(is_cursor_or_selected: bool, is_active: bool) []const u8 {
+    return if (is_cursor_or_selected) "> " else if (is_active) "* " else "  ";
+}
+
 const TuiSavedInputState = if (builtin.os.tag == .windows) win.DWORD else std.posix.termios;
 const TuiSavedOutputState = if (builtin.os.tag == .windows) win.DWORD else void;
 
@@ -2299,7 +2303,7 @@ pub fn runSwitchLiveActions(
     defer tui.deinit();
 
     const out = tui.out();
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const ui_tick_ms: i32 = 1000;
 
     var selected_account_key = if (current_display.reg.active_account_key) |key|
@@ -2601,7 +2605,7 @@ pub fn runRemoveLiveActions(
     defer tui.deinit();
 
     const out = tui.out();
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const ui_tick_ms: i32 = 1000;
 
     var cursor_account_key: ?[]u8 = null;
@@ -3327,7 +3331,7 @@ fn selectInteractiveFromIndices(
     var idx: usize = active_idx orelse 0;
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
     const widths = rows.widths;
 
@@ -3580,7 +3584,7 @@ fn selectInteractive(
     var idx: usize = active_idx orelse 0;
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
     const widths = rows.widths;
 
@@ -4075,7 +4079,7 @@ fn renderSwitchList(
                 try out.writeAll(ansi.dim);
             }
         }
-        try out.writeAll(if (is_selected) "> " else if (is_active) "* " else "  ");
+        try out.writeAll(activeRowMarker(is_selected, is_active));
         try writeIndexPadded(out, displayed_counter + 1, idx_width);
         try out.writeAll(" ");
         const indent: usize = @as(usize, row.depth) * 2;
@@ -4157,7 +4161,7 @@ fn renderRemoveList(
                 try out.writeAll(ansi.dim);
             }
         }
-        try out.writeAll(if (is_cursor) "> " else "  ");
+        try out.writeAll(activeRowMarker(is_cursor, is_active));
         try out.writeAll(if (is_checked) "[x]" else "[ ]");
         try out.writeAll(" ");
         try writeIndexPadded(out, selectable_counter + 1, idx_width);
@@ -4174,9 +4178,6 @@ fn renderRemoveList(
         try writeTruncatedPadded(out, row.rate_week, widths.rate_week);
         try out.writeAll("  ");
         try writeTruncatedPadded(out, row.last, widths.last);
-        if (is_active) {
-            try out.writeAll("  [ACTIVE]");
-        }
         try out.writeAll("\n");
         if (use_color) try out.writeAll(ansi.reset);
         selectable_counter += 1;
@@ -4874,6 +4875,54 @@ test "Scenario: Given the active account is selected when rendering switch list 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "> 01 active@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "* 01 active@example.com") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+}
+
+test "Scenario: Given an active account when rendering remove list then non-cursor active rows use the list marker" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "cursor@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "active@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-2");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var checked = [_]bool{ false, false };
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, 0, &checked, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "> [ ] 01 cursor@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "* [ ] 02 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+}
+
+test "Scenario: Given the active account is the remove cursor then the cursor marker wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "other@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var checked = [_]bool{ false, false };
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, 0, &checked, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "> [ ] 01 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "* [ ] 01 active@example.com") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
 }
 
