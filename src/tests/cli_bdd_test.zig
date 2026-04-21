@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("../cli.zig");
 const registry = @import("../registry.zig");
 
@@ -68,6 +69,14 @@ fn expectArgv(actual: []const []const u8, expected: []const []const u8) !void {
     for (expected, actual) |expected_arg, actual_arg| {
         try std.testing.expectEqualStrings(expected_arg, actual_arg);
     }
+}
+
+fn expectedImportMarker(outcome: registry.ImportOutcome) []const u8 {
+    return switch (outcome) {
+        .imported => if (builtin.os.tag == .windows) "[+]" else "✓",
+        .updated => if (builtin.os.tag == .windows) "[~]" else "✓",
+        .skipped => if (builtin.os.tag == .windows) "[x]" else "✗",
+    };
 }
 
 test "Scenario: Given import path and alias when parsing then import options are preserved" {
@@ -342,17 +351,24 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
 
     try cli.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
 
-    try std.testing.expectEqualStrings(
+    const expected_stdout = try std.fmt.allocPrint(
+        gpa,
         "Scanning ./tokens/...\n" ++
-            "  ✓ imported  token_ryan.taylor.alpha@email.com\n" ++
-            "  ✓ updated   token_jane.smith.alpha@email.com\n" ++
+            "  {s} imported  token_ryan.taylor.alpha@email.com\n" ++
+            "  {s} updated   token_jane.smith.alpha@email.com\n" ++
             "Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)\n",
-        stdout_aw.written(),
+        .{ expectedImportMarker(.imported), expectedImportMarker(.updated) },
     );
-    try std.testing.expectEqualStrings(
-        "  ✗ skipped   token_invalid: MalformedJson\n",
-        stderr_aw.written(),
+    defer gpa.free(expected_stdout);
+    try std.testing.expectEqualStrings(expected_stdout, stdout_aw.written());
+
+    const expected_stderr = try std.fmt.allocPrint(
+        gpa,
+        "  {s} skipped   token_invalid: MalformedJson\n",
+        .{expectedImportMarker(.skipped)},
     );
+    defer gpa.free(expected_stderr);
+    try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
 }
 
 test "Scenario: Given single-file skipped import report when rendering then summary stays concise" {
@@ -372,10 +388,13 @@ test "Scenario: Given single-file skipped import report when rendering then summ
         "Import Summary: 0 imported, 1 skipped\n",
         stdout_aw.written(),
     );
-    try std.testing.expectEqualStrings(
-        "  ✗ skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
-        stderr_aw.written(),
+    const expected_stderr = try std.fmt.allocPrint(
+        gpa,
+        "  {s} skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
+        .{expectedImportMarker(.skipped)},
     );
+    defer gpa.free(expected_stderr);
+    try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
 }
 
 test "Scenario: Given status when parsing then status command is preserved" {
