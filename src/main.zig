@@ -3619,7 +3619,15 @@ test "buildStatusLine releases mutex on allocation failure" {
 
 // Tests live in separate files but are pulled in by main.zig for zig test.
 test {
+    // Keep every src/*.zig module with top-level tests listed here so `zig build test`
+    // covers the same source-file tests as direct `zig test src/<file>.zig`.
+    _ = @import("account_name_refresh.zig");
+    _ = @import("auto.zig");
+    _ = @import("chatgpt_http.zig");
     _ = @import("cli.zig");
+    _ = @import("compat_fs.zig");
+    _ = @import("format.zig");
+    _ = @import("timefmt.zig");
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");
     _ = @import("tests/account_api_test.zig");
