@@ -137,7 +137,7 @@ function Invoke-InteractiveWindow(
 function Invoke-SwitchSmoke([string]$ExeLocalPath, [string]$BaseDir) {
   $layout = New-SmokeLayout $BaseDir
   $windowTitle = 'codex-auth-switch-smoke-' + [Guid]::NewGuid().ToString('N')
-  $interaction = Invoke-InteractiveWindow $ExeLocalPath $BaseDir $layout.codex_home $windowTitle 'switch --skip-api' {
+  $interaction = Invoke-InteractiveWindow $ExeLocalPath $BaseDir $layout.codex_home $windowTitle 'switch' {
     param($wshell)
     $wshell.SendKeys('{DOWN}')
     Start-Sleep -Milliseconds 150
@@ -162,7 +162,7 @@ function Invoke-SwitchSmoke([string]$ExeLocalPath, [string]$BaseDir) {
 function Invoke-RemoveSmoke([string]$ExeLocalPath, [string]$BaseDir) {
   $layout = New-SmokeLayout $BaseDir
   $windowTitle = 'codex-auth-remove-smoke-' + [Guid]::NewGuid().ToString('N')
-  $interaction = Invoke-InteractiveWindow $ExeLocalPath $BaseDir $layout.codex_home $windowTitle 'remove --skip-api' {
+  $interaction = Invoke-InteractiveWindow $ExeLocalPath $BaseDir $layout.codex_home $windowTitle 'remove' {
     param($wshell)
     $wshell.SendKeys('{DOWN}')
     Start-Sleep -Milliseconds 150

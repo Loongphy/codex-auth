@@ -14,6 +14,10 @@ After modifying any `.zig` file, always run `zig build run -- list` to verify th
 
 - When updating and pushing a release version, always follow [docs/release.md](./docs/release.md).
 
+# Docs
+
+- Do not add low-level technical implementation details to `README.md`. Put implementation-specific behavior in `docs/*.md` or `AGENTS.md` instead.
+
 # Zig API Discovery
 
 - Do not guess Zig APIs from memory or from examples targeting other Zig versions.

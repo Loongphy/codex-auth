@@ -931,7 +931,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         defer selectors.deinit(allocator);
         var all = false;
         var live = false;
-        var api_mode: ApiMode = .default;
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
@@ -943,28 +942,20 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                 continue;
             }
             if (std.mem.eql(u8, arg, "--api")) {
-                switch (api_mode) {
-                    .default => api_mode = .force_api,
-                    .force_api => {
-                        return usageErrorResult(allocator, .remove_account, "duplicate `--api` for `remove`.", .{});
-                    },
-                    .skip_api => {
-                        return usageErrorResult(allocator, .remove_account, "`--api` cannot be combined with `--skip-api` for `remove`.", .{});
-                    },
-                }
-                continue;
+                return usageErrorResult(
+                    allocator,
+                    .remove_account,
+                    "`remove` does not support `--api`; removal is always local-only.",
+                    .{},
+                );
             }
             if (std.mem.eql(u8, arg, "--skip-api")) {
-                switch (api_mode) {
-                    .default => api_mode = .skip_api,
-                    .skip_api => {
-                        return usageErrorResult(allocator, .remove_account, "duplicate `--skip-api` for `remove`.", .{});
-                    },
-                    .force_api => {
-                        return usageErrorResult(allocator, .remove_account, "`--skip-api` cannot be combined with `--api` for `remove`.", .{});
-                    },
-                }
-                continue;
+                return usageErrorResult(
+                    allocator,
+                    .remove_account,
+                    "`remove` does not support `--skip-api`; removal is always local-only.",
+                    .{},
+                );
             }
             if (std.mem.eql(u8, arg, "--all")) {
                 if (all or selectors.items.len != 0) {
@@ -981,12 +972,12 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             }
             try selectors.append(allocator, try allocator.dupe(u8, arg));
         }
-        if ((live or api_mode != .default) and (all or selectors.items.len != 0)) {
+        if (live and (all or selectors.items.len != 0)) {
             freeOwnedStringList(allocator, selectors.items);
             return usageErrorResult(
                 allocator,
                 .remove_account,
-                "`remove <query>` and `remove --all` do not support `--live`, `--api`, or `--skip-api`.",
+                "`remove <query>` and `remove --all` do not support `--live`.",
                 .{},
             );
         }
@@ -994,7 +985,6 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
             .selectors = try selectors.toOwnedSlice(allocator),
             .all = all,
             .live = live,
-            .api_mode = api_mode,
         } } };
     }
 
@@ -1243,7 +1233,7 @@ pub fn writeHelp(
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
         .{ .name = "switch [--live] [--auto] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
-        .{ .name = "remove [--live] [<query>...] | remove --all", .description = "Remove one or more accounts" },
+        .{ .name = "remove [--live] | remove <query> [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -1428,7 +1418,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
-            try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth remove [--live]\n");
             try out.writeAll("  codex-auth remove <query> [<query>...]\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
@@ -1484,8 +1474,6 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
             try out.writeAll("  codex-auth remove --live\n");
-            try out.writeAll("  codex-auth remove --api\n");
-            try out.writeAll("  codex-auth remove --skip-api\n");
             try out.writeAll("  codex-auth remove 01 03\n");
             try out.writeAll("  codex-auth remove work personal\n");
             try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");
@@ -1928,6 +1916,7 @@ pub const SwitchLiveActionController = struct {
     apply_selection: *const fn (
         context: *anyopaque,
         allocator: std.mem.Allocator,
+        display: SwitchSelectionDisplay,
         account_key: []const u8,
     ) anyerror!LiveActionOutcome,
     auto_switch: bool = false,
@@ -1938,6 +1927,7 @@ pub const RemoveLiveActionController = struct {
     apply_selection: *const fn (
         context: *anyopaque,
         allocator: std.mem.Allocator,
+        display: SwitchSelectionDisplay,
         account_keys: []const []const u8,
     ) anyerror!LiveActionOutcome,
 };
@@ -2326,7 +2316,7 @@ pub fn runSwitchLiveActions(
         if (auto_check_pending) {
             if (try maybeAutoSwitchTargetKeyAlloc(allocator, borrowed, &rows)) |target_key| {
                 defer allocator.free(target_key);
-                const outcome = controller.apply_selection(controller.refresh.context, allocator, target_key) catch |err| {
+                const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, target_key) catch |err| {
                     replaceOptionalOwnedString(
                         allocator,
                         &action_message,
@@ -2402,7 +2392,7 @@ pub fn runSwitchLiveActions(
                     else
                         continue;
                     defer allocator.free(target_key);
-                    const outcome = controller.apply_selection(controller.refresh.context, allocator, target_key) catch |err| {
+                    const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, target_key) catch |err| {
                         replaceOptionalOwnedString(
                             allocator,
                             &action_message,
@@ -2510,7 +2500,7 @@ pub fn runSwitchLiveActions(
                 else
                     continue;
                 defer allocator.free(target_key);
-                const outcome = controller.apply_selection(controller.refresh.context, allocator, target_key) catch |err| {
+                const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, target_key) catch |err| {
                     replaceOptionalOwnedString(
                         allocator,
                         &action_message,
@@ -2684,7 +2674,7 @@ pub fn runRemoveLiveActions(
                     const selected_keys = try allocator.alloc([]const u8, checked_account_keys.items.len);
                     defer allocator.free(selected_keys);
                     for (checked_account_keys.items, 0..) |key, idx| selected_keys[idx] = key;
-                    const outcome = controller.apply_selection(controller.refresh.context, allocator, selected_keys) catch |err| {
+                    const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, selected_keys) catch |err| {
                         replaceOptionalOwnedString(
                             allocator,
                             &action_message,
@@ -2798,7 +2788,7 @@ pub fn runRemoveLiveActions(
                 const selected_keys = try allocator.alloc([]const u8, checked_account_keys.items.len);
                 defer allocator.free(selected_keys);
                 for (checked_account_keys.items, 0..) |key, idx| selected_keys[idx] = key;
-                const outcome = controller.apply_selection(controller.refresh.context, allocator, selected_keys) catch |err| {
+                const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, selected_keys) catch |err| {
                     replaceOptionalOwnedString(
                         allocator,
                         &action_message,
@@ -4808,11 +4798,35 @@ test "Scenario: Given an active account when rendering switch list then non-sele
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
-    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, 0, false);
+    var selected_displayed_idx: ?usize = null;
+    for (rows.selectable_row_indices, 0..) |row_idx, selectable_idx| {
+        const account_idx = rows.items[row_idx].account_index.?;
+        if (std.mem.eql(u8, reg.accounts.items[account_idx].account_key, "user-1::acc-1")) {
+            selected_displayed_idx = displayedIndexForSelectable(&rows, selectable_idx);
+            break;
+        }
+    }
+
+    try std.testing.expect(selected_displayed_idx != null);
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, selected_displayed_idx.?, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "> 01 selected@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "* 02 active@example.com") != null);
+    var expected_selected_line_buf: [128]u8 = undefined;
+    const expected_selected_line = try std.fmt.bufPrint(
+        &expected_selected_line_buf,
+        "> {d:0>2} selected@example.com",
+        .{selected_displayed_idx.? + 1},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_selected_line) != null);
+
+    const active_displayed_idx = displayedIndexForSelectable(&rows, activeSelectableIndex(&rows).? ).?;
+    var expected_active_line_buf: [128]u8 = undefined;
+    const expected_active_line = try std.fmt.bufPrint(
+        &expected_active_line_buf,
+        "* {d:0>2} active@example.com",
+        .{active_displayed_idx + 1},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_active_line) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
 }
 

@@ -28,6 +28,9 @@ const SeedAccount = struct {
     alias: []const u8,
 };
 
+const future_primary_reset_at: i64 = 4_102_444_800;
+const future_secondary_reset_at: i64 = 4_103_049_600;
+
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
     const project_root = getEnvVarOwned(allocator, e2e_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
@@ -526,6 +529,66 @@ fn setRegistryApiConfig(
     reg.api.usage = usage_enabled;
     reg.api.account = account_enabled;
     try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn makeUsageSnapshot(primary_used_percent: f64, secondary_used_percent: f64) registry.RateLimitSnapshot {
+    return .{
+        .primary = .{
+            .used_percent = primary_used_percent,
+            .window_minutes = 300,
+            .resets_at = future_primary_reset_at,
+        },
+        .secondary = .{
+            .used_percent = secondary_used_percent,
+            .window_minutes = 10080,
+            .resets_at = future_secondary_reset_at,
+        },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
+fn setStoredUsageSnapshotForAccount(
+    allocator: std.mem.Allocator,
+    home_root: []const u8,
+    email: []const u8,
+    snapshot: registry.RateLimitSnapshot,
+    last_usage_at: i64,
+    active_account_activated_at_ms: i64,
+) !void {
+    const codex_home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(codex_home);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    const account_key = try bdd.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(account_key);
+    registry.updateUsage(allocator, &reg, account_key, snapshot);
+    const idx = registry.findAccountIndexByAccountKey(&reg, account_key) orelse return error.TestExpectedEqual;
+    reg.accounts.items[idx].last_usage_at = last_usage_at;
+    reg.active_account_activated_at_ms = active_account_activated_at_ms;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn writeLocalRolloutUsage(
+    dir: fs.Dir,
+    rel_path: []const u8,
+    primary_used_percent: f64,
+    secondary_used_percent: f64,
+) !void {
+    const contents = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{{\"timestamp\":\"2025-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{d:.1},\"window_minutes\":300,\"resets_at\":{d}}},\"secondary\":{{\"used_percent\":{d:.1},\"window_minutes\":10080,\"resets_at\":{d}}},\"plan_type\":\"pro\"}}}}}}\n",
+        .{
+            primary_used_percent,
+            future_primary_reset_at,
+            secondary_used_percent,
+            future_secondary_reset_at,
+        },
+    );
+    defer std.testing.allocator.free(contents);
+    try dir.writeFile(.{ .sub_path = rel_path, .data = contents });
 }
 
 fn appendCustomAccount(
@@ -1530,6 +1593,42 @@ test "Scenario: Given switch query with skip-api flag when running switch then i
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--auto`, `--api`, or `--skip-api`") != null);
 }
 
+test "Scenario: Given switch without api flags when running interactively then it requires api refresh executables by default" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{"switch"},
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+}
+
 test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1546,6 +1645,14 @@ test "Scenario: Given switch with skip-api when running interactively then it do
         .{ .email = "active@example.com", .alias = "active" },
         .{ .email = "backup@example.com", .alias = "backup" },
     });
+    try setStoredUsageSnapshotForAccount(
+        gpa,
+        home_root,
+        "active@example.com",
+        makeUsageSnapshot(25.0, 40.0),
+        1,
+        0,
+    );
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -1782,7 +1889,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--live`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -1818,10 +1925,10 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "do not support `--live`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
 }
 
-test "Scenario: Given interactive remove with api flag and missing refresh executables when running remove then it falls back to the local picker" {
+test "Scenario: Given interactive remove with api flag when running remove then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1838,9 +1945,6 @@ test "Scenario: Given interactive remove with api flag and missing refresh execu
         .{ .email = "beta@example.com", .alias = "" },
     });
 
-    const codex_home = try codexHomeAlloc(gpa, home_root);
-    defer gpa.free(codex_home);
-
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
@@ -1856,14 +1960,9 @@ test "Scenario: Given interactive remove with api flag and missing refresh execu
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 1 account(s): beta@example.com\n") != null);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expectEqualStrings("alpha@example.com", loaded.accounts.items[0].email);
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
 }
 
 test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {
@@ -1911,7 +2010,7 @@ test "Scenario: Given remove without selectors when running remove then it does 
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
 }
 
-test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
+test "Scenario: Given remove with skip-api when running remove then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1928,9 +2027,6 @@ test "Scenario: Given remove with skip-api when running remove then it does not 
         .{ .email = "beta@example.com", .alias = "" },
     });
 
-    const codex_home = try codexHomeAlloc(gpa, home_root);
-    defer gpa.free(codex_home);
-
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
@@ -1946,14 +2042,9 @@ test "Scenario: Given remove with skip-api when running remove then it does not 
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
 }
 
 test "Scenario: Given active account removal with a replacement when running remove then it does not recreate a backup for the deleted auth" {

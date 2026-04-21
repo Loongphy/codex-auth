@@ -45,15 +45,19 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
-- `list --api` forces foreground usage refresh for this command even when `api.usage = false`; `list --skip-api` skips foreground usage refresh completely and renders only the stored registry data
-- interactive `switch` follows the configured foreground usage mode by default; `switch --live --auto` uses the same live display data source and only adds foreground auto-selection on top of that refreshed view
+- `list` and interactive `switch` follow the same foreground usage mode by default: they honor the stored `api.usage` setting unless the command line overrides it
+- `list --api` and interactive `switch --api` force foreground usage refresh for that command even when `api.usage = false`
+- `list --skip-api` and interactive `switch --skip-api` disable the foreground usage API path for that command
 - in `switch --live --auto`, the active account triggers a foreground auto-switch only when the live display shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
 - `switch --live --auto` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
-- with `--skip-api` or `api.usage = false`, only the active account can be refreshed from local rollout data; non-active foreground auto-switch candidates still come from stored registry data
-- `switch <query>` always resolves selectors locally from stored data and does not accept `--auto`, `--api`, or `--skip-api`
-- interactive `remove` stays local-only by default; `remove --api` does a best-effort foreground usage refresh attempt for picker display only. Successful rows show live usage data; rows that cannot refresh may show HTTP/error overlays in the picker instead. Refresh problems do not block deletion, and setup or batch-level failures still fall back to the stored registry list
-- `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--api` or `--skip-api`
-- `switch` does not refresh usage again after the new account is activated
+- with `--skip-api` or `api.usage = false`, `list` and `switch --live` can still refresh only the active account from local rollout data; non-active `switch` rows and non-active foreground auto-switch candidates still come from stored registry data
+- single-shot `switch --skip-api` skips the pre-render refresh round entirely and shows the stored registry picker directly
+- `switch <query>` always resolves selectors locally from stored data and does not accept `--live`, `--auto`, `--api`, or `--skip-api`
+- interactive `remove`, including `remove --live`, always stays local-only and never makes foreground usage API requests
+- `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--live`
+- single-shot `switch` does not perform another foreground usage refresh after the new account is activated
+- in `switch --live`, a successful selection patches the current picker state in memory instead of rebuilding it from disk; the active account and `Switched to ...` message both come from the persisted registry state after the local switch succeeds, while the next scheduled live refresh reapplies current usage/account overlays asynchronously
+- in `remove --live`, a successful delete also patches the current picker state in memory; removed rows disappear immediately, surviving overlays stay in place until the next scheduled refresh, and the surviving active account plus the `Removed ...` summary come from the persisted registry state after removal succeeds
 - the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
 - the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
 - the daemon usage paths are cooldown-limited; see [docs/auto-switch.md](./auto-switch.md) for the broader runtime loop
@@ -64,10 +68,10 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
-- `list --api` forces synchronous `accounts/check` refresh for this command even when `api.account = false`; `list --skip-api` skips it and uses stored metadata only.
-- interactive `switch` follows the configured account-name refresh mode by default, including `switch --live --auto`; `switch <query>` always stays local-only and does not accept `--auto`, `--api`, or `--skip-api`.
-- interactive `remove` stays local-only by default; `remove --api` does a best-effort synchronous `accounts/check` refresh for picker display only, and account-name refresh failures leave the stored metadata in place without blocking deletion.
-- `remove <query>` and `remove --all` always stay local-only and do not accept `--api` or `--skip-api`.
+- `list` and interactive `switch` follow the same foreground account-name refresh mode by default: they honor the stored `api.account` setting unless the command line overrides it.
+- `list --api` and interactive `switch --api` force synchronous `accounts/check` refresh for that command even when `api.account = false`; `list --skip-api` and interactive `switch --skip-api` skip it and use stored metadata only.
+- `switch <query>` always stays local-only and does not accept `--live`, `--auto`, `--api`, or `--skip-api`.
+- `remove <query>` and `remove --all` always stay local-only and do not accept `--live`.
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.
 - the auto-switch daemon still uses a grouped-scope scan during each cycle when `auto_switch.enabled = true`.
 - daemon refreshes load the request auth context from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
