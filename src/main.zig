@@ -242,7 +242,7 @@ fn ensureLiveTty(target: LiveTtyTarget) !void {
 }
 
 pub fn shouldRefreshForegroundUsage(target: ForegroundUsageRefreshTarget) bool {
-    return target == .list or target == .switch_account;
+    return target == .list or target == .switch_account or target == .remove_account;
 }
 
 fn apiModeUsesApi(default_enabled: bool, api_mode: cli.ApiMode) bool {
@@ -1692,18 +1692,9 @@ const SwitchLiveRuntime = struct {
 
 fn switchLiveRefreshPolicy(
     reg: *const registry.Registry,
-    target: ForegroundUsageRefreshTarget,
+    _: ForegroundUsageRefreshTarget,
     api_mode: cli.ApiMode,
 ) SwitchLiveRefreshPolicy {
-    if (target == .remove_account) {
-        return .{
-            .usage_api_enabled = false,
-            .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
-            .label = "local",
-        };
-    }
-
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, api_mode);
     if (usage_api_enabled or account_api_enabled) {
@@ -2659,15 +2650,7 @@ fn selectBestRemainingAccountKeyByUsageAlloc(
 }
 
 fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.RemoveOptions) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-
-    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
-    }
-
     const interactive_remove = !opts.all and opts.selectors.len == 0;
-    const api_mode: cli.ApiMode = .skip_api;
     if (interactive_remove and opts.live) {
         try ensureLiveTty(.remove_account);
         const live_allocator = std.heap.smp_allocator;
@@ -2675,7 +2658,7 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             live_allocator,
             codex_home,
             .remove_account,
-            api_mode,
+            opts.api_mode,
         );
         var initial_display: ?cli.OwnedSwitchSelectionDisplay = loaded.display;
         errdefer if (initial_display) |*display| display.deinit(live_allocator);
@@ -2684,8 +2667,8 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             live_allocator,
             codex_home,
             .remove_account,
-            api_mode,
-            false,
+            opts.api_mode,
+            opts.api_mode == .force_api,
             loaded.policy,
             loaded.refresh_error_name,
         );
@@ -2711,6 +2694,62 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             return err;
         };
         return;
+    }
+
+    if (interactive_remove) {
+        var loaded = if (opts.api_mode == .skip_api)
+            try loadStoredSwitchSelectionDisplay(
+                allocator,
+                codex_home,
+                .remove_account,
+                opts.api_mode,
+            )
+        else
+            try loadSwitchSelectionDisplay(
+                allocator,
+                codex_home,
+                opts.api_mode,
+                .remove_account,
+                true,
+            );
+        defer loaded.display.deinit(allocator);
+        defer if (loaded.refresh_error_name) |name| allocator.free(name);
+
+        const selected = cli.selectAccountsToRemoveWithUsageOverrides(
+            allocator,
+            &loaded.display.reg,
+            loaded.display.usage_overrides,
+        ) catch |err| {
+            if (err == error.TuiRequiresTty) {
+                try cli.printRemoveRequiresTtyError();
+                return error.RemoveSelectionRequiresTty;
+            }
+            if (err == error.InvalidRemoveSelectionInput) {
+                try cli.printInvalidRemoveSelectionError();
+                return error.InvalidRemoveSelectionInput;
+            }
+            return err;
+        };
+        if (selected == null) return;
+        defer allocator.free(selected.?);
+        if (selected.?.len == 0) return;
+
+        var removed_labels = try cli.buildRemoveLabels(allocator, &loaded.display.reg, selected.?);
+        defer {
+            freeOwnedStrings(allocator, removed_labels.items);
+            removed_labels.deinit(allocator);
+        }
+
+        try removeSelectedAccountsAndPersist(allocator, codex_home, &loaded.display.reg, selected.?, opts.all);
+        try cli.printRemoveSummary(removed_labels.items);
+        return;
+    }
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
     var selected: ?[]usize = null;
@@ -2943,7 +2982,7 @@ fn sleepLiveRefreshTask(io: std.Io) void {
     std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
 }
 
-test "initial live selection display uses stored api defaults for list and switch" {
+test "initial live selection display uses stored api defaults for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2953,7 +2992,7 @@ test "initial live selection display uses stored api defaults for list and switc
 
     try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig());
 
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account }) |target| {
+    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = true,
             .account_api_enabled = true,
@@ -2963,7 +3002,7 @@ test "initial live selection display uses stored api defaults for list and switc
     }
 }
 
-test "initial live selection display preserves mixed stored api defaults for list and switch" {
+test "initial live selection display preserves mixed stored api defaults for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2976,7 +3015,7 @@ test "initial live selection display preserves mixed stored api defaults for lis
         .account = true,
     });
 
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account }) |target| {
+    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = false,
             .account_api_enabled = true,
@@ -2986,7 +3025,7 @@ test "initial live selection display preserves mixed stored api defaults for lis
     }
 }
 
-test "initial live selection display honors explicit api mode overrides for list and switch" {
+test "initial live selection display honors explicit api mode overrides for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -2999,7 +3038,7 @@ test "initial live selection display honors explicit api mode overrides for list
         .account = false,
     });
 
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account }) |target| {
+    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .force_api, .{
             .usage_api_enabled = true,
             .account_api_enabled = true,
@@ -3010,7 +3049,7 @@ test "initial live selection display honors explicit api mode overrides for list
 
     try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig());
 
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account }) |target| {
+    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .skip_api, .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
@@ -3018,30 +3057,6 @@ test "initial live selection display honors explicit api mode overrides for list
             .label = "local",
         });
     }
-}
-
-test "initial live selection display keeps remove local regardless of registry api defaults" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig());
-
-    try expectInitialLiveSelectionPolicy(gpa, codex_home, .remove_account, .default, .{
-        .usage_api_enabled = false,
-        .account_api_enabled = false,
-        .interval_ms = switch_live_local_refresh_interval_ms,
-        .label = "local",
-    });
-    try expectInitialLiveSelectionPolicy(gpa, codex_home, .remove_account, .force_api, .{
-        .usage_api_enabled = false,
-        .account_api_enabled = false,
-        .interval_ms = switch_live_local_refresh_interval_ms,
-        .label = "local",
-    });
 }
 
 test "live refresh merge preserves accounts newly added to the latest registry" {

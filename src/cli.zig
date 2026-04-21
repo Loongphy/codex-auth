@@ -956,63 +956,62 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         var selectors = std.ArrayList([]const u8).empty;
         errdefer freeOwnedStringList(allocator, selectors.items);
         defer selectors.deinit(allocator);
-        var all = false;
-        var live = false;
+        var opts: RemoveOptions = .{
+            .selectors = &.{},
+            .all = false,
+        };
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = std.mem.sliceTo(args[i], 0);
             if (std.mem.eql(u8, arg, "--live")) {
-                if (live) {
+                if (opts.live) {
                     return usageErrorResult(allocator, .remove_account, "duplicate `--live` for `remove`.", .{});
                 }
-                live = true;
+                opts.live = true;
                 continue;
             }
             if (std.mem.eql(u8, arg, "--api")) {
-                return usageErrorResult(
-                    allocator,
-                    .remove_account,
-                    "`remove` does not support `--api`; removal is always local-only.",
-                    .{},
-                );
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .force_api,
+                    .force_api => return usageErrorResult(allocator, .remove_account, "duplicate `--api` for `remove`.", .{}),
+                    .skip_api => return usageErrorResult(allocator, .remove_account, "`--api` cannot be combined with `--skip-api` for `remove`.", .{}),
+                }
+                continue;
             }
             if (std.mem.eql(u8, arg, "--skip-api")) {
-                return usageErrorResult(
-                    allocator,
-                    .remove_account,
-                    "`remove` does not support `--skip-api`; removal is always local-only.",
-                    .{},
-                );
+                switch (opts.api_mode) {
+                    .default => opts.api_mode = .skip_api,
+                    .skip_api => return usageErrorResult(allocator, .remove_account, "duplicate `--skip-api` for `remove`.", .{}),
+                    .force_api => return usageErrorResult(allocator, .remove_account, "`--skip-api` cannot be combined with `--api` for `remove`.", .{}),
+                }
+                continue;
             }
             if (std.mem.eql(u8, arg, "--all")) {
-                if (all or selectors.items.len != 0) {
+                if (opts.all or selectors.items.len != 0) {
                     return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
                 }
-                all = true;
+                opts.all = true;
                 continue;
             }
             if (std.mem.startsWith(u8, arg, "-")) {
                 return usageErrorResult(allocator, .remove_account, "unknown flag `{s}` for `remove`.", .{arg});
             }
-            if (all) {
+            if (opts.all) {
                 return usageErrorResult(allocator, .remove_account, "`remove` cannot combine `--all` with another selector.", .{});
             }
             try selectors.append(allocator, try allocator.dupe(u8, arg));
         }
-        if (live and (all or selectors.items.len != 0)) {
+        if ((opts.live or opts.api_mode != .default) and (opts.all or selectors.items.len != 0)) {
             freeOwnedStringList(allocator, selectors.items);
             return usageErrorResult(
                 allocator,
                 .remove_account,
-                "`remove <query>` and `remove --all` do not support `--live`.",
+                "`remove <query>` and `remove --all` do not support `--live`, `--api`, or `--skip-api`.",
                 .{},
             );
         }
-        return .{ .command = .{ .remove_account = .{
-            .selectors = try selectors.toOwnedSlice(allocator),
-            .all = all,
-            .live = live,
-        } } };
+        opts.selectors = try selectors.toOwnedSlice(allocator);
+        return .{ .command = .{ .remove_account = opts } };
     }
 
     if (std.mem.eql(u8, cmd, "clean")) {
@@ -1260,7 +1259,7 @@ pub fn writeHelp(
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
         .{ .name = "switch [--live] [--auto] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
-        .{ .name = "remove [--live] | remove <query> [<query>...] | remove --all", .description = "Remove one or more accounts" },
+        .{ .name = "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
     };
@@ -1407,7 +1406,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
         .switch_account => "Switch the active account interactively, or by query using stored local data.",
-        .remove_account => "Remove one or more accounts by query or list row number using stored local data.",
+        .remove_account => "Remove one or more accounts interactively or by query.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
@@ -1445,7 +1444,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
-            try out.writeAll("  codex-auth remove [--live]\n");
+            try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth remove <query> [<query>...]\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
@@ -1501,6 +1500,8 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
             try out.writeAll("  codex-auth remove --live\n");
+            try out.writeAll("  codex-auth remove --api\n");
+            try out.writeAll("  codex-auth remove --skip-api\n");
             try out.writeAll("  codex-auth remove 01 03\n");
             try out.writeAll("  codex-auth remove work personal\n");
             try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");

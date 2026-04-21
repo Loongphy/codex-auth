@@ -1931,7 +1931,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <query>` and `remove --all` do not support") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -1967,10 +1967,10 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <query>` and `remove --all` do not support") != null);
 }
 
-test "Scenario: Given interactive remove with api flag when running remove then it returns a usage error" {
+test "Scenario: Given interactive remove with api flag when running remove then it requires api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2004,10 +2004,10 @@ test "Scenario: Given interactive remove with api flag when running remove then 
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 }
 
-test "Scenario: Given remove without selectors when running remove then it does not require api refresh executables" {
+test "Scenario: Given remove without api flags when running remove then it requires api refresh executables by default" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2023,6 +2023,44 @@ test "Scenario: Given remove without selectors when running remove then it does 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{"remove"},
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+}
+
+test "Scenario: Given remove without selectors and api disabled in config when running remove then it does not require api refresh executables" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+    try setRegistryApiConfig(gpa, home_root, false, false);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -2052,7 +2090,7 @@ test "Scenario: Given remove without selectors when running remove then it does 
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
 }
 
-test "Scenario: Given remove with skip-api when running remove then it returns a usage error" {
+test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2084,9 +2122,9 @@ test "Scenario: Given remove with skip-api when running remove then it returns a
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectFailure(result);
-    try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "removal is always local-only") != null);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
 }
 
 test "Scenario: Given active account removal with a replacement when running remove then it does not recreate a backup for the deleted auth" {
