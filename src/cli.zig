@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
+const terminal_color = @import("terminal_color.zig");
 const timefmt = @import("timefmt.zig");
 const version = @import("version.zig");
 const windows = std.os.windows;
@@ -213,15 +214,29 @@ fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[H\x1b[J");
 }
 
+fn switchTuiFooterText(is_windows: bool) []const u8 {
+    return if (is_windows)
+        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n"
+    else
+        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n";
+}
+
 fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n");
+    try out.writeAll(switchTuiFooterText(builtin.os.tag == .windows));
     if (use_color) try out.writeAll(ansi.reset);
+}
+
+fn removeTuiFooterText(is_windows: bool) []const u8 {
+    return if (is_windows)
+        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n"
+    else
+        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n";
 }
 
 fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(ansi.dim);
-    try out.writeAll("Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n");
+    try out.writeAll(removeTuiFooterText(builtin.os.tag == .windows));
     if (use_color) try out.writeAll(ansi.reset);
 }
 
@@ -238,6 +253,14 @@ fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u
         try out.writeAll(digits);
     }
     try out.writeAll("\n");
+}
+
+fn importReportMarker(outcome: registry.ImportOutcome, is_windows: bool) []const u8 {
+    return switch (outcome) {
+        .imported => if (is_windows) "[+]" else "✓",
+        .updated => if (is_windows) "[~]" else "✓",
+        .skipped => if (is_windows) "[x]" else "✗",
+    };
 }
 
 const TuiSavedInputState = if (builtin.os.tag == .windows) win.DWORD else std.posix.termios;
@@ -578,11 +601,11 @@ test "Scenario: Given Windows TUI console modes when configuring them then resiz
 }
 
 fn colorEnabled() bool {
-    return std.Io.File.stdout().isTty(app_runtime.io()) catch false;
+    return terminal_color.stdoutColorEnabled();
 }
 
 fn stderrColorEnabled() bool {
-    return std.Io.File.stderr().isTty(app_runtime.io()) catch false;
+    return terminal_color.stderrColorEnabled();
 }
 
 fn readFileOnce(file: std.Io.File, buffer: []u8) !usize {
@@ -1541,6 +1564,7 @@ pub fn writeImportReport(
     err_out: *std.Io.Writer,
     report: *const registry.ImportReport,
 ) !void {
+    const is_windows = builtin.os.tag == .windows;
     if (report.render_kind == .scanned) {
         try out.print("Scanning {s}...\n", .{report.source_label.?});
         try out.flush();
@@ -1549,15 +1573,15 @@ pub fn writeImportReport(
     for (report.events.items) |event| {
         switch (event.outcome) {
             .imported => {
-                try out.print("  ✓ imported  {s}\n", .{event.label});
+                try out.print("  {s} imported  {s}\n", .{ importReportMarker(.imported, is_windows), event.label });
                 try out.flush();
             },
             .updated => {
-                try out.print("  ✓ updated   {s}\n", .{event.label});
+                try out.print("  {s} updated   {s}\n", .{ importReportMarker(.updated, is_windows), event.label });
                 try out.flush();
             },
             .skipped => {
-                try err_out.print("  ✗ skipped   {s}: {s}\n", .{ event.label, event.reason.? });
+                try err_out.print("  {s} skipped   {s}: {s}\n", .{ importReportMarker(.skipped, is_windows), event.label, event.reason.? });
                 try err_out.flush();
             },
         }
@@ -1954,7 +1978,7 @@ pub fn selectAccountWithLiveUpdates(
     defer tui.deinit();
 
     const out = tui.out();
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const ui_tick_ms: i32 = 1000;
 
     var selected_account_key = if (current_display.reg.active_account_key) |key|
@@ -2195,7 +2219,7 @@ pub fn viewAccountsWithLiveUpdates(
     defer tui.deinit();
 
     const out = tui.out();
-    const use_color = try tui.output.isTty(app_runtime.io());
+    const use_color = terminal_color.fileColorEnabled(tui.output);
     const ui_tick_ms: i32 = 1000;
 
     while (true) {
@@ -4819,7 +4843,7 @@ test "Scenario: Given an active account when rendering switch list then non-sele
     );
     try std.testing.expect(std.mem.indexOf(u8, output, expected_selected_line) != null);
 
-    const active_displayed_idx = displayedIndexForSelectable(&rows, activeSelectableIndex(&rows).? ).?;
+    const active_displayed_idx = displayedIndexForSelectable(&rows, activeSelectableIndex(&rows).?).?;
     var expected_active_line_buf: [128]u8 = undefined;
     const expected_active_line = try std.fmt.bufPrint(
         &expected_active_line_buf,
@@ -4881,6 +4905,34 @@ test "Scenario: Given switch live feedback when rendering switch screen then the
     const footer_pos = std.mem.indexOf(u8, output, "Keys:") orelse return error.TestExpectedEqual;
     const action_pos = std.mem.indexOf(u8, output, "Switched to healthy@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(action_pos > footer_pos);
+}
+
+test "Scenario: Given Windows console labels when rendering unicode-prone output then ASCII fallbacks are used" {
+    try std.testing.expectEqualStrings(
+        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        switchTuiFooterText(true),
+    );
+    try std.testing.expectEqualStrings(
+        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        removeTuiFooterText(true),
+    );
+    try std.testing.expectEqualStrings("[+]", importReportMarker(.imported, true));
+    try std.testing.expectEqualStrings("[~]", importReportMarker(.updated, true));
+    try std.testing.expectEqualStrings("[x]", importReportMarker(.skipped, true));
+}
+
+test "Scenario: Given non-Windows console labels when rendering unicode-prone output then the richer glyphs remain" {
+    try std.testing.expectEqualStrings(
+        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        switchTuiFooterText(false),
+    );
+    try std.testing.expectEqualStrings(
+        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        removeTuiFooterText(false),
+    );
+    try std.testing.expectEqualStrings("✓", importReportMarker(.imported, false));
+    try std.testing.expectEqualStrings("✓", importReportMarker(.updated, false));
+    try std.testing.expectEqualStrings("✗", importReportMarker(.skipped, false));
 }
 
 test "Scenario: Given usage overrides when rendering remove list then failed rows show response status in both usage columns" {

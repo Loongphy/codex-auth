@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
+const terminal_color = @import("terminal_color.zig");
 const timefmt = @import("timefmt.zig");
 const c = @cImport({
     @cInclude("time.h");
@@ -18,7 +19,7 @@ const ansi = struct {
 };
 
 fn colorEnabled() bool {
-    return std.Io.File.stdout().isTty(app_runtime.io()) catch false;
+    return terminal_color.stdoutColorEnabled();
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
@@ -759,7 +760,6 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
     const output = writer.buffered();
     try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
 }
-
 
 test "writeAccountsTable highlights usage override rows in red when color is enabled" {
     const gpa = std.testing.allocator;

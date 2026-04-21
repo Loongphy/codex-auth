@@ -11,6 +11,7 @@ const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
+const terminal_color = @import("terminal_color.zig");
 const usage_api = @import("usage_api.zig");
 const version = @import("version.zig");
 const windows_task_scheduler = @import("windows_task_scheduler.zig");
@@ -505,7 +506,7 @@ pub fn helpStateLabel(enabled: bool) []const u8 {
 }
 
 fn colorEnabled() bool {
-    return std.Io.File.stdout().isTty(app_runtime.io()) catch false;
+    return terminal_color.stdoutColorEnabled();
 }
 
 pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
