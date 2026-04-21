@@ -4894,11 +4894,26 @@ test "Scenario: Given an active account when rendering remove list then non-curs
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
-    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, 0, &checked, false);
+    const cursor_idx = selectableIndexForAccountKey(&rows, &reg, "user-1::acc-1").?;
+    try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, cursor_idx, &checked, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "> [ ] 01 cursor@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "* [ ] 02 active@example.com") != null);
+    var expected_cursor_line_buf: [128]u8 = undefined;
+    const expected_cursor_line = try std.fmt.bufPrint(
+        &expected_cursor_line_buf,
+        "> [ ] {d:0>2} cursor@example.com",
+        .{cursor_idx + 1},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_cursor_line) != null);
+
+    const active_idx = selectableIndexForAccountKey(&rows, &reg, "user-1::acc-2").?;
+    var expected_active_line_buf: [128]u8 = undefined;
+    const expected_active_line = try std.fmt.bufPrint(
+        &expected_active_line_buf,
+        "* [ ] {d:0>2} active@example.com",
+        .{active_idx + 1},
+    );
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_active_line) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
 }
 
