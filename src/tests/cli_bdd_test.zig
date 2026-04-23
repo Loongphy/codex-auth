@@ -792,7 +792,7 @@ test "Scenario: Given selector remove with api override flags when parsing then 
         var result = try cli.parseArgs(gpa, &args);
         defer cli.freeParseResult(gpa, &result);
 
-        try expectUsageError(result, .remove_account, "does not support `--api` or `--skip-api`");
+        try expectUsageError(result, .remove_account, "do not support `--api` or `--skip-api`");
     }
 
     {
@@ -800,7 +800,7 @@ test "Scenario: Given selector remove with api override flags when parsing then 
         var result = try cli.parseArgs(gpa, &args);
         defer cli.freeParseResult(gpa, &result);
 
-        try expectUsageError(result, .remove_account, "does not support `--api` or `--skip-api`");
+        try expectUsageError(result, .remove_account, "do not support `--api` or `--skip-api`");
     }
 }
 
