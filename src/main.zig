@@ -14,7 +14,7 @@ const usage_api = @import("usage_api.zig");
 const skip_service_reconcile_env = "CODEX_AUTH_SKIP_SERVICE_RECONCILE";
 const account_name_refresh_only_env = "CODEX_AUTH_REFRESH_ACCOUNT_NAMES_ONLY";
 const disable_background_account_name_refresh_env = "CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH";
-const foreground_usage_refresh_concurrency: usize = 3;
+const foreground_usage_refresh_concurrency: usize = 5;
 
 const AccountFetchFn = *const fn (
     allocator: std.mem.Allocator,
@@ -25,6 +25,11 @@ const UsageFetchDetailedFn = *const fn (
     allocator: std.mem.Allocator,
     auth_path: []const u8,
 ) anyerror!usage_api.UsageFetchResult;
+const UsageBatchFetchDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+) anyerror![]usage_api.BatchUsageFetchResult;
 const ForegroundUsagePoolInitFn = *const fn (
     pool: *std.Thread.Pool,
     allocator: std.mem.Allocator,
@@ -325,6 +330,75 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcher(
     );
 }
 
+pub fn refreshForegroundUsageForDisplayWithBatchApiFetcher(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    batch_fetcher: UsageBatchFetchDetailedFn,
+) !ForegroundUsageRefreshState {
+    var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
+    errdefer state.deinit(allocator);
+
+    if (!reg.api.usage) {
+        state.local_only_mode = true;
+        if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
+            try registry.saveRegistry(allocator, codex_home, reg);
+        }
+        return state;
+    }
+
+    if (reg.accounts.items.len == 0) return state;
+
+    const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
+    defer {
+        for (worker_results) |*worker_result| worker_result.deinit(allocator);
+        allocator.free(worker_results);
+    }
+    for (worker_results) |*worker_result| worker_result.* = .{};
+
+    var auth_path_arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer auth_path_arena_state.deinit();
+    const auth_path_arena = auth_path_arena_state.allocator();
+
+    const auth_paths = try auth_path_arena.alloc([]const u8, reg.accounts.items.len);
+    for (reg.accounts.items, 0..) |account, idx| {
+        auth_paths[idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+    }
+
+    const batch_results = batch_fetcher(
+        allocator,
+        auth_paths,
+        @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            const error_name = @errorName(err);
+            for (worker_results) |*worker_result| {
+                worker_result.* = .{ .error_name = error_name };
+            }
+            try applyForegroundUsageWorkerResults(allocator, codex_home, reg, &state, worker_results);
+            return state;
+        },
+    };
+    defer {
+        for (batch_results) |*batch_result| batch_result.deinit(allocator);
+        allocator.free(batch_results);
+    }
+
+    for (batch_results, 0..) |*batch_result, idx| {
+        worker_results[idx] = .{
+            .status_code = batch_result.status_code,
+            .missing_auth = batch_result.missing_auth,
+            .error_name = batch_result.error_name,
+            .snapshot = batch_result.snapshot,
+        };
+        batch_result.snapshot = null;
+    }
+
+    try applyForegroundUsageWorkerResults(allocator, codex_home, reg, &state, worker_results);
+    return state;
+}
+
 pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -437,6 +511,22 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
         }
     }
 
+    try applyForegroundUsageWorkerResults(allocator, codex_home, reg, &state, worker_results);
+
+    if (debug_logger) |logger| {
+        try printForegroundUsageDebugDone(logger, &state);
+    }
+
+    return state;
+}
+
+fn applyForegroundUsageWorkerResults(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    state: *ForegroundUsageRefreshState,
+    worker_results: []ForegroundUsageWorkerResult,
+) !void {
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
         const outcome = &state.outcomes[idx];
@@ -472,12 +562,6 @@ pub fn refreshForegroundUsageForDisplayWithApiFetcherWithPoolInitAndDebug(
     if (registry_changed) {
         try registry.saveRegistry(allocator, codex_home, reg);
     }
-
-    if (debug_logger) |logger| {
-        try printForegroundUsageDebugDone(logger, &state);
-    }
-
-    return state;
 }
 
 fn initForegroundUsagePool(
@@ -1138,6 +1222,19 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .list);
+    if (!opts.debug) {
+        var usage_state = try refreshForegroundUsageForDisplayWithBatchApiFetcher(
+            allocator,
+            codex_home,
+            &reg,
+            usage_api.fetchUsageForAuthPathsDetailedBatch,
+        );
+        defer usage_state.deinit(allocator);
+        try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .list, defaultAccountFetcher);
+        try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+        return;
+    }
+
     var debug_stdout: io_util.Stdout = undefined;
     var debug_logger: ?ForegroundUsageDebugLogger = null;
     if (opts.debug) {
@@ -1251,11 +1348,11 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         return;
     }
     try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .switch_account);
-    var usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+    var usage_state = try refreshForegroundUsageForDisplayWithBatchApiFetcher(
         allocator,
         codex_home,
         &reg,
-        usage_api.fetchUsageForAuthPathDetailed,
+        usage_api.fetchUsageForAuthPathsDetailedBatch,
     );
     defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNames(allocator, codex_home, &reg, .switch_account, defaultAccountFetcher);
@@ -1415,11 +1512,11 @@ fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
 
     if (needs_selector) {
         try ensureForegroundNodeAvailable(allocator, codex_home, &reg, .remove_account);
-        usage_state = try refreshForegroundUsageForDisplayWithApiFetcher(
+        usage_state = try refreshForegroundUsageForDisplayWithBatchApiFetcher(
             allocator,
             codex_home,
             &reg,
-            usage_api.fetchUsageForAuthPathDetailed,
+            usage_api.fetchUsageForAuthPathsDetailedBatch,
         );
     }
 

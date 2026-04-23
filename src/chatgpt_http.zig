@@ -18,6 +18,38 @@ pub const HttpResult = struct {
     status_code: ?u16,
 };
 
+pub const BatchRequest = struct {
+    access_token: []const u8,
+    account_id: []const u8,
+};
+
+pub const BatchItemOutcome = enum {
+    ok,
+    timeout,
+    failed,
+};
+
+pub const BatchItemResult = struct {
+    body: []u8,
+    status_code: ?u16,
+    outcome: BatchItemOutcome,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.body);
+        self.* = undefined;
+    }
+};
+
+pub const BatchHttpResult = struct {
+    items: []BatchItemResult,
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.items) |*item| item.deinit(allocator);
+        allocator.free(self.items);
+        self.* = undefined;
+    }
+};
+
 const NodeOutcome = enum {
     ok,
     timeout,
@@ -49,7 +81,20 @@ const ChildProcessWatchdog = struct {
     timed_out: bool = false,
 
     fn run(self: *ChildProcessWatchdog, child_id: std.process.Child.Id, timeout_ms: u64) void {
-        std.Thread.sleep(timeout_ms * std.time.ns_per_ms);
+        const poll_interval_ms: u64 = 50;
+        var waited_ms: u64 = 0;
+        while (waited_ms < timeout_ms) {
+            const sleep_ms = @min(poll_interval_ms, timeout_ms - waited_ms);
+            std.Thread.sleep(@as(u64, sleep_ms) * std.time.ns_per_ms);
+            waited_ms += sleep_ms;
+
+            self.mutex.lock();
+            if (self.completed) {
+                self.mutex.unlock();
+                return;
+            }
+            self.mutex.unlock();
+        }
 
         self.mutex.lock();
         if (self.completed) {
@@ -120,6 +165,89 @@ const node_request_script =
     \\}
 ;
 
+const node_batch_request_script =
+    \\const readStdin = () => new Promise((resolve, reject) => {
+    \\  let data = "";
+    \\  process.stdin.setEncoding("utf8");
+    \\  process.stdin.on("data", (chunk) => {
+    \\    data += chunk;
+    \\  });
+    \\  process.stdin.on("end", () => resolve(data));
+    \\  process.stdin.on("error", reject);
+    \\});
+    \\const encode = (value) => Buffer.from(value ?? "", "utf8").toString("base64");
+    \\const emit = (body, status, outcome) => {
+    \\  process.stdout.write(encode(body));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(String(status));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(outcome);
+    \\};
+    \\const emitAndExit = (body, status, outcome) => {
+    \\  process.stdout.write(encode(body));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(String(status));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(outcome, () => process.exit(0));
+    \\};
+    \\const nodeMajor = Number(process.versions?.node?.split(".")[0] ?? 0);
+    \\if (!Number.isInteger(nodeMajor) || nodeMajor < 22 || typeof fetch !== "function" || typeof AbortSignal?.timeout !== "function") {
+    \\  emitAndExit("Node.js 22+ is required.", 0, "node-too-old");
+    \\} else {
+    \\  void (async () => {
+    \\    try {
+    \\      const payload = JSON.parse(await readStdin());
+    \\      const requests = Array.isArray(payload?.requests) ? payload.requests : [];
+    \\      const endpoint = String(payload?.endpoint ?? "");
+    \\      const timeoutMs = Number(payload?.timeout_ms ?? 0);
+    \\      const userAgent = String(payload?.user_agent ?? "");
+    \\      const requestedConcurrency = Math.max(1, Number(payload?.concurrency ?? 1) || 1);
+    \\      const workerCount = Math.max(1, Math.min(requestedConcurrency, Math.max(1, requests.length)));
+    \\      const results = new Array(requests.length);
+    \\      let nextIndex = 0;
+    \\      const runOne = async (index) => {
+    \\        const req = requests[index] ?? {};
+    \\        try {
+    \\          const response = await fetch(endpoint, {
+    \\            method: "GET",
+    \\            headers: {
+    \\              "Authorization": "Bearer " + String(req.access_token ?? ""),
+    \\              "ChatGPT-Account-Id": String(req.account_id ?? ""),
+    \\              "User-Agent": userAgent,
+    \\            },
+    \\            signal: AbortSignal.timeout(timeoutMs),
+    \\          });
+    \\          results[index] = {
+    \\            body: encode(await response.text()),
+    \\            status: response.status,
+    \\            outcome: "ok",
+    \\          };
+    \\        } catch (error) {
+    \\          const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
+    \\          results[index] = {
+    \\            body: encode(error?.message ?? ""),
+    \\            status: 0,
+    \\            outcome: isTimeout ? "timeout" : "error",
+    \\          };
+    \\        }
+    \\      };
+    \\      await Promise.all(Array.from({ length: workerCount }, async () => {
+    \\        while (true) {
+    \\          const index = nextIndex++;
+    \\          if (index >= requests.length) return;
+    \\          await runOne(index);
+    \\        }
+    \\      }));
+    \\      emit(JSON.stringify(results), 200, "ok");
+    \\    } catch (error) {
+    \\      emitAndExit(error?.message ?? "", 0, "error");
+    \\    }
+    \\  })().catch((error) => {
+    \\    emitAndExit(error?.message ?? "", 0, "error");
+    \\  });
+    \\}
+;
+
 pub fn runGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
@@ -127,6 +255,15 @@ pub fn runGetJsonCommand(
     account_id: []const u8,
 ) !HttpResult {
     return runNodeGetJsonCommand(allocator, endpoint, access_token, account_id);
+}
+
+pub fn runGetJsonBatchCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const BatchRequest,
+    max_concurrency: usize,
+) !BatchHttpResult {
+    return runNodeGetJsonBatchCommand(allocator, endpoint, requests, max_concurrency);
 }
 
 pub fn ensureNodeExecutableAvailable(allocator: std.mem.Allocator) !void {
@@ -210,15 +347,108 @@ fn runNodeGetJsonCommand(
     }
 }
 
+fn runNodeGetJsonBatchCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const BatchRequest,
+    max_concurrency: usize,
+) !BatchHttpResult {
+    if (requests.len == 0) {
+        return .{ .items = try allocator.alloc(BatchItemResult, 0) };
+    }
+
+    const node_executable = try resolveNodeExecutableForLaunchAlloc(allocator);
+    defer allocator.free(node_executable);
+
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const node_env_proxy_supported = if (needsNodeEnvProxySupportCheck(&env_map))
+        detectNodeEnvProxySupport(allocator, node_executable)
+    else
+        false;
+    try maybeEnableNodeEnvProxy(allocator, &env_map, node_env_proxy_supported);
+
+    const Payload = struct {
+        endpoint: []const u8,
+        timeout_ms: u64,
+        concurrency: usize,
+        user_agent: []const u8,
+        requests: []const BatchRequest,
+    };
+
+    var payload_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer payload_writer.deinit();
+    try std.json.Stringify.value(Payload{
+        .endpoint = endpoint,
+        .timeout_ms = request_timeout_ms_value,
+        .concurrency = @max(@as(usize, 1), max_concurrency),
+        .user_agent = browser_user_agent,
+        .requests = requests,
+    }, .{}, &payload_writer.writer);
+
+    const result = runChildCaptureWithInputAndOutputLimit(
+        allocator,
+        &.{
+            node_executable,
+            "-e",
+            node_batch_request_script,
+        },
+        payload_writer.written(),
+        computeBatchChildTimeoutMs(requests.len, @max(@as(usize, 1), max_concurrency)),
+        &env_map,
+        computeBatchChildOutputLimitBytes(requests.len),
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => {
+            logNodeRequirement();
+            return error.NodeJsRequired;
+        },
+        else => return err,
+    };
+    defer result.deinit(allocator);
+
+    if (result.timed_out) return error.NodeProcessTimedOut;
+
+    switch (result.term) {
+        .Exited => |code| if (code != 0) return error.RequestFailed,
+        else => return error.RequestFailed,
+    }
+
+    const parsed = parseNodeHttpOutput(allocator, result.stdout) orelse return error.CommandFailed;
+    defer allocator.free(parsed.body);
+
+    switch (parsed.outcome) {
+        .ok => return try parseBatchNodeHttpOutput(allocator, parsed.body),
+        .timeout => return error.TimedOut,
+        .failed => return error.RequestFailed,
+        .node_too_old => {
+            logNodeRequirement();
+            return error.NodeJsRequired;
+        },
+    }
+}
+
 fn runChildCapture(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     timeout_ms: u64,
     env_map: ?*const std.process.EnvMap,
 ) !ChildCaptureResult {
+    return runChildCaptureWithInputAndOutputLimit(allocator, argv, null, timeout_ms, env_map, max_output_bytes);
+}
+
+fn runChildCaptureWithInputAndOutputLimit(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    stdin_bytes: ?[]const u8,
+    timeout_ms: u64,
+    env_map: ?*const std.process.EnvMap,
+    output_limit_bytes: usize,
+) !ChildCaptureResult {
     var child = std.process.Child.init(argv, allocator);
     child.env_map = env_map;
-    child.stdin_behavior = .Ignore;
+    child.stdin_behavior = if (stdin_bytes != null) .Pipe else .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -230,6 +460,12 @@ fn runChildCapture(
     try child.spawn();
     errdefer reapChildAfterError(&child);
 
+    if (stdin_bytes) |bytes| {
+        try child.stdin.?.writeAll(bytes);
+        child.stdin.?.close();
+        child.stdin = null;
+    }
+
     var watchdog = ChildProcessWatchdog{};
     const watchdog_thread = std.Thread.spawn(.{}, ChildProcessWatchdog.run, .{
         &watchdog,
@@ -238,7 +474,7 @@ fn runChildCapture(
     }) catch null;
     defer if (watchdog_thread) |thread| thread.join();
 
-    try child.collectOutput(allocator, &stdout, &stderr, max_output_bytes);
+    try child.collectOutput(allocator, &stdout, &stderr, output_limit_bytes);
     const term = try child.wait();
     const timed_out = if (watchdog_thread != null) watchdog.finish() else false;
 
@@ -248,6 +484,16 @@ fn runChildCapture(
         .stderr = try stderr.toOwnedSlice(allocator),
         .timed_out = timed_out,
     };
+}
+
+fn computeBatchChildTimeoutMs(request_count: usize, max_concurrency: usize) u64 {
+    const safe_concurrency = @max(@as(usize, 1), max_concurrency);
+    const waves = @max(@as(usize, 1), (request_count + safe_concurrency - 1) / safe_concurrency);
+    return @as(u64, @intCast(waves)) * request_timeout_ms_value + 2000;
+}
+
+fn computeBatchChildOutputLimitBytes(request_count: usize) usize {
+    return std.math.mul(usize, max_output_bytes, @max(@as(usize, 1), request_count)) catch std.math.maxInt(usize);
 }
 
 fn terminateChildProcess(child_id: std.process.Child.Id) void {
@@ -749,6 +995,64 @@ fn parseNodeHttpOutput(allocator: std.mem.Allocator, output: []const u8) ?Parsed
     };
 }
 
+fn parseBatchNodeHttpOutput(allocator: std.mem.Allocator, output: []const u8) !BatchHttpResult {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, output, .{});
+    defer parsed.deinit();
+
+    const root = switch (parsed.value) {
+        .array => |array| array,
+        else => return error.InvalidBatchOutput,
+    };
+
+    const items = try allocator.alloc(BatchItemResult, root.items.len);
+    errdefer allocator.free(items);
+    for (items) |*item| item.* = .{
+        .body = &.{},
+        .status_code = null,
+        .outcome = .failed,
+    };
+    errdefer {
+        for (items) |*item| {
+            if (item.body.len != 0) allocator.free(item.body);
+        }
+    }
+
+    for (root.items, 0..) |entry, idx| {
+        const obj = switch (entry) {
+            .object => |object| object,
+            else => return error.InvalidBatchOutput,
+        };
+
+        const encoded_body = switch (obj.get("body") orelse return error.InvalidBatchOutput) {
+            .string => |value| value,
+            else => return error.InvalidBatchOutput,
+        };
+        const status = switch (obj.get("status") orelse return error.InvalidBatchOutput) {
+            .integer => |value| value,
+            else => return error.InvalidBatchOutput,
+        };
+        const outcome_text = switch (obj.get("outcome") orelse return error.InvalidBatchOutput) {
+            .string => |value| value,
+            else => return error.InvalidBatchOutput,
+        };
+
+        items[idx] = .{
+            .body = try decodeBase64Alloc(allocator, encoded_body),
+            .status_code = if (status == 0) null else std.math.cast(u16, status) orelse return error.InvalidBatchOutput,
+            .outcome = if (std.mem.eql(u8, outcome_text, "ok"))
+                .ok
+            else if (std.mem.eql(u8, outcome_text, "timeout"))
+                .timeout
+            else if (std.mem.eql(u8, outcome_text, "error"))
+                .failed
+            else
+                return error.InvalidBatchOutput,
+        };
+    }
+
+    return .{ .items = items };
+}
+
 fn parseNodeOutcome(input: []const u8) ?NodeOutcome {
     if (std.mem.eql(u8, input, "ok")) return .ok;
     if (std.mem.eql(u8, input, "timeout")) return .timeout;
@@ -784,6 +1088,29 @@ test "parse node http output keeps timeout marker" {
     try std.testing.expectEqual(NodeOutcome.timeout, parsed.outcome);
     try std.testing.expectEqual(@as(?u16, null), parsed.status_code);
     try std.testing.expectEqual(@as(usize, 0), parsed.body.len);
+}
+
+test "parse batch node http output decodes per-request bodies" {
+    const allocator = std.testing.allocator;
+    var parsed = try parseBatchNodeHttpOutput(
+        allocator,
+        "[{\"body\":\"aGVsbG8=\",\"status\":200,\"outcome\":\"ok\"},{\"body\":\"\",\"status\":0,\"outcome\":\"timeout\"}]",
+    );
+    defer parsed.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), parsed.items.len);
+    try std.testing.expectEqualStrings("hello", parsed.items[0].body);
+    try std.testing.expectEqual(@as(?u16, 200), parsed.items[0].status_code);
+    try std.testing.expectEqual(BatchItemOutcome.ok, parsed.items[0].outcome);
+    try std.testing.expectEqual(@as(usize, 0), parsed.items[1].body.len);
+    try std.testing.expectEqual(@as(?u16, null), parsed.items[1].status_code);
+    try std.testing.expectEqual(BatchItemOutcome.timeout, parsed.items[1].outcome);
+}
+
+test "batch child output limit scales with request count" {
+    try std.testing.expectEqual(max_output_bytes, computeBatchChildOutputLimitBytes(1));
+    try std.testing.expectEqual(max_output_bytes * 2, computeBatchChildOutputLimitBytes(2));
+    try std.testing.expectEqual(max_output_bytes * 8, computeBatchChildOutputLimitBytes(8));
 }
 
 test "run child capture times out stalled child process" {
