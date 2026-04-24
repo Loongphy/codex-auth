@@ -287,7 +287,7 @@ const TuiSession = struct {
     writer_buffer: [4096]u8 = undefined,
     writer: std.Io.File.Writer = undefined,
 
-    fn init() !@This() {
+    fn init(self: *@This()) !void {
         const input = std.Io.File.stdin();
         const output = std.Io.File.stdout();
         if (!(try input.isTty(app_runtime.io())) or !(try output.isTty(app_runtime.io()))) {
@@ -316,15 +316,14 @@ const TuiSession = struct {
             }
             errdefer _ = win.SetConsoleMode(output.handle, saved_output_mode);
 
-            var session = @This(){
+            self.* = .{
                 .input = input,
                 .output = output,
                 .saved_input_state = saved_input_mode,
                 .saved_output_state = saved_output_mode,
             };
-            session.writer = session.output.writer(app_runtime.io(), &session.writer_buffer);
-            session.enter() catch |err| return mapTuiOutputError(err);
-            return session;
+            self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
+            self.enter() catch |err| return mapTuiOutputError(err);
         } else {
             const saved_termios = try std.posix.tcgetattr(input.handle);
             var raw = saved_termios;
@@ -335,14 +334,13 @@ const TuiSession = struct {
             try std.posix.tcsetattr(input.handle, .FLUSH, raw);
             errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
 
-            var session = @This(){
+            self.* = .{
                 .input = input,
                 .output = output,
                 .saved_input_state = saved_termios,
             };
-            session.writer = session.output.writer(app_runtime.io(), &session.writer_buffer);
-            session.enter() catch |err| return mapTuiOutputError(err);
-            return session;
+            self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
+            self.enter() catch |err| return mapTuiOutputError(err);
         }
     }
 
@@ -1990,7 +1988,8 @@ pub fn selectAccountWithLiveUpdates(
         return try dupeOptionalAccountKey(allocator, selected_account_key);
     }
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
 
     const out = tui.out();
@@ -2231,7 +2230,8 @@ pub fn viewAccountsWithLiveUpdates(
     var current_display = initial_display;
     defer current_display.deinit(allocator);
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
 
     const out = tui.out();
@@ -2311,7 +2311,8 @@ pub fn runSwitchLiveActions(
     var current_display = initial_display;
     defer current_display.deinit(allocator);
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
 
     const out = tui.out();
@@ -2613,7 +2614,8 @@ pub fn runRemoveLiveActions(
     var current_display = initial_display;
     defer current_display.deinit(allocator);
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
 
     const out = tui.out();
@@ -3336,7 +3338,8 @@ fn selectInteractiveFromIndices(
     const total_accounts = accountRowCount(rows.items);
     if (total_accounts == 0) return null;
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
     const out = tui.out();
     const active_idx = activeSelectableIndex(&rows);
@@ -3589,7 +3592,8 @@ fn selectInteractive(
     const total_accounts = accountRowCount(rows.items);
     if (total_accounts == 0) return null;
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
     const out = tui.out();
     const active_idx = activeSelectableIndex(&rows);
@@ -3769,7 +3773,8 @@ fn selectRemoveInteractive(
     defer allocator.free(checked);
     @memset(checked, false);
 
-    var tui = try TuiSession.init();
+    var tui: TuiSession = undefined;
+    try tui.init();
     defer tui.deinit();
     const out = tui.out();
     var idx: usize = 0;
