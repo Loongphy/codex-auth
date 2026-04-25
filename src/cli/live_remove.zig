@@ -62,6 +62,8 @@ pub fn runRemoveLiveActions(
     defer rows_cache.deinit(allocator);
     var frame: std.Io.Writer.Allocating = .init(allocator);
     defer frame.deinit();
+    var checked_flags_buf = std.ArrayList(bool).empty;
+    defer checked_flags_buf.deinit(allocator);
 
     while (true) {
         if (try controller.refresh.maybe_take_updated_display(controller.refresh.context)) |updated| {
@@ -82,8 +84,8 @@ pub fn runRemoveLiveActions(
             const rows = try rows_cache.ensure(allocator, borrowed);
 
             const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
-            const checked_flags = try allocator.alloc(bool, rows.selectable_row_indices.len);
-            defer allocator.free(checked_flags);
+            try checked_flags_buf.resize(allocator, rows.selectable_row_indices.len);
+            const checked_flags = checked_flags_buf.items;
             for (checked_flags, 0..) |*flag, selectable_idx| {
                 flag.* = containsOwnedAccountKey(&checked_account_keys, accountIdForSelectable(rows, borrowed.reg, selectable_idx));
             }
