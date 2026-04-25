@@ -18,7 +18,6 @@ pub const RemoveLiveActionController = selection.RemoveLiveActionController;
 
 const TuiSession = tui_mod.TuiSession;
 const mapTuiOutputError = tui_mod.mapTuiOutputError;
-const buildSwitchRowsWithUsageOverrides = row_data.buildSwitchRowsWithUsageOverrides;
 const indexWidth = row_data.indexWidth;
 const renderSwitchScreenViewport = render.renderSwitchScreenViewport;
 const renderListScreenViewport = render.renderListScreenViewport;

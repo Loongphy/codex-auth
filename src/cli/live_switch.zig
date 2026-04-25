@@ -56,6 +56,11 @@ pub fn runSwitchLiveActions(
     var viewport_start: usize = 0;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var last_rows_minute: i64 = -1;
+    var rows_cache: live_tui.RowsCache = .{};
+    defer rows_cache.deinit(allocator);
+    var frame: std.Io.Writer.Allocating = .init(allocator);
+    defer frame.deinit();
 
     while (true) {
         if (try controller.refresh.maybe_take_updated_display(controller.refresh.context)) |updated| {
@@ -63,13 +68,20 @@ pub fn runSwitchLiveActions(
             current_display = updated;
             auto_switch_state.noteRefreshedDisplay();
             needs_render = true;
+            rows_cache.invalidate(allocator);
+        }
+
+        const now_second = live_tui.nowSecond();
+        const now_minute = @divTrunc(now_second, 60);
+        if (now_minute != last_rows_minute) {
+            rows_cache.invalidate(allocator);
+            last_rows_minute = now_minute;
         }
 
         if (auto_switch_state.takePending()) {
             const borrowed = current_display.borrowed();
-            var rows = try live_tui.buildSelectableRows(allocator, borrowed);
-            defer rows.deinit(allocator);
-            if (try maybeAutoSwitchTargetKeyAlloc(allocator, borrowed, &rows)) |target_key| {
+            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+            if (try maybeAutoSwitchTargetKeyAlloc(allocator, borrowed, rows)) |target_key| {
                 defer allocator.free(target_key);
                 const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, target_key) catch |err| {
                     replaceOptionalOwnedString(
@@ -85,6 +97,7 @@ pub fn runSwitchLiveActions(
                 };
                 current_display.deinit(allocator);
                 current_display = outcome.updated_display;
+                rows_cache.invalidate(allocator);
                 replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
                 replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                 number_len = 0;
@@ -94,16 +107,14 @@ pub fn runSwitchLiveActions(
             }
         }
 
-        const now_second = live_tui.nowSecond();
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            var rows = try live_tui.buildSelectableRows(allocator, borrowed);
-            defer rows.deinit(allocator);
+            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
             const total_accounts = accountRowCount(rows.items);
-            const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, &rows, borrowed.reg);
+            const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
             const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
             defer allocator.free(status_line);
-            const selected_display_idx = selectedDisplayIndexForRender(&rows, selected_idx, number_buf[0..number_len]);
+            const selected_display_idx = selectedDisplayIndexForRender(rows, selected_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectedViewport(
                 tui.terminalRows(),
                 rows.items,
@@ -112,8 +123,7 @@ pub fn runSwitchLiveActions(
                 &viewport_start,
             );
 
-            var frame: std.Io.Writer.Allocating = .init(allocator);
-            defer frame.deinit();
+            frame.clearRetainingCapacity();
             renderSwitchScreenViewport(
                 &frame.writer,
                 borrowed.reg,
@@ -142,8 +152,7 @@ pub fn runSwitchLiveActions(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    var rows = try live_tui.buildSelectableRows(allocator, borrowed);
-                    defer rows.deinit(allocator);
+                    const rows = try rows_cache.ensureSelectable(allocator, borrowed);
                     const total_accounts = accountRowCount(rows.items);
                     const page_rows = live_tui.maxTableRows(
                         tui.terminalRows(),
@@ -151,45 +160,45 @@ pub fn runSwitchLiveActions(
                     );
 
                     for (key_buf[0..key_count]) |key| {
-                        const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, &rows, borrowed.reg);
+                        const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .move_down => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .up, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .down, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .home => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, &rows, borrowed.reg, .up)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .end => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, &rows, borrowed.reg, .down)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .enter => {
                                 const target_key = if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx|
-                                    try allocator.dupe(u8, accountIdForDisplayedAccount(&rows, borrowed.reg, displayed_idx) orelse continue)
+                                    try allocator.dupe(u8, accountIdForDisplayedAccount(rows, borrowed.reg, displayed_idx) orelse continue)
                                 else if (selected_idx) |idx|
-                                    try accountKeyForSelectableAlloc(allocator, &rows, borrowed.reg, idx)
+                                    try accountKeyForSelectableAlloc(allocator, rows, borrowed.reg, idx)
                                 else
                                     continue;
                                 defer allocator.free(target_key);
@@ -206,6 +215,7 @@ pub fn runSwitchLiveActions(
                                 };
                                 current_display.deinit(allocator);
                                 current_display = outcome.updated_display;
+                                rows_cache.invalidate(allocator);
                                 replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
                                 replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                                 number_len = 0;
@@ -220,7 +230,7 @@ pub fn runSwitchLiveActions(
                                     _ = try live_tui.updateSelectedFromDisplayedDigits(
                                         allocator,
                                         &selected_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
@@ -231,12 +241,12 @@ pub fn runSwitchLiveActions(
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'j') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
@@ -246,7 +256,7 @@ pub fn runSwitchLiveActions(
                                     _ = try live_tui.updateSelectedFromDisplayedDigits(
                                         allocator,
                                         &selected_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );

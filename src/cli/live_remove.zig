@@ -16,7 +16,6 @@ pub const RemoveLiveActionController = selection.RemoveLiveActionController;
 
 const TuiSession = tui_mod.TuiSession;
 const mapTuiOutputError = tui_mod.mapTuiOutputError;
-const buildSwitchRowsWithUsageOverrides = row_data.buildSwitchRowsWithUsageOverrides;
 const indexWidth = row_data.indexWidth;
 const renderRemoveScreenViewport = render.renderRemoveScreenViewport;
 const selectedDisplayIndexForRender = picker.selectedDisplayIndexForRender;
@@ -58,30 +57,40 @@ pub fn runRemoveLiveActions(
     var viewport_start: usize = 0;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var last_rows_minute: i64 = -1;
+    var rows_cache: live_tui.RowsCache = .{};
+    defer rows_cache.deinit(allocator);
+    var frame: std.Io.Writer.Allocating = .init(allocator);
+    defer frame.deinit();
 
     while (true) {
         if (try controller.refresh.maybe_take_updated_display(controller.refresh.context)) |updated| {
             current_display.deinit(allocator);
             current_display = updated;
             needs_render = true;
+            rows_cache.invalidate(allocator);
         }
 
         const now_second = live_tui.nowSecond();
+        const now_minute = @divTrunc(now_second, 60);
+        if (now_minute != last_rows_minute) {
+            rows_cache.invalidate(allocator);
+            last_rows_minute = now_minute;
+        }
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            var rows = try buildSwitchRowsWithUsageOverrides(allocator, borrowed.reg, borrowed.usage_overrides);
-            defer rows.deinit(allocator);
+            const rows = try rows_cache.ensure(allocator, borrowed);
 
-            const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, &rows, borrowed.reg);
+            const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
             const checked_flags = try allocator.alloc(bool, rows.selectable_row_indices.len);
             defer allocator.free(checked_flags);
             for (checked_flags, 0..) |*flag, selectable_idx| {
-                flag.* = containsOwnedAccountKey(&checked_account_keys, accountIdForSelectable(&rows, borrowed.reg, selectable_idx));
+                flag.* = containsOwnedAccountKey(&checked_account_keys, accountIdForSelectable(rows, borrowed.reg, selectable_idx));
             }
 
             const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
             defer allocator.free(status_line);
-            const cursor_display_idx = selectedDisplayIndexForRender(&rows, cursor_idx, number_buf[0..number_len]);
+            const cursor_display_idx = selectedDisplayIndexForRender(rows, cursor_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectedViewport(
                 tui.terminalRows(),
                 rows.items,
@@ -90,8 +99,7 @@ pub fn runRemoveLiveActions(
                 &viewport_start,
             );
 
-            var frame: std.Io.Writer.Allocating = .init(allocator);
-            defer frame.deinit();
+            frame.clearRetainingCapacity();
             renderRemoveScreenViewport(
                 &frame.writer,
                 borrowed.reg,
@@ -121,46 +129,45 @@ pub fn runRemoveLiveActions(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    var rows = try buildSwitchRowsWithUsageOverrides(allocator, borrowed.reg, borrowed.usage_overrides);
-                    defer rows.deinit(allocator);
+                    const rows = try rows_cache.ensure(allocator, borrowed);
                     const page_rows = live_tui.maxTableRows(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", action_message orelse ""),
                     );
 
                     for (key_buf[0..key_count]) |key| {
-                        const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, &rows, borrowed.reg);
+                        const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &cursor_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .move_down => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &cursor_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, &rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, &rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, &rows, borrowed.reg, .up, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .up, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, &rows, borrowed.reg, .down, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .down, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .home => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, &rows, borrowed.reg, .up)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .end => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, &rows, borrowed.reg, .down)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .enter => {
@@ -184,6 +191,7 @@ pub fn runRemoveLiveActions(
                                 clearOwnedAccountKeys(allocator, &checked_account_keys);
                                 current_display.deinit(allocator);
                                 current_display = outcome.updated_display;
+                                rows_cache.invalidate(allocator);
                                 replaceOptionalOwnedString(allocator, &action_message, outcome.action_message);
                                 number_len = 0;
                                 needs_render = true;
@@ -196,7 +204,7 @@ pub fn runRemoveLiveActions(
                                     _ = try live_tui.updateSelectedFromSelectableDigits(
                                         allocator,
                                         &cursor_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
@@ -207,18 +215,18 @@ pub fn runRemoveLiveActions(
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &cursor_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'j') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &cursor_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == ' ') {
                                     if (cursor_idx) |idx| {
-                                        try toggleOwnedAccountKey(allocator, &checked_account_keys, accountIdForSelectable(&rows, borrowed.reg, idx));
+                                        try toggleOwnedAccountKey(allocator, &checked_account_keys, accountIdForSelectable(rows, borrowed.reg, idx));
                                         number_len = 0;
                                         needs_render = true;
                                     }
@@ -230,7 +238,7 @@ pub fn runRemoveLiveActions(
                                     _ = try live_tui.updateSelectedFromSelectableDigits(
                                         allocator,
                                         &cursor_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
