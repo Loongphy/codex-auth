@@ -67,6 +67,9 @@ pub fn selectAccountWithLiveUpdates(
     var viewport_start: usize = 0;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var last_rows_minute: i64 = -1;
+    var rows_cache: live_tui.RowsCache = .{};
+    defer rows_cache.deinit(allocator);
     var frame: std.Io.Writer.Allocating = .init(allocator);
     defer frame.deinit();
 
@@ -75,13 +78,18 @@ pub fn selectAccountWithLiveUpdates(
             current_display.deinit(allocator);
             current_display = updated;
             needs_render = true;
+            rows_cache.invalidate(allocator);
         }
 
         const now_second = live_tui.nowSecond();
+        const now_minute = @divTrunc(now_second, 60);
+        if (now_minute != last_rows_minute) {
+            rows_cache.invalidate(allocator);
+            last_rows_minute = now_minute;
+        }
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            var rows = try live_tui.buildSelectableRows(allocator, borrowed);
-            defer rows.deinit(allocator);
+            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
             const total_accounts = accountRowCount(rows.items);
             if (total_accounts == 0) return null;
 
@@ -242,6 +250,9 @@ pub fn viewAccountsWithLiveUpdates(
     var rendered_row_count: usize = current_display.reg.accounts.items.len;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var last_rows_minute: i64 = -1;
+    var rows_cache: live_tui.RowsCache = .{};
+    defer rows_cache.deinit(allocator);
     var frame: std.Io.Writer.Allocating = .init(allocator);
     defer frame.deinit();
 
@@ -250,12 +261,17 @@ pub fn viewAccountsWithLiveUpdates(
             current_display.deinit(allocator);
             current_display = updated;
             needs_render = true;
+            rows_cache.invalidate(allocator);
         }
 
         const now_second = live_tui.nowSecond();
+        const now_minute = @divTrunc(now_second, 60);
+        if (now_minute != last_rows_minute) {
+            rows_cache.invalidate(allocator);
+            last_rows_minute = now_minute;
+        }
         if (needs_render or now_second != last_render_second) {
-            var rows = try buildSwitchRowsWithUsageOverrides(allocator, &current_display.reg, current_display.usage_overrides);
-            defer rows.deinit(allocator);
+            const rows = try rows_cache.ensure(allocator, current_display.borrowed());
             rendered_row_count = rows.items.len;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
@@ -292,6 +308,8 @@ pub fn viewAccountsWithLiveUpdates(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines("status"));
+                    const rows = try rows_cache.ensure(allocator, current_display.borrowed());
+                    rendered_row_count = rows.items.len;
 
                     for (key_buf[0..key_count]) |key| {
                         switch (key) {

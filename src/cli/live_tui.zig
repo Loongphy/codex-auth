@@ -131,6 +131,43 @@ pub fn buildSelectableRows(
     return rows;
 }
 
+pub const RowsCache = struct {
+    rows: ?row_data.SwitchRows = null,
+
+    pub fn deinit(self: *RowsCache, allocator: std.mem.Allocator) void {
+        if (self.rows) |*rows| {
+            rows.deinit(allocator);
+            self.rows = null;
+        }
+    }
+
+    pub fn invalidate(self: *RowsCache, allocator: std.mem.Allocator) void {
+        self.deinit(allocator);
+    }
+
+    pub fn ensure(
+        self: *RowsCache,
+        allocator: std.mem.Allocator,
+        display: selection.SwitchSelectionDisplay,
+    ) !*row_data.SwitchRows {
+        if (self.rows) |*rows| return rows;
+        self.rows = try row_data.buildSwitchRowsWithUsageOverrides(allocator, display.reg, display.usage_overrides);
+        return &self.rows.?;
+    }
+
+    pub fn ensureSelectable(
+        self: *RowsCache,
+        allocator: std.mem.Allocator,
+        display: selection.SwitchSelectionDisplay,
+    ) !*row_data.SwitchRows {
+        if (self.rows) |*rows| return rows;
+        var rows = try buildSelectableRows(allocator, display);
+        errdefer rows.deinit(allocator);
+        self.rows = rows;
+        return &self.rows.?;
+    }
+};
+
 pub fn resolveSelectedIndex(
     allocator: std.mem.Allocator,
     selected_account_key: *?[]u8,
