@@ -51,284 +51,51 @@ Remove the npm package:
 npm uninstall -g @loongphy/codex-auth
 ```
 
-#### Legacy Bash Installer
-
-> [!NOTE]
-> If you only installed `@loongphy/codex-auth` with npm, you do not need any legacy cleanup steps.
-> Older Bash/PowerShell GitHub-release installs could leave a standalone `codex-auth` binary outside npm's install path.
-> If you previously used those legacy installers, remove the leftover binaries and profile changes during migration.
-> API-backed usage refresh and team-name refresh use Node.js `fetch`.
-> npm installs already satisfy that requirement.
-
-For non-npm installs on Linux/macOS/WSL2 only:
-
-```shell
-rm -f ~/.local/bin/codex-auth
-rm -f ~/.local/bin/codex-auth-auto
-sed -i '/# Added by codex-auth installer/,+1d' ~/.bashrc ~/.bash_profile ~/.profile ~/.zshrc ~/.zprofile 2>/dev/null || true
-```
-
-If you used fish, also remove the old profile entry:
-
-```shell
-sed -i '/# Added by codex-auth installer/,+3d' ~/.config/fish/config.fish 2>/dev/null || true
-```
-
-#### Legacy PowerShell Installer
-
-For non-npm installs on Windows only:
-
-```powershell
-Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth.exe" -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -ErrorAction SilentlyContinue
-[Environment]::SetEnvironmentVariable(
-  "Path",
-  (($env:Path -split ';' | Where-Object { $_ -and $_ -ne "$env:LOCALAPPDATA\codex-auth\bin" }) -join ';'),
-  "User"
-)
-```
-
 ## Commands
+
+Detailed command documentation lives in [docs/commands/README.md](./docs/commands/README.md).
 
 ### Account Management
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth list [--live] [--api\|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
-| `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
-| `codex-auth switch [--live] [--auto] [--api\|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. `--auto` requires `--live` and auto-switches away from the current account when the live view shows it as exhausted or returns a non-200 usage API status. |
-| `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
-| `codex-auth remove [--live] [--api\|--skip-api]` | Interactive remove. `--live` keeps the picker open after each deletion; `--api` forces remote refresh and `--skip-api` forbids remote API use for this command. |
-| `codex-auth remove <query> [<query>...]` | Remove one or more accounts by row number, alias, email, account name, or `account_key` match using stored local data. |
-| `codex-auth remove --all` | Remove all stored accounts. |
-| `codex-auth status` | Show auto-switch, service, and usage status |
+| [`codex-auth list [--live] [--api\|--skip-api]`](./docs/commands/list.md) | List stored accounts and usage state |
+| [`codex-auth login [--device-auth]`](./docs/commands/login.md) | Run `codex login`, then add the current account |
+| [`codex-auth switch [--live] [--auto] [--api\|--skip-api]`](./docs/commands/switch.md) | Switch the active account interactively |
+| [`codex-auth switch <query>`](./docs/commands/switch.md) | Switch directly by row number or account selector |
+| [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
+| [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
+| [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
+| [`codex-auth status`](./docs/commands/status.md) | Show auto-switch, service, and usage status |
 
-### Import
+### Import and Maintenance
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth import <path> [--alias <alias>]` | Import a single file or batch import from a folder |
-| `codex-auth import --cpa [<path>]` | Import [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (CPA) token JSON |
-| `codex-auth import --purge [<path>]` | Rebuild `registry.json` from existing auth files |
+| [`codex-auth import <path> [--alias <alias>]`](./docs/commands/import.md) | Import a single auth file or batch import a folder |
+| [`codex-auth import --cpa [<path>]`](./docs/commands/import.md) | Import CLIProxyAPI token JSON |
+| [`codex-auth import --purge [<path>]`](./docs/commands/import.md) | Rebuild `registry.json` from auth files |
+| [`codex-auth clean`](./docs/commands/clean.md) | Delete managed backup and stale account files |
 
 ### Configuration
 
 | Command | Description |
 |---------|-------------|
-| `codex-auth config auto enable\|disable` | Enable or disable experimental background auto-switching |
-| `codex-auth config api enable\|disable` | Enable or disable both usage refresh and team name refresh API calls |
+| [`codex-auth config auto enable\|disable`](./docs/commands/config.md) | Enable or disable background auto-switching |
+| [`codex-auth config auto --5h <percent> [--weekly <percent>]`](./docs/commands/config.md) | Configure background auto-switch thresholds |
+| [`codex-auth config api enable\|disable`](./docs/commands/config.md) | Enable or disable default API-backed refresh |
 
----
-
-## Examples
-
-### List Accounts
-
-> [!IMPORTANT]
-> Built-in Node proxy support for API refresh requires Node.js `22.21.0+` or `24.0.0+`.
+## Quick Examples
 
 ```shell
 codex-auth list
-codex-auth list --live
-codex-auth list --api        # force usage/team-name API refresh, even if config api is disabled
-codex-auth list --skip-api   # forbid usage/team-name API refresh for this command
-```
-
-`--live` keeps the list refreshing inside the terminal UI.
-`--api` forces the foreground usage and team-name refresh path for this command only.
-`--skip-api` forbids remote refresh for this command only. Usage can still refresh locally for the active account when local rollout data exists.
-
-### Switch Account
-
-```shell
 codex-auth switch
-codex-auth switch --live
-codex-auth switch --live --auto
-codex-auth switch --api
-codex-auth switch --skip-api
-```
-
-`codex-auth switch`
-Opens the interactive picker. It shows email, 5h, weekly, and last activity, then exits after one successful switch.
-
-`codex-auth switch --live`
-Keeps the picker open after Enter, keeps refreshing the terminal view, and updates the footer with the latest switch result.
-
-`codex-auth switch --live --auto`
-Keeps watching the current live display and auto-switches only when the active account reaches `0%` on 5h or weekly, or when the usage API returns a non-200 status for the active account.
-
-`codex-auth switch --api`
-Forces a foreground remote refresh before opening the picker.
-
-`codex-auth switch --skip-api`
-Forbids remote API use for this command and relies on local-only usage refresh where available.
-
-`codex-auth switch <query>`
-Switches directly by displayed row number, alias, or fuzzy email/alias match using stored local data only. The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering. `switch <query>` does not accept `--live`, `--auto`, `--api`, or `--skip-api`.
-
-When `--live --auto` is active, auto-switch candidates still follow the live picker rules and skip accounts whose current 5h or weekly value is already `0%`.
-
-![command switch](https://github.com/user-attachments/assets/48a86acf-2a6e-4206-a8c4-591989fdc0df)
-
-```shell
-codex-auth switch 02                 # switch by displayed row number
-codex-auth switch john               # fuzzy match by email or alias
-codex-auth switch work               # match by alias set during import
-```
-
-If `<query>` matches multiple accounts, the command falls back to interactive selection. Press `q` to quit without switching.
-
-### Remove Accounts
-
-```shell
-codex-auth remove
-codex-auth remove --live
-codex-auth remove --api
-codex-auth remove --skip-api
-```
-
-`codex-auth remove`
-Opens the interactive remove picker. It stays local-only by default so deletion is not blocked by API refresh work.
-
-`codex-auth remove --live`
-Keeps the picker open after each deletion so you can continue cleaning up accounts in one session.
-
-`codex-auth remove --api`
-Attempts a best-effort foreground refresh for picker display. Successful rows show live API data when it is available; rows that cannot refresh may show live error overlays such as `403`, `TimedOut`, or `MissingAuth` instead.
-
-`codex-auth remove --skip-api`
-Keeps the picker local-only explicitly and forbids remote API use for this command.
-
-`codex-auth remove <query> [<query>...]`
-Removes one or more accounts by row number, alias, email, account name, or `account_key` match using stored local data only.
-
-`codex-auth remove --all`
-Removes all stored accounts.
-
-Each selector supports the same query forms as `switch`: row number, alias, or fuzzy email/alias match.
-The row number follows the interactive `switch` list, and the same number from `codex-auth list` also works because both commands use the same ordering.
-You can pass multiple selectors in one command.
-Selector-based `remove` and `remove --all` do not accept `--live`, `--api`, or `--skip-api`.
-
-```shell
-codex-auth remove 01 03
-codex-auth remove work personal
-codex-auth remove 01 jane@example.com
-codex-auth remove --all
-```
-
-If any selector matches multiple accounts, `remove` asks for confirmation in interactive terminals before deleting.
-
-### Login (Add Account)
-
-Add the currently logged-in Codex account:
-
-```shell
-codex-auth login
-codex-auth login --device-auth
-```
-
-### Import
-
-#### Single File
-
-```shell
+codex-auth switch 02
+codex-auth remove work
 codex-auth import /path/to/auth.json --alias personal
-```
-
-#### Batch Import from a Folder
-
-Scans all `.json` files in the directory:
-
-```shell
-codex-auth import /path/to/auth-exports
-```
-
-Typical output:
-
-```text
-Scanning /path/to/auth-exports...
-  ✓ imported  token_ryan.taylor.alpha@email.com
-  ✓ updated   token_jane.smith.alpha@email.com
-  ✗ skipped   token_invalid: MalformedJson
-Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)
-```
-
-`stdout` carries scanning, success, and summary lines. Skipped files and warnings stay on `stderr`.
-
-#### Import CLIProxyAPI (CPA) Tokens
-
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) stores tokens as flat JSON under `~/.cli-proxy-api/`. Import them directly without conversion:
-
-```shell
-codex-auth import --cpa                                  # scan default ~/.cli-proxy-api/*.json
-codex-auth import --cpa /path/to/cpa-dir                 # scan a specific directory
-codex-auth import --cpa /path/to/token.json --alias bob  # import a single CPA file
-```
-
-#### Fix Broken Account Data (Rebuild Registry)
-
-If `codex-auth list` shows missing accounts or wrong usage data, the internal registry file may be out of sync with the actual auth files on disk. This command re-reads all auth files and rebuilds the registry from scratch:
-
-```shell
-codex-auth import --purge                                # rebuild from ~/.codex/accounts/*.auth.json
-codex-auth import --purge /path/to/auth-exports          # rebuild from a specific folder
-```
-
-This does not import new files. It repairs the registry index for auth snapshots that already exist on disk.
-
-### Show Status
-
-```shell
+codex-auth config api disable
 codex-auth status
 ```
-
-### Config
-
-#### Auto-Switch
-
-> [!WARNING]
-> Auto-switch is experimental. Behavior, defaults, and platform integration may change in future releases while the feature matures.
-
-Enable or disable:
-
-```shell
-codex-auth config auto enable
-codex-auth config auto disable
-```
-
-`config auto enable` prints the current usage mode after installing the watcher, so you can immediately see whether auto-switch is running with default API-backed usage or local-only fallback semantics.
-
-When auto-switching is enabled, a long-running background watcher refreshes the active account's usage and silently switches accounts when:
-
-- 5h remaining reaches `0`, or
-- weekly remaining reaches `0`
-
-Auto-switch evaluates both 5h and weekly by default, without separate threshold configuration.
-Candidates whose current 5h or weekly value is already `0` are skipped.
-When choosing the next account, `codex-auth` prefers a usable account whose remaining quota resets sooner, so a reset at `05:11` wins over `05:30`.
-
-The managed background worker is long-running on all supported platforms:
-
-- Linux/WSL: persistent `systemd --user` service
-- macOS: `LaunchAgent`
-- Windows: scheduled task that launches the long-running helper at logon, restarts it after failures, has no 72-hour execution cap, and also starts it immediately on enable
-
-#### Usage Refresh Source
-
-API-backed fallback:
-
-```shell
-codex-auth config api enable
-```
-
-Local-only, no usage API calls:
-
-```shell
-codex-auth config api disable
-```
-
-Changing `config api` updates `registry.json` immediately. `api enable` is shown as API mode and `api disable` is shown as local mode.
 
 ## Q&A
 
@@ -352,11 +119,6 @@ codex-auth status
 
 `status` should show `usage: api`.
 
-Upgrade notes:
-
-- If you are upgrading from `v0.1.x` to the latest `v0.2.x`, API usage refresh is enabled by default.
-- If you previously used an early `v0.2` prerelease/test build and `status` still shows `usage: local`, run `codex-auth config api enable` once to switch back to API mode.
-
 Verify with:
 
 ```shell
@@ -370,7 +132,7 @@ This project is provided as-is and use is at your own risk.
 **Usage Data Refresh Source:**
 `codex-auth` supports two sources for refreshing account usage/usage limit information:
 
-1. **API (default):** When `config api enable` is on, the tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and team name refresh. npm installs already satisfy the runtime requirement; legacy standalone binary installs need Node.js 22+ on `PATH`.
+1. **API (default):** When `config api enable` is on, the tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and team name refresh. npm installs already satisfy the runtime requirement.
 2. **Local-only:** When `config api disable` is on, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips team name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
 
 **API Call Declaration:**

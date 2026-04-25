@@ -30,6 +30,7 @@
   },
   "scripts": {
     "check:versions": "node scripts/npm/check-versions.mjs",
+    "check:release-metadata": "node scripts/npm/check-release-metadata.mjs",
     "stage:npm": "node scripts/npm/stage-packages.mjs"
   },
   "publishConfig": {

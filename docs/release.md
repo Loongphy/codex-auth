@@ -7,8 +7,8 @@ This document describes the repository's CI, preview package publishing, and tag
 - The CLI binary version is defined in `src/version.zig`.
 - The root npm package version in `package.json` must match `src/version.zig`.
 - Release tags must use the same version with a leading `v`.
-  - Example: `src/version.zig = 0.2.2-alpha.1`
-  - Matching tag: `v0.2.2-alpha.1`
+  - Example version: `1.2.3-alpha.1`
+  - Matching tag: `v1.2.3-alpha.1`
 
 ## Manual Release Checklist
 
@@ -20,18 +20,21 @@ This document describes the repository's CI, preview package publishing, and tag
 2. Decide the next version.
    - For a stable release, require the requester to provide the exact version. Do not infer stable versions automatically.
    - For a prerelease or test release, inspect the latest reachable release tag from `main`.
-   - If the latest reachable tag is a stable tag such as `v0.2.2`, bump the patch version and start a new alpha line: `0.2.3-alpha.1`.
-   - If the latest reachable tag is already an alpha prerelease such as `v0.2.3-alpha.1`, keep the same core version and bump the alpha suffix: `0.2.3-alpha.2`.
+   - If the latest reachable tag is a stable tag such as `v1.2.3`, bump the patch version and start a new alpha line such as `1.2.4-alpha.1`.
+   - If the latest reachable tag is already an alpha prerelease such as `v1.2.4-alpha.1`, keep the same core version and bump the alpha suffix, such as `1.2.4-alpha.2`.
 3. Update the local version files.
    - Update `src/version.zig`.
    - Update `package.json`.
    - Update every platform package version under `package.json.optionalDependencies` to the same version.
 4. Validate the version change before committing.
    - Keep the version values aligned across `src/version.zig`, `package.json`, and the release tag you intend to create.
+   - Run `node scripts/npm/check-versions.mjs v<version>`.
+   - Run `node scripts/npm/check-release-metadata.mjs`.
+   - Run `zig build test`.
    - Because `src/version.zig` changes, run `zig build run -- list` before release.
    - Run side-effecting validation from an isolated directory under `/tmp/<task-name>` with `HOME=/tmp/<task-name>`.
 5. Commit and push `main`.
-   - Commit with a release message such as `chore: release v0.2.3-alpha.1`.
+   - Commit with a release message such as `chore: release v<version>`.
    - Push the commit to `origin/main`.
 6. Wait for the post-push `CI` run for that exact `main` commit.
    - Do not create the release tag until the latest `CI` run for the pushed release commit succeeds.
@@ -58,17 +61,21 @@ This document describes the repository's CI, preview package publishing, and tag
 - Each platform package declares `os` and `cpu`, so npm installs only the matching binary package for the current host platform.
 - GitHub Release assets and npm packages currently target Linux x64, Linux ARM64, macOS x64, macOS ARM64, Windows x64, and Windows ARM64.
 - Windows builds include both `codex-auth.exe` and `codex-auth-auto.exe`; the helper is used only by the managed auto-switch task.
+- Platform package metadata, target triples, binary names, and GitHub Release archive names are defined in `scripts/npm/metadata.mjs`.
+- `scripts/npm/check-release-metadata.mjs` verifies that `scripts/npm/metadata.mjs`, `package.json`, `bin/codex-auth.js`, and the release/preview workflow matrices stay aligned.
+- GitHub Release archives use `.tar.gz` for Linux/macOS targets and `.zip` for Windows targets.
 
 ## CI Workflow
 
 - Branch and pull request validation runs in `.github/workflows/ci.yml`.
 - The `build-test` matrix runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`.
-- CI installs Zig `0.16.0` and runs `zig test src/main.zig -lc`.
+- CI installs Zig [`0.16.0`](https://ziglang.org/download/) and runs `zig build test`; if Zig is missing locally, download the matching `0.16.0` build from that page.
 
 ## Preview Packages for Pull Requests
 
 - Pull request preview npm packages are published by `.github/workflows/preview-release.yml`.
 - The workflow cross-builds the six platform binaries on Ubuntu and stages the same seven npm package directories used by the tag release pipeline.
+- The preview pipeline runs `scripts/npm/check-release-metadata.mjs` before staging packages.
 - The staged root preview package has its `optionalDependencies` rewritten to deterministic `pkg.pr.new` platform package URLs for the PR head SHA.
 - Preview publishing then runs a single `pkg.pr.new` publish command across the root package and all six platform packages, so the preview install command keeps the same platform-selective behavior as the real npm release.
 - The staged preview root package also gets a `codexAuthPreviewLabel` field like `pr-6 b6bfcf5`.
@@ -79,12 +86,13 @@ This document describes the repository's CI, preview package publishing, and tag
 ## Tag Release Workflow
 
 - Tag pushes matching `v*` run `.github/workflows/release.yml`.
-- The release workflow first validates the code with the same `build-test` matrix used by CI.
+- The release workflow validates the code with the same OS matrix used by CI and also builds a native `ReleaseSafe` binary on each matrix host.
 - It then cross-builds release assets for the six supported targets on Ubuntu.
+- Release metadata is checked against `scripts/npm/metadata.mjs` before publishing GitHub release assets or npm packages.
 - Release notes are generated from git tags and commit history.
 - GitHub releases are published automatically from the tag pipeline.
 - Stable tags create normal GitHub releases.
-- Prerelease tags such as `v0.2.0-rc.1`, `v0.2.0-beta.1`, and `v0.2.0-alpha.1` create GitHub releases marked as prereleases, not drafts.
+- Prerelease tags such as `v1.2.4-rc.1`, `v1.2.4-beta.1`, and `v1.2.4-alpha.1` create GitHub releases marked as prereleases, not drafts.
 
 ## npm Publish Rules
 
@@ -93,5 +101,7 @@ This document describes the repository's CI, preview package publishing, and tag
 - `.github/workflows/release.yml` uses `actions/setup-node@v6` with Node `24` for the npm packaging and publish steps so the bundled npm CLI supports Trusted Publishing.
 - The `setup-node` steps in `.github/workflows/release.yml` explicitly set `package-manager-cache: false` to avoid future automatic npm cache behavior changes in the release pipeline.
 - npm provenance validation requires the package `repository.url` metadata to match the GitHub repository URL exactly: `https://github.com/Loongphy/codex-auth`
-- Stable tags such as `v0.1.3` publish to npm dist-tag `latest`.
-- Prerelease tags such as `v0.2.0-rc.1`, `v0.2.0-beta.1`, and `v0.2.0-alpha.1` publish to npm dist-tag `next`.
+- `scripts/npm/stage-packages.mjs` stages the root package plus all platform packages from downloaded release artifacts.
+- The npm publish job packs the staged root package and Linux x64 package, installs both into a smoke project, and runs `codex-auth --version` before publishing.
+- Stable tags such as `v1.2.3` publish to npm dist-tag `latest`.
+- Prerelease tags such as `v1.2.4-rc.1`, `v1.2.4-beta.1`, and `v1.2.4-alpha.1` publish to npm dist-tag `next`.

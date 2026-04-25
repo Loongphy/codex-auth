@@ -83,6 +83,9 @@ jobs:
       - name: Check versions
         run: node scripts/npm/check-versions.mjs ""
 
+      - name: Check release metadata
+        run: node scripts/npm/check-release-metadata.mjs
+
       - name: Stage npm packages
         run: node scripts/npm/stage-packages.mjs --artifacts-dir artifacts --output-dir dist/npm
 

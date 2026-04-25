@@ -32,4 +32,4 @@ jobs:
       - name: Zig test
         run: |
           zig version
-          zig test src/main.zig -lc
+          zig build test
