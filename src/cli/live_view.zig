@@ -92,10 +92,10 @@ pub fn selectAccountWithLiveUpdates(
             const total_accounts = accountRowCount(rows.items);
             if (total_accounts == 0) return null;
 
-            const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, &rows, borrowed.reg);
+            const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
             const status_line = try controller.build_status_line(controller.context, allocator, borrowed);
             defer allocator.free(status_line);
-            const selected_display_idx = selectedDisplayIndexForRender(&rows, selected_idx, number_buf[0..number_len]);
+            const selected_display_idx = selectedDisplayIndexForRender(rows, selected_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectedViewport(
                 tui.terminalRows(),
                 rows.items,
@@ -133,8 +133,7 @@ pub fn selectAccountWithLiveUpdates(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    var rows = try live_tui.buildSelectableRows(allocator, borrowed);
-                    defer rows.deinit(allocator);
+                    const rows = try rows_cache.ensureSelectable(allocator, borrowed);
                     const total_accounts = accountRowCount(rows.items);
                     if (total_accounts == 0) return null;
                     const page_rows = live_tui.maxTableRows(
@@ -143,45 +142,45 @@ pub fn selectAccountWithLiveUpdates(
                     );
 
                     for (key_buf[0..key_count]) |key| {
-                        const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, &rows, borrowed.reg);
+                        const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .move_down => {
-                                if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .up, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .home => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, &rows, borrowed.reg, .up)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, &rows, borrowed.reg, .down, page_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, page_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .end => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, &rows, borrowed.reg, .down)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },
                             .enter => {
                                 if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
-                                    return try dupSelectedAccountKeyForDisplayedAccount(allocator, &rows, borrowed.reg, displayed_idx);
+                                    return try dupSelectedAccountKeyForDisplayedAccount(allocator, rows, borrowed.reg, displayed_idx);
                                 }
-                                if (selected_idx) |idx| return try dupSelectedAccountKey(allocator, &rows, borrowed.reg, idx);
+                                if (selected_idx) |idx| return try dupSelectedAccountKey(allocator, rows, borrowed.reg, idx);
                                 return null;
                             },
                             .quit => return null,
@@ -191,7 +190,7 @@ pub fn selectAccountWithLiveUpdates(
                                     _ = try live_tui.updateSelectedFromDisplayedDigits(
                                         allocator,
                                         &selected_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
@@ -202,12 +201,12 @@ pub fn selectAccountWithLiveUpdates(
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return null;
                                 if (ch == 'k') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'j') {
-                                    if (try live_tui.moveSelectedIndexForKey(allocator, &selected_account_key, &rows, borrowed.reg, key)) number_len = 0;
+                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                     needs_render = true;
                                     continue;
                                 }
@@ -217,7 +216,7 @@ pub fn selectAccountWithLiveUpdates(
                                     _ = try live_tui.updateSelectedFromDisplayedDigits(
                                         allocator,
                                         &selected_account_key,
-                                        &rows,
+                                        rows,
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
