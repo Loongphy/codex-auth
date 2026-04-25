@@ -496,11 +496,7 @@ fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
 fn writePadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     try out.writeAll(value);
     if (value.len >= width) return;
-    var i: usize = 0;
-    const pad = width - value.len;
-    while (i < pad) : (i += 1) {
-        try out.writeAll(" ");
-    }
+    try out.splatByteAll(' ', width - value.len);
 }
 
 fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
