@@ -67,6 +67,8 @@ pub fn selectAccountWithLiveUpdates(
     var viewport_start: usize = 0;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var frame: std.Io.Writer.Allocating = .init(allocator);
+    defer frame.deinit();
 
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
@@ -95,8 +97,7 @@ pub fn selectAccountWithLiveUpdates(
                 &viewport_start,
             );
 
-            var frame: std.Io.Writer.Allocating = .init(allocator);
-            defer frame.deinit();
+            frame.clearRetainingCapacity();
             renderSwitchScreenViewport(
                 &frame.writer,
                 borrowed.reg,
@@ -238,8 +239,11 @@ pub fn viewAccountsWithLiveUpdates(
 
     const use_color = terminal_color.fileColorEnabled(tui.output);
     var viewport_start: usize = 0;
+    var rendered_row_count: usize = current_display.reg.accounts.items.len;
     var needs_render = true;
     var last_render_second: i64 = -1;
+    var frame: std.Io.Writer.Allocating = .init(allocator);
+    defer frame.deinit();
 
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
@@ -252,6 +256,7 @@ pub fn viewAccountsWithLiveUpdates(
         if (needs_render or now_second != last_render_second) {
             var rows = try buildSwitchRowsWithUsageOverrides(allocator, &current_display.reg, current_display.usage_overrides);
             defer rows.deinit(allocator);
+            rendered_row_count = rows.items.len;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
             const viewport = live_tui.listViewport(
@@ -261,8 +266,7 @@ pub fn viewAccountsWithLiveUpdates(
                 &viewport_start,
             );
 
-            var frame: std.Io.Writer.Allocating = .init(allocator);
-            defer frame.deinit();
+            frame.clearRetainingCapacity();
             renderListScreenViewport(
                 &frame.writer,
                 &current_display.reg,
@@ -287,26 +291,24 @@ pub fn viewAccountsWithLiveUpdates(
             .closed => return,
             .ready => |key_count| {
                 if (key_count != 0) {
-                    var rows = try buildSwitchRowsWithUsageOverrides(allocator, &current_display.reg, current_display.usage_overrides);
-                    defer rows.deinit(allocator);
                     const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines("status"));
 
                     for (key_buf[0..key_count]) |key| {
                         switch (key) {
                             .move_up => {
-                                live_tui.scrollListViewport(rows.items.len, max_rows, &viewport_start, .up);
+                                live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .up);
                                 needs_render = true;
                             },
                             .move_down => {
-                                live_tui.scrollListViewport(rows.items.len, max_rows, &viewport_start, .down);
+                                live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .down);
                                 needs_render = true;
                             },
                             .page_up => {
-                                live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .up, max_rows);
+                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, max_rows);
                                 needs_render = true;
                             },
                             .page_down => {
-                                live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .down, max_rows);
+                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, max_rows);
                                 needs_render = true;
                             },
                             .home => {
@@ -314,15 +316,15 @@ pub fn viewAccountsWithLiveUpdates(
                                 needs_render = true;
                             },
                             .end => {
-                                viewport_start = render.clampLiveViewportStart(rows.items.len, max_rows, rows.items.len);
+                                viewport_start = render.clampLiveViewportStart(rendered_row_count, max_rows, rendered_row_count);
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .up, live_tui.mouse_wheel_rows);
+                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, live_tui.mouse_wheel_rows);
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .down, live_tui.mouse_wheel_rows);
+                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, live_tui.mouse_wheel_rows);
                                 needs_render = true;
                             },
                             .quit => return,
@@ -330,22 +332,22 @@ pub fn viewAccountsWithLiveUpdates(
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {
-                                    live_tui.scrollListViewport(rows.items.len, max_rows, &viewport_start, .up);
+                                    live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .up);
                                     needs_render = true;
                                 } else if (ch == 'j') {
-                                    live_tui.scrollListViewport(rows.items.len, max_rows, &viewport_start, .down);
+                                    live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .down);
                                     needs_render = true;
                                 } else if (ch == 'u') {
-                                    live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .up, @max(@as(usize, 1), max_rows / 2));
+                                    live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, @max(@as(usize, 1), max_rows / 2));
                                     needs_render = true;
                                 } else if (ch == 'd') {
-                                    live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .down, @max(@as(usize, 1), max_rows / 2));
+                                    live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, @max(@as(usize, 1), max_rows / 2));
                                     needs_render = true;
                                 } else if (ch == 'g') {
                                     viewport_start = 0;
                                     needs_render = true;
                                 } else if (ch == 'G') {
-                                    viewport_start = render.clampLiveViewportStart(rows.items.len, max_rows, rows.items.len);
+                                    viewport_start = render.clampLiveViewportStart(rendered_row_count, max_rows, rendered_row_count);
                                     needs_render = true;
                                 }
                             },
