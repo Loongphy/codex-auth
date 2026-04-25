@@ -488,10 +488,7 @@ fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
     var buf: [16]u8 = undefined;
     const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
     if (idx_str.len < width) {
-        var pad: usize = width - idx_str.len;
-        while (pad > 0) : (pad -= 1) {
-            try out.writeAll("0");
-        }
+        try out.splatByteAll('0', width - idx_str.len);
     }
     try out.writeAll(idx_str);
 }
@@ -521,8 +518,5 @@ fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !v
 }
 
 fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        try out.writeByte(ch);
-    }
+    try out.splatByteAll(ch, count);
 }
