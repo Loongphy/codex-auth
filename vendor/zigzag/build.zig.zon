@@ -1,0 +1,14 @@
+.{
+    .name = .zigzag,
+    .version = "0.1.2+codex-auth.0",
+    .fingerprint = 0xdffe16199cbe952c, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
+}

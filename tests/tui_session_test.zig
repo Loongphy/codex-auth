@@ -3,9 +3,12 @@ const cli = @import("codex_auth").cli;
 
 const TuiNavigation = cli.tui.TuiNavigation;
 const TuiEscapeClassification = cli.tui.TuiEscapeClassification;
+const TuiEscapeAction = cli.tui.TuiEscapeAction;
 const classifyTuiEscapeSuffix = cli.tui.classifyTuiEscapeSuffix;
+const readTuiEscapeAction = cli.tui.readTuiEscapeAction;
 const writeTuiEnterTo = cli.tui.writeTuiEnterTo;
 const writeTuiExitTo = cli.tui.writeTuiExitTo;
+const writeTuiFrameTo = cli.tui.writeTuiFrameTo;
 const writeTuiResetFrameTo = cli.tui.writeTuiResetFrameTo;
 const writeTuiPromptLine = cli.tui.writeTuiPromptLine;
 const windowsTuiInputMode = cli.tui.windowsTuiInputMode;
@@ -27,6 +30,39 @@ test "Scenario: Given tty arrow escape suffixes when classifying them then both 
     }
 }
 
+test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {
+    switch (classifyTuiEscapeSuffix("[6~")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.page_down, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[5~")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.page_up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[H")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.home, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[F")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.end, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[<65;12;4M")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.scroll_down, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[<64;12;4M")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.scroll_up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "Scenario: Given long SGR mouse wheel escape suffix when reading it then the full sequence is consumed" {
+    const result = try readTuiEscapeAction(std.Io.File.stdin(), "[<65;120;40M", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.scroll_down, result.action);
+    try std.testing.expectEqual(@as(usize, "[<65;120;40M".len), result.buffered_bytes_consumed);
+}
+
 test "Scenario: Given unrelated tty escape suffixes when classifying them then they are ignored instead of acting like quit" {
     try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("x"));
     try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[200~"));
@@ -43,7 +79,9 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
 
     try std.testing.expectEqualStrings(
         "\x1b[?1049h\x1b[?25l" ++
+            "\x1b[?1000h\x1b[?1006h" ++
             "\x1b[H\x1b[J" ++
+            "\x1b[?1006l\x1b[?1000l" ++
             "\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
@@ -58,6 +96,21 @@ test "Scenario: Given shared TUI frame redraw when writing it then it clears onl
 
     try std.testing.expectEqualStrings("\x1b[H\x1b[J", aw.written());
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2J\x1b[H") == null);
+}
+
+test "Scenario: Given live TUI frame output when writing it then redraw moves home without pre-clearing the screen" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    const line_count = try writeTuiFrameTo(&aw.writer, "abc\ndef\n", 4);
+
+    try std.testing.expectEqual(@as(usize, 3), line_count);
+    try std.testing.expect(std.mem.startsWith(u8, aw.written(), "\x1b[?2026h\x1b[H"));
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[H\x1b[J") == null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "abc\x1b[K\r\ndef\x1b[K") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\r\n\x1b[2K") != null);
+    try std.testing.expect(std.mem.endsWith(u8, aw.written(), "\x1b[?2026l"));
 }
 
 test "Scenario: Given TUI prompt with numeric input when rendering then the current digits stay inline with the title" {

@@ -5,6 +5,7 @@ pub const output = @import("output.zig");
 pub const login = @import("login.zig");
 pub const picker = @import("picker.zig");
 pub const live = @import("live.zig");
+pub const live_tui = @import("live_tui.zig");
 pub const render = @import("render.zig");
 pub const rows = @import("rows.zig");
 pub const tui = @import("tui.zig");

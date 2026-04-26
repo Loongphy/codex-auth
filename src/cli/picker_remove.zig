@@ -160,15 +160,25 @@ fn selectRemoveInteractive(
 
         if (comptime builtin.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
-                .move_up => {
+                .move_up, .scroll_up, .page_up => {
                     if (idx > 0) {
                         idx -= 1;
                         number_len = 0;
                     }
                 },
-                .move_down => {
+                .home => {
+                    idx = 0;
+                    number_len = 0;
+                },
+                .move_down, .scroll_down, .page_down => {
                     if (idx + 1 < rows.selectable_row_indices.len) {
                         idx += 1;
+                        number_len = 0;
+                    }
+                },
+                .end => {
+                    if (rows.selectable_row_indices.len != 0) {
+                        idx = rows.selectable_row_indices.len - 1;
                         number_len = 0;
                     }
                 },
@@ -242,15 +252,15 @@ fn selectRemoveInteractive(
                     tui_escape_sequence_timeout_ms,
                 );
                 switch (escape.action) {
-                    .move_up => {
+                    .move_up, .scroll_up, .page_up, .home => {
                         if (idx > 0) {
-                            idx -= 1;
+                            idx = if (escape.action == .home) 0 else idx - 1;
                             number_len = 0;
                         }
                     },
-                    .move_down => {
+                    .move_down, .scroll_down, .page_down, .end => {
                         if (idx + 1 < rows.selectable_row_indices.len) {
-                            idx += 1;
+                            idx = if (escape.action == .end) rows.selectable_row_indices.len - 1 else idx + 1;
                             number_len = 0;
                         }
                     },

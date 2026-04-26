@@ -1,0 +1,20 @@
+.{
+    .name = .codex_auth,
+    .version = "0.3.0-alpha.2",
+    .fingerprint = 0x5307ec8012c039c4, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zigzag = .{
+            .path = "vendor/zigzag",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "vendor/zigzag",
+        "README.md",
+        "LICENSE",
+    },
+}

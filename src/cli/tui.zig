@@ -34,6 +34,10 @@ const win = struct {
     pub const VK_BACK: WORD = 0x08;
     pub const VK_RETURN: WORD = 0x0D;
     pub const VK_ESCAPE: WORD = 0x1B;
+    pub const VK_PRIOR: WORD = 0x21;
+    pub const VK_NEXT: WORD = 0x22;
+    pub const VK_END: WORD = 0x23;
+    pub const VK_HOME: WORD = 0x24;
     pub const VK_UP: WORD = 0x26;
     pub const VK_DOWN: WORD = 0x28;
 
@@ -95,10 +99,17 @@ pub const win32 = win;
 pub const tui_poll_input_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.IN;
 pub const tui_poll_error_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
 pub const tui_escape_sequence_timeout_ms: i32 = 100;
+pub const live_ui_tick_ms: i32 = 100;
 
 pub const TuiNavigation = enum {
     up,
     down,
+    page_up,
+    page_down,
+    home,
+    end,
+    scroll_up,
+    scroll_down,
 };
 
 pub const TuiEscapeClassification = union(enum) {
@@ -112,6 +123,12 @@ pub const TuiEscapeAction = enum {
     ignore,
     move_up,
     move_down,
+    page_up,
+    page_down,
+    home,
+    end,
+    scroll_up,
+    scroll_down,
 };
 
 pub const TuiEscapeReadResult = struct {
@@ -125,14 +142,31 @@ pub const TuiPollResult = enum {
     closed,
 };
 
+pub const TuiInputRead = union(enum) {
+    ready: usize,
+    timeout,
+    closed,
+};
+
 pub const TuiInputKey = union(enum) {
     move_up,
     move_down,
+    page_up,
+    page_down,
+    home,
+    end,
+    scroll_up,
+    scroll_down,
     enter,
     quit,
     backspace,
     redraw,
     byte: u8,
+};
+
+pub const TuiSize = struct {
+    rows: usize,
+    cols: usize,
 };
 
 pub fn windowsTuiInputMode(saved_input_mode: win.DWORD) win.DWORD {
@@ -187,15 +221,43 @@ else
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l");
+    try out.writeAll("\x1b[?1000h\x1b[?1006h");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
+    try out.writeAll("\x1b[?1006l\x1b[?1000l");
     try out.writeAll("\x1b[?25h\x1b[?1049l");
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[H\x1b[J");
+}
+
+pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_count: usize) !usize {
+    try out.writeAll("\x1b[?2026h\x1b[H");
+
+    var line_count: usize = 0;
+    var lines = std.mem.splitScalar(u8, frame, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try out.writeAll("\r\n");
+        first = false;
+        try out.writeAll(line);
+        try out.writeAll("\x1b[K");
+        line_count += 1;
+    }
+
+    if (previous_line_count > line_count) {
+        var remaining = previous_line_count - line_count;
+        while (remaining > 0) : (remaining -= 1) {
+            try out.writeAll("\r\n");
+            try out.writeAll("\x1b[2K");
+        }
+    }
+
+    try out.writeAll("\x1b[?2026l");
+    return line_count;
 }
 
 pub fn switchTuiFooterText(is_windows: bool) []const u8 {
@@ -224,9 +286,16 @@ pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(style.ansi.reset);
 }
 
+pub fn listTuiFooterText(is_windows: bool) []const u8 {
+    return if (is_windows)
+        "Keys: Up/Down or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n"
+    else
+        "Keys: ↑/↓ or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n";
+}
+
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
     if (use_color) try out.writeAll(style.ansi.dim);
-    try out.writeAll("Keys: Esc or q quit\n");
+    try out.writeAll(listTuiFooterText(builtin.os.tag == .windows));
     if (use_color) try out.writeAll(style.ansi.reset);
 }
 
@@ -256,6 +325,9 @@ pub const TuiSession = struct {
     saved_output_state: TuiSavedOutputState = if (builtin.os.tag == .windows) 0 else {},
     pending_windows_key: ?TuiInputKey = null,
     pending_windows_repeat_count: u16 = 0,
+    last_frame_hash: u64 = 0,
+    last_frame_line_count: usize = 0,
+    has_last_frame: bool = false,
     writer_buffer: [4096]u8 = undefined,
     writer: std.Io.File.Writer = undefined,
 
@@ -337,6 +409,64 @@ pub const TuiSession = struct {
         return try readFileOnce(self.input, buffer);
     }
 
+    pub fn readInputKeys(self: *@This(), timeout_ms: i32, keys: []TuiInputKey) !TuiInputRead {
+        std.debug.assert(keys.len != 0);
+
+        switch (try pollTuiInput(self.input, timeout_ms, tui_poll_error_mask)) {
+            .timeout => return .timeout,
+            .closed => return .closed,
+            .ready => {},
+        }
+
+        if (comptime builtin.os.tag == .windows) {
+            keys[0] = try self.readWindowsKey();
+            return .{ .ready = 1 };
+        }
+
+        var buffer: [64]u8 = undefined;
+        const n = try self.read(&buffer);
+        if (n == 0) return .closed;
+
+        var key_count: usize = 0;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (buffer[i] == 0x1b) {
+                const escape = try readTuiEscapeAction(
+                    self.input,
+                    buffer[i + 1 .. n],
+                    tui_poll_error_mask,
+                    tui_escape_sequence_timeout_ms,
+                );
+                switch (escape.action) {
+                    .move_up => appendTuiInputKey(keys, &key_count, .move_up),
+                    .move_down => appendTuiInputKey(keys, &key_count, .move_down),
+                    .page_up => appendTuiInputKey(keys, &key_count, .page_up),
+                    .page_down => appendTuiInputKey(keys, &key_count, .page_down),
+                    .home => appendTuiInputKey(keys, &key_count, .home),
+                    .end => appendTuiInputKey(keys, &key_count, .end),
+                    .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
+                    .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
+                    .quit => appendTuiInputKey(keys, &key_count, .quit),
+                    .ignore => {},
+                }
+                i += escape.buffered_bytes_consumed;
+                continue;
+            }
+
+            switch (buffer[i]) {
+                '\r', '\n' => appendTuiInputKey(keys, &key_count, .enter),
+                0x7f, 0x08 => appendTuiInputKey(keys, &key_count, .backspace),
+                else => appendTuiInputKey(keys, &key_count, .{ .byte = buffer[i] }),
+            }
+        }
+
+        return .{ .ready = key_count };
+    }
+
+    pub fn terminalRows(self: *@This()) usize {
+        return if (terminalSize(self.output)) |size| size.rows else 24;
+    }
+
     pub fn readWindowsKey(self: *@This()) !TuiInputKey {
         if (comptime builtin.os.tag != .windows) unreachable;
 
@@ -370,6 +500,10 @@ pub const TuiSession = struct {
             const key = switch (key_event.wVirtualKeyCode) {
                 win.VK_UP => TuiInputKey.move_up,
                 win.VK_DOWN => TuiInputKey.move_down,
+                win.VK_PRIOR => TuiInputKey.page_up,
+                win.VK_NEXT => TuiInputKey.page_down,
+                win.VK_HOME => TuiInputKey.home,
+                win.VK_END => TuiInputKey.end,
                 win.VK_RETURN => TuiInputKey.enter,
                 win.VK_ESCAPE => TuiInputKey.quit,
                 win.VK_BACK => TuiInputKey.backspace,
@@ -399,10 +533,61 @@ pub const TuiSession = struct {
         writeTuiResetFrameTo(self.out()) catch |err| return mapTuiOutputError(err);
     }
 
+    pub fn drawFrame(self: *@This(), frame: []const u8) !void {
+        const hash = std.hash.Wyhash.hash(0, frame);
+        if (self.has_last_frame and hash == self.last_frame_hash) return;
+        self.last_frame_line_count = writeTuiFrameTo(
+            self.out(),
+            frame,
+            self.last_frame_line_count,
+        ) catch |err| return mapTuiOutputError(err);
+        self.last_frame_hash = hash;
+        self.has_last_frame = true;
+        try self.flushOutput();
+    }
+
     pub fn flushOutput(self: *@This()) !void {
         self.out().flush() catch |err| return mapTuiOutputError(err);
     }
 };
+
+fn appendTuiInputKey(keys: []TuiInputKey, key_count: *usize, key: TuiInputKey) void {
+    if (key_count.* >= keys.len) return;
+    keys[key_count.*] = key;
+    key_count.* += 1;
+}
+
+pub fn terminalSize(file: std.Io.File) ?TuiSize {
+    if (!(file.isTty(app_runtime.io()) catch false)) return null;
+
+    if (comptime builtin.os.tag == .windows) {
+        var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
+        switch (get_console_info.operate(app_runtime.io(), file) catch return null) {
+            .SUCCESS => {},
+            else => return null,
+        }
+        const rows = @as(i32, get_console_info.Data.dwWindowSize.Y);
+        const cols = @as(i32, get_console_info.Data.dwWindowSize.X);
+        if (rows <= 0 or cols <= 0) return null;
+        return .{
+            .rows = @intCast(rows),
+            .cols = @intCast(cols),
+        };
+    } else {
+        var wsz: std.posix.winsize = .{
+            .row = 0,
+            .col = 0,
+            .xpixel = 0,
+            .ypixel = 0,
+        };
+        const rc = std.posix.system.ioctl(file.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&wsz));
+        if (std.posix.errno(rc) != .SUCCESS or wsz.row == 0 or wsz.col == 0) return null;
+        return .{
+            .rows = @intCast(wsz.row),
+            .cols = @intCast(wsz.col),
+        };
+    }
+}
 
 pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     if (seq.len == 0) return .incomplete;
@@ -411,11 +596,43 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
         '[' => blk: {
             if (seq.len == 1) break :blk .incomplete;
             const final = seq[seq.len - 1];
+            if (seq[1] == '<') {
+                if (final != 'M' and final != 'm') {
+                    if (final >= '@' and final <= '~') break :blk .ignore;
+                    break :blk .incomplete;
+                }
+                const first_semicolon = std.mem.indexOfScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
+                const button_code = std.fmt.parseInt(usize, seq[2 .. 2 + first_semicolon], 10) catch break :blk .ignore;
+                break :blk switch (button_code) {
+                    64 => .{ .navigation = .scroll_up },
+                    65 => .{ .navigation = .scroll_down },
+                    else => .ignore,
+                };
+            }
             if (final == 'A' or final == 'B') {
                 for (seq[1 .. seq.len - 1]) |ch| {
                     if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
                 }
                 break :blk .{ .navigation = if (final == 'A') .up else .down };
+            }
+            if (final == 'H' or final == 'F') {
+                for (seq[1 .. seq.len - 1]) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                }
+                break :blk .{ .navigation = if (final == 'H') .home else .end };
+            }
+            if (final == '~') {
+                for (seq[1 .. seq.len - 1]) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                }
+                const code = std.fmt.parseInt(usize, seq[1 .. seq.len - 1], 10) catch break :blk .ignore;
+                break :blk switch (code) {
+                    1, 7 => .{ .navigation = .home },
+                    4, 8 => .{ .navigation = .end },
+                    5 => .{ .navigation = .page_up },
+                    6 => .{ .navigation = .page_down },
+                    else => .ignore,
+                };
             }
             if (final >= '@' and final <= '~') break :blk .ignore;
             break :blk .incomplete;
@@ -425,6 +642,9 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
             const code = seq[1];
             if (code == 'A' or code == 'B') {
                 break :blk .{ .navigation = if (code == 'A') .up else .down };
+            }
+            if (code == 'H' or code == 'F') {
+                break :blk .{ .navigation = if (code == 'H') .home else .end };
             }
             break :blk .ignore;
         },
@@ -438,7 +658,7 @@ pub fn readTuiEscapeAction(
     poll_error_mask: i16,
     timeout_ms: i32,
 ) !TuiEscapeReadResult {
-    var seq: [8]u8 = undefined;
+    var seq: [32]u8 = undefined;
     var seq_len: usize = 0;
     var buffered_bytes_consumed: usize = 0;
 
@@ -449,6 +669,12 @@ pub fn readTuiEscapeAction(
                     .action = switch (direction) {
                         .up => .move_up,
                         .down => .move_down,
+                        .page_up => .page_up,
+                        .page_down => .page_down,
+                        .home => .home,
+                        .end => .end,
+                        .scroll_up => .scroll_up,
+                        .scroll_down => .scroll_down,
                     },
                     .buffered_bytes_consumed = buffered_bytes_consumed,
                 };
