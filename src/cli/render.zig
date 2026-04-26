@@ -2,84 +2,18 @@ const std = @import("std");
 const registry = @import("../registry/root.zig");
 const row_data = @import("rows.zig");
 const style = @import("style.zig");
+const table_layout = @import("table_layout.zig");
 const tui_mod = @import("tui.zig");
 
 pub const SwitchWidths = row_data.SwitchWidths;
 pub const indexWidth = row_data.indexWidth;
+pub const LiveListViewport = table_layout.LiveListViewport;
 const SwitchRow = row_data.SwitchRow;
 const writeTuiPromptLine = tui_mod.writeTuiPromptLine;
-const writeSwitchTuiFooter = tui_mod.writeSwitchTuiFooter;
-const writeListTuiFooter = tui_mod.writeListTuiFooter;
-const writeRemoveTuiFooter = tui_mod.writeRemoveTuiFooter;
-
-pub const LiveListViewport = struct {
-    start_row: usize = 0,
-    max_rows: ?usize = null,
-};
-
-const live_table_column_count = 5;
-const LiveTableColumn = struct {
-    header: []const u8,
-    width: usize,
-};
-const LiveTableCell = struct {
-    text: []const u8,
-    indent: usize = 0,
-};
-const LiveTable = struct {
-    columns: [live_table_column_count]LiveTableColumn,
-    prefix_width: usize,
-
-    fn writeHeader(self: *const LiveTable, out: *std.Io.Writer) !void {
-        try writeRepeat(out, ' ', self.prefix_width);
-        try self.writeCells(out, &.{
-            .{ .text = self.columns[0].header },
-            .{ .text = self.columns[1].header },
-            .{ .text = self.columns[2].header },
-            .{ .text = self.columns[3].header },
-            .{ .text = self.columns[4].header },
-        });
-        try out.writeAll("\n");
-    }
-
-    fn writeGroupRow(self: *const LiveTable, out: *std.Io.Writer, account: []const u8, use_color: bool) !void {
-        if (use_color) try out.writeAll(style.ansi.dim);
-        try writeRepeat(out, ' ', self.prefix_width);
-        try writeTruncatedPadded(out, account, self.columns[0].width);
-        try out.writeAll("\n");
-        if (use_color) try out.writeAll(style.ansi.reset);
-    }
-
-    fn writeDataRow(
-        self: *const LiveTable,
-        out: *std.Io.Writer,
-        prefix: []const u8,
-        cells: [live_table_column_count]LiveTableCell,
-        ansi_style: []const u8,
-    ) !void {
-        if (ansi_style.len != 0) try out.writeAll(ansi_style);
-        try out.writeAll(prefix);
-        if (prefix.len < self.prefix_width) {
-            try writeRepeat(out, ' ', self.prefix_width - prefix.len);
-        }
-        try self.writeCells(out, &cells);
-        try out.writeAll("\n");
-        if (ansi_style.len != 0) try out.writeAll(style.ansi.reset);
-    }
-
-    fn writeCells(
-        self: *const LiveTable,
-        out: *std.Io.Writer,
-        cells: *const [live_table_column_count]LiveTableCell,
-    ) !void {
-        for (self.columns, 0..) |column, i| {
-            if (i > 0) try out.writeAll("  ");
-            const indent = @min(cells[i].indent, column.width);
-            try writeRepeat(out, ' ', indent);
-            try writeTruncatedPadded(out, cells[i].text, column.width - indent);
-        }
-    }
-};
+const writeSwitchTuiFooterBounded = tui_mod.writeSwitchTuiFooterBounded;
+const writeListTuiFooterBounded = tui_mod.writeListTuiFooterBounded;
+const writeRemoveTuiFooterBounded = tui_mod.writeRemoveTuiFooterBounded;
+const writeTuiLineBounded = tui_mod.writeTuiLineBounded;
 
 fn activeRowMarker(is_cursor_or_selected: bool, is_active: bool) []const u8 {
     return if (is_cursor_or_selected) "> " else if (is_active) "* " else "  ";
@@ -131,15 +65,13 @@ pub fn renderSwitchScreenViewport(
     try out.writeAll("\n");
     if (status_line.len != 0) {
         if (use_color) try out.writeAll(style.ansi.dim);
-        try out.writeAll(status_line);
-        try out.writeAll("\n");
+        try writeTuiLineBounded(out, status_line, viewport.max_cols);
         if (use_color) try out.writeAll(style.ansi.reset);
     }
-    try writeSwitchTuiFooter(out, use_color);
+    try writeSwitchTuiFooterBounded(out, use_color, viewport.max_cols);
     if (action_line.len != 0) {
         if (use_color) try out.writeAll(style.ansi.bold_green);
-        try out.writeAll(action_line);
-        try out.writeAll("\n");
+        try writeTuiLineBounded(out, action_line, viewport.max_cols);
         if (use_color) try out.writeAll(style.ansi.reset);
     }
 }
@@ -180,11 +112,10 @@ pub fn renderListScreenViewport(
     try out.writeAll("\n");
     if (status_line.len != 0) {
         if (use_color) try out.writeAll(style.ansi.dim);
-        try out.writeAll(status_line);
-        try out.writeAll("\n");
+        try writeTuiLineBounded(out, status_line, viewport.max_cols);
         if (use_color) try out.writeAll(style.ansi.reset);
     }
-    try writeListTuiFooter(out, use_color);
+    try writeListTuiFooterBounded(out, use_color, viewport.max_cols);
 }
 
 pub fn renderRemoveScreen(
@@ -236,15 +167,13 @@ pub fn renderRemoveScreenViewport(
     try out.writeAll("\n");
     if (status_line.len != 0) {
         if (use_color) try out.writeAll(style.ansi.dim);
-        try out.writeAll(status_line);
-        try out.writeAll("\n");
+        try writeTuiLineBounded(out, status_line, viewport.max_cols);
         if (use_color) try out.writeAll(style.ansi.reset);
     }
-    try writeRemoveTuiFooter(out, use_color);
+    try writeRemoveTuiFooterBounded(out, use_color, viewport.max_cols);
     if (action_line.len != 0) {
         if (use_color) try out.writeAll(style.ansi.bold_green);
-        try out.writeAll(action_line);
-        try out.writeAll("\n");
+        try writeTuiLineBounded(out, action_line, viewport.max_cols);
         if (use_color) try out.writeAll(style.ansi.reset);
     }
 }
@@ -272,7 +201,8 @@ pub fn renderSwitchListViewport(
     viewport: LiveListViewport,
 ) !void {
     _ = reg;
-    const table = liveAccountsTable(widths, 2 + idx_width + 1);
+    const prefix_width = 2 + idx_width + 1;
+    const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
     try table.writeHeader(out);
 
     const visible = visibleRowRange(rows.len, viewport);
@@ -328,7 +258,8 @@ pub fn renderRemoveListViewport(
 ) !void {
     _ = reg;
     const checkbox_width: usize = 3;
-    const table = liveAccountsTable(widths, 2 + checkbox_width + 1 + idx_width + 1);
+    const prefix_width = 2 + checkbox_width + 1 + idx_width + 1;
+    const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
     try table.writeHeader(out);
 
     const visible = visibleRowRange(rows.len, viewport);
@@ -419,20 +350,7 @@ fn dataRowCount(rows: []const SwitchRow) usize {
     return count;
 }
 
-fn liveAccountsTable(widths: SwitchWidths, prefix_width: usize) LiveTable {
-    return .{
-        .columns = .{
-            .{ .header = "ACCOUNT", .width = widths.email },
-            .{ .header = "PLAN", .width = widths.plan },
-            .{ .header = "5H", .width = widths.rate_5h },
-            .{ .header = "WEEKLY", .width = widths.rate_week },
-            .{ .header = "LAST", .width = widths.last },
-        },
-        .prefix_width = prefix_width,
-    };
-}
-
-fn liveAccountCells(row: SwitchRow) [live_table_column_count]LiveTableCell {
+fn liveAccountCells(row: SwitchRow) [table_layout.column_count]table_layout.Cell {
     return .{
         .{ .text = row.account, .indent = @as(usize, row.depth) * 2 },
         .{ .text = row.plan },
@@ -491,28 +409,4 @@ fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
         try out.splatByteAll('0', width - idx_str.len);
     }
     try out.writeAll(idx_str);
-}
-
-fn writePadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
-    try out.writeAll(value);
-    if (value.len >= width) return;
-    try out.splatByteAll(' ', width - value.len);
-}
-
-fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
-    if (width == 0) return;
-    if (value.len <= width) {
-        try writePadded(out, value, width);
-        return;
-    }
-    if (width == 1) {
-        try out.writeAll(".");
-        return;
-    }
-    try out.writeAll(value[0 .. width - 1]);
-    try out.writeAll(".");
-}
-
-fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
-    try out.splatByteAll(ch, count);
 }

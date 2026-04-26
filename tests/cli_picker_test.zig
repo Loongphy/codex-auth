@@ -15,6 +15,7 @@ const accountIdForSelectable = cli.picker.accountIdForSelectable;
 const filterErroredRowsFromSelectableIndices = cli.rows.filterErroredRowsFromSelectableIndices;
 const maybeAutoSwitchTargetKeyAlloc = cli.picker.maybeAutoSwitchTargetKeyAlloc;
 const renderSwitchScreen = cli.render.renderSwitchScreen;
+const renderListScreenViewport = cli.render.renderListScreenViewport;
 const renderSwitchList = cli.render.renderSwitchList;
 const renderRemoveList = cli.render.renderRemoveList;
 const renderSwitchListViewport = cli.render.renderSwitchListViewport;
@@ -269,6 +270,85 @@ test "Scenario: Given a live switch viewport when rendering then long lists keep
     try std.testing.expect(std.mem.indexOf(u8, output, "01 first") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "03 third") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "group") == null);
+}
+
+test "Scenario: Given long account labels when rendering live rows then account cells are truncated within the account column" {
+    var rows = [_]SwitchRow{
+        testHeaderRow("group-name-too-long"),
+        .{
+            .account_index = 0,
+            .account = testMutableString("child-name-too-long"),
+            .plan = "Team",
+            .rate_5h = testMutableString("-"),
+            .rate_week = testMutableString("-"),
+            .last = testMutableString("-"),
+            .depth = 2,
+            .is_active = false,
+            .has_error = false,
+            .is_header = false,
+        },
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try renderSwitchList(&writer, &reg, &rows, 2, .{
+        .email = 8,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    }, null, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "     group-n.\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "  01     chi.  Team") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "group-name-too-long") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "child-name-too-long") == null);
+}
+
+test "Scenario: Given a narrow live viewport when rendering then the account column truncates instead of wrapping" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(
+        gpa,
+        &reg,
+        "user-1::acc-1",
+        "very-long-account-name-that-should-not-wrap@example.com",
+        "",
+        .team,
+    );
+    try appendTestAccount(
+        gpa,
+        &reg,
+        "user-1::acc-2",
+        "another-very-long-account-name-that-should-not-wrap@example.com",
+        "",
+        .team,
+    );
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const idx_width = @max(@as(usize, 2), indexWidth(accountRowCount(rows.items)));
+    try renderListScreenViewport(&writer, &reg, rows.items, idx_width, rows.widths, false, "Live refresh: api refresh status line that should not wrap", .{
+        .start_row = 0,
+        .max_rows = 3,
+        .max_cols = 40,
+    });
+
+    const output = writer.buffered();
+    var it = std.mem.splitScalar(u8, output, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        try std.testing.expect(line.len <= 40);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, output, "very-long-account-name-that-should-not-wrap") == null);
 }
 
 test "Scenario: Given a live remove viewport when rendering then checked row numbering stays stable" {
@@ -817,7 +897,7 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         removeTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(true),
     );
     try std.testing.expectEqualStrings("[+]", importReportMarker(.imported, true));
@@ -835,7 +915,7 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         removeTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(false),
     );
     try std.testing.expectEqualStrings("✓", importReportMarker(.imported, false));

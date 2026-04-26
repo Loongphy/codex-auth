@@ -103,6 +103,8 @@ pub fn selectAccountWithLiveUpdates(
                 live_tui.switchFixedLines(status_line, ""),
                 &viewport_start,
             );
+            var bounded_viewport = viewport;
+            bounded_viewport.max_cols = tui.terminalCols();
 
             frame.clearRetainingCapacity();
             renderSwitchScreenViewport(
@@ -116,7 +118,7 @@ pub fn selectAccountWithLiveUpdates(
                 status_line,
                 "",
                 number_buf[0..number_len],
-                viewport,
+                bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
             try tui.drawFrame(frame.written());
             last_render_second = now_second;
@@ -140,6 +142,7 @@ pub fn selectAccountWithLiveUpdates(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", ""),
                     );
+                    const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
                     for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
@@ -153,11 +156,11 @@ pub fn selectAccountWithLiveUpdates(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {
@@ -279,6 +282,8 @@ pub fn viewAccountsWithLiveUpdates(
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
             );
+            var bounded_viewport = viewport;
+            bounded_viewport.max_cols = tui.terminalCols();
 
             frame.clearRetainingCapacity();
             renderListScreenViewport(
@@ -289,7 +294,7 @@ pub fn viewAccountsWithLiveUpdates(
                 rows.widths,
                 use_color,
                 status_line,
-                viewport,
+                bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
             try tui.drawFrame(frame.written());
             last_render_second = now_second;
@@ -306,66 +311,20 @@ pub fn viewAccountsWithLiveUpdates(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines("status"));
+                    const wheel_rows = live_tui.mouseWheelRows(max_rows);
                     const rows = try rows_cache.ensure(allocator, current_display.borrowed());
                     rendered_row_count = rows.items.len;
 
                     for (key_buf[0..key_count]) |key| {
+                        if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {
+                            needs_render = true;
+                            continue;
+                        }
                         switch (key) {
-                            .move_up => {
-                                live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .up);
-                                needs_render = true;
-                            },
-                            .move_down => {
-                                live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .down);
-                                needs_render = true;
-                            },
-                            .page_up => {
-                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, max_rows);
-                                needs_render = true;
-                            },
-                            .page_down => {
-                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, max_rows);
-                                needs_render = true;
-                            },
-                            .home => {
-                                viewport_start = 0;
-                                needs_render = true;
-                            },
-                            .end => {
-                                viewport_start = render.clampLiveViewportStart(rendered_row_count, max_rows, rendered_row_count);
-                                needs_render = true;
-                            },
-                            .scroll_up => {
-                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, live_tui.mouse_wheel_rows);
-                                needs_render = true;
-                            },
-                            .scroll_down => {
-                                live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, live_tui.mouse_wheel_rows);
-                                needs_render = true;
-                            },
                             .quit => return,
                             .redraw => needs_render = true,
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
-                                if (ch == 'k') {
-                                    live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .up);
-                                    needs_render = true;
-                                } else if (ch == 'j') {
-                                    live_tui.scrollListViewport(rendered_row_count, max_rows, &viewport_start, .down);
-                                    needs_render = true;
-                                } else if (ch == 'u') {
-                                    live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .up, @max(@as(usize, 1), max_rows / 2));
-                                    needs_render = true;
-                                } else if (ch == 'd') {
-                                    live_tui.scrollListViewportBy(rendered_row_count, max_rows, &viewport_start, .down, @max(@as(usize, 1), max_rows / 2));
-                                    needs_render = true;
-                                } else if (ch == 'g') {
-                                    viewport_start = 0;
-                                    needs_render = true;
-                                } else if (ch == 'G') {
-                                    viewport_start = render.clampLiveViewportStart(rendered_row_count, max_rows, rendered_row_count);
-                                    needs_render = true;
-                                }
                             },
                             else => {},
                         }

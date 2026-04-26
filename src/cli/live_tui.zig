@@ -9,8 +9,45 @@ const tui_mod = @import("tui.zig");
 
 pub const tick_ms = tui_mod.live_ui_tick_ms;
 pub const key_buffer_len = 64;
-pub const mouse_wheel_rows = 3;
+pub const min_mouse_wheel_rows = 6;
+pub const max_mouse_wheel_rows = 12;
 pub const ScrollDirection = enum { up, down };
+
+pub fn mouseWheelRows(max_rows: usize) usize {
+    return @min(max_mouse_wheel_rows, @max(min_mouse_wheel_rows, max_rows / 3));
+}
+
+test "mouse wheel step scales with visible rows" {
+    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(1));
+    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(18));
+    try std.testing.expectEqual(@as(usize, 10), mouseWheelRows(30));
+    try std.testing.expectEqual(@as(usize, 12), mouseWheelRows(80));
+}
+
+test "list viewport keys ignore switch navigation but keep paging and jump shortcuts" {
+    var viewport_start: usize = 9;
+    const row_count: usize = 105;
+    const max_rows: usize = 20;
+    const wheel_rows: usize = mouseWheelRows(max_rows);
+
+    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
+    try std.testing.expectEqual(@as(usize, 29), viewport_start);
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
+    try std.testing.expectEqual(@as(usize, 0), viewport_start);
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
+    try std.testing.expectEqual(@as(usize, 85), viewport_start);
+}
 
 pub const LiveAutoSwitchState = struct {
     enabled: bool,
@@ -118,6 +155,61 @@ pub fn scrollListViewportBy(
             scrollForward(viewport_start, amount);
             viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, viewport_start.*);
         },
+    }
+}
+
+pub fn applyListViewportKey(
+    row_count: usize,
+    max_rows: usize,
+    viewport_start: *usize,
+    wheel_rows: usize,
+    key: tui_mod.TuiInputKey,
+) bool {
+    switch (key) {
+        .page_up => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .up, max_rows);
+            return true;
+        },
+        .page_down => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .down, max_rows);
+            return true;
+        },
+        .home => {
+            viewport_start.* = 0;
+            return true;
+        },
+        .end => {
+            viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, row_count);
+            return true;
+        },
+        .scroll_up => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .up, wheel_rows);
+            return true;
+        },
+        .scroll_down => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .down, wheel_rows);
+            return true;
+        },
+        .byte => |ch| switch (ch) {
+            'u' => {
+                scrollListViewportBy(row_count, max_rows, viewport_start, .up, @max(@as(usize, 1), max_rows / 2));
+                return true;
+            },
+            'd' => {
+                scrollListViewportBy(row_count, max_rows, viewport_start, .down, @max(@as(usize, 1), max_rows / 2));
+                return true;
+            },
+            'g' => {
+                viewport_start.* = 0;
+                return true;
+            },
+            'G' => {
+                viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, row_count);
+                return true;
+            },
+            else => return false,
+        },
+        else => return false,
     }
 }
 

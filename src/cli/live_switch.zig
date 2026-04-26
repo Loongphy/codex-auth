@@ -122,6 +122,8 @@ pub fn runSwitchLiveActions(
                 live_tui.switchFixedLines(status_line, action_message orelse ""),
                 &viewport_start,
             );
+            var bounded_viewport = viewport;
+            bounded_viewport.max_cols = tui.terminalCols();
 
             frame.clearRetainingCapacity();
             renderSwitchScreenViewport(
@@ -135,7 +137,7 @@ pub fn runSwitchLiveActions(
                 status_line,
                 action_message orelse "",
                 number_buf[0..number_len],
-                viewport,
+                bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
             try tui.drawFrame(frame.written());
             last_render_second = now_second;
@@ -158,6 +160,7 @@ pub fn runSwitchLiveActions(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", action_message orelse ""),
                     );
+                    const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
                     for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
@@ -171,11 +174,11 @@ pub fn runSwitchLiveActions(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, wheel_rows)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {

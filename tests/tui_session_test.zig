@@ -79,12 +79,12 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
 
     try std.testing.expectEqualStrings(
         "\x1b[?1049h\x1b[?25l" ++
-            "\x1b[?1000h\x1b[?1006h" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[?1006l\x1b[?1000l" ++
             "\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1000h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1006h") == null);
 }
 
 test "Scenario: Given shared TUI frame redraw when writing it then it clears only the alternate screen frame instead of appending full screens" {

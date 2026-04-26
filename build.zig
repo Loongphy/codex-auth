@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
         "tests/session_test.zig",
         "tests/terminal_color_test.zig",
         "tests/time_relative_test.zig",
+        "tests/table_layout_test.zig",
         "tests/tui_display_test.zig",
         "tests/tui_session_test.zig",
         "tests/tui_table_test.zig",

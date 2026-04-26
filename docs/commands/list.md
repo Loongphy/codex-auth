@@ -32,3 +32,4 @@ When local-only refresh is active, only the active account can be updated from l
 - Usage cells show remaining percent and reset time when that data is known.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
+- Shared table layout policy is documented in [docs/table-layout.md](../table-layout.md).

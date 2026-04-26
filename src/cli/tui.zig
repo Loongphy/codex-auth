@@ -221,12 +221,10 @@ else
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l");
-    try out.writeAll("\x1b[?1000h\x1b[?1006h");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[?1006l\x1b[?1000l");
     try out.writeAll("\x1b[?25h\x1b[?1049l");
 }
 
@@ -268,8 +266,12 @@ pub fn switchTuiFooterText(is_windows: bool) []const u8 {
 }
 
 pub fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
+    try writeSwitchTuiFooterBounded(out, use_color, null);
+}
+
+pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
     if (use_color) try out.writeAll(style.ansi.dim);
-    try out.writeAll(switchTuiFooterText(builtin.os.tag == .windows));
+    try writeTuiLineBounded(out, switchTuiFooterText(builtin.os.tag == .windows), max_cols);
     if (use_color) try out.writeAll(style.ansi.reset);
 }
 
@@ -281,22 +283,48 @@ pub fn removeTuiFooterText(is_windows: bool) []const u8 {
 }
 
 pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
+    try writeRemoveTuiFooterBounded(out, use_color, null);
+}
+
+pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
     if (use_color) try out.writeAll(style.ansi.dim);
-    try out.writeAll(removeTuiFooterText(builtin.os.tag == .windows));
+    try writeTuiLineBounded(out, removeTuiFooterText(builtin.os.tag == .windows), max_cols);
     if (use_color) try out.writeAll(style.ansi.reset);
 }
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n"
+        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n"
     else
-        "Keys: ↑/↓ or j/k scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n";
+        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n";
 }
 
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
+    try writeListTuiFooterBounded(out, use_color, null);
+}
+
+pub fn writeListTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
     if (use_color) try out.writeAll(style.ansi.dim);
-    try out.writeAll(listTuiFooterText(builtin.os.tag == .windows));
+    try writeTuiLineBounded(out, listTuiFooterText(builtin.os.tag == .windows), max_cols);
     if (use_color) try out.writeAll(style.ansi.reset);
+}
+
+pub fn writeTuiLineBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usize) !void {
+    const line = if (std.mem.endsWith(u8, text, "\n")) text[0 .. text.len - 1] else text;
+    const limit = max_cols orelse {
+        try out.writeAll(line);
+        try out.writeAll("\n");
+        return;
+    };
+    if (line.len <= limit) {
+        try out.writeAll(line);
+    } else if (limit == 1) {
+        try out.writeAll(".");
+    } else if (limit > 1) {
+        try out.writeAll(line[0 .. limit - 1]);
+        try out.writeAll(".");
+    }
+    try out.writeAll("\n");
 }
 
 pub fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u8) !void {
@@ -465,6 +493,10 @@ pub const TuiSession = struct {
 
     pub fn terminalRows(self: *@This()) usize {
         return if (terminalSize(self.output)) |size| size.rows else 24;
+    }
+
+    pub fn terminalCols(self: *@This()) usize {
+        return if (terminalSize(self.output)) |size| size.cols else 80;
     }
 
     pub fn readWindowsKey(self: *@This()) !TuiInputKey {
