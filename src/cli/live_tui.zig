@@ -227,13 +227,16 @@ pub fn moveSelectedIndexBy(
     direction: ScrollDirection,
     amount: usize,
 ) !bool {
-    var moved = false;
-    var remaining = amount;
-    while (remaining > 0) : (remaining -= 1) {
-        if (!try moveSelectedIndex(allocator, selected_account_key, rows, reg, direction)) break;
-        moved = true;
-    }
-    return moved;
+    if (amount == 0) return false;
+    const selected_idx = (try resolveSelectedIndex(allocator, selected_account_key, rows, reg)) orelse return false;
+    const last_idx = rows.selectable_row_indices.len - 1;
+    const next_idx = switch (direction) {
+        .up => selected_idx -| amount,
+        .down => @min(last_idx, std.math.add(usize, selected_idx, amount) catch last_idx),
+    };
+    if (next_idx == selected_idx) return false;
+    try picker.replaceSelectedAccountKeyForSelectable(allocator, selected_account_key, rows, reg, next_idx);
+    return true;
 }
 
 pub fn moveSelectedIndexToEdge(
@@ -243,11 +246,14 @@ pub fn moveSelectedIndexToEdge(
     reg: *registry.Registry,
     direction: ScrollDirection,
 ) !bool {
-    var moved = false;
-    while (try moveSelectedIndex(allocator, selected_account_key, rows, reg, direction)) {
-        moved = true;
-    }
-    return moved;
+    const selected_idx = (try resolveSelectedIndex(allocator, selected_account_key, rows, reg)) orelse return false;
+    const next_idx = switch (direction) {
+        .up => 0,
+        .down => rows.selectable_row_indices.len - 1,
+    };
+    if (next_idx == selected_idx) return false;
+    try picker.replaceSelectedAccountKeyForSelectable(allocator, selected_account_key, rows, reg, next_idx);
+    return true;
 }
 
 pub fn updateSelectedFromDisplayedDigits(
