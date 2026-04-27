@@ -3114,6 +3114,38 @@ test "Scenario: Given default api usage when rendering status then no warning is
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
+test "Scenario: Given config live interval when running command then registry and status show the interval" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const config_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "config", "live", "--interval", "45" });
+    defer gpa.free(config_result.stdout);
+    defer gpa.free(config_result.stderr);
+    try expectSuccess(config_result);
+    try std.testing.expectEqualStrings("Live refresh interval: 45s\n", config_result.stdout);
+    try std.testing.expectEqualStrings("", config_result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(u16, 45), loaded.live.interval_seconds);
+
+    const status_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"status"});
+    defer gpa.free(status_result.stdout);
+    defer gpa.free(status_result.stderr);
+    try expectSuccess(status_result);
+    try std.testing.expect(std.mem.indexOf(u8, status_result.stdout, "live refresh: 45s") != null);
+}
+
 test "Scenario: Given default api usage when listing accounts then no warning is printed" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

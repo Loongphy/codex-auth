@@ -6,8 +6,7 @@ const targets = @import("targets.zig");
 const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const apiModeUsesApi = preflight.apiModeUsesApi;
 
-pub const switch_live_api_refresh_interval_ms: i64 = 60_000;
-pub const switch_live_local_refresh_interval_ms: i64 = 30_000;
+pub const switch_live_default_refresh_interval_ms: i64 = registry.default_live_refresh_interval_seconds * 1000;
 
 pub const SwitchLiveRefreshPolicy = struct {
     usage_api_enabled: bool,
@@ -33,7 +32,7 @@ pub fn switchLiveRefreshPolicy(
         return .{
             .usage_api_enabled = usage_api_enabled,
             .account_api_enabled = account_api_enabled,
-            .interval_ms = switch_live_api_refresh_interval_ms,
+            .interval_ms = @as(i64, reg.live.interval_seconds) * 1000,
             .label = "api",
         };
     }
@@ -41,7 +40,7 @@ pub fn switchLiveRefreshPolicy(
     return .{
         .usage_api_enabled = false,
         .account_api_enabled = false,
-        .interval_ms = switch_live_local_refresh_interval_ms,
+        .interval_ms = @as(i64, reg.live.interval_seconds) * 1000,
         .label = "local",
     };
 }

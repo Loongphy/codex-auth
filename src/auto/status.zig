@@ -14,6 +14,7 @@ pub const Status = struct {
     threshold_weekly_percent: u8,
     api_usage_enabled: bool,
     api_account_enabled: bool,
+    live_interval_seconds: u16,
 };
 
 pub fn helpStateLabel(enabled: bool) []const u8 {
@@ -41,6 +42,7 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
         .api_usage_enabled = reg.api.usage,
         .api_account_enabled = reg.api.account,
+        .live_interval_seconds = reg.live.interval_seconds,
     };
 }
 
@@ -71,6 +73,10 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
 
     try out.writeAll("account: ");
     try out.writeAll(if (status.api_account_enabled) "api" else "disabled");
+    try out.writeAll("\n");
+
+    try out.writeAll("live refresh: ");
+    try out.print("{d}s", .{status.live_interval_seconds});
     try out.writeAll("\n");
 
     try out.flush();

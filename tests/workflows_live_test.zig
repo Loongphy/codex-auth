@@ -24,8 +24,7 @@ const mergeSwitchLiveRefreshIntoLatest = main_mod.mergeSwitchLiveRefreshIntoLate
 const nowMilliseconds = main_mod.nowMilliseconds;
 const removeLiveRuntimeApplySelection = main_mod.removeLiveRuntimeApplySelection;
 const runBackgroundAccountNameRefreshWithLockAcquirer = main_mod.runBackgroundAccountNameRefreshWithLockAcquirer;
-const switch_live_api_refresh_interval_ms = main_mod.switch_live_api_refresh_interval_ms;
-const switch_live_local_refresh_interval_ms = main_mod.switch_live_local_refresh_interval_ms;
+const switch_live_default_refresh_interval_ms = main_mod.switch_live_default_refresh_interval_ms;
 const switchLiveRuntimeApplySelection = main_mod.switchLiveRuntimeApplySelection;
 const findAccountIndexByAccountKeyConst = main_mod.findAccountIndexByAccountKeyConst;
 const nowSeconds = main_mod.nowSeconds;
@@ -78,6 +77,7 @@ fn saveLivePolicyTestRegistry(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     api_config: registry.ApiConfig,
+    live_config: registry.LiveConfig,
 ) !void {
     var reg: registry.Registry = .{
         .schema_version = registry.current_schema_version,
@@ -85,6 +85,7 @@ fn saveLivePolicyTestRegistry(
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = api_config,
+        .live = live_config,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
     defer reg.deinit(allocator);
@@ -155,9 +156,8 @@ fn sleepLiveRefreshTask(io: std.Io) void {
     std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
 }
 
-test "live refresh intervals use distinct api and local cadences" {
-    try std.testing.expectEqual(@as(i64, 60_000), switch_live_api_refresh_interval_ms);
-    try std.testing.expectEqual(@as(i64, 30_000), switch_live_local_refresh_interval_ms);
+test "live refresh interval uses the shared live config cadence" {
+    try std.testing.expectEqual(@as(i64, 30_000), switch_live_default_refresh_interval_ms);
 }
 
 test "initial live selection display uses stored api defaults for list, switch, and remove" {
@@ -168,13 +168,13 @@ test "initial live selection display uses stored api defaults for list, switch, 
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = true,
             .account_api_enabled = true,
-            .interval_ms = switch_live_api_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "api",
         });
     }
@@ -191,13 +191,13 @@ test "initial live selection display preserves mixed stored api defaults for lis
     try saveLivePolicyTestRegistry(gpa, codex_home, .{
         .usage = false,
         .account = true,
-    });
+    }, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = false,
             .account_api_enabled = true,
-            .interval_ms = switch_live_api_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "api",
         });
     }
@@ -214,27 +214,51 @@ test "initial live selection display honors explicit api mode overrides for list
     try saveLivePolicyTestRegistry(gpa, codex_home, .{
         .usage = false,
         .account = false,
-    });
+    }, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .force_api, .{
             .usage_api_enabled = true,
             .account_api_enabled = true,
-            .interval_ms = switch_live_api_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "api",
         });
     }
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .skip_api, .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         });
     }
+}
+
+test "initial live selection display uses configured live refresh interval for api and local modes" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), .{ .interval_seconds = 45 });
+    try expectInitialLiveSelectionPolicy(gpa, codex_home, .list, .default, .{
+        .usage_api_enabled = true,
+        .account_api_enabled = true,
+        .interval_ms = 45_000,
+        .label = "api",
+    });
+
+    try expectInitialLiveSelectionPolicy(gpa, codex_home, .list, .skip_api, .{
+        .usage_api_enabled = false,
+        .account_api_enabled = false,
+        .interval_ms = 45_000,
+        .label = "local",
+    });
 }
 
 test "live refresh merge preserves accounts newly added to the latest registry" {
@@ -346,7 +370,7 @@ test "switch live action patches the current display after switching" {
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         try gpa.dupe(u8, "PreviousRefreshError"),
@@ -395,7 +419,7 @@ test "switch live action patches the current display after switching" {
     try std.testing.expect(runtime.last_refresh_error_name != null);
     try std.testing.expectEqualStrings("PreviousRefreshError", runtime.last_refresh_error_name.?);
     try std.testing.expectEqualStrings("local", runtime.mode_label);
-    try std.testing.expectEqual(switch_live_local_refresh_interval_ms, runtime.refresh_interval_ms);
+    try std.testing.expectEqual(switch_live_default_refresh_interval_ms, runtime.refresh_interval_ms);
     try std.testing.expect(runtime.last_refresh_started_at_ms != null);
     try std.testing.expect(runtime.last_refresh_finished_at_ms != null);
     try std.testing.expect(runtime.last_refresh_duration_ms != null);
@@ -403,7 +427,7 @@ test "switch live action patches the current display after switching" {
     try std.testing.expect(runtime.last_refresh_finished_at_ms.? >= runtime.last_refresh_started_at_ms.?);
     try std.testing.expect(runtime.last_refresh_finished_at_ms.? <= action_finished_ms);
     try std.testing.expectEqual(
-        runtime.last_refresh_finished_at_ms.? + switch_live_local_refresh_interval_ms,
+        runtime.last_refresh_finished_at_ms.? + switch_live_default_refresh_interval_ms,
         runtime.next_refresh_not_before_ms,
     );
 
@@ -450,7 +474,7 @@ test "switch live action does not wait for an in-flight refresh" {
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         null,
@@ -539,7 +563,7 @@ test "remove live action patches the current display after deleting the active a
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         try gpa.dupe(u8, "PreviousRefreshError"),
@@ -591,7 +615,7 @@ test "remove live action patches the current display after deleting the active a
     try std.testing.expect(runtime.last_refresh_error_name != null);
     try std.testing.expectEqualStrings("PreviousRefreshError", runtime.last_refresh_error_name.?);
     try std.testing.expectEqualStrings("local", runtime.mode_label);
-    try std.testing.expectEqual(switch_live_local_refresh_interval_ms, runtime.refresh_interval_ms);
+    try std.testing.expectEqual(switch_live_default_refresh_interval_ms, runtime.refresh_interval_ms);
     try std.testing.expect(runtime.last_refresh_started_at_ms != null);
     try std.testing.expect(runtime.last_refresh_finished_at_ms != null);
     try std.testing.expect(runtime.last_refresh_duration_ms != null);
@@ -599,7 +623,7 @@ test "remove live action patches the current display after deleting the active a
     try std.testing.expect(runtime.last_refresh_finished_at_ms.? >= runtime.last_refresh_started_at_ms.?);
     try std.testing.expect(runtime.last_refresh_finished_at_ms.? <= action_finished_ms);
     try std.testing.expectEqual(
-        runtime.last_refresh_finished_at_ms.? + switch_live_local_refresh_interval_ms,
+        runtime.last_refresh_finished_at_ms.? + switch_live_default_refresh_interval_ms,
         runtime.next_refresh_not_before_ms,
     );
 
@@ -648,7 +672,7 @@ test "remove live action does not wait for an in-flight refresh" {
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         null,
@@ -701,7 +725,7 @@ test "live runtime deinit cancels an in-flight refresh promptly" {
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         null,
@@ -792,7 +816,7 @@ test "buildStatusLine releases mutex on allocation failure" {
         .{
             .usage_api_enabled = false,
             .account_api_enabled = false,
-            .interval_ms = switch_live_local_refresh_interval_ms,
+            .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
         try gpa.dupe(u8, "NodeJsRequired"),

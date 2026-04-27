@@ -16,6 +16,7 @@ const RateLimitSnapshot = common.RateLimitSnapshot;
 const RolloutSignature = common.RolloutSignature;
 const AutoSwitchConfig = common.AutoSwitchConfig;
 const ApiConfig = common.ApiConfig;
+const LiveConfig = common.LiveConfig;
 const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
 const current_schema_version = common.current_schema_version;
@@ -23,6 +24,7 @@ const min_supported_schema_version = common.min_supported_schema_version;
 const private_file_permissions = common.private_file_permissions;
 const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 const defaultApiConfig = common.defaultApiConfig;
+const defaultLiveConfig = common.defaultLiveConfig;
 const freeAccountRecord = common.freeAccountRecord;
 const freeRateLimitSnapshot = common.freeRateLimitSnapshot;
 const cloneOptionalStringAlloc = common.cloneOptionalStringAlloc;
@@ -43,6 +45,8 @@ const parseAutoSwitch = parse.parseAutoSwitch;
 const parseApiConfig = parse.parseApiConfig;
 const apiConfigNeedsRewrite = parse.apiConfigNeedsRewrite;
 const parseApiConfigDetailed = parse.parseApiConfigDetailed;
+const parseLiveConfig = parse.parseLiveConfig;
+const liveConfigNeedsRewrite = parse.liveConfigNeedsRewrite;
 const parseRolloutSignature = parse.parseRolloutSignature;
 const readInt = parse.readInt;
 const parseThresholdPercent = parse.parseThresholdPercent;
@@ -81,6 +85,7 @@ pub fn defaultRegistry() Registry {
         .active_account_activated_at_ms = null,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
+        .live = defaultLiveConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
     };
 }
@@ -305,6 +310,9 @@ fn loadLegacyRegistryV2(
     if (root_obj.get("api")) |v| {
         parseApiConfig(&reg.api, v);
     }
+    if (root_obj.get("live")) |v| {
+        parseLiveConfig(&reg.live, v);
+    }
 
     for (legacy_accounts.items) |*legacy| {
         try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
@@ -352,6 +360,9 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     if (root_obj.get("api")) |v| {
         parseApiConfig(&reg.api, v);
     }
+    if (root_obj.get("live")) |v| {
+        parseLiveConfig(&reg.live, v);
+    }
 
     return reg;
 }
@@ -376,6 +387,11 @@ fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     if (root_obj.get("last_attributed_rollout") != null) return true;
     if (root_obj.get("api")) |v| {
         if (apiConfigNeedsRewrite(v)) return true;
+    } else {
+        return true;
+    }
+    if (root_obj.get("live")) |v| {
+        if (liveConfigNeedsRewrite(v)) return true;
     } else {
         return true;
     }

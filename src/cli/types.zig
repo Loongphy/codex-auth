@@ -40,9 +40,13 @@ pub const AutoOptions = union(enum) {
     configure: AutoThresholdOptions,
 };
 pub const ApiAction = enum { enable, disable };
+pub const LiveOptions = struct {
+    interval_seconds: u16,
+};
 pub const ConfigOptions = union(enum) {
     auto_switch: AutoOptions,
     api: ApiAction,
+    live: LiveOptions,
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };

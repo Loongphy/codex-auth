@@ -6,6 +6,7 @@ const AuthMode = common.AuthMode;
 const AutoSwitchConfig = common.AutoSwitchConfig;
 const ApiConfig = common.ApiConfig;
 const ApiConfigParseResult = common.ApiConfigParseResult;
+const LiveConfig = common.LiveConfig;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RateLimitWindow = common.RateLimitWindow;
 const RolloutSignature = common.RolloutSignature;
@@ -81,6 +82,31 @@ pub fn apiConfigNeedsRewrite(v: std.json.Value) bool {
     var cfg = defaultApiConfig();
     const result = parseApiConfigDetailed(&cfg, v);
     return !result.has_object or !result.has_usage or !result.has_account;
+}
+
+pub fn parseLiveConfig(cfg: *LiveConfig, v: std.json.Value) void {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return,
+    };
+    if (obj.get("interval_seconds")) |interval| {
+        if (parseLiveIntervalSeconds(interval)) |value| {
+            cfg.interval_seconds = value;
+        }
+    }
+}
+
+pub fn liveConfigNeedsRewrite(v: std.json.Value) bool {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return true,
+    };
+    if (obj.get("interval_seconds")) |interval| {
+        if (parseLiveIntervalSeconds(interval)) |_| {
+            return false;
+        }
+    }
+    return true;
 }
 
 pub fn parseApiConfigDetailed(cfg: *ApiConfig, v: std.json.Value) ApiConfigParseResult {
@@ -191,4 +217,13 @@ pub fn parseThresholdPercent(v: std.json.Value) ?u8 {
     };
     if (raw < 1 or raw > 100) return null;
     return @as(u8, @intCast(raw));
+}
+
+pub fn parseLiveIntervalSeconds(v: std.json.Value) ?u16 {
+    const raw = switch (v) {
+        .integer => |i| i,
+        else => return null,
+    };
+    if (raw < common.min_live_refresh_interval_seconds or raw > common.max_live_refresh_interval_seconds) return null;
+    return @as(u16, @intCast(raw));
 }

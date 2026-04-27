@@ -320,6 +320,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "auto --weekly <percent>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "daemon --watch|--once") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
@@ -415,6 +416,9 @@ test "Scenario: Given config and daemon help when rendering then special modes a
     try std.testing.expect(std.mem.indexOf(u8, config_help, "auto enable       Enable background auto-switching.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "--5h <percent>    Set the 5-hour usage threshold from 1 to 100.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "--weekly <percent>\n                    Set the weekly usage threshold from 1 to 100.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval <seconds>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 30") != null);
 
     const daemon_help = daemon_aw.written();
     try std.testing.expect(std.mem.indexOf(u8, daemon_help, "--watch   Run continuously and switch accounts when thresholds are reached.") != null);
@@ -692,6 +696,42 @@ test "Scenario: Given config api unknown action when parsing then usage error is
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .config, "unknown action `status`");
+}
+
+test "Scenario: Given config live interval when parsing then interval is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "live", "--interval", "30" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .config => |opts| switch (opts) {
+                .live => |live_opts| try std.testing.expectEqual(@as(u16, 30), live_opts.interval_seconds),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given config live invalid interval when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "live", "--interval", "4" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .config, "`--interval` must be an integer from 5 to 3600 seconds.");
+}
+
+test "Scenario: Given config live unknown flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "live", "--refresh", "30" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .config, "unknown flag `--refresh` for `config live`.");
 }
 
 test "Scenario: Given status with extra args when parsing then usage error is returned" {

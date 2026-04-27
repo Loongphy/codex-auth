@@ -2,8 +2,7 @@ const live_types = @import("live_types.zig");
 const live_display = @import("live_display.zig");
 const live_runtime = @import("live_runtime.zig");
 
-pub const switch_live_api_refresh_interval_ms = live_types.switch_live_api_refresh_interval_ms;
-pub const switch_live_local_refresh_interval_ms = live_types.switch_live_local_refresh_interval_ms;
+pub const switch_live_default_refresh_interval_ms = live_types.switch_live_default_refresh_interval_ms;
 pub const SwitchLiveRefreshPolicy = live_types.SwitchLiveRefreshPolicy;
 pub const SwitchLoadedDisplay = live_types.SwitchLoadedDisplay;
 pub const switchLiveRefreshPolicy = live_types.switchLiveRefreshPolicy;

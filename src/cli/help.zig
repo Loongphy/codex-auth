@@ -85,6 +85,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "config auto --weekly <percent>");
     try writeCommandDetail(out, use_color, "config api enable");
     try writeCommandDetail(out, use_color, "config api disable");
+    try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "daemon --watch|--once", "Run the background auto-switch daemon");
 
     try out.writeAll("\n");
@@ -173,7 +174,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .switch_account => "Switch the active account by alias, email, display number, or partial query.",
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
-        .config => "Manage auto-switch and usage API configuration.",
+        .config => "Manage auto-switch, API, and live refresh configuration.",
         .daemon => "Run the background auto-switch daemon.",
     };
 }
@@ -243,6 +244,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth config auto --weekly <percent>\n");
             try out.writeAll("  codex-auth config api enable\n");
             try out.writeAll("  codex-auth config api disable\n");
+            try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
         .daemon => {
             try out.writeAll("  codex-auth daemon --watch\n");
@@ -311,6 +313,8 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("                    Set the weekly usage threshold from 1 to 100.\n");
             try out.writeAll("  api enable        Enable usage and account APIs.\n");
             try out.writeAll("  api disable       Disable usage and account APIs.\n");
+            try out.writeAll("  live --interval <seconds>\n");
+            try out.writeAll("                    Set the live TUI refresh interval from 5 to 3600 seconds.\n");
         },
         .daemon => {
             try out.writeAll("  --watch   Run continuously and switch accounts when thresholds are reached.\n");
@@ -373,6 +377,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .config => {
             try out.writeAll("  codex-auth config auto --5h 12 --weekly 8\n");
             try out.writeAll("  codex-auth config api enable\n");
+            try out.writeAll("  codex-auth config live --interval 30\n");
         },
         .daemon => {
             try out.writeAll("  codex-auth daemon --watch\n");

@@ -5,16 +5,20 @@ const parse = @import("parse.zig");
 
 const AutoSwitchConfig = common.AutoSwitchConfig;
 const ApiConfig = common.ApiConfig;
+const LiveConfig = common.LiveConfig;
 const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 const defaultApiConfig = common.defaultApiConfig;
+const defaultLiveConfig = common.defaultLiveConfig;
 const registryPath = common.registryPath;
 const readFileAlloc = common.readFileAlloc;
 const parseAutoSwitch = parse.parseAutoSwitch;
 const parseApiConfig = parse.parseApiConfig;
+const parseLiveConfig = parse.parseLiveConfig;
 
 const PurgeCarryForwardConfig = struct {
     auto_switch: AutoSwitchConfig = defaultAutoSwitchConfig(),
     api: ApiConfig = defaultApiConfig(),
+    live: LiveConfig = defaultLiveConfig(),
 };
 
 pub fn loadPurgeCarryForwardConfig(allocator: std.mem.Allocator, codex_home: []const u8) !PurgeCarryForwardConfig {
@@ -40,6 +44,7 @@ fn parsePurgeCarryForwardConfig(allocator: std.mem.Allocator, data: []const u8) 
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch {
         applyCarryForwardObjectSlice(allocator, data, "auto_switch", &cfg.auto_switch, parseCarryForwardAutoSwitch);
         applyCarryForwardObjectSlice(allocator, data, "api", &cfg.api, parseCarryForwardApiConfig);
+        applyCarryForwardObjectSlice(allocator, data, "live", &cfg.live, parseCarryForwardLiveConfig);
         return cfg;
     };
     defer parsed.deinit();
@@ -48,6 +53,7 @@ fn parsePurgeCarryForwardConfig(allocator: std.mem.Allocator, data: []const u8) 
         .object => |obj| {
             if (obj.get("auto_switch")) |v| parseAutoSwitch(allocator, &cfg.auto_switch, v);
             if (obj.get("api")) |v| parseApiConfig(&cfg.api, v);
+            if (obj.get("live")) |v| parseLiveConfig(&cfg.live, v);
         },
         else => {},
     }
@@ -60,6 +66,10 @@ fn parseCarryForwardAutoSwitch(allocator: std.mem.Allocator, value: std.json.Val
 
 fn parseCarryForwardApiConfig(_: std.mem.Allocator, value: std.json.Value, target: *ApiConfig) void {
     parseApiConfig(target, value);
+}
+
+fn parseCarryForwardLiveConfig(_: std.mem.Allocator, value: std.json.Value, target: *LiveConfig) void {
+    parseLiveConfig(target, value);
 }
 
 fn applyCarryForwardObjectSlice(

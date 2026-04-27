@@ -90,6 +90,14 @@ pub const ApiConfig = struct {
     account: bool = true,
 };
 
+pub const default_live_refresh_interval_seconds: u16 = 30;
+pub const min_live_refresh_interval_seconds: u16 = 5;
+pub const max_live_refresh_interval_seconds: u16 = 3600;
+
+pub const LiveConfig = struct {
+    interval_seconds: u16 = default_live_refresh_interval_seconds,
+};
+
 pub const ApiConfigParseResult = struct {
     has_object: bool = false,
     has_usage: bool = false,
@@ -145,6 +153,7 @@ pub const Registry = struct {
     active_account_activated_at_ms: ?i64,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
+    live: LiveConfig = defaultLiveConfig(),
     accounts: std.ArrayList(AccountRecord),
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
@@ -161,6 +170,10 @@ pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
 }
 
 pub fn defaultApiConfig() ApiConfig {
+    return .{};
+}
+
+pub fn defaultLiveConfig() LiveConfig {
     return .{};
 }
 

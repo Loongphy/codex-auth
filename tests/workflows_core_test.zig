@@ -325,6 +325,7 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
         .threshold_weekly_percent = null,
     } } } }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api = .enable } }));
+    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .live = .{ .interval_seconds = 30 } } }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = .top_level }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
