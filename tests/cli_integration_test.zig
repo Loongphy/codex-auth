@@ -1479,7 +1479,7 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("Switched to backup\n", result.stdout);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -1490,6 +1490,122 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+}
+
+test "Scenario: Given switch query with multiple matches when running switch then it asks for one account and switches only that account" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "team-a" },
+        .{ .email = "beta@example.com", .alias = "team-b" },
+        .{ .email = "solo@example.com", .alias = "solo" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+    const alpha_snapshot_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
+    defer gpa.free(alpha_snapshot_path);
+    const beta_snapshot_path = try registry.accountAuthPath(gpa, codex_home, beta_key);
+    defer gpa.free(beta_snapshot_path);
+
+    const alpha_auth = try fixtures.authJsonWithEmailPlan(gpa, "alpha@example.com", "team");
+    defer gpa.free(alpha_auth);
+    const beta_auth = try fixtures.authJsonWithEmailPlan(gpa, "beta@example.com", "plus");
+    defer gpa.free(beta_auth);
+
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = alpha_auth });
+    try fs.cwd().writeFile(.{ .sub_path = alpha_snapshot_path, .data = alpha_auth });
+    try fs.cwd().writeFile(.{ .sub_path = beta_snapshot_path, .data = beta_auth });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPathAndStdin(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "team" },
+        "2\n",
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "solo@example.com") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to team-b") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after);
+    try std.testing.expectEqualStrings(beta_auth, auth_after);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, beta_key));
+}
+
+test "Scenario: Given switch query with no matches when running switch then it explains accepted target forms" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "missing" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings(
+        "error: no switch target matches 'missing'.\n" ++
+            "hint: Switch accepts one target: alias, email, display number, or partial query.\n",
+        result.stderr,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
 
 test "Scenario: Given list with api override when api config is disabled then it still requires api refresh executables" {
@@ -1738,6 +1854,7 @@ test "Scenario: Given switch with skip-api when running interactively then it do
 
     try expectSuccess(result);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to backup") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -1933,7 +2050,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <query>` and `remove --all` do not support") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -1969,7 +2086,7 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <query>` and `remove --all` do not support") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
 }
 
 test "Scenario: Given interactive remove with api flag when running remove then it requires api refresh executables" {
@@ -2401,7 +2518,7 @@ test "Scenario: Given remove query with no matches when running remove then it e
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "error: no account matches 'tmp2'.\n" ++
-            "hint: Run `codex-auth list` to see available accounts, then retry with an alias, email, or number.\n",
+            "hint: Remove accepts one or more aliases, emails, display numbers, or partial queries.\n",
         result.stderr,
     );
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
@@ -2438,7 +2555,7 @@ test "Scenario: Given multiple remove queries with no matches when running remov
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "error: no account matches: 112222, 222222.\n" ++
-            "hint: Run `codex-auth list` to see available accounts, then retry with aliases, emails, or numbers.\n",
+            "hint: Remove accepts one or more aliases, emails, display numbers, or partial queries.\n",
         result.stderr,
     );
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
@@ -2510,6 +2627,46 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
         "Matched multiple accounts:\n" ++
             "- alpha@example.com / team-a\n" ++
             "- beta@example.com / team-b\n" ++
+            "error: multiple accounts match the query in non-interactive mode.\n" ++
+            "hint: Refine the query to match one account, or run the command in a TTY.\n",
+        result.stderr,
+    );
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 3), loaded.accounts.items.len);
+}
+
+test "Scenario: Given remove fuzzy selector with multiple matches when running remove then it reports every matched account before deleting" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "west@example.com", .alias = "ops-west" },
+        .{ .email = "east@example.com", .alias = "ops-east" },
+        .{ .email = "keeper@example.com", .alias = "keeper" },
+    });
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "ops" }, "y\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings(
+        "Matched multiple accounts:\n" ++
+            "- east@example.com / ops-east\n" ++
+            "- west@example.com / ops-west\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,

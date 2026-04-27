@@ -61,7 +61,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(
             allocator,
             .switch_account,
-            "`switch <query>` does not support `--live`, `--api`, or `--skip-api`.",
+            "`switch <alias|email|display-number|query>` does not support `--live`, `--api`, or `--skip-api`.",
             .{},
         );
     }

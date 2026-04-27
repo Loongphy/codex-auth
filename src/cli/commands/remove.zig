@@ -53,7 +53,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(
             allocator,
             .remove_account,
-            "`remove <query>` and `remove --all` do not support `--live`, `--api`, or `--skip-api`.",
+            "`remove <alias|email|display-number|query>...` and `remove --all` do not support `--live`, `--api`, or `--skip-api`.",
             .{},
         );
     }

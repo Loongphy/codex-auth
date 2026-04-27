@@ -294,21 +294,33 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Account API: ON") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)\nUsage API: ON (api)\nAccount API: ON\n\nCommands:\n  --help, -h") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "help <command>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--version, -V") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "login [--device-auth]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "import <path> [--alias <alias>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "import --cpa [<path>] [--alias <alias>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "import --alias <alias>\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Run `codex-auth <command> --help` for command-specific usage details.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api] | switch <query>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "switch <alias|email|display-number|query>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "remove <alias|email|display-number|query>...") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "remove --all") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto disable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "auto --weekly <percent>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api enable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "api disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "daemon --watch|--once") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
 }
@@ -350,6 +362,22 @@ test "Scenario: Given complex command help when rendering then examples are show
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth import") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
+}
+
+test "Scenario: Given switch command help when rendering then target forms and multi-match behavior are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, false, .switch_account);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch <alias|email|display-number|query>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch personal") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch john@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch 02") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "If a target is ambiguous") == null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {

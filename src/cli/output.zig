@@ -122,7 +122,19 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     try writeErrorPrefixTo(out, use_color);
     try out.print(" no account matches '{s}'.\n", .{query});
     try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Run `codex-auth list` to see available accounts, then retry with an alias, email, or number.\n");
+    try out.writeAll(" Remove accepts one or more aliases, emails, display numbers, or partial queries.\n");
+    try out.flush();
+}
+
+pub fn printSwitchAccountNotFoundError(query: []const u8) !void {
+    var buffer: [768]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = style.stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" no switch target matches '{s}'.\n", .{query});
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Switch accepts one target: alias, email, display number, or partial query.\n");
     try out.flush();
 }
 
@@ -144,7 +156,7 @@ pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
     }
     try out.writeAll(".\n");
     try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Run `codex-auth list` to see available accounts, then retry with aliases, emails, or numbers.\n");
+    try out.writeAll(" Remove accepts one or more aliases, emails, display numbers, or partial queries.\n");
     try out.flush();
 }
 
@@ -156,7 +168,7 @@ pub fn printSwitchRequiresTtyError() !void {
     try writeErrorPrefixTo(out, use_color);
     try out.writeAll(" interactive switch requires a TTY.\n");
     try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Run `codex-auth switch` in a terminal, or narrow `codex-auth switch <query>` to one account.\n");
+    try out.writeAll(" Run `codex-auth switch` in a terminal, or narrow `codex-auth switch <alias|email|display-number|query>` to one account.\n");
     try out.flush();
 }
 
@@ -180,7 +192,7 @@ pub fn printRemoveRequiresTtyError() !void {
     try writeErrorPrefixTo(out, use_color);
     try out.writeAll(" interactive remove requires a TTY.\n");
     try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Use `codex-auth remove <query>...` or `codex-auth remove --all` instead.\n");
+    try out.writeAll(" Use `codex-auth remove <alias|email|display-number|query>...` or `codex-auth remove --all` instead.\n");
     try out.flush();
 }
 

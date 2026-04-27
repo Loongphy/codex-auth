@@ -31,7 +31,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
 
         const selected_account_key = switch (resolution) {
             .not_found => {
-                try cli.output.printAccountNotFoundError(query);
+                try cli.output.printSwitchAccountNotFoundError(query);
                 return error.AccountNotFound;
             },
             .direct => |account_key| account_key,
@@ -51,6 +51,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         if (selected_account_key == null) return;
         try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
         try registry.saveRegistry(allocator, codex_home, &reg);
+        try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
         return;
     }
 
@@ -87,6 +88,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         if (selected_account_key == null) return;
         try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
         try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
+        try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
         return;
     }
 
