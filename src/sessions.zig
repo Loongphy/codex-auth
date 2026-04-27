@@ -36,6 +36,16 @@ pub const LatestRolloutEvent = struct {
     }
 };
 
+pub const LatestLimitEvent = struct {
+    path: []u8,
+    mtime: i64,
+    event_timestamp_ms: i64,
+
+    pub fn deinit(self: *LatestLimitEvent, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+    }
+};
+
 const RolloutCandidate = struct {
     path: []u8,
     mtime: i64,
@@ -44,6 +54,10 @@ const RolloutCandidate = struct {
 const ParsedUsageEvent = struct {
     event_timestamp_ms: i64,
     snapshot: ?registry.RateLimitSnapshot,
+};
+
+const ParsedLimitEvent = struct {
+    event_timestamp_ms: i64,
 };
 
 const UsageEventLineJson = struct {
@@ -55,6 +69,18 @@ const UsageEventLineJson = struct {
 const UsagePayloadJson = struct {
     type: []const u8 = "",
     rate_limits: ?UsageRateLimitsJson = null,
+};
+
+const LimitEventLineJson = struct {
+    timestamp: []const u8 = "",
+    type: []const u8 = "",
+    payload: LimitPayloadJson = .{},
+};
+
+const LimitPayloadJson = struct {
+    type: []const u8 = "",
+    message: []const u8 = "",
+    codex_error_info: []const u8 = "",
 };
 
 const UsageRateLimitsJson = struct {
@@ -78,6 +104,8 @@ const UsageCreditsJson = struct {
 
 const max_rollout_line_bytes: usize = 10 * 1024 * 1024;
 const rollout_full_rescan_interval_ns = 15 * std.time.ns_per_s;
+const limit_full_rescan_interval_ns = 1 * std.time.ns_per_s;
+const limit_message_needle = "hit your usage limit";
 
 pub const RolloutScanCache = struct {
     last_full_scan_at_ns: i128 = 0,
@@ -106,6 +134,38 @@ pub const RolloutScanCache = struct {
     fn cloneLatest(self: *const RolloutScanCache, allocator: std.mem.Allocator) !?LatestRolloutEvent {
         if (self.latest) |latest| {
             return try cloneLatestRolloutEvent(allocator, latest);
+        }
+        return null;
+    }
+};
+
+pub const LimitScanCache = struct {
+    last_full_scan_at_ns: i128 = 0,
+    latest: ?LatestLimitEvent = null,
+
+    pub fn deinit(self: *LimitScanCache, allocator: std.mem.Allocator) void {
+        self.clear(allocator);
+    }
+
+    fn clear(self: *LimitScanCache, allocator: std.mem.Allocator) void {
+        if (self.latest) |*latest| {
+            latest.deinit(allocator);
+        }
+        self.latest = null;
+        self.last_full_scan_at_ns = 0;
+    }
+
+    fn replace(self: *LimitScanCache, allocator: std.mem.Allocator, latest: ?LatestLimitEvent, scanned_at_ns: i128) void {
+        if (self.latest) |*cached| {
+            cached.deinit(allocator);
+        }
+        self.latest = latest;
+        self.last_full_scan_at_ns = scanned_at_ns;
+    }
+
+    fn cloneLatest(self: *const LimitScanCache, allocator: std.mem.Allocator) !?LatestLimitEvent {
+        if (self.latest) |latest| {
+            return try cloneLatestLimitEvent(allocator, latest);
         }
         return null;
     }
@@ -206,6 +266,58 @@ pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home
     };
 }
 
+pub fn scanLatestLimitEventWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestLimitEvent {
+    const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
+    defer allocator.free(sessions_root);
+
+    var latest: ?LatestLimitEvent = null;
+    errdefer if (latest) |*event| event.deinit(allocator);
+
+    var dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), sessions_root, .{ .iterate = true });
+    defer dir.close(app_runtime.io());
+    var walker = try dir.walk(allocator);
+    defer walker.deinit();
+
+    while (try walker.next(app_runtime.io())) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isRolloutFile(entry.path)) continue;
+        const stat = dir.statFile(app_runtime.io(), entry.path, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        const mtime: i64 = @intCast(stat.mtime.nanoseconds);
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
+        errdefer allocator.free(path);
+        const parsed = scanFileForLimitMessage(allocator, path, mtime) catch |err| switch (err) {
+            error.FileNotFound => {
+                allocator.free(path);
+                continue;
+            },
+            else => return err,
+        };
+        if (parsed == null) {
+            allocator.free(path);
+            continue;
+        }
+
+        const event: LatestLimitEvent = .{
+            .path = path,
+            .mtime = mtime,
+            .event_timestamp_ms = parsed.?.event_timestamp_ms,
+        };
+        if (latest) |*current| {
+            if (!limitEventNewer(event, current.*)) {
+                allocator.free(event.path);
+                continue;
+            }
+            current.deinit(allocator);
+        }
+        latest = event;
+    }
+
+    return latest;
+}
+
 pub fn scanLatestRolloutEventWithCache(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -237,6 +349,37 @@ pub fn scanLatestRolloutEventWithCache(
     return try refreshRolloutScanCache(allocator, codex_home, cache, now_ns);
 }
 
+pub fn scanLatestLimitEventWithCache(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    cache: *LimitScanCache,
+) !?LatestLimitEvent {
+    const now_ns = @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds());
+
+    if (cache.latest) |cached| {
+        const stat = std.Io.Dir.cwd().statFile(app_runtime.io(), cached.path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return try refreshLimitScanCache(allocator, codex_home, cache, now_ns),
+            else => return err,
+        };
+        const current_mtime: i64 = @intCast(stat.mtime.nanoseconds);
+        if (current_mtime != cached.mtime) {
+            const reparsed = try scanFileForLimitMessage(allocator, cached.path, current_mtime);
+            if (reparsed) |parsed| {
+                const updated = try latestLimitEventFromParsedLimit(allocator, cached.path, current_mtime, parsed);
+                cache.replace(allocator, updated, cache.last_full_scan_at_ns);
+                return try cache.cloneLatest(allocator);
+            }
+            return try refreshLimitScanCache(allocator, codex_home, cache, now_ns);
+        }
+
+        if (cache.last_full_scan_at_ns != 0 and (now_ns - cache.last_full_scan_at_ns) < limit_full_rescan_interval_ns) {
+            return try cache.cloneLatest(allocator);
+        }
+    }
+
+    return try refreshLimitScanCache(allocator, codex_home, cache, now_ns);
+}
+
 fn scanFileForUsage(allocator: std.mem.Allocator, path: []const u8) !?ParsedUsageEvent {
     return scanFileForUsageWithMode(allocator, path, true);
 }
@@ -263,6 +406,27 @@ fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep
     defer map.destroy(app_runtime.io());
 
     return scanUsageEventSliceBackwards(allocator, map.memory, keep_latest_unusable);
+}
+
+fn scanFileForLimitMessage(allocator: std.mem.Allocator, path: []const u8, mtime: i64) !?ParsedLimitEvent {
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{});
+    defer file.close(app_runtime.io());
+
+    const stat = try file.stat(app_runtime.io());
+    if (stat.size == 0) return null;
+    const fallback_timestamp_ms = mtimeToMillis(mtime);
+    if (comptime builtin.os.tag == .windows) {
+        return scanFileForLimitMessageStreaming(allocator, file, fallback_timestamp_ms);
+    }
+
+    var map = try file.createMemoryMap(app_runtime.io(), .{
+        .len = @intCast(stat.size),
+        .protection = .{ .read = true, .write = false },
+        .populate = false,
+    });
+    defer map.destroy(app_runtime.io());
+
+    return scanLimitEventSliceBackwards(allocator, map.memory, fallback_timestamp_ms);
 }
 
 fn scanFileForUsageStreaming(
@@ -325,6 +489,58 @@ fn scanFileForUsageStreaming(
     return last;
 }
 
+fn scanFileForLimitMessageStreaming(
+    allocator: std.mem.Allocator,
+    file: std.Io.File,
+    fallback_timestamp_ms: i64,
+) !?ParsedLimitEvent {
+    var read_buffer: [8192]u8 = undefined;
+    var file_reader = file.reader(app_runtime.io(), &read_buffer);
+    const reader = &file_reader.interface;
+    var line_buffer: std.Io.Writer.Allocating = .init(allocator);
+    defer line_buffer.deinit();
+    var last: ?ParsedLimitEvent = null;
+
+    while (true) {
+        line_buffer.clearRetainingCapacity();
+        const line_len = reader.streamDelimiterLimit(
+            &line_buffer.writer,
+            '\n',
+            .limited(max_rollout_line_bytes),
+        ) catch |err| switch (err) {
+            error.StreamTooLong => {
+                _ = reader.discardDelimiterInclusive('\n') catch |discard_err| switch (discard_err) {
+                    error.EndOfStream => break,
+                    error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+                };
+                continue;
+            },
+            error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+            error.WriteFailed => return error.OutOfMemory,
+        };
+        const line = line_buffer.written();
+        const next_byte: ?u8 = reader.peekByte() catch |err| switch (err) {
+            error.EndOfStream => null,
+            error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+        };
+        if (next_byte) |byte| {
+            std.debug.assert(byte == '\n');
+            _ = reader.discardDelimiterInclusive('\n') catch |err| switch (err) {
+                error.EndOfStream => unreachable,
+                error.ReadFailed => return file_reader.err orelse error.ReadFailed,
+            };
+        } else if (line_len == 0) {
+            break;
+        }
+        const trimmed = std.mem.trim(u8, line, " \r\t");
+        if (trimmed.len == 0) continue;
+        if (parseLimitEventLine(allocator, trimmed, fallback_timestamp_ms)) |event| {
+            last = event;
+        }
+    }
+    return last;
+}
+
 fn scanUsageEventSliceBackwards(
     allocator: std.mem.Allocator,
     contents: []const u8,
@@ -354,6 +570,29 @@ fn scanUsageEventSliceBackwards(
     return null;
 }
 
+fn scanLimitEventSliceBackwards(allocator: std.mem.Allocator, contents: []const u8, fallback_timestamp_ms: i64) ?ParsedLimitEvent {
+    var line_end = contents.len;
+
+    while (line_end > 0) {
+        const maybe_newline = std.mem.lastIndexOfScalar(u8, contents[0..line_end], '\n');
+        const line_start = if (maybe_newline) |idx| idx + 1 else 0;
+        const line = std.mem.trim(u8, contents[line_start..line_end], " \r\t");
+        if (line.len != 0 and line.len <= max_rollout_line_bytes) {
+            if (parseLimitEventLine(allocator, line, fallback_timestamp_ms)) |event| {
+                return event;
+            }
+        }
+
+        if (maybe_newline) |idx| {
+            line_end = idx;
+            continue;
+        }
+        break;
+    }
+
+    return null;
+}
+
 fn refreshRolloutScanCache(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -361,6 +600,17 @@ fn refreshRolloutScanCache(
     scanned_at_ns: i128,
 ) !?LatestRolloutEvent {
     const latest = try scanLatestRolloutEventWithSource(allocator, codex_home);
+    cache.replace(allocator, latest, scanned_at_ns);
+    return try cache.cloneLatest(allocator);
+}
+
+fn refreshLimitScanCache(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    cache: *LimitScanCache,
+    scanned_at_ns: i128,
+) !?LatestLimitEvent {
+    const latest = try scanLatestLimitEventWithSource(allocator, codex_home);
     cache.replace(allocator, latest, scanned_at_ns);
     return try cache.cloneLatest(allocator);
 }
@@ -382,6 +632,19 @@ fn latestRolloutEventFromParsedUsage(
     };
 }
 
+fn latestLimitEventFromParsedLimit(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    mtime: i64,
+    parsed: ParsedLimitEvent,
+) !LatestLimitEvent {
+    return .{
+        .path = try allocator.dupe(u8, path),
+        .mtime = mtime,
+        .event_timestamp_ms = parsed.event_timestamp_ms,
+    };
+}
+
 fn cloneLatestRolloutEvent(allocator: std.mem.Allocator, latest: LatestRolloutEvent) !LatestRolloutEvent {
     return .{
         .path = try allocator.dupe(u8, latest.path),
@@ -391,6 +654,14 @@ fn cloneLatestRolloutEvent(allocator: std.mem.Allocator, latest: LatestRolloutEv
             try registry.cloneRateLimitSnapshot(allocator, snapshot)
         else
             null,
+    };
+}
+
+fn cloneLatestLimitEvent(allocator: std.mem.Allocator, latest: LatestLimitEvent) !LatestLimitEvent {
+    return .{
+        .path = try allocator.dupe(u8, latest.path),
+        .mtime = latest.mtime,
+        .event_timestamp_ms = latest.event_timestamp_ms,
     };
 }
 
@@ -427,6 +698,46 @@ fn looksLikeUsageEventLine(line: []const u8) bool {
         std.mem.indexOf(u8, line, "\"token_count\"") != null and
         std.mem.indexOf(u8, line, "\"rate_limits\"") != null and
         std.mem.indexOf(u8, line, "\"timestamp\"") != null;
+}
+
+fn parseLimitEventLine(allocator: std.mem.Allocator, line: []const u8, fallback_timestamp_ms: i64) ?ParsedLimitEvent {
+    if (!looksLikeLimitEventLine(line)) return null;
+
+    var parsed = std.json.parseFromSlice(LimitEventLineJson, allocator, line, .{
+        .ignore_unknown_fields = true,
+    }) catch return null;
+    defer parsed.deinit();
+
+    const root = parsed.value;
+    if (!std.mem.eql(u8, root.type, "event_msg")) return null;
+
+    const explicit_limit_error = std.mem.eql(u8, root.payload.codex_error_info, "usage_limit_exceeded");
+    const error_message_limit =
+        std.mem.eql(u8, root.payload.type, "error") and
+        std.ascii.indexOfIgnoreCase(root.payload.message, limit_message_needle) != null;
+    if (!explicit_limit_error and !error_message_limit) return null;
+
+    return .{
+        .event_timestamp_ms = parseTimestampMs(root.timestamp) orelse fallback_timestamp_ms,
+    };
+}
+
+fn looksLikeLimitEventLine(line: []const u8) bool {
+    if (std.mem.indexOf(u8, line, "\"event_msg\"") == null) return false;
+    if (std.mem.indexOf(u8, line, "\"payload\"") == null) return false;
+    return std.mem.indexOf(u8, line, "\"usage_limit_exceeded\"") != null or
+        std.ascii.indexOfIgnoreCase(line, limit_message_needle) != null;
+}
+
+fn mtimeToMillis(mtime: i64) i64 {
+    return @divFloor(mtime, @as(i64, std.time.ns_per_ms));
+}
+
+fn limitEventNewer(candidate: LatestLimitEvent, current: LatestLimitEvent) bool {
+    if (candidate.event_timestamp_ms != current.event_timestamp_ms) {
+        return candidate.event_timestamp_ms > current.event_timestamp_ms;
+    }
+    return candidate.mtime > current.mtime;
 }
 
 fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) ?registry.RateLimitSnapshot {

@@ -253,16 +253,7 @@ test "Scenario: Given login with device auth flag when parsing then device auth 
     }
 }
 
-test "Scenario: Given login with duplicate device auth flag when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "login", "--device-auth", "--device-auth" };
-    var result = try cli.parseArgs(gpa, &args);
-    defer cli.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .login, "duplicate `--device-auth`");
-}
-
-test "Scenario: Given login with group when parsing then group name and device auth are preserved" {
+test "Scenario: Given login with group flag when parsing then group target is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "login", "--group", "work", "--device-auth" };
     var result = try cli.parseArgs(gpa, &args);
@@ -281,46 +272,28 @@ test "Scenario: Given login with group when parsing then group name and device a
     }
 }
 
-test "Scenario: Given group create with account selectors when parsing then group mutation is preserved" {
+test "Scenario: Given login with duplicate device auth flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "group", "create", "work", "01", "jane@example.com" };
+    const args = [_][:0]const u8{ "codex-auth", "login", "--device-auth", "--device-auth" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .group => |opts| switch (opts) {
-                .create => |mutation| {
-                    try std.testing.expectEqualStrings("work", mutation.name);
-                    try std.testing.expectEqual(@as(usize, 2), mutation.selectors.len);
-                    try std.testing.expectEqualStrings("01", mutation.selectors[0]);
-                    try std.testing.expectEqualStrings("jane@example.com", mutation.selectors[1]);
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
+    try expectUsageError(result, .login, "duplicate `--device-auth`");
 }
 
-test "Scenario: Given scoped group commands when parsing then delegated options are preserved" {
+test "Scenario: Given scoped group login when parsing then group and device auth are preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch", "--live", "--auto", "--skip-api" };
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "login", "--device-auth" };
     var result = try cli.parseArgs(gpa, &args);
     defer cli.freeParseResult(gpa, &result);
 
     switch (result) {
         .command => |cmd| switch (cmd) {
-            .group => |opts| switch (opts) {
+            .group => |group_opts| switch (group_opts) {
                 .scoped => |scoped| {
                     try std.testing.expectEqualStrings("work", scoped.name);
                     switch (scoped.action) {
-                        .switch_account => |switch_opts| {
-                            try std.testing.expect(switch_opts.live);
-                            try std.testing.expect(switch_opts.auto);
-                            try std.testing.expectEqual(cli.ApiMode.skip_api, switch_opts.api_mode);
-                        },
+                        .login => |login_opts| try std.testing.expect(login_opts.device_auth),
                         else => return error.TestExpectedEqual,
                     }
                 },
@@ -332,17 +305,37 @@ test "Scenario: Given scoped group commands when parsing then delegated options 
     }
 }
 
-test "Scenario: Given group help when rendering then core group usage is shown" {
+test "Scenario: Given accounts group name when parsing group accounts list then scoped list is preserved" {
     const gpa = std.testing.allocator;
-    var aw: std.Io.Writer.Allocating = .init(gpa);
-    defer aw.deinit();
+    const args = [_][:0]const u8{ "codex-auth", "group", "accounts", "list" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
 
-    try cli.writeCommandHelp(&aw.writer, false, .group);
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("accounts", scoped.name);
+                    switch (scoped.action) {
+                        .list => {},
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
 
-    const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group create <name> [<account>...]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> login [--device-auth]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> launch [-- <codext-arg>...]") != null);
+test "Scenario: Given group name before removed show action when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "show" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .group, "unknown group action `show`");
 }
 
 test "Scenario: Given command help selector when parsing then command-specific help is preserved" {
@@ -369,7 +362,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try cli.writeHelp(&aw.writer, false, &auto_cfg, &api_cfg);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<=12%, weekly<=8%)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Account API: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--cpa [<path>]") != null);
@@ -377,9 +370,12 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "group") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--auto] [--api|--skip-api] | switch <query>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "list <name> | <name> list") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "<name> switch [--live] [--auto] [--api|--skip-api] | <name> switch <query>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "<name> config api enable|disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "archive <name> | delete <name> --force") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
@@ -417,6 +413,270 @@ test "Scenario: Given complex command help when rendering then examples are show
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth import") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
+}
+
+test "Scenario: Given group command help when rendering then managed group forms are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeCommandHelp(&aw.writer, false, .group);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> list [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> show") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group show <name>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> config api enable|disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> copy [<account>...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> move [<account>...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> path") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> launch [resume [session]] [-- <codext-arg>...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work show") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work list --skip-api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work copy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work move personal@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work switch\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work switch 02") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work launch resume") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group work config api enable") != null);
+}
+
+test "Scenario: Given scoped group copy without selectors when parsing then interactive copy is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "copy" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .copy => |selectors| try std.testing.expectEqual(@as(usize, 0), selectors.len),
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group move with selector when parsing then direct move is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "move", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .move => |selectors| {
+                            try std.testing.expectEqual(@as(usize, 1), selectors.len);
+                            try std.testing.expectEqualStrings("02", selectors[0]);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given top-level group copy alias when parsing then target group is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "copy", "work" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .copy => |opts| {
+                    try std.testing.expectEqualStrings("work", opts.name);
+                    try std.testing.expectEqual(@as(usize, 0), opts.selectors.len);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given top-level group move alias when parsing then selector is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "move", "work", "alpha" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .move => |opts| {
+                    try std.testing.expectEqualStrings("work", opts.name);
+                    try std.testing.expectEqual(@as(usize, 1), opts.selectors.len);
+                    try std.testing.expectEqualStrings("alpha", opts.selectors[0]);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group launch resume when parsing then codext resume arguments are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "launch", "resume", "019db67d-2190-7563-a899-ce3082e491cf" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .launch => |opts| try expectArgv(opts.argv, &[_][]const u8{
+                            "resume",
+                            "019db67d-2190-7563-a899-ce3082e491cf",
+                        }),
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remembered project launch resume when parsing then codext resume arguments are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "launch", "resume", "019db67d-2190-7563-a899-ce3082e491cf" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .launch => |opts| try expectArgv(opts.argv, &[_][]const u8{
+                "resume",
+                "019db67d-2190-7563-a899-ce3082e491cf",
+            }),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group switch without query when parsing then interactive switch is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .switch_account => |opts| {
+                            try std.testing.expect(opts.query == null);
+                            try std.testing.expect(!opts.live);
+                            try std.testing.expect(!opts.auto);
+                            try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group switch with skip api when parsing then interactive switch options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch", "--skip-api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .switch_account => |opts| {
+                            try std.testing.expect(opts.query == null);
+                            try std.testing.expect(!opts.live);
+                            try std.testing.expect(!opts.auto);
+                            try std.testing.expectEqual(cli.ApiMode.skip_api, opts.api_mode);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group switch with query when parsing then direct switch is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |group_opts| switch (group_opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .switch_account => |opts| {
+                            try std.testing.expect(opts.query != null);
+                            try std.testing.expectEqualStrings("02", opts.query.?);
+                            try std.testing.expect(!opts.live);
+                            try std.testing.expect(!opts.auto);
+                            try std.testing.expectEqual(cli.ApiMode.default, opts.api_mode);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group switch query with api flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch", "--api", "02" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .group, "invalid `group <name> switch` arguments");
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -755,6 +1015,63 @@ test "Scenario: Given daemon once when parsing then one-shot daemon command is p
     }
 }
 
+test "Scenario: Given daemon manager when parsing then manager daemon command is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "daemon", "--manager" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .daemon => |opts| try std.testing.expectEqual(cli.DaemonMode.manager, opts.mode),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given daemon manager once when parsing then one-shot manager daemon command is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "daemon", "--manager-once" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .daemon => |opts| try std.testing.expectEqual(cli.DaemonMode.manager_once, opts.mode),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group api config when parsing then group config is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "config", "api", "enable" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |opts| switch (opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .config => |config| switch (config) {
+                            .api => |action| try std.testing.expectEqual(cli.ApiAction.enable, action),
+                            else => return error.TestExpectedEqual,
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given codex login access denied when rendering then plain English retry hint is included" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
@@ -780,7 +1097,7 @@ test "Scenario: Given codex login client missing when rendering then detection h
     try std.testing.expect(std.mem.indexOf(u8, hint, "Ensure the Codex CLI is installed and available in your environment.") != null);
 }
 
-test "Scenario: Given login help when rendering then device auth usage is included" {
+test "Scenario: Given login help when rendering then device auth and group usage are included" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -789,6 +1106,7 @@ test "Scenario: Given login help when rendering then device auth usage is includ
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth login --device-auth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth login --group <name>") != null);
 }
 
 test "Scenario: Given login options when building codex argv then device auth is forwarded" {

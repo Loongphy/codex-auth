@@ -116,8 +116,15 @@ See [docs/account-groups.md](./docs/account-groups.md) for the full command refe
 | `codex-auth group <name> list [--live] [--api\|--skip-api]` | List accounts in one group |
 | `codex-auth group <name> login [--device-auth]` | Login and add the account directly to one group |
 | `codex-auth group <name> add <account> [<account>...]` | Copy accounts from another group into this group |
+| `codex-auth group <name> copy [<account>...]` | Copy accounts into this group; without selectors, choose interactively |
+| `codex-auth group <name> move [<account>...]` | Move accounts into this group; without selectors, choose interactively |
 | `codex-auth group <name> switch [--live] [--auto] [--api\|--skip-api]` | Switch the active account inside one group |
-| `codex-auth group <name> launch [-- <codext-arg>...]` | Launch `codext` with this group's `CODEX_HOME` |
+| `codex-auth group <name> auto enable\|disable` | Enable or disable background auto-switching for one group |
+| `codex-auth group <name> config api enable\|disable` | Enable or disable usage and account APIs for one group |
+| `codex-auth group <name> status` | Show auto-switch and usage status for one group |
+| `codex-auth group <name> launch [resume [session]] [-- <codext-arg>...]` | Launch `codext` with this group's `CODEX_HOME` |
+| `codex-auth project set-group <name>` | Remember a group for the current project directory |
+| `codex-auth launch [resume [session]] [-- <codext-arg>...]` | Launch `codext` with the remembered project group, or `default` |
 
 ### Import
 

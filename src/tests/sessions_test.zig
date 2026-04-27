@@ -18,6 +18,19 @@ const missing_primary_used_percent_line = "{" ++
     "\"timestamp\":\"2025-01-01T00:00:02Z\"," ++
     "\"type\":\"event_msg\"," ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}";
+const limit_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:20.000Z\"," ++
+    "\"type\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"error\",\"message\":\"You've hit your usage limit. Try again later.\",\"codex_error_info\":\"usage_limit_exceeded\"}}";
+const response_item_limit_text_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:30.000Z\"," ++
+    "\"type\":\"response_item\"," ++
+    "\"kind\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"function_call_output\",\"codex_error_info\":\"usage_limit_exceeded\",\"output\":\"You've hit your usage limit.\"}}";
+const agent_message_limit_text_line = "{" ++
+    "\"timestamp\":\"2025-01-01T00:00:31.000Z\"," ++
+    "\"type\":\"event_msg\"," ++
+    "\"payload\":{\"type\":\"agent_message\",\"message\":\"You've hit your usage limit. Try again later.\"}}";
 
 fn usageLineAlloc(allocator: std.mem.Allocator, timestamp: []const u8, used_percent: f64) ![]u8 {
     return std.fmt.allocPrint(
@@ -332,6 +345,91 @@ test "scan latest usage keeps final line without trailing newline" {
     try std.testing.expectEqual(@as(i64, 1735689612000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 33.0), latest.snapshot.primary.?.used_percent);
+}
+
+test "scan latest limit event finds the newest usage limit message" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = "sessions/2025/01/01/rollout-a.jsonl",
+        .data = line ++ "\n" ++ limit_line ++ "\n",
+    });
+
+    var latest = (try sessions.scanLatestLimitEventWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689620000), latest.event_timestamp_ms);
+}
+
+test "scan latest limit event ignores non-error mentions of the limit text" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = "sessions/2025/01/01/rollout-false-positive.jsonl",
+        .data = response_item_limit_text_line ++ "\n" ++ agent_message_limit_text_line ++ "\n",
+    });
+
+    try std.testing.expect((try sessions.scanLatestLimitEventWithSource(gpa, codex_home)) == null);
+}
+
+test "scan latest limit event skips newer non-error mentions and keeps the real error" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = "sessions/2025/01/01/rollout-mixed-limit.jsonl",
+        .data = limit_line ++ "\n" ++ response_item_limit_text_line ++ "\n" ++ agent_message_limit_text_line ++ "\n",
+    });
+
+    var latest = (try sessions.scanLatestLimitEventWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+
+    try std.testing.expectEqualStrings("rollout-mixed-limit.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689620000), latest.event_timestamp_ms);
+}
+
+test "scan latest limit event cache tracks appends to the current rollout file" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
+
+    const rollout_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-limit-cache.jsonl" });
+    defer gpa.free(rollout_path);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = rollout_path, .data = line });
+
+    var cache = sessions.LimitScanCache{};
+    defer cache.deinit(gpa);
+
+    try std.testing.expect((try sessions.scanLatestLimitEventWithCache(gpa, codex_home, &cache)) == null);
+
+    const base_time = @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds());
+    const file_contents = line ++ "\n" ++ limit_line ++ "\n";
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = rollout_path, .data = file_contents });
+    try updateFileTimes(rollout_path, base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
+
+    var latest = (try sessions.scanLatestLimitEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
+    defer latest.deinit(gpa);
+    try std.testing.expectEqualStrings("rollout-limit-cache.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqual(@as(i64, 1735689620000), latest.event_timestamp_ms);
 }
 
 test "scan latest rollout event cache tracks changes to the current rollout file without a full rescan" {

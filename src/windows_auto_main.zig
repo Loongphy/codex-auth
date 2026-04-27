@@ -2,13 +2,26 @@ const std = @import("std");
 const auto = @import("auto.zig");
 const registry = @import("registry.zig");
 
-fn resolveDaemonCodexHome(allocator: std.mem.Allocator, init: std.process.Init.Minimal) ![]u8 {
+const DaemonTarget = union(enum) {
+    codex_home: []u8,
+    manager: void,
+
+    fn deinit(self: *DaemonTarget, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .codex_home => |path| allocator.free(path),
+            .manager => {},
+        }
+    }
+};
+
+fn resolveDaemonTarget(allocator: std.mem.Allocator, init: std.process.Init.Minimal) !DaemonTarget {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const args = try init.args.toSlice(arena_state.allocator());
 
     var codex_home_override: ?[]u8 = null;
     defer if (codex_home_override) |path| allocator.free(path);
+    var manager = false;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -25,13 +38,19 @@ fn resolveDaemonCodexHome(allocator: std.mem.Allocator, init: std.process.Init.M
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--manager")) {
+            if (manager or codex_home_override != null) return error.InvalidCliUsage;
+            manager = true;
+            continue;
+        }
         return error.InvalidCliUsage;
     }
 
+    if (manager) return .{ .manager = {} };
     if (codex_home_override) |path| {
-        return try registry.resolveCodexHomeFromEnv(allocator, path, null, null);
+        return .{ .codex_home = try registry.resolveCodexHomeFromEnv(allocator, path, null, null) };
     }
-    return try registry.resolveCodexHome(allocator);
+    return .{ .codex_home = try registry.resolveCodexHome(allocator) };
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
@@ -39,8 +58,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    const codex_home = try resolveDaemonCodexHome(allocator, init);
-    defer allocator.free(codex_home);
+    var target = try resolveDaemonTarget(allocator, init);
+    defer target.deinit(allocator);
 
-    try auto.runDaemon(allocator, codex_home);
+    switch (target) {
+        .codex_home => |codex_home| try auto.runDaemon(allocator, codex_home),
+        .manager => try auto.runManagerDaemon(allocator),
+    }
 }

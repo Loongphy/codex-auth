@@ -652,7 +652,7 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
 }
 
-test "schema 3 registry with legacy rollout attribution rewrites to normalized schema 3" {
+test "schema 3 registry with legacy rollout attribution rewrites to normalized schema 4" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -697,7 +697,7 @@ test "schema 3 registry with legacy rollout attribution rewrites to normalized s
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_activated_at_ms\": 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"last_attributed_rollout\"") == null);
 }
@@ -732,7 +732,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
 }
 
@@ -819,7 +819,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);

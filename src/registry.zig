@@ -8,7 +8,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 3;
+pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
 pub const default_auto_switch_threshold_5h_percent: u8 = 10;
 pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
@@ -112,6 +112,11 @@ pub const AccountRecord = struct {
     last_local_rollout: ?RolloutSignature,
 };
 
+pub const AccountGroup = struct {
+    name: []u8,
+    account_keys: [][]u8,
+};
+
 pub fn resolvePlan(rec: *const AccountRecord) ?PlanType {
     if (rec.plan) |p| return p;
     if (rec.last_usage) |u| return u.plan_type;
@@ -143,16 +148,23 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_key: ?[]u8,
     active_account_activated_at_ms: ?i64,
+    active_group_name: ?[]u8 = null,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: std.ArrayList(AccountRecord),
+    groups: std.ArrayList(AccountGroup) = .empty,
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {
         for (self.accounts.items) |*rec| {
             freeAccountRecord(allocator, rec);
         }
+        for (self.groups.items) |*group| {
+            freeAccountGroup(allocator, group);
+        }
         if (self.active_account_key) |k| allocator.free(k);
+        if (self.active_group_name) |name| allocator.free(name);
         self.accounts.deinit(allocator);
+        self.groups.deinit(allocator);
     }
 };
 
@@ -175,6 +187,12 @@ fn freeAccountRecord(allocator: std.mem.Allocator, rec: *const AccountRecord) vo
     if (rec.last_usage) |*u| {
         freeRateLimitSnapshot(allocator, u);
     }
+}
+
+fn freeAccountGroup(allocator: std.mem.Allocator, group: *const AccountGroup) void {
+    allocator.free(group.name);
+    for (group.account_keys) |key| allocator.free(key);
+    allocator.free(group.account_keys);
 }
 
 pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const RateLimitSnapshot) void {
@@ -1661,7 +1679,7 @@ fn syncCurrentAuthBestEffort(
     return if (existing_idx != null) .updated else .imported;
 }
 
-pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
+pub fn findAccountIndexByAccountKey(reg: *const Registry, account_key: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
         if (std.mem.eql(u8, rec.account_key, account_key)) return i;
     }
@@ -1685,6 +1703,207 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
             break;
         }
     }
+}
+
+pub fn findGroupIndexByName(reg: *const Registry, name: []const u8) ?usize {
+    for (reg.groups.items, 0..) |group, idx| {
+        if (std.mem.eql(u8, group.name, name)) return idx;
+    }
+    return null;
+}
+
+pub fn groupContainsAccountKey(group: *const AccountGroup, account_key: []const u8) bool {
+    for (group.account_keys) |key| {
+        if (std.mem.eql(u8, key, account_key)) return true;
+    }
+    return false;
+}
+
+pub fn accountInActiveGroup(reg: *const Registry, account_key: []const u8) bool {
+    const group_name = reg.active_group_name orelse return true;
+    const group_idx = findGroupIndexByName(reg, group_name) orelse return false;
+    return groupContainsAccountKey(&reg.groups.items[group_idx], account_key);
+}
+
+fn stringListContains(items: []const []u8, value: []const u8) bool {
+    for (items) |item| {
+        if (std.mem.eql(u8, item, value)) return true;
+    }
+    return false;
+}
+
+fn appendOwnedGroupKeyUnique(
+    allocator: std.mem.Allocator,
+    keys: *std.ArrayList([]u8),
+    account_key: []const u8,
+) !bool {
+    if (stringListContains(keys.items, account_key)) return false;
+    try keys.append(allocator, try allocator.dupe(u8, account_key));
+    return true;
+}
+
+pub fn createGroup(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    name: []const u8,
+    account_keys: []const []const u8,
+) !void {
+    if (name.len == 0) return error.InvalidGroupName;
+    if (findGroupIndexByName(reg, name) != null) return error.GroupAlreadyExists;
+
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+
+    var keys = std.ArrayList([]u8).empty;
+    errdefer {
+        for (keys.items) |key| allocator.free(key);
+        keys.deinit(allocator);
+    }
+
+    for (account_keys) |account_key| {
+        if (findAccountIndexByAccountKey(reg, account_key) == null) continue;
+        _ = try appendOwnedGroupKeyUnique(allocator, &keys, account_key);
+    }
+
+    const owned_keys = try keys.toOwnedSlice(allocator);
+    errdefer {
+        for (owned_keys) |key| allocator.free(key);
+        allocator.free(owned_keys);
+    }
+
+    try reg.groups.append(allocator, .{
+        .name = owned_name,
+        .account_keys = owned_keys,
+    });
+}
+
+fn appendGroupAccountKey(
+    allocator: std.mem.Allocator,
+    group: *AccountGroup,
+    account_key: []const u8,
+) !bool {
+    if (groupContainsAccountKey(group, account_key)) return false;
+    const new_keys = try allocator.alloc([]u8, group.account_keys.len + 1);
+    errdefer allocator.free(new_keys);
+    @memcpy(new_keys[0..group.account_keys.len], group.account_keys);
+    new_keys[group.account_keys.len] = try allocator.dupe(u8, account_key);
+    allocator.free(group.account_keys);
+    group.account_keys = new_keys;
+    return true;
+}
+
+pub fn addAccountsToGroup(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    group_name: []const u8,
+    account_keys: []const []const u8,
+) !usize {
+    const group_idx = findGroupIndexByName(reg, group_name) orelse return error.GroupNotFound;
+    var added: usize = 0;
+    for (account_keys) |account_key| {
+        if (findAccountIndexByAccountKey(reg, account_key) == null) continue;
+        if (try appendGroupAccountKey(allocator, &reg.groups.items[group_idx], account_key)) {
+            added += 1;
+        }
+    }
+    return added;
+}
+
+fn keyMatchesAny(key: []const u8, account_keys: []const []const u8) bool {
+    for (account_keys) |account_key| {
+        if (std.mem.eql(u8, key, account_key)) return true;
+    }
+    return false;
+}
+
+pub fn removeAccountsFromGroup(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    group_name: []const u8,
+    account_keys: []const []const u8,
+) !usize {
+    const group_idx = findGroupIndexByName(reg, group_name) orelse return error.GroupNotFound;
+    const group = &reg.groups.items[group_idx];
+
+    var kept_count: usize = 0;
+    var removed_count: usize = 0;
+    for (group.account_keys) |key| {
+        if (keyMatchesAny(key, account_keys)) {
+            removed_count += 1;
+        } else {
+            kept_count += 1;
+        }
+    }
+    if (removed_count == 0) return 0;
+
+    const new_keys = try allocator.alloc([]u8, kept_count);
+    var write_idx: usize = 0;
+    for (group.account_keys) |key| {
+        if (keyMatchesAny(key, account_keys)) {
+            allocator.free(key);
+            continue;
+        }
+        new_keys[write_idx] = key;
+        write_idx += 1;
+    }
+    allocator.free(group.account_keys);
+    group.account_keys = new_keys;
+    return removed_count;
+}
+
+pub fn deleteGroup(allocator: std.mem.Allocator, reg: *Registry, name: []const u8) !void {
+    const group_idx = findGroupIndexByName(reg, name) orelse return error.GroupNotFound;
+    freeAccountGroup(allocator, &reg.groups.items[group_idx]);
+    var idx = group_idx;
+    while (idx + 1 < reg.groups.items.len) : (idx += 1) {
+        reg.groups.items[idx] = reg.groups.items[idx + 1];
+    }
+    reg.groups.items.len -= 1;
+    if (reg.active_group_name) |active| {
+        if (std.mem.eql(u8, active, name)) {
+            allocator.free(active);
+            reg.active_group_name = null;
+        }
+    }
+}
+
+pub fn setActiveGroupName(allocator: std.mem.Allocator, reg: *Registry, name: []const u8) !void {
+    if (findGroupIndexByName(reg, name) == null) return error.GroupNotFound;
+    if (reg.active_group_name) |active| {
+        if (std.mem.eql(u8, active, name)) return;
+    }
+    const owned_name = try allocator.dupe(u8, name);
+    if (reg.active_group_name) |active| allocator.free(active);
+    reg.active_group_name = owned_name;
+}
+
+pub fn clearActiveGroup(allocator: std.mem.Allocator, reg: *Registry) void {
+    if (reg.active_group_name) |active| allocator.free(active);
+    reg.active_group_name = null;
+}
+
+pub fn groupAccountIndicesAlloc(
+    allocator: std.mem.Allocator,
+    reg: *const Registry,
+    group_name: []const u8,
+) ![]usize {
+    const group_idx = findGroupIndexByName(reg, group_name) orelse return error.GroupNotFound;
+    var indices = std.ArrayList(usize).empty;
+    defer indices.deinit(allocator);
+    for (reg.groups.items[group_idx].account_keys) |account_key| {
+        if (findAccountIndexByAccountKey(reg, account_key)) |account_idx| {
+            try indices.append(allocator, account_idx);
+        }
+    }
+    return try indices.toOwnedSlice(allocator);
+}
+
+pub fn activeGroupAccountIndicesAlloc(
+    allocator: std.mem.Allocator,
+    reg: *const Registry,
+) !?[]usize {
+    const group_name = reg.active_group_name orelse return null;
+    return try groupAccountIndicesAlloc(allocator, reg, group_name);
 }
 
 pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8, snapshot: RateLimitSnapshot) void {
@@ -1799,6 +2018,7 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
     }
 
     try deleteRemovedAccountBackups(allocator, codex_home, reg, removed);
+    try removeDeletedAccountsFromGroups(allocator, reg, removed);
 
     if (reg.active_account_key) |key| {
         var active_removed = false;
@@ -1830,6 +2050,74 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
         write_idx += 1;
     }
     reg.accounts.items.len = write_idx;
+}
+
+fn removedAccountKeyMatches(reg: *const Registry, removed: []const bool, account_key: []const u8) bool {
+    for (reg.accounts.items, 0..) |rec, i| {
+        if (!removed[i]) continue;
+        if (std.mem.eql(u8, rec.account_key, account_key)) return true;
+    }
+    return false;
+}
+
+fn removeDeletedAccountsFromGroups(
+    allocator: std.mem.Allocator,
+    reg: *Registry,
+    removed: []const bool,
+) !void {
+    for (reg.groups.items) |*group| {
+        var kept_count: usize = 0;
+        var removed_count: usize = 0;
+        for (group.account_keys) |account_key| {
+            if (removedAccountKeyMatches(reg, removed, account_key)) {
+                removed_count += 1;
+            } else {
+                kept_count += 1;
+            }
+        }
+        if (removed_count == 0) continue;
+
+        const new_keys = try allocator.alloc([]u8, kept_count);
+        var write_idx: usize = 0;
+        for (group.account_keys) |account_key| {
+            if (removedAccountKeyMatches(reg, removed, account_key)) {
+                allocator.free(account_key);
+                continue;
+            }
+            new_keys[write_idx] = account_key;
+            write_idx += 1;
+        }
+        allocator.free(group.account_keys);
+        group.account_keys = new_keys;
+    }
+}
+
+fn pruneUnknownGroupAccountKeys(allocator: std.mem.Allocator, reg: *Registry) !void {
+    for (reg.groups.items) |*group| {
+        var kept_count: usize = 0;
+        var removed_count: usize = 0;
+        for (group.account_keys) |account_key| {
+            if (findAccountIndexByAccountKey(reg, account_key) == null) {
+                removed_count += 1;
+            } else {
+                kept_count += 1;
+            }
+        }
+        if (removed_count == 0) continue;
+
+        const new_keys = try allocator.alloc([]u8, kept_count);
+        var write_idx: usize = 0;
+        for (group.account_keys) |account_key| {
+            if (findAccountIndexByAccountKey(reg, account_key) == null) {
+                allocator.free(account_key);
+                continue;
+            }
+            new_keys[write_idx] = account_key;
+            write_idx += 1;
+        }
+        allocator.free(group.account_keys);
+        group.account_keys = new_keys;
+    }
 }
 
 fn deleteRemovedAccountBackups(
@@ -1880,6 +2168,29 @@ pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     var best_score: i64 = -2;
     var best_seen: i64 = -1;
     for (reg.accounts.items, 0..) |rec, i| {
+        const score = usageScoreAt(rec.last_usage, now) orelse -1;
+        const seen = rec.last_usage_at orelse -1;
+        if (score > best_score) {
+            best_score = score;
+            best_seen = seen;
+            best_idx = i;
+        } else if (score == best_score and seen > best_seen) {
+            best_seen = seen;
+            best_idx = i;
+        }
+    }
+    return best_idx;
+}
+
+pub fn selectBestAccountIndexByUsageFromIndices(reg: *Registry, indices: []const usize) ?usize {
+    if (indices.len == 0) return null;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var best_idx: ?usize = null;
+    var best_score: i64 = -2;
+    var best_seen: i64 = -1;
+    for (indices) |i| {
+        if (i >= reg.accounts.items.len) continue;
+        const rec = reg.accounts.items[i];
         const score = usageScoreAt(rec.last_usage, now) orelse -1;
         const seen = rec.last_usage_at orelse -1;
         if (score > best_score) {
@@ -2142,9 +2453,11 @@ fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
+        .active_group_name = null,
         .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
+        .groups = std.ArrayList(AccountGroup).empty,
     };
 }
 
@@ -2247,6 +2560,42 @@ fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !Ac
         rec.last_local_rollout = parseRolloutSignature(allocator, v);
     }
     return rec;
+}
+
+fn parseAccountGroup(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !AccountGroup {
+    const name_val = obj.get("name") orelse return error.MissingGroupName;
+    const name = switch (name_val) {
+        .string => |s| s,
+        else => return error.MissingGroupName,
+    };
+
+    var keys = std.ArrayList([]u8).empty;
+    errdefer {
+        for (keys.items) |key| allocator.free(key);
+        keys.deinit(allocator);
+    }
+    if (obj.get("account_keys")) |v| {
+        switch (v) {
+            .array => |arr| {
+                for (arr.items) |item| {
+                    const account_key = switch (item) {
+                        .string => |s| s,
+                        else => continue,
+                    };
+                    if (stringListContains(keys.items, account_key)) continue;
+                    try keys.append(allocator, try allocator.dupe(u8, account_key));
+                }
+            },
+            else => {},
+        }
+    }
+
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+    return .{
+        .name = owned_name,
+        .account_keys = try keys.toOwnedSlice(allocator),
+    };
 }
 
 fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
@@ -2463,6 +2812,12 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     } else if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
     }
+    if (root_obj.get("active_group")) |v| {
+        switch (v) {
+            .string => |s| reg.active_group_name = try allocator.dupe(u8, s),
+            else => {},
+        }
+    }
     if (root_obj.get("accounts")) |v| {
         switch (v) {
             .array => |arr| {
@@ -2478,12 +2833,39 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
             else => {},
         }
     }
+    if (root_obj.get("groups")) |v| {
+        switch (v) {
+            .array => |arr| {
+                for (arr.items) |item| {
+                    const obj = switch (item) {
+                        .object => |o| o,
+                        else => continue,
+                    };
+                    var group = try parseAccountGroup(allocator, obj);
+                    errdefer freeAccountGroup(allocator, &group);
+                    if (findGroupIndexByName(&reg, group.name) != null) {
+                        freeAccountGroup(allocator, &group);
+                        continue;
+                    }
+                    try reg.groups.append(allocator, group);
+                }
+            },
+            else => {},
+        }
+    }
 
     if (root_obj.get("auto_switch")) |v| {
         parseAutoSwitch(allocator, &reg.auto_switch, v);
     }
     if (root_obj.get("api")) |v| {
         parseApiConfig(&reg.api, v);
+    }
+    try pruneUnknownGroupAccountKeys(allocator, &reg);
+    if (reg.active_group_name) |name| {
+        if (findGroupIndexByName(&reg, name) == null) {
+            allocator.free(name);
+            reg.active_group_name = null;
+        }
     }
 
     return reg;
@@ -2565,7 +2947,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",
@@ -2650,9 +3032,11 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_key = reg.active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
+        .active_group = reg.active_group_name,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
         .accounts = reg.accounts.items,
+        .groups = reg.groups.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
@@ -2673,9 +3057,11 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
+    active_group: ?[]const u8,
     auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     accounts: []const AccountRecord,
+    groups: []const AccountGroup,
 };
 
 fn parsePlanType(s: []const u8) ?PlanType {

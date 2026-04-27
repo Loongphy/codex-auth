@@ -13,6 +13,11 @@ User-facing commands:
 - `codex-auth config auto [--5h <percent>] [--weekly <percent>]`
 - `codex-auth config api enable`
 - `codex-auth config api disable`
+- `codex-auth group <name> auto enable`
+- `codex-auth group <name> auto disable`
+- `codex-auth group <name> auto [--5h <percent>] [--weekly <percent>]`
+- `codex-auth group <name> config api enable`
+- `codex-auth group <name> config api disable`
 
 Stored registry fields:
 
@@ -25,21 +30,22 @@ The feature is off by default.
 
 ## Runtime Model
 
-When enabled, managed services run the long-lived watcher mode:
+When enabled, the managed service runs the long-lived manager mode:
 
-- `codex-auth daemon --watch`
+- `codex-auth daemon --manager`
 
-The watcher keeps a single process alive and runs roughly once per second.
-Each cycle:
+The manager keeps a single process alive, loads all managed groups, and runs roughly once per second.
+For every group whose own registry has `auto_switch.enabled = true`, each cycle:
 
 1. keeps an in-memory candidate index for all non-active accounts, keyed by the same candidate score used for switching
 2. reloads `registry.json` only when the on-disk file changed, then rebuilds that in-memory index
 3. syncs the currently active `auth.json` into the in-memory registry when the active auth snapshot changed
 4. tries to refresh usage from the newest local rollout event first
-5. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
-6. keeps the candidate index warm with a bounded candidate upkeep pass instead of batch-refreshing every candidate
-7. if the active account should switch, revalidates only the top few stale candidates before making the final switch decision
-8. writes `registry.json` only when state changed
+5. scans that group's rollout files for a fresh "hit your usage limit" message and marks the currently active account exhausted immediately when the message is newer than that account's activation time
+6. if no new local rollout event is available, or the newest event has no usable rate-limit windows, and `api.usage = true`, falls back to the ChatGPT usage API at most once per minute for the current active account
+7. keeps the candidate index warm with a bounded candidate upkeep pass instead of batch-refreshing every candidate
+8. if the active account should switch, revalidates only the top few stale candidates before making the final switch decision
+9. writes `registry.json` only when state changed
 
 The watcher also emits English-only service logs for debugging:
 
@@ -47,13 +53,14 @@ The watcher also emits English-only service logs for debugging:
 - local rollout captures show the parsed window labels first, then the local-time event timestamp, then the real rollout basename; when the newest local event has no usable usage windows the same `[local]` line also marks `fallback-to-api`
 - API refresh logs are reduced to `refresh usage | status=...`, where `status` is the HTTP status when available, `MissingAuth` when the active auth cannot call the ChatGPT usage API, or the direct transport error name such as `TimedOut` / `RequestFailed`
 
-`daemon --once` still exists for tests and one-shot validation, but the managed service path uses `daemon --watch`.
+`daemon --watch` and `daemon --once` still exist for tests, legacy service cleanup, and one-CODEX_HOME validation. The managed service path uses `daemon --manager`; `daemon --manager-once` runs one manager pass.
 
 ## Data Source Priority
 
 The background watcher is intentionally not API-only, even when `api.usage = true`.
 
 - Local rollout events are preferred because they arrive much faster than periodic usage API polling.
+- Local limit-message detection is even more direct: it watches each enabled group's own `<CODEX_HOME>/sessions/**/rollout-*.jsonl` tree, so project directories and terminal tabs do not matter as long as the session uses that group `CODEX_HOME`.
 - API refresh remains useful as a slower fallback and calibration path when rollout data is missing or stale.
 - When `api.usage = false`, the watcher uses local rollout data only and makes no usage API requests.
 - When a new rollout event arrives but its `rate_limits` payload is `null`, `{}`, or otherwise lacks usable 5h/weekly windows, the watcher keeps the previous `last_usage` snapshot and relies on the API fallback path instead of overwriting usage with empty data.
@@ -68,13 +75,14 @@ Local rollout attribution rules are unchanged:
 - a newer `token_count` event with unusable `rate_limits` is still treated as a fresh signal for API fallback, but it does not overwrite the stored usage snapshot
 - the event is applied only when `event_timestamp_ms >= active_account_activated_at_ms`
 - each account remembers its own last consumed local rollout signature `(path, event_timestamp_ms)` so the same local event is not reapplied
+- limit-message events also use the same activation-time guard; after a switch, the old limit message is older than the newly active account activation and will not immediately exhaust the replacement account
 
 ## Switching Rules
 
-The watcher switches without foreground CLI output when the active account drops below either threshold:
+The watcher switches without foreground CLI output when the active account reaches or drops below either threshold:
 
-- `5h remaining < auto_switch.threshold_5h_percent`
-- `weekly remaining < auto_switch.threshold_weekly_percent`
+- `5h remaining <= auto_switch.threshold_5h_percent`
+- `weekly remaining <= auto_switch.threshold_weekly_percent`
 
 There is one extra near-real-time safety rule for free plans:
 
@@ -101,12 +109,14 @@ Platform bootstrap:
 
 - Linux/WSL: `systemd --user` persistent service
 - macOS: `LaunchAgent` with `KeepAlive`
-- Windows: user scheduled task with an `ONLOGON` trigger, restart-on-failure settings, and an unlimited execution time for `codex-auth-auto.exe`, plus an immediate `schtasks /Run` during enablement
+- Windows: user scheduled task with an `ONLOGON` trigger, restart-on-failure settings, and an unlimited execution time for `codex-auth-auto.exe`, plus an immediate task run during enablement
 
-Service definition files stay in the platform-standard per-user locations. The managed watcher process uses the current `codex_home` root, so when `CODEX_HOME` is set during enablement the watcher keeps reading and writing that override after it starts in the background.
+Service definition files stay in the platform-standard per-user locations. The managed manager process does not use one fixed `CODEX_HOME`; it reads `~/codex-auth/groups.json`, then runs each enabled group against that group's configured `CODEX_HOME`. The `default` group still maps to the normal `~/.codex`.
 Foreground commands other than `help`, `version`, `status`, and `daemon` still reconcile the managed service definition after they complete.
 `config auto enable` also prints a short usage-mode note so the user can see whether switching is currently running with default API-backed usage data or local-only fallback semantics.
-When migrating from older Linux/WSL timer-based installs, enable/reconcile also removes the legacy `codex-auth-autoswitch.timer` unit file instead of leaving the old minute timer behind.
+The manager uses one service identity for all enabled groups: `codex-auth-manager.service` on Linux, `com.loongphy.codex-auth.manager` on macOS, and `CodexAuthManager` on Windows.
+When the manager service is installed or reconciled, the CLI resolves the current usable Node executable from `CODEX_AUTH_NODE_EXECUTABLE` or `PATH` and writes it into the service environment as `CODEX_AUTH_NODE_EXECUTABLE`. This avoids hard-coding a user-specific path while still letting macOS LaunchAgent/systemd run API refreshes under their limited default `PATH`.
+When migrating from older service layouts, enable/reconcile also removes legacy one-CODEX_HOME and per-group service identities such as `codex-auth-autoswitch.service`, `com.loongphy.codex-auth.auto`, `codex-auth-autoswitch-work.service`, and `com.loongphy.codex-auth.auto.work`.
 
 ## Limits
 
