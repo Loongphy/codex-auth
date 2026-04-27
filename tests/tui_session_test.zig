@@ -78,11 +78,13 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
     try writeTuiExitTo(&aw.writer);
 
     try std.testing.expectEqualStrings(
-        "\x1b[?1049h\x1b[?25l" ++
+        "\x1b[?1049h\x1b[?25l\x1b[?1007h" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[?25h\x1b[?1049l",
+            "\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007h") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007l") != null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1000h") == null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1006h") == null);
 }

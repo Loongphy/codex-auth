@@ -24,15 +24,15 @@ test "mouse wheel step scales with visible rows" {
     try std.testing.expectEqual(@as(usize, 12), mouseWheelRows(80));
 }
 
-test "list viewport keys ignore switch navigation but keep paging and jump shortcuts" {
+test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
     var viewport_start: usize = 9;
     const row_count: usize = 105;
     const max_rows: usize = 20;
     const wheel_rows: usize = mouseWheelRows(max_rows);
 
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
+    try std.testing.expectEqual(@as(usize, 3), viewport_start);
+    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
     try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
@@ -166,6 +166,14 @@ pub fn applyListViewportKey(
     key: tui_mod.TuiInputKey,
 ) bool {
     switch (key) {
+        .move_up => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .up, wheel_rows);
+            return true;
+        },
+        .move_down => {
+            scrollListViewportBy(row_count, max_rows, viewport_start, .down, wheel_rows);
+            return true;
+        },
         .page_up => {
             scrollListViewportBy(row_count, max_rows, viewport_start, .up, max_rows);
             return true;
