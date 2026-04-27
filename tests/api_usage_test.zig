@@ -128,3 +128,20 @@ test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing
     try std.testing.expect(result.status_code == null);
     try std.testing.expect(result.missing_auth);
 }
+
+test "parse non-success usage response extracts error code" {
+    const body =
+        \\{
+        \\  "error": {
+        \\    "message": "Your authentication token has been invalidated. Please try signing in again.",
+        \\    "type": "invalid_request_error",
+        \\    "param": null,
+        \\    "code": "token_invalidated"
+        \\  }
+        \\}
+    ;
+
+    const code = usage_api.parseNonSuccessErrorCode(std.testing.allocator, 401, body) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("token_invalidated", code.text());
+    try std.testing.expect(usage_api.parseNonSuccessErrorCode(std.testing.allocator, 200, body) == null);
+}

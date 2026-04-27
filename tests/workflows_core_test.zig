@@ -545,6 +545,67 @@ test "Scenario: Given more than five foreground usage jobs when refreshing usage
     try std.testing.expectEqual(@as(usize, 0), state.failed);
 }
 
+test "Scenario: Given foreground usage returns response error code then status override includes the code" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestUsageFetcher = struct {
+        fn fetch(_: std.mem.Allocator, _: []const u8) !usage_api.UsageFetchResult {
+            return .{
+                .snapshot = null,
+                .status_code = 401,
+                .error_code = usage_api.parseNonSuccessErrorCode(std.testing.allocator, 401,
+                    \\{
+                    \\  "error": {
+                    \\    "message": "Your authentication token has been invalidated. Please try signing in again.",
+                    \\    "type": "invalid_request_error",
+                    \\    "param": null,
+                    \\    "code": "token_invalidated"
+                    \\  }
+                    \\}
+                ),
+            };
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
+        gpa,
+        codex_home,
+        &reg,
+        TestUsageFetcher.fetch,
+        main_mod.initForegroundUsagePool,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), state.failed);
+    try std.testing.expectEqualStrings("401 token_invalidated", state.usage_overrides[0].?);
+}
+
+test "Scenario: Given long response error code then status override is truncated to quota display width" {
+    const gpa = std.testing.allocator;
+    const code = usage_api.parseNonSuccessErrorCode(std.testing.allocator, 429,
+        \\{
+        \\  "error": {
+        \\    "code": "this_error_code_is_much_longer_than_the_usage_column"
+        \\  }
+        \\}
+    ) orelse return error.TestExpectedEqual;
+    const text = try main_mod.formatStatusOverrideAlloc(gpa, 429, code);
+    defer gpa.free(text);
+
+    try std.testing.expectEqual(@as(usize, 25), text.len);
+    try std.testing.expectEqualStrings("429 this_error_code_is...", text);
+}
+
 test "Scenario: Given thread pool init failure when refreshing foreground usage then it falls back to serial refresh" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

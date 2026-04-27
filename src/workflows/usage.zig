@@ -4,6 +4,7 @@ const registry = @import("../registry/root.zig");
 const usage_api = @import("../api/usage.zig");
 
 const foreground_usage_refresh_concurrency: usize = 5;
+pub const max_usage_override_display_width: usize = 25;
 pub const UsageFetchDetailedFn = *const fn (
     allocator: std.mem.Allocator,
     auth_path: []const u8,
@@ -19,6 +20,7 @@ pub const ForegroundUsagePoolInitFn = *const fn (
 ) anyerror!void;
 const ForegroundUsageWorkerResult = struct {
     status_code: ?u16 = null,
+    error_code: ?usage_api.ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     snapshot: ?registry.RateLimitSnapshot = null,
@@ -34,6 +36,7 @@ const ForegroundUsageWorkerResult = struct {
 pub const ForegroundUsageOutcome = struct {
     attempted: bool = false,
     status_code: ?u16 = null,
+    error_code: ?usage_api.ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     has_usage_windows: bool = false,
@@ -250,6 +253,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         for (batch_results, 0..) |*batch_result, idx| {
             worker_results[idx] = .{
                 .status_code = batch_result.status_code,
+                .error_code = batch_result.error_code,
                 .missing_auth = batch_result.missing_auth,
                 .error_name = batch_result.error_name,
                 .snapshot = batch_result.snapshot,
@@ -287,6 +291,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         outcome.* = .{
             .attempted = true,
             .status_code = worker_result.status_code,
+            .error_code = worker_result.error_code,
             .missing_auth = worker_result.missing_auth,
             .error_name = worker_result.error_name,
             .has_usage_windows = worker_result.snapshot != null,
@@ -430,6 +435,7 @@ fn foregroundUsageRefreshWorker(
 
     var result: ForegroundUsageWorkerResult = .{
         .status_code = fetch_result.status_code,
+        .error_code = fetch_result.error_code,
         .missing_auth = fetch_result.missing_auth,
     };
 
@@ -437,6 +443,7 @@ fn foregroundUsageRefreshWorker(
         result.snapshot = registry.cloneRateLimitSnapshot(allocator, snapshot) catch |err| {
             results[account_idx] = .{
                 .status_code = fetch_result.status_code,
+                .error_code = fetch_result.error_code,
                 .missing_auth = fetch_result.missing_auth,
                 .error_name = @errorName(err),
             };
@@ -462,9 +469,34 @@ fn setForegroundUsageOverrideForOutcome(
     }
     if (outcome.status_code) |status_code| {
         if (status_code != 200) {
-            slot.* = try std.fmt.allocPrint(allocator, "{d}", .{status_code});
+            slot.* = try formatStatusOverrideAlloc(allocator, status_code, outcome.error_code);
             return true;
         }
     }
     return false;
+}
+
+pub fn formatStatusOverrideAlloc(
+    allocator: std.mem.Allocator,
+    status_code: u16,
+    error_code: ?usage_api.ResponseErrorCode,
+) ![]u8 {
+    var status_buf: [5]u8 = undefined;
+    var status_writer: std.Io.Writer = .fixed(&status_buf);
+    status_writer.print("{d}", .{status_code}) catch unreachable;
+    const status_text = status_writer.buffered();
+
+    const code = if (error_code) |value| value.text() else "";
+    if (code.len == 0 or status_text.len + 1 >= max_usage_override_display_width) {
+        return allocator.dupe(u8, status_text);
+    }
+
+    const max_code_len = max_usage_override_display_width - status_text.len - 1;
+    if (code.len <= max_code_len) {
+        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, code });
+    }
+    if (max_code_len <= 3) {
+        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, "..."[0..max_code_len] });
+    }
+    return std.fmt.allocPrint(allocator, "{s} {s}...", .{ status_text, code[0 .. max_code_len - 3] });
 }

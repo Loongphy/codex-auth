@@ -8,12 +8,25 @@ pub const default_usage_endpoint = "https://chatgpt.com/backend-api/wham/usage";
 pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
+    error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
+};
+
+pub const max_response_error_code_bytes: usize = 64;
+
+pub const ResponseErrorCode = struct {
+    bytes: [max_response_error_code_bytes]u8 = undefined,
+    len: usize = 0,
+
+    pub fn text(self: *const @This()) []const u8 {
+        return self.bytes[0..self.len];
+    }
 };
 
 pub const BatchUsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot = null,
     status_code: ?u16 = null,
+    error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
 
@@ -140,9 +153,10 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         const unique_idx = request_idx orelse continue;
         const http_result = http_results.items[unique_idx];
         results[result_idx].status_code = http_result.status_code;
+        results[result_idx].error_code = parseNonSuccessErrorCode(allocator, http_result.status_code, http_result.body);
         switch (http_result.outcome) {
             .ok => {
-                if (http_result.body.len == 0) continue;
+                if (http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) continue;
                 results[result_idx].snapshot = parseUsageResponse(allocator, http_result.body) catch |err| {
                     results[result_idx].error_name = @errorName(err);
                     continue;
@@ -174,14 +188,54 @@ pub fn fetchUsageForTokenDetailed(
 ) !UsageFetchResult {
     const http_result = try runUsageCommand(allocator, endpoint, access_token, account_id);
     defer allocator.free(http_result.body);
+    const error_code = parseNonSuccessErrorCode(allocator, http_result.status_code, http_result.body);
     if (http_result.body.len == 0) {
-        return .{ .snapshot = null, .status_code = http_result.status_code };
+        return .{ .snapshot = null, .status_code = http_result.status_code, .error_code = error_code };
+    }
+    if (isNonSuccessStatus(http_result.status_code)) {
+        return .{ .snapshot = null, .status_code = http_result.status_code, .error_code = error_code };
     }
 
     return .{
         .snapshot = try parseUsageResponse(allocator, http_result.body),
         .status_code = http_result.status_code,
+        .error_code = error_code,
     };
+}
+
+fn isNonSuccessStatus(status_code: ?u16) bool {
+    const status = status_code orelse return false;
+    return status < 200 or status > 299;
+}
+
+pub fn parseNonSuccessErrorCode(
+    allocator: std.mem.Allocator,
+    status_code: ?u16,
+    body: []const u8,
+) ?ResponseErrorCode {
+    if (!isNonSuccessStatus(status_code) or body.len == 0) return null;
+
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch return null;
+    defer parsed.deinit();
+
+    const root_obj = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return null,
+    };
+    const error_obj = switch (root_obj.get("error") orelse return null) {
+        .object => |obj| obj,
+        else => return null,
+    };
+    const code = switch (error_obj.get("code") orelse return null) {
+        .string => |value| value,
+        else => return null,
+    };
+    if (code.len == 0) return null;
+
+    var out: ResponseErrorCode = .{};
+    out.len = @min(code.len, out.bytes.len);
+    @memcpy(out.bytes[0..out.len], code[0..out.len]);
+    return out;
 }
 
 pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?registry.RateLimitSnapshot {
