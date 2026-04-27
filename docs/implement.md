@@ -16,6 +16,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`
+- Account group behavior is documented in [docs/account-groups.md](./account-groups.md).
 
 ## File Permissions
 

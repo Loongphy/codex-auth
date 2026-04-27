@@ -643,6 +643,7 @@ pub const ListOptions = struct {
 };
 pub const LoginOptions = struct {
     device_auth: bool = false,
+    group_name: ?[]u8 = null,
 };
 pub const ImportSource = enum { standard, cpa };
 pub const ImportOptions = struct {
@@ -680,6 +681,29 @@ pub const ConfigOptions = union(enum) {
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
+pub const GroupMutationOptions = struct {
+    name: []u8,
+    selectors: [][]const u8,
+};
+pub const GroupScopedAction = union(enum) {
+    list: ListOptions,
+    login: LoginOptions,
+    add: [][]const u8,
+    remove: [][]const u8,
+    import_auth: ImportOptions,
+    switch_account: SwitchOptions,
+    launch: [][]const u8,
+};
+pub const GroupScopedOptions = struct {
+    name: []u8,
+    action: GroupScopedAction,
+};
+pub const GroupOptions = union(enum) {
+    list: void,
+    create: GroupMutationOptions,
+    path: []u8,
+    scoped: GroupScopedOptions,
+};
 pub const HelpTopic = enum {
     top_level,
     list,
@@ -691,6 +715,7 @@ pub const HelpTopic = enum {
     clean,
     config,
     daemon,
+    group,
 };
 
 pub const Command = union(enum) {
@@ -703,6 +728,7 @@ pub const Command = union(enum) {
     config: ConfigOptions,
     status: void,
     daemon: DaemonOptions,
+    group: GroupOptions,
     version: void,
     help: HelpTopic,
 };
@@ -804,12 +830,28 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
                 opts.device_auth = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--group")) {
+                if (i + 1 >= args.len) {
+                    if (opts.group_name) |name| allocator.free(name);
+                    return usageErrorResult(allocator, .login, "missing value for `--group`.", .{});
+                }
+                if (opts.group_name != null) {
+                    if (opts.group_name) |name| allocator.free(name);
+                    return usageErrorResult(allocator, .login, "duplicate `--group` for `login`.", .{});
+                }
+                opts.group_name = try allocator.dupe(u8, std.mem.sliceTo(args[i + 1], 0));
+                i += 1;
+                continue;
+            }
             if (isHelpFlag(arg)) {
+                if (opts.group_name) |name| allocator.free(name);
                 return usageErrorResult(allocator, .login, "`--help` must be used by itself for `login`.", .{});
             }
             if (std.mem.startsWith(u8, arg, "-")) {
+                if (opts.group_name) |name| allocator.free(name);
                 return usageErrorResult(allocator, .login, "unknown flag `{s}` for `login`.", .{arg});
             }
+            if (opts.group_name) |name| allocator.free(name);
             return usageErrorResult(allocator, .login, "unexpected argument `{s}` for `login`.", .{arg});
         }
         return .{ .command = .{ .login = opts } };
@@ -1033,6 +1075,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !Pars
         return try parseSimpleCommandArgs(allocator, "status", .status, .{ .status = {} }, args[2..]);
     }
 
+    if (std.mem.eql(u8, cmd, "group")) {
+        if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
+            return .{ .command = .{ .help = .group } };
+        }
+        return try parseGroupArgs(allocator, args[2..]);
+    }
+
     if (std.mem.eql(u8, cmd, "config")) {
         if (args.len == 3 and isHelpFlag(std.mem.sliceTo(args[2], 0))) {
             return .{ .command = .{ .help = .config } };
@@ -1135,6 +1184,48 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *Command) void {
             freeOwnedStringList(allocator, opts.selectors);
             allocator.free(opts.selectors);
         },
+        .login => |*opts| {
+            if (opts.group_name) |name| allocator.free(name);
+        },
+        .group => |*opts| freeGroupOptions(allocator, opts),
+        else => {},
+    }
+}
+
+fn freeGroupMutationOptions(allocator: std.mem.Allocator, opts: *GroupMutationOptions) void {
+    allocator.free(opts.name);
+    freeOwnedStringList(allocator, opts.selectors);
+    allocator.free(opts.selectors);
+}
+
+fn freeGroupScopedAction(allocator: std.mem.Allocator, action: *GroupScopedAction) void {
+    switch (action.*) {
+        .login => |*opts| {
+            if (opts.group_name) |name| allocator.free(name);
+        },
+        .add, .remove, .launch => |items| {
+            freeOwnedStringList(allocator, items);
+            allocator.free(items);
+        },
+        .import_auth => |*opts| {
+            if (opts.auth_path) |path| allocator.free(path);
+            if (opts.alias) |alias| allocator.free(alias);
+        },
+        .switch_account => |*opts| {
+            if (opts.query) |query| allocator.free(query);
+        },
+        else => {},
+    }
+}
+
+fn freeGroupOptions(allocator: std.mem.Allocator, opts: *GroupOptions) void {
+    switch (opts.*) {
+        .create => |*mutation| freeGroupMutationOptions(allocator, mutation),
+        .path => |name| allocator.free(name),
+        .scoped => |*scoped| {
+            allocator.free(scoped.name);
+            freeGroupScopedAction(allocator, &scoped.action);
+        },
         else => {},
     }
 }
@@ -1188,6 +1279,263 @@ fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !Pars
     return .{ .command = .{ .help = topic } };
 }
 
+fn parseGroupNameAlloc(allocator: std.mem.Allocator, raw: [:0]const u8) ![]u8 {
+    const name = std.mem.sliceTo(raw, 0);
+    if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.InvalidCliUsage;
+    for (name) |ch| {
+        switch (ch) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
+            else => return error.InvalidCliUsage,
+        }
+    }
+    return try allocator.dupe(u8, name);
+}
+
+fn parseGroupSelectorsAlloc(allocator: std.mem.Allocator, rest: []const [:0]const u8) ![][]const u8 {
+    var selectors = std.ArrayList([]const u8).empty;
+    errdefer freeOwnedStringList(allocator, selectors.items);
+    defer selectors.deinit(allocator);
+    for (rest) |arg_raw| {
+        const arg = std.mem.sliceTo(arg_raw, 0);
+        if (isHelpFlag(arg) or std.mem.startsWith(u8, arg, "-")) return error.InvalidCliUsage;
+        try selectors.append(allocator, try allocator.dupe(u8, arg));
+    }
+    return try selectors.toOwnedSlice(allocator);
+}
+
+fn parseGroupMutationArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !GroupMutationOptions {
+    const name = try parseGroupNameAlloc(allocator, rest[1]);
+    errdefer allocator.free(name);
+    const selectors = try parseGroupSelectorsAlloc(allocator, rest[2..]);
+    errdefer {
+        freeOwnedStringList(allocator, selectors);
+        allocator.free(selectors);
+    }
+    return .{ .name = name, .selectors = selectors };
+}
+
+fn parseGroupLoginArgs(rest: []const [:0]const u8) !LoginOptions {
+    var opts: LoginOptions = .{};
+    for (rest) |arg_raw| {
+        const arg = std.mem.sliceTo(arg_raw, 0);
+        if (std.mem.eql(u8, arg, "--device-auth")) {
+            if (opts.device_auth) return error.InvalidCliUsage;
+            opts.device_auth = true;
+            continue;
+        }
+        return error.InvalidCliUsage;
+    }
+    return opts;
+}
+
+fn parseGroupImportArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !ImportOptions {
+    var auth_path: ?[]u8 = null;
+    var alias: ?[]u8 = null;
+    errdefer freeImportOptions(allocator, auth_path, alias);
+    var i: usize = 0;
+    while (i < rest.len) : (i += 1) {
+        const arg = std.mem.sliceTo(rest[i], 0);
+        if (std.mem.eql(u8, arg, "--alias")) {
+            if (i + 1 >= rest.len or alias != null) return error.InvalidCliUsage;
+            alias = try allocator.dupe(u8, std.mem.sliceTo(rest[i + 1], 0));
+            i += 1;
+            continue;
+        }
+        if (isHelpFlag(arg) or std.mem.startsWith(u8, arg, "-")) return error.InvalidCliUsage;
+        if (auth_path != null) return error.InvalidCliUsage;
+        auth_path = try allocator.dupe(u8, arg);
+    }
+    if (auth_path == null) return error.InvalidCliUsage;
+    return .{
+        .auth_path = auth_path,
+        .alias = alias,
+        .purge = false,
+        .source = .standard,
+    };
+}
+
+fn parseGroupLaunchArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) ![][]const u8 {
+    var args = std.ArrayList([]const u8).empty;
+    errdefer freeOwnedStringList(allocator, args.items);
+    defer args.deinit(allocator);
+
+    var i: usize = 0;
+    if (i < rest.len and std.mem.eql(u8, std.mem.sliceTo(rest[i], 0), "--")) i += 1;
+    while (i < rest.len) : (i += 1) {
+        try args.append(allocator, try allocator.dupe(u8, std.mem.sliceTo(rest[i], 0)));
+    }
+    return try args.toOwnedSlice(allocator);
+}
+
+fn parseGroupListOptions(rest: []const [:0]const u8) !ListOptions {
+    var opts: ListOptions = .{};
+    for (rest) |arg_raw| {
+        const arg = std.mem.sliceTo(arg_raw, 0);
+        if (std.mem.eql(u8, arg, "--live")) {
+            if (opts.live) return error.InvalidCliUsage;
+            opts.live = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--api")) {
+            switch (opts.api_mode) {
+                .default => opts.api_mode = .force_api,
+                else => return error.InvalidCliUsage,
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--skip-api")) {
+            switch (opts.api_mode) {
+                .default => opts.api_mode = .skip_api,
+                else => return error.InvalidCliUsage,
+            }
+            continue;
+        }
+        return error.InvalidCliUsage;
+    }
+    return opts;
+}
+
+fn parseGroupSwitchOptions(allocator: std.mem.Allocator, rest: []const [:0]const u8) !SwitchOptions {
+    var opts: SwitchOptions = .{ .query = null };
+    errdefer if (opts.query) |query| allocator.free(query);
+    for (rest) |arg_raw| {
+        const arg = std.mem.sliceTo(arg_raw, 0);
+        if (std.mem.eql(u8, arg, "--live")) {
+            if (opts.live) return error.InvalidCliUsage;
+            opts.live = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--auto")) {
+            if (opts.auto) return error.InvalidCliUsage;
+            opts.auto = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--api")) {
+            switch (opts.api_mode) {
+                .default => opts.api_mode = .force_api,
+                else => return error.InvalidCliUsage,
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--skip-api")) {
+            switch (opts.api_mode) {
+                .default => opts.api_mode = .skip_api,
+                else => return error.InvalidCliUsage,
+            }
+            continue;
+        }
+        if (isHelpFlag(arg) or std.mem.startsWith(u8, arg, "-")) return error.InvalidCliUsage;
+        if (opts.query != null) return error.InvalidCliUsage;
+        opts.query = try allocator.dupe(u8, arg);
+    }
+    if (opts.auto and !opts.live) return error.InvalidCliUsage;
+    if (opts.query != null and (opts.api_mode != .default or opts.live or opts.auto)) return error.InvalidCliUsage;
+    return opts;
+}
+
+fn parseNamedGroupAction(allocator: std.mem.Allocator, name: []u8, rest: []const [:0]const u8) !ParseResult {
+    errdefer allocator.free(name);
+    if (rest.len == 0) {
+        allocator.free(name);
+        return usageErrorResult(allocator, .group, "`group <name>` requires an action.", .{});
+    }
+    const action = std.mem.sliceTo(rest[0], 0);
+    if (std.mem.eql(u8, action, "list")) {
+        const opts = parseGroupListOptions(rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> list` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .list = opts } } } } };
+    }
+    if (std.mem.eql(u8, action, "login")) {
+        const opts = parseGroupLoginArgs(rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> login` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .login = opts } } } } };
+    }
+    if (std.mem.eql(u8, action, "add")) {
+        if (rest.len < 2) {
+            allocator.free(name);
+            return usageErrorResult(allocator, .group, "`group <name> add` requires at least one account selector.", .{});
+        }
+        const selectors = parseGroupSelectorsAlloc(allocator, rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> add` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .add = selectors } } } } };
+    }
+    if (std.mem.eql(u8, action, "remove")) {
+        if (rest.len < 2) {
+            allocator.free(name);
+            return usageErrorResult(allocator, .group, "`group <name> remove` requires at least one account selector.", .{});
+        }
+        const selectors = parseGroupSelectorsAlloc(allocator, rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> remove` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .remove = selectors } } } } };
+    }
+    if (std.mem.eql(u8, action, "import")) {
+        const opts = parseGroupImportArgs(allocator, rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> import` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .import_auth = opts } } } } };
+    }
+    if (std.mem.eql(u8, action, "switch")) {
+        const opts = parseGroupSwitchOptions(allocator, rest[1..]) catch
+            {
+                allocator.free(name);
+                return usageErrorResult(allocator, .group, "invalid `group <name> switch` arguments.", .{});
+            };
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .switch_account = opts } } } } };
+    }
+    if (std.mem.eql(u8, action, "launch")) {
+        const launch_args = try parseGroupLaunchArgs(allocator, rest[1..]);
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .launch = launch_args } } } } };
+    }
+    if (std.mem.eql(u8, action, "path")) {
+        if (rest.len != 1) {
+            allocator.free(name);
+            return usageErrorResult(allocator, .group, "`group <name> path` does not take arguments.", .{});
+        }
+        return .{ .command = .{ .group = .{ .path = name } } };
+    }
+    allocator.free(name);
+    return usageErrorResult(allocator, .group, "unknown group action `{s}`.", .{action});
+}
+
+fn parseGroupArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !ParseResult {
+    if (rest.len == 0) return usageErrorResult(allocator, .group, "`group` requires an action.", .{});
+    const action = std.mem.sliceTo(rest[0], 0);
+    if (isHelpFlag(action)) return .{ .command = .{ .help = .group } };
+    if (std.mem.eql(u8, action, "list")) {
+        if (rest.len == 1) return .{ .command = .{ .group = .{ .list = {} } } };
+        if (rest.len < 2) return usageErrorResult(allocator, .group, "`group list` takes an optional group name.", .{});
+        if (rest.len > 2) return usageErrorResult(allocator, .group, "`group list <name>` does not take extra arguments.", .{});
+        const name = try parseGroupNameAlloc(allocator, rest[1]);
+        return .{ .command = .{ .group = .{ .scoped = .{ .name = name, .action = .{ .list = .{} } } } } };
+    }
+    if (std.mem.eql(u8, action, "create")) {
+        if (rest.len < 2) return usageErrorResult(allocator, .group, "`group create` requires a name.", .{});
+        const opts = parseGroupMutationArgs(allocator, rest) catch
+            return usageErrorResult(allocator, .group, "invalid `group create` arguments.", .{});
+        return .{ .command = .{ .group = .{ .create = opts } } };
+    }
+    if (std.mem.eql(u8, action, "path")) {
+        if (rest.len != 2) return usageErrorResult(allocator, .group, "`group path` requires exactly one name.", .{});
+        return .{ .command = .{ .group = .{ .path = try parseGroupNameAlloc(allocator, rest[1]) } } };
+    }
+    const name = try parseGroupNameAlloc(allocator, rest[0]);
+    return try parseNamedGroupAction(allocator, name, rest[1..]);
+}
+
 fn helpTopicForName(name: []const u8) ?HelpTopic {
     if (std.mem.eql(u8, name, "list")) return .list;
     if (std.mem.eql(u8, name, "status")) return .status;
@@ -1198,6 +1546,7 @@ fn helpTopicForName(name: []const u8) ?HelpTopic {
     if (std.mem.eql(u8, name, "clean")) return .clean;
     if (std.mem.eql(u8, name, "config")) return .config;
     if (std.mem.eql(u8, name, "daemon")) return .daemon;
+    if (std.mem.eql(u8, name, "group")) return .group;
     return null;
 }
 
@@ -1272,6 +1621,7 @@ pub fn writeHelp(
         .{ .name = "switch [--live] [--auto] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
         .{ .name = "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
+        .{ .name = "group", .description = "Manage separate account groups" },
         .{ .name = "config", .description = "Manage configuration" },
     };
     const import_details = [_]HelpEntry{
@@ -1307,6 +1657,7 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[6].name, commands[6].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[7].name, commands[7].description);
     try writeHelpEntry(out, use_color, parent_indent, command_col, commands[8].name, commands[8].description);
+    try writeHelpEntry(out, use_color, parent_indent, command_col, commands[9].name, commands[9].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[0].name, config_details[0].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[1].name, config_details[1].description);
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[2].name, config_details[2].description);
@@ -1406,6 +1757,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .clean => "clean",
         .config => "config",
         .daemon => "daemon",
+        .group => "group",
     };
 }
 
@@ -1421,12 +1773,13 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch and usage API configuration.",
         .daemon => "Run the background auto-switch daemon.",
+        .group => "Create groups and run account commands against a group's CODEX_HOME.",
     };
 }
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .import_auth, .switch_account, .remove_account, .config, .daemon, .group => true,
         else => false,
     };
 }
@@ -1444,6 +1797,7 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .login => {
             try out.writeAll("  codex-auth login\n");
             try out.writeAll("  codex-auth login --device-auth\n");
+            try out.writeAll("  codex-auth login --group <name> [--device-auth]\n");
         },
         .import_auth => {
             try out.writeAll("  codex-auth import <path> [--alias <alias>]\n");
@@ -1472,6 +1826,20 @@ fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth daemon --watch\n");
             try out.writeAll("  codex-auth daemon --once\n");
         },
+        .group => {
+            try out.writeAll("  codex-auth group list\n");
+            try out.writeAll("  codex-auth group create <name> [<account>...]\n");
+            try out.writeAll("  codex-auth group <name> list [--live] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth group <name> login [--device-auth]\n");
+            try out.writeAll("  codex-auth group <name> add <account> [<account>...]\n");
+            try out.writeAll("  codex-auth group <name> remove <account> [<account>...]\n");
+            try out.writeAll("  codex-auth group <name> import <path> [--alias <alias>]\n");
+            try out.writeAll("  codex-auth group <name> switch [--live] [--auto] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth group <name> switch <query>\n");
+            try out.writeAll("  codex-auth group <name> launch [-- <codext-arg>...]\n");
+            try out.writeAll("  codex-auth group <name> path\n");
+            try out.writeAll("  codex-auth group path <name>\n");
+        },
     }
 }
 
@@ -1493,6 +1861,7 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .login => {
             try out.writeAll("  codex-auth login\n");
             try out.writeAll("  codex-auth login --device-auth\n");
+            try out.writeAll("  codex-auth login --group work --device-auth\n");
         },
         .import_auth => {
             try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
@@ -1527,6 +1896,14 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth daemon --watch\n");
             try out.writeAll("  codex-auth daemon --once\n");
         },
+        .group => {
+            try out.writeAll("  codex-auth group create work\n");
+            try out.writeAll("  codex-auth group work login --device-auth\n");
+            try out.writeAll("  codex-auth group work add 01 jane@example.com\n");
+            try out.writeAll("  codex-auth group work list --skip-api\n");
+            try out.writeAll("  codex-auth group work switch 02\n");
+            try out.writeAll("  codex-auth group work launch -- --model gpt-5.4\n");
+        },
     }
 }
 
@@ -1556,6 +1933,7 @@ fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .clean => "codex-auth clean --help",
         .config => "codex-auth config --help",
         .daemon => "codex-auth daemon --help",
+        .group => "codex-auth group --help",
     };
 }
 
@@ -1873,6 +2251,32 @@ fn ensureCodexLoginSucceeded(term: std.process.Child.Term) !void {
 pub fn runCodexLogin(opts: LoginOptions) !void {
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = codexLoginArgs(opts),
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
+        return err;
+    };
+    const term = child.wait(app_runtime.io()) catch |err| {
+        writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
+        return err;
+    };
+    try ensureCodexLoginSucceeded(term);
+}
+
+pub fn runCodexLoginWithCodexHome(
+    allocator: std.mem.Allocator,
+    opts: LoginOptions,
+    codex_home: []const u8,
+) !void {
+    var env_map = try app_runtime.currentEnviron().createMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("CODEX_HOME", codex_home);
+
+    var child = std.process.spawn(app_runtime.io(), .{
+        .argv = codexLoginArgs(opts),
+        .environ_map = &env_map,
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
