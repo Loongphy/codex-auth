@@ -2,6 +2,7 @@ const std = @import("std");
 const app_runtime = @import("runtime.zig");
 const builtin = @import("builtin");
 const display_rows = @import("display_rows.zig");
+const group_manager = @import("group_manager.zig");
 const registry = @import("registry.zig");
 const io_util = @import("io_util.zig");
 const terminal_color = @import("terminal_color.zig");
@@ -14,8 +15,34 @@ const ansi = struct {
     const reset = "\x1b[0m";
     const dim = "\x1b[2m";
     const red = "\x1b[31m";
+    const bright_red = "\x1b[91m";
     const bold_red = "\x1b[1;31m";
     const green = "\x1b[32m";
+    const bright_green = "\x1b[92m";
+    const blue = "\x1b[34m";
+    const bright_blue = "\x1b[94m";
+    const cyan = "\x1b[36m";
+    const bright_cyan = "\x1b[96m";
+    const magenta = "\x1b[35m";
+    const bright_magenta = "\x1b[95m";
+    const yellow = "\x1b[33m";
+    const bright_yellow = "\x1b[93m";
+    const dark_gray = "\x1b[90m";
+    const light_gray = "\x1b[37m";
+    const active_group_gray = "\x1b[1;90m";
+    const active_group_blue = "\x1b[1;38;5;25m";
+    const active_group_cyan = "\x1b[1;38;5;31m";
+    const active_group_green = "\x1b[1;38;5;28m";
+    const active_group_magenta = "\x1b[1;38;5;91m";
+    const active_group_yellow = "\x1b[1;38;5;136m";
+    const active_group_red = "\x1b[1;38;5;124m";
+    const inactive_group_gray = "\x1b[38;5;250m";
+    const inactive_group_blue = "\x1b[38;5;153m";
+    const inactive_group_cyan = "\x1b[38;5;159m";
+    const inactive_group_green = "\x1b[38;5;157m";
+    const inactive_group_magenta = "\x1b[38;5;219m";
+    const inactive_group_yellow = "\x1b[38;5;229m";
+    const inactive_group_red = "\x1b[38;5;217m";
 };
 
 fn colorEnabled() bool {
@@ -35,19 +62,59 @@ pub fn printAccountsWithUsageOverrides(
     reg: *registry.Registry,
     usage_overrides: ?[]const ?[]const u8,
 ) !void {
-    try printAccountsTable(reg, usage_overrides);
+    try printAccountsTable(reg, usage_overrides, null, null);
 }
 
-fn printAccountsTable(reg: *registry.Registry, usage_overrides: ?[]const ?[]const u8) !void {
+pub fn printAccountsWithUsageOverridesForIndices(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    account_indices: []const usize,
+) !void {
+    try printAccountsTable(reg, usage_overrides, account_indices, null);
+}
+
+pub fn printAccountsWithUsageOverridesForGroup(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    account_indices: ?[]const usize,
+    display_color: []const u8,
+) !void {
+    try printAccountsTable(reg, usage_overrides, account_indices, display_color);
+}
+
+pub const GroupedAccountsView = struct {
+    group_name: []const u8,
+    display_color: ?[]const u8 = null,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8 = null,
+    account_indices: ?[]const usize = null,
+};
+
+pub fn printGroupedAccountsWithUsageOverrides(
+    views: []const GroupedAccountsView,
+) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeAccountsTableWithUsageOverrides(out, reg, colorEnabled(), usage_overrides);
+    try writeGroupedAccountsTableWithUsageOverrides(out, views, colorEnabled());
+    try out.flush();
+}
+
+fn printAccountsTable(
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    account_indices: ?[]const usize,
+    group_display_color: ?[]const u8,
+) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeAccountsTableWithUsageOverrides(out, reg, colorEnabled(), usage_overrides, account_indices, group_display_color);
     try out.flush();
 }
 
 fn writeAccountsTable(out: *std.Io.Writer, reg: *registry.Registry, use_color: bool) !void {
-    try writeAccountsTableWithUsageOverrides(out, reg, use_color, null);
+    try writeAccountsTableWithUsageOverrides(out, reg, use_color, null, null, null);
 }
 
 fn usageOverrideForAccount(
@@ -78,13 +145,74 @@ fn usageCellFullTextAlloc(
     return formatRateLimitFullAlloc(window);
 }
 
+fn groupActiveAnsi(display_color: ?[]const u8) []const u8 {
+    const color = display_color orelse group_manager.default_group_display_color;
+    if (std.mem.eql(u8, color, group_manager.default_group_display_color)) return ansi.active_group_gray;
+    if (std.mem.eql(u8, color, "blue")) return ansi.active_group_blue;
+    if (std.mem.eql(u8, color, "cyan")) return ansi.active_group_cyan;
+    if (std.mem.eql(u8, color, "green")) return ansi.active_group_green;
+    if (std.mem.eql(u8, color, "magenta")) return ansi.active_group_magenta;
+    if (std.mem.eql(u8, color, "yellow")) return ansi.active_group_yellow;
+    if (std.mem.eql(u8, color, "red")) return ansi.active_group_red;
+    return ansi.active_group_gray;
+}
+
+fn groupInactiveAnsi(display_color: ?[]const u8) []const u8 {
+    const color = display_color orelse group_manager.default_group_display_color;
+    if (std.mem.eql(u8, color, group_manager.default_group_display_color)) return ansi.inactive_group_gray;
+    if (std.mem.eql(u8, color, "blue")) return ansi.inactive_group_blue;
+    if (std.mem.eql(u8, color, "cyan")) return ansi.inactive_group_cyan;
+    if (std.mem.eql(u8, color, "green")) return ansi.inactive_group_green;
+    if (std.mem.eql(u8, color, "magenta")) return ansi.inactive_group_magenta;
+    if (std.mem.eql(u8, color, "yellow")) return ansi.inactive_group_yellow;
+    if (std.mem.eql(u8, color, "red")) return ansi.inactive_group_red;
+    return ansi.inactive_group_gray;
+}
+
+fn writeGroupRowColor(
+    out: *std.Io.Writer,
+    display_color: ?[]const u8,
+    is_active: bool,
+    usage_override: ?[]const u8,
+) !void {
+    if (usage_override != null) {
+        try out.writeAll(if (is_active) ansi.bold_red else ansi.red);
+        return;
+    }
+    try out.writeAll(if (is_active) groupActiveAnsi(display_color) else groupInactiveAnsi(display_color));
+}
+
+fn writeGroupSeparator(
+    out: *std.Io.Writer,
+    group_name: []const u8,
+    display_color: ?[]const u8,
+    total_width: usize,
+    use_color: bool,
+) !void {
+    if (use_color) try out.writeAll(groupActiveAnsi(display_color));
+    try out.writeAll("-- ");
+    const max_name_len = if (total_width > 4) total_width - 4 else 0;
+    const name_cell = try truncateAlloc(group_name, max_name_len);
+    defer std.heap.page_allocator.free(name_cell);
+    try out.writeAll(name_cell);
+    const used = @min(total_width, 3 + name_cell.len);
+    if (total_width > used + 1) {
+        try out.writeAll(" ");
+        try writeRepeat(out, '-', total_width - used - 1);
+    }
+    try out.writeAll("\n");
+    if (use_color) try out.writeAll(ansi.reset);
+}
+
 fn writeAccountsTableWithUsageOverrides(
     out: *std.Io.Writer,
     reg: *registry.Registry,
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
+    account_indices: ?[]const usize,
+    group_display_color: ?[]const u8,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H LEFT", "WEEKLY LEFT", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -93,7 +221,7 @@ fn writeAccountsTableWithUsageOverrides(
         headers[4].len,
     };
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-    var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
+    var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, account_indices);
     defer display.deinit(std.heap.page_allocator);
     const idx_width = @max(@as(usize, 2), indexWidth(display.selectable_row_indices.len));
     const prefix_len: usize = 2 + idx_width + 1;
@@ -122,16 +250,16 @@ fn writeAccountsTableWithUsageOverrides(
         }
     }
 
-    adjustListWidths(&widths, prefix_len, sep_len);
+    adjustListWidths(widths[0..], prefix_len, sep_len);
 
     const h0 = try truncateAlloc(headers[0], widths[0]);
     defer std.heap.page_allocator.free(h0);
     const h1 = try truncateAlloc(headers[1], widths[1]);
     defer std.heap.page_allocator.free(h1);
-    const header_5h = if (widths[2] >= "5H USAGE".len) "5H USAGE" else "5H";
+    const header_5h = if (widths[2] >= "5H LEFT".len) "5H LEFT" else "5H";
     const h2 = try truncateAlloc(header_5h, widths[2]);
     defer std.heap.page_allocator.free(h2);
-    const header_week = if (widths[3] >= "WEEKLY USAGE".len) "WEEKLY USAGE" else if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
+    const header_week = if (widths[3] >= "WEEKLY LEFT".len) "WEEKLY LEFT" else if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
     const h3 = try truncateAlloc(header_week, widths[3]);
     defer std.heap.page_allocator.free(h3);
     const header_last = if (widths[4] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
@@ -151,7 +279,7 @@ fn writeAccountsTableWithUsageOverrides(
     try writePadded(out, h4, widths[4]);
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.dim);
-    try writeRepeat(out, '-', listTotalWidth(&widths, prefix_len, sep_len));
+    try writeRepeat(out, '-', listTotalWidth(widths[0..], prefix_len, sep_len));
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
 
@@ -189,9 +317,15 @@ fn writeAccountsTableWithUsageOverrides(
                         try out.writeAll(ansi.red);
                     }
                 } else if (row.is_active) {
-                    try out.writeAll(ansi.green);
+                    try out.writeAll(if (group_display_color) |display_color|
+                        groupActiveAnsi(display_color)
+                    else
+                        ansi.green);
                 } else {
-                    try out.writeAll(ansi.dim);
+                    try out.writeAll(if (group_display_color) |display_color|
+                        groupInactiveAnsi(display_color)
+                    else
+                        ansi.dim);
                 }
             }
             try out.writeAll(if (row.is_active) "* " else "  ");
@@ -218,6 +352,162 @@ fn writeAccountsTableWithUsageOverrides(
             try writePadded(out, account_cell, widths[0]);
             try out.writeAll("\n");
             if (use_color) try out.writeAll(ansi.reset);
+        }
+    }
+}
+
+fn writeGroupedAccountsTableWithUsageOverrides(
+    out: *std.Io.Writer,
+    views: []const GroupedAccountsView,
+    use_color: bool,
+) !void {
+    const headers = [_][]const u8{ "GROUP", "ACCOUNT", "PLAN", "5H LEFT", "WEEKLY LEFT", "LAST ACTIVITY" };
+    var widths = [_]usize{
+        headers[0].len,
+        headers[1].len,
+        headers[2].len,
+        headers[3].len,
+        headers[4].len,
+        headers[5].len,
+    };
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var selectable_count: usize = 0;
+    const sep_len: usize = 2;
+
+    for (views) |view| {
+        var display = try display_rows.buildDisplayRows(std.heap.page_allocator, view.reg, view.account_indices);
+        defer display.deinit(std.heap.page_allocator);
+        selectable_count += display.selectable_row_indices.len;
+        widths[0] = @max(widths[0], view.group_name.len);
+
+        for (display.rows) |row| {
+            const indent: usize = @as(usize, row.depth) * 2;
+            widths[1] = @max(widths[1], row.account_cell.len + indent);
+            if (row.account_index) |account_idx| {
+                const rec = view.reg.accounts.items[account_idx];
+                const plan = planDisplay(&rec, "-");
+                const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+                const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+                const usage_override = usageOverrideForAccount(view.usage_overrides, account_idx);
+                const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
+                defer std.heap.page_allocator.free(rate_5h_str);
+                const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
+                defer std.heap.page_allocator.free(rate_week_str);
+                const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
+                defer std.heap.page_allocator.free(last_str);
+
+                widths[2] = @max(widths[2], plan.len);
+                widths[3] = @max(widths[3], rate_5h_str.len);
+                widths[4] = @max(widths[4], rate_week_str.len);
+                widths[5] = @max(widths[5], last_str.len);
+            }
+        }
+    }
+
+    const idx_width = @max(@as(usize, 2), indexWidth(selectable_count));
+    const prefix_len: usize = 2 + idx_width + 1;
+    adjustListWidths(widths[0..], prefix_len, sep_len);
+
+    const h0 = try truncateAlloc(headers[0], widths[0]);
+    defer std.heap.page_allocator.free(h0);
+    const h1 = try truncateAlloc(headers[1], widths[1]);
+    defer std.heap.page_allocator.free(h1);
+    const h2 = try truncateAlloc(headers[2], widths[2]);
+    defer std.heap.page_allocator.free(h2);
+    const header_5h = if (widths[3] >= "5H LEFT".len) "5H LEFT" else "5H";
+    const h3 = try truncateAlloc(header_5h, widths[3]);
+    defer std.heap.page_allocator.free(h3);
+    const header_week = if (widths[4] >= "WEEKLY LEFT".len) "WEEKLY LEFT" else if (widths[4] >= "WEEKLY".len) "WEEKLY" else if (widths[4] >= "WEEK".len) "WEEK" else "W";
+    const h4 = try truncateAlloc(header_week, widths[4]);
+    defer std.heap.page_allocator.free(h4);
+    const header_last = if (widths[5] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
+    const h5 = try truncateAlloc(header_last, widths[5]);
+    defer std.heap.page_allocator.free(h5);
+
+    if (use_color) try out.writeAll(ansi.dim);
+    try writeRepeat(out, ' ', prefix_len);
+    try writePadded(out, h0, widths[0]);
+    try out.writeAll("  ");
+    try writePadded(out, h1, widths[1]);
+    try out.writeAll("  ");
+    try writePadded(out, h2, widths[2]);
+    try out.writeAll("  ");
+    try writePadded(out, h3, widths[3]);
+    try out.writeAll("  ");
+    try writePadded(out, h4, widths[4]);
+    try out.writeAll("  ");
+    try writePadded(out, h5, widths[5]);
+    try out.writeAll("\n");
+    if (use_color) try out.writeAll(ansi.dim);
+    const total_width = listTotalWidth(widths[0..], prefix_len, sep_len);
+    try writeRepeat(out, '-', total_width);
+    try out.writeAll("\n");
+    if (use_color) try out.writeAll(ansi.reset);
+
+    var selectable_counter: usize = 0;
+    for (views) |view| {
+        var display = try display_rows.buildDisplayRows(std.heap.page_allocator, view.reg, view.account_indices);
+        defer display.deinit(std.heap.page_allocator);
+
+        try writeGroupSeparator(out, view.group_name, view.display_color, total_width, use_color);
+
+        for (display.rows) |row| {
+            const group_cell = try truncateAlloc(view.group_name, widths[0]);
+            defer std.heap.page_allocator.free(group_cell);
+            if (row.account_index) |account_idx| {
+                const rec = view.reg.accounts.items[account_idx];
+                const plan = planDisplay(&rec, "-");
+                const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+                const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+                const usage_override = usageOverrideForAccount(view.usage_overrides, account_idx);
+                const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[3], usage_override);
+                defer std.heap.page_allocator.free(rate_5h_str);
+                const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[4], usage_override);
+                defer std.heap.page_allocator.free(rate_week_str);
+                const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
+                defer std.heap.page_allocator.free(last);
+                const indent: usize = @as(usize, row.depth) * 2;
+                const indent_to_print: usize = @min(indent, widths[1]);
+                const account_cell = try truncateAlloc(row.account_cell, widths[1] - indent_to_print);
+                defer std.heap.page_allocator.free(account_cell);
+                const plan_cell = try truncateAlloc(plan, widths[2]);
+                defer std.heap.page_allocator.free(plan_cell);
+                const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[3]);
+                defer std.heap.page_allocator.free(rate_5h_cell);
+                const rate_week_cell = try truncateAlloc(rate_week_str, widths[4]);
+                defer std.heap.page_allocator.free(rate_week_cell);
+                const last_cell = try truncateAlloc(last, widths[5]);
+                defer std.heap.page_allocator.free(last_cell);
+                if (use_color) try writeGroupRowColor(out, view.display_color, row.is_active, usage_override);
+                try out.writeAll(if (row.is_active) "* " else "  ");
+                try writeIndexPadded(out, selectable_counter + 1, idx_width);
+                try out.writeAll(" ");
+                try writePadded(out, group_cell, widths[0]);
+                try out.writeAll("  ");
+                try writeRepeat(out, ' ', indent_to_print);
+                try writePadded(out, account_cell, widths[1] - indent_to_print);
+                try out.writeAll("  ");
+                try writePadded(out, plan_cell, widths[2]);
+                try out.writeAll("  ");
+                try writePadded(out, rate_5h_cell, widths[3]);
+                try out.writeAll("  ");
+                try writePadded(out, rate_week_cell, widths[4]);
+                try out.writeAll("  ");
+                try writePadded(out, last_cell, widths[5]);
+                try out.writeAll("\n");
+                if (use_color) try out.writeAll(ansi.reset);
+                selectable_counter += 1;
+            } else {
+                const account_cell = try truncateAlloc(row.account_cell, widths[1]);
+                defer std.heap.page_allocator.free(account_cell);
+                if (use_color) try out.writeAll(groupInactiveAnsi(view.display_color));
+                try writeRepeat(out, ' ', prefix_len);
+                try writePadded(out, group_cell, widths[0]);
+                try out.writeAll("  ");
+                try writePadded(out, account_cell, widths[1]);
+                try out.writeAll("\n");
+                if (use_color) try out.writeAll(ansi.reset);
+            }
         }
     }
 }
@@ -313,7 +603,7 @@ fn resetPartsAlloc(reset_at: i64, now: i64) !ResetParts {
     };
 }
 
-fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
+pub fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
     if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
@@ -479,64 +769,46 @@ fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     }
 }
 
-fn listTotalWidth(widths: *const [5]usize, prefix_len: usize, sep_len: usize) usize {
+fn listTotalWidth(widths: []const usize, prefix_len: usize, sep_len: usize) usize {
     var sum: usize = prefix_len;
     for (widths) |w| sum += w;
     sum += sep_len * (widths.len - 1);
     return sum;
 }
 
-fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
+fn listMinColumnWidth(column_count: usize, idx: usize) usize {
+    if (column_count == 6) {
+        return switch (idx) {
+            0 => 5,
+            1 => 10,
+            2 => 4,
+            3, 4 => 1,
+            else => 4,
+        };
+    }
+    return switch (idx) {
+        0 => 10,
+        1 => 4,
+        2, 3 => 1,
+        else => 4,
+    };
+}
+
+fn adjustListWidths(widths: []usize, prefix_len: usize, sep_len: usize) void {
     const term_cols = terminalWidth();
     if (term_cols == 0) return;
     const total = listTotalWidth(widths, prefix_len, sep_len);
     if (total <= term_cols) return;
 
-    const min_email: usize = 10;
-    const min_plan: usize = 4;
-    const min_rate: usize = 1;
-    const min_last: usize = 4;
-
     var over = total - term_cols;
-    if (over == 0) return;
-
-    if (widths[0] > min_email) {
-        const reducible = widths[0] - min_email;
+    for (widths, 0..) |*width, idx| {
+        const min_width = listMinColumnWidth(widths.len, idx);
+        if (width.* <= min_width) continue;
+        const reducible = width.* - min_width;
         const reduce = @min(reducible, over);
-        widths[0] -= reduce;
+        width.* -= reduce;
         over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[1] > min_plan) {
-        const reducible = widths[1] - min_plan;
-        const reduce = @min(reducible, over);
-        widths[1] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[2] > min_rate) {
-        const reducible = widths[2] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[2] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[3] > min_rate) {
-        const reducible = widths[3] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[3] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[4] > min_last) {
-        const reducible = widths[4] - min_last;
-        const reduce = @min(reducible, over);
-        widths[4] -= reduce;
-        over -= reduce;
+        if (over == 0) return;
     }
 }
 
@@ -755,7 +1027,7 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
 
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides, null, null);
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
@@ -773,10 +1045,70 @@ test "writeAccountsTable highlights usage override rows in red when color is ena
 
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try writeAccountsTableWithUsageOverrides(&writer, &reg, true, &usage_overrides);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, true, &usage_overrides, null, null);
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+}
+
+test "writeAccountsTable can use the scoped group palette" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-2::acc-1", "inactive@example.com", "", .free);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverrides(&writer, &reg, true, null, null, group_manager.default_group_display_color);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.active_group_gray) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.inactive_group_gray) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green) == null);
+}
+
+test "writeGroupedAccountsTable separates groups and uses bold/pale group colors" {
+    const gpa = std.testing.allocator;
+    var default_reg = makeTestRegistry();
+    defer default_reg.deinit(gpa);
+    var work_reg = makeTestRegistry();
+    defer work_reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &default_reg, "user-1::acc-1", "active-default@example.com", "", .plus);
+    try appendTestAccount(gpa, &default_reg, "user-2::acc-1", "inactive-default@example.com", "", .plus);
+    default_reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+
+    try appendTestAccount(gpa, &work_reg, "user-3::acc-1", "inactive-work@example.com", "", .team);
+    try appendTestAccount(gpa, &work_reg, "user-4::acc-1", "active-work@example.com", "", .team);
+    work_reg.active_account_key = try gpa.dupe(u8, "user-4::acc-1");
+
+    const views = [_]GroupedAccountsView{
+        .{
+            .group_name = "default",
+            .display_color = group_manager.default_group_display_color,
+            .reg = &default_reg,
+        },
+        .{
+            .group_name = "work",
+            .display_color = "blue",
+            .reg = &work_reg,
+        },
+    };
+
+    var buffer: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeGroupedAccountsTableWithUsageOverrides(&writer, &views, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "-- default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "-- work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.active_group_gray) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.inactive_group_gray) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.active_group_blue) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.inactive_group_blue) != null);
 }
 
 test "writeAccountsTable prefers usage snapshot plan labels over stored auth plan" {

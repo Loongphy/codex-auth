@@ -95,13 +95,36 @@ Remove-Item "$env:LOCALAPPDATA\codex-auth\bin\codex-auth-auto.exe" -Force -Error
 | Command | Description |
 |---------|-------------|
 | `codex-auth list [--live] [--api\|--skip-api]` | List all accounts. `--live` keeps refreshing the terminal view; `--api` forces remote refresh, while `--skip-api` forbids remote API use for this command. |
-| `codex-auth login [--device-auth]` | Run `codex login` (optionally with `--device-auth`), then add the current account |
+| `codex-auth login [--device-auth] [--group <name>]` | Run `codex login` (optionally with `--device-auth`), then add the current account to the default account set or a named group |
 | `codex-auth switch [--live] [--auto] [--api\|--skip-api]` | Switch the active account interactively. Without `--live` it exits after one switch; with `--live` it stays open and keeps refreshing. `--auto` requires `--live` and auto-switches away from the current account when the live view shows it as exhausted or returns a non-200 usage API status. |
 | `codex-auth switch <query>` | Switch the active account directly by row number, alias, or fuzzy match using stored local data only. |
 | `codex-auth remove [--live] [--api\|--skip-api]` | Interactive remove. `--live` keeps the picker open after each deletion; `--api` forces remote refresh and `--skip-api` forbids remote API use for this command. |
 | `codex-auth remove <query> [<query>...]` | Remove one or more accounts by row number, alias, email, account name, or `account_key` match using stored local data. |
 | `codex-auth remove --all` | Remove all stored accounts. |
 | `codex-auth status` | Show auto-switch, service, and usage status |
+
+### Account Groups
+
+Groups keep separate Codex account sets with their own `CODEX_HOME`. The `default` group is the normal Codex home. Named groups can be used to keep workspaces such as `work`, `trading`, or `personal` separate.
+
+See [docs/account-groups.md](./docs/account-groups.md) for the full command reference.
+
+| Command | Description |
+|---------|-------------|
+| `codex-auth group list` | List configured groups and account counts |
+| `codex-auth group create <name> [<account>...]` | Create a group and optionally copy existing accounts into it |
+| `codex-auth group <name> list [--live] [--api\|--skip-api]` | List accounts in one group |
+| `codex-auth group <name> login [--device-auth]` | Login and add the account directly to one group |
+| `codex-auth group <name> add <account> [<account>...]` | Copy accounts from another group into this group |
+| `codex-auth group <name> copy [<account>...]` | Copy accounts into this group; without selectors, choose interactively |
+| `codex-auth group <name> move [<account>...]` | Move accounts into this group; without selectors, choose interactively |
+| `codex-auth group <name> switch [--live] [--auto] [--api\|--skip-api]` | Switch the active account inside one group |
+| `codex-auth group <name> auto enable\|disable` | Enable or disable background auto-switching for one group |
+| `codex-auth group <name> config api enable\|disable` | Enable or disable usage and account APIs for one group |
+| `codex-auth group <name> status` | Show auto-switch and usage status for one group |
+| `codex-auth group <name> launch [resume [session]] [-- <codext-arg>...]` | Launch `codext` with this group's `CODEX_HOME` |
+| `codex-auth project set-group <name>` | Remember a group for the current project directory |
+| `codex-auth launch [resume [session]] [-- <codext-arg>...]` | Launch `codext` with the remembered project group, or `default` |
 
 ### Import
 
@@ -226,7 +249,10 @@ Add the currently logged-in Codex account:
 ```shell
 codex-auth login
 codex-auth login --device-auth
+codex-auth login --group work --device-auth
 ```
+
+`--group <name>` creates the group when needed and stores the logged-in account in that group's Codex home.
 
 ### Import
 

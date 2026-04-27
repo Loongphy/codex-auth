@@ -659,6 +659,44 @@ test "Scenario: Given custom 5h threshold when checking current then it uses con
     try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
 }
 
+test "Scenario: Given 5h remaining equal to threshold when checking current then auto switch is required" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 15;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 85.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 40.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
+}
+
+test "Scenario: Given weekly remaining equal to threshold when checking current then auto switch is required" {
+    const gpa = std.testing.allocator;
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.threshold_weekly_percent = 5;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 95.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = null,
+    }, 100);
+    const active_account_key = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_key);
+
+    try std.testing.expect(auto.shouldSwitchCurrent(&reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds()));
+}
+
 test "Scenario: Given missing window_minutes in the primary slot when checking current then 5h fallback still triggers auto switch" {
     const gpa = std.testing.allocator;
     var reg = bdd.makeEmptyRegistry();
@@ -932,6 +970,102 @@ test "Scenario: Given repeated daemon candidate refresh attempts within cooldown
     try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
 }
 
+test "Scenario: Given a fresh limit message when daemon runs then active account is exhausted for switching" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 15.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", null, null);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    const candidate_account_id = try bdd.accountKeyForEmailAlloc(gpa, "candidate@example.com");
+    defer gpa.free(candidate_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+    reg.active_account_activated_at_ms = 0;
+
+    const candidate_auth = try bdd.authJsonWithEmailPlan(gpa, "candidate@example.com", "pro");
+    defer gpa.free(candidate_auth);
+    const candidate_path = try registry.accountAuthPath(gpa, codex_home, candidate_account_id);
+    defer gpa.free(candidate_path);
+    try fs.cwd().writeFile(.{ .sub_path = candidate_path, .data = candidate_auth });
+
+    const limit_contents =
+        "{\"timestamp\":\"2025-01-01T00:00:20.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"error\",\"message\":\"You've hit your usage limit. Try again later.\",\"codex_error_info\":\"usage_limit_exceeded\"}}\n";
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-limit.jsonl", .data = limit_contents });
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.applyActiveLimitMessageForDaemon(gpa, codex_home, &reg, &refresh_state));
+    try std.testing.expect(reg.accounts.items[0].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 100.0), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
+    try std.testing.expect(attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, candidate_account_id));
+}
+
+test "Scenario: Given a stale limit message older than latest usage then daemon keeps the newer usage snapshot" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("sessions/2025/01/01");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = false;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 15.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+    reg.active_account_activated_at_ms = 0;
+
+    const rollout_contents =
+        "{\"timestamp\":\"2025-01-01T00:00:20.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"error\",\"message\":\"You've hit your usage limit. Try again later.\",\"codex_error_info\":\"usage_limit_exceeded\"}}\n" ++
+        "{\"timestamp\":\"2025-01-01T00:00:30.000Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":20.0,\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":30.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}\n";
+    try tmp.dir.writeFile(.{ .sub_path = "sessions/2025/01/01/rollout-limit-then-usage.jsonl", .data = rollout_contents });
+
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiError));
+    try std.testing.expect(!(try auto.applyActiveLimitMessageForDaemon(gpa, codex_home, &reg, &refresh_state)));
+
+    const idx = bdd.findAccountIndexByEmail(&reg, "active@example.com") orelse return error.TestExpectedEqual;
+    try std.testing.expect(reg.accounts.items[idx].last_usage != null);
+    try std.testing.expectEqual(@as(f64, 20.0), reg.accounts.items[idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expect(reg.accounts.items[idx].last_local_rollout != null);
+    try std.testing.expectEqual(@as(i64, 1735689630000), reg.accounts.items[idx].last_local_rollout.?.event_timestamp_ms);
+}
+
 test "Scenario: Given switch-time candidate validation returns non-200 then that candidate is disqualified" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1166,6 +1300,54 @@ test "Scenario: Given switch-time candidate validation gets no response then the
     try std.testing.expectEqual(@as(usize, 1), candidate_api_fetch_count);
 }
 
+test "Scenario: Given active usage API is unavailable then daemon does not switch from a stale exhausted snapshot" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = bdd.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    reg.auto_switch.enabled = true;
+    reg.api.usage = true;
+
+    try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
+        .primary = .{ .used_percent = 99.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 90.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+    try appendAccountWithUsage(gpa, &reg, "candidate@example.com", .{
+        .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
+        .secondary = .{ .used_percent = 20.0, .window_minutes = 10080, .resets_at = null },
+        .credits = null,
+        .plan_type = .pro,
+    }, 100);
+
+    const active_account_id = try bdd.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_account_id);
+    try registry.setActiveAccountKey(gpa, &reg, active_account_id);
+
+    daemon_api_fetch_count = 0;
+    candidate_api_fetch_count = 0;
+    var refresh_state = auto.DaemonRefreshState{};
+    defer refresh_state.deinit(gpa);
+
+    try std.testing.expect(!(try auto.refreshActiveUsageForDaemonWithApiFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingApiError)));
+    try std.testing.expectEqual(@as(usize, 1), daemon_api_fetch_count);
+
+    const attempt = try auto.maybeAutoSwitchForDaemonWithUsageFetcher(gpa, codex_home, &reg, &refresh_state, fetchCountingCandidateUsageByAuthPathDetailed);
+    try std.testing.expect(!attempt.refreshed_candidates);
+    try std.testing.expect(!attempt.state_changed);
+    try std.testing.expect(!attempt.switched);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expect(std.mem.eql(u8, reg.active_account_key.?, active_account_id));
+    try std.testing.expectEqual(@as(usize, 0), candidate_api_fetch_count);
+}
+
 test "Scenario: Given daemon api mode and an api-key candidate when auto switching then the candidate stays eligible without usage refresh" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1371,6 +1553,72 @@ test "Scenario: Given linux service unit when rendering then it keeps a persiste
     try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --watch") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "[Install]") != null);
     try std.testing.expect(std.mem.indexOf(u8, unit, "WantedBy=default.target") != null);
+}
+
+test "Scenario: Given legacy managed group service target when rendering then it can clean up old isolated service identities" {
+    const gpa = std.testing.allocator;
+    var target = try auto.groupServiceTargetAlloc(gpa, "work");
+    defer target.deinit(gpa);
+
+    try std.testing.expectEqualStrings("codex-auth-autoswitch-work.service", target.linux_service_name);
+    try std.testing.expect(target.linux_timer_name == null);
+    try std.testing.expectEqualStrings("com.loongphy.codex-auth.auto.work", target.mac_label);
+    try std.testing.expectEqualStrings("CodexAuthAutoSwitch-work", target.windows_task_name);
+
+    const plist = try auto.macPlistTextForLabel(gpa, "/tmp/codex-auth", "/tmp/custom-codex-home", target.mac_label);
+    defer gpa.free(plist);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>com.loongphy.codex-auth.auto.work</string>") != null);
+
+    const script = try auto.windowsRegisterTaskScriptForTask(
+        gpa,
+        "C:\\Program Files\\codex-auth\\codex-auth-auto.exe",
+        "C:\\Users\\demo\\Codex Work\\",
+        target.windows_task_name,
+    );
+    defer gpa.free(script);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthAutoSwitch-work'") != null);
+}
+
+test "Scenario: Given manager service target when rendering then one service can watch all enabled groups" {
+    const gpa = std.testing.allocator;
+    const target = auto.managerServiceTarget();
+
+    try std.testing.expectEqualStrings("codex-auth-manager.service", target.linux_service_name);
+    try std.testing.expect(target.linux_timer_name == null);
+    try std.testing.expectEqualStrings("com.loongphy.codex-auth.manager", target.mac_label);
+    try std.testing.expectEqualStrings("CodexAuthManager", target.windows_task_name);
+
+    const unit = try auto.linuxManagerUnitText(gpa, "/tmp/codex-auth");
+    defer gpa.free(unit);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "Description=codex-auth auto-switch manager") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "ExecStart=\"/tmp/codex-auth\" daemon --manager") != null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "CODEX_HOME") == null);
+    try std.testing.expect(std.mem.indexOf(u8, unit, "CODEX_AUTH_NODE_EXECUTABLE") == null);
+
+    const unit_with_node = try auto.linuxManagerUnitTextWithNode(gpa, "/tmp/codex-auth", "/opt/node/bin/node");
+    defer gpa.free(unit_with_node);
+    try std.testing.expect(std.mem.indexOf(u8, unit_with_node, "Environment=\"CODEX_AUTH_NODE_EXECUTABLE=/opt/node/bin/node\"") != null);
+
+    const plist = try auto.macManagerPlistText(gpa, "/tmp/codex-auth");
+    defer gpa.free(plist);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>com.loongphy.codex-auth.manager</string>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<string>--manager</string>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_HOME</key>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, plist, "<key>CODEX_AUTH_NODE_EXECUTABLE</key>") == null);
+
+    const plist_with_node = try auto.macManagerPlistTextForLabelWithNode(gpa, "/tmp/codex-auth", target.mac_label, "/opt/node/bin/node");
+    defer gpa.free(plist_with_node);
+    try std.testing.expect(std.mem.indexOf(u8, plist_with_node, "<key>CODEX_AUTH_NODE_EXECUTABLE</key>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plist_with_node, "<string>/opt/node/bin/node</string>") != null);
+
+    const action = try auto.windowsManagerTaskAction(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
+    defer gpa.free(action);
+    try std.testing.expect(std.mem.indexOf(u8, action, "--manager") != null);
+    try std.testing.expect(std.mem.indexOf(u8, action, "--codex-home") == null);
+
+    const script = try auto.windowsManagerRegisterTaskScript(gpa, "C:\\Program Files\\codex-auth\\codex-auth-auto.exe");
+    defer gpa.free(script);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ScheduledTask -TaskName 'CodexAuthManager'") != null);
 }
 
 test "Scenario: Given a zig build run executable path when resolving the managed service binary then it prefers zig-out" {
@@ -1599,14 +1847,17 @@ test "Scenario: Given status when rendering then auto and usage api settings are
         .threshold_weekly_percent = 8,
         .api_usage_enabled = false,
         .api_account_enabled = false,
+        .codex_home = "/tmp/codex-auth-status/.codex",
     });
 
     const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h left<=12%, weekly left<=8%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "account: disabled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account scope: all accounts in CODEX_HOME: /tmp/codex-auth-status/.codex") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "group: all") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
 }
 
@@ -1614,6 +1865,10 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
+    const managed_group = try gpa.dupe(u8, "trading");
+    defer gpa.free(managed_group);
+    const active_group = try gpa.dupe(u8, "legacy-work");
+    defer gpa.free(active_group);
 
     try auto.writeStatus(&aw.writer, .{
         .enabled = true,
@@ -1622,11 +1877,16 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
         .threshold_weekly_percent = 8,
         .api_usage_enabled = true,
         .api_account_enabled = true,
+        .codex_home = "/tmp/codex-auth-status/groups/trading",
+        .managed_group = managed_group,
+        .active_group = active_group,
     });
 
     const output = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, output, "managed group: trading") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "usage: api") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "account: api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account scope: legacy group legacy-work in CODEX_HOME: /tmp/codex-auth-status/groups/trading") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") == null);
 }

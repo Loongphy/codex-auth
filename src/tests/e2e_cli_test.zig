@@ -187,6 +187,32 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     }
 }
 
+fn fakeCodextCommandPath() []const u8 {
+    return if (builtin.os.tag == .windows) "fake-bin/codext.cmd" else "fake-bin/codext";
+}
+
+fn writeSuccessfulFakeCodext(dir: fs.Dir) !void {
+    const script =
+        if (builtin.os.tag == .windows)
+            "@echo off\r\n" ++
+                ">\"%HOME%\\fake-codext-codex-home.txt\" echo %CODEX_HOME%\r\n" ++
+                ">\"%HOME%\\fake-codext-argv.txt\" echo %*\r\n" ++
+                "exit /b 0\r\n"
+        else
+            "#!/bin/sh\n" ++
+                "printf '%s\\n' \"$CODEX_HOME\" > \"$HOME/fake-codext-codex-home.txt\"\n" ++
+                "printf '%s\\n' \"$*\" > \"$HOME/fake-codext-argv.txt\"\n" ++
+                "exit 0\n";
+    const sub_path = fakeCodextCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn fakeNodeCommandPath() []const u8 {
     return if (builtin.os.tag == .windows) "fake-node-bin/node.cmd" else "fake-node-bin/node";
 }
@@ -495,6 +521,16 @@ fn countAuthBackups(dir: fs.Dir, rel_path: []const u8) !usize {
     return count;
 }
 
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, pos, needle)) |idx| {
+        count += 1;
+        pos = idx + needle.len;
+    }
+    return count;
+}
+
 fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const encoded = try bdd.b64url(allocator, email);
     defer allocator.free(encoded);
@@ -510,6 +546,15 @@ fn seedRegistryWithAccounts(
     const codex_home = try codexHomeAlloc(allocator, home_root);
     defer allocator.free(codex_home);
 
+    try seedRegistryAtCodexHome(allocator, codex_home, active_email, entries);
+}
+
+fn seedRegistryAtCodexHome(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    active_email: []const u8,
+    entries: []const SeedAccount,
+) !void {
     var reg = bdd.makeEmptyRegistry();
     defer reg.deinit(allocator);
 
@@ -521,6 +566,22 @@ fn seedRegistryWithAccounts(
     reg.active_account_key = active_key;
     reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn writeAuthSnapshotForEmail(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    email: []const u8,
+    plan: []const u8,
+) ![]u8 {
+    const account_key = try bdd.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(snapshot_path);
+    const auth_json = try bdd.authJsonWithEmailPlan(allocator, email, plan);
+    errdefer allocator.free(auth_json);
+    try fs.cwd().writeFile(.{ .sub_path = snapshot_path, .data = auth_json });
+    return auth_json;
 }
 
 fn setRegistryApiConfig(
@@ -750,6 +811,106 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, expected_email));
+}
+
+test "Scenario: Given managed group login when running login then it stores auth state under that group" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("fake-bin");
+    try writeSuccessfulFakeCodex(tmp.dir);
+
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const create_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "create", "work" },
+    );
+    defer gpa.free(create_result.stdout);
+    defer gpa.free(create_result.stderr);
+    try expectSuccess(create_result);
+
+    const first_email = "group-login@example.com";
+    const first_auth = try bdd.authJsonWithEmailPlan(gpa, first_email, "plus");
+    defer gpa.free(first_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = first_auth });
+
+    const login_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "login", "--group", "work", "--device-auth" },
+    );
+    defer gpa.free(login_result.stdout);
+    defer gpa.free(login_result.stderr);
+
+    try expectSuccess(login_result);
+    try std.testing.expect(std.mem.indexOf(u8, login_result.stdout, "Logged in account to group `work`") != null);
+    try std.testing.expectEqualStrings("", login_result.stderr);
+
+    const argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-argv.txt" });
+    defer gpa.free(argv_path);
+    const argv_data = try bdd.readFileAlloc(gpa, argv_path);
+    defer gpa.free(argv_data);
+    try std.testing.expect(std.mem.indexOf(u8, argv_data, "login --device-auth") != null);
+
+    const work_codex_home = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "work" });
+    defer gpa.free(work_codex_home);
+    var work_registry = try registry.loadRegistry(gpa, work_codex_home);
+    defer work_registry.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), work_registry.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, work_registry.accounts.items[0].email, first_email));
+
+    const default_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(default_auth_path);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(default_auth_path, .{}));
+
+    const second_email = "group-scoped-login@example.com";
+    const second_auth = try bdd.authJsonWithEmailPlan(gpa, second_email, "plus");
+    defer gpa.free(second_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = second_auth });
+
+    const scoped_login_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "login" },
+    );
+    defer gpa.free(scoped_login_result.stdout);
+    defer gpa.free(scoped_login_result.stderr);
+
+    try expectSuccess(scoped_login_result);
+    try std.testing.expect(std.mem.indexOf(u8, scoped_login_result.stdout, "Logged in account to group `work`") != null);
+    try std.testing.expectEqualStrings("", scoped_login_result.stderr);
+
+    var loaded_after_scoped_login = try registry.loadRegistry(gpa, work_codex_home);
+    defer loaded_after_scoped_login.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded_after_scoped_login.accounts.items.len);
+    try std.testing.expect(loaded_after_scoped_login.active_account_key != null);
+    const second_account_key = try bdd.accountKeyForEmailAlloc(gpa, second_email);
+    defer gpa.free(second_account_key);
+    try std.testing.expect(std.mem.eql(u8, loaded_after_scoped_login.active_account_key.?, second_account_key));
+
+    const work_auth_path = try registry.activeAuthPath(gpa, work_codex_home);
+    defer gpa.free(work_auth_path);
+    const active_group_auth = try bdd.readFileAlloc(gpa, work_auth_path);
+    defer gpa.free(active_group_auth);
+    try std.testing.expectEqualStrings(second_auth, active_group_auth);
 }
 
 test "Scenario: Given failed device auth login with existing auth json when running login then it forwards the flag and does not mutate the registry" {
@@ -1488,6 +1649,450 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+}
+
+test "Scenario: Given a managed account group when adding listing switching and launching then cli uses that group folder" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "gamma@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+        .{ .email = "gamma@example.com", .alias = "gamma" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const alpha_auth = try writeAuthSnapshotForEmail(gpa, codex_home, "alpha@example.com", "plus");
+    defer gpa.free(alpha_auth);
+    const beta_auth = try writeAuthSnapshotForEmail(gpa, codex_home, "beta@example.com", "plus");
+    defer gpa.free(beta_auth);
+    const gamma_auth = try writeAuthSnapshotForEmail(gpa, codex_home, "gamma@example.com", "plus");
+    defer gpa.free(gamma_auth);
+    try fs.cwd().writeFile(.{ .sub_path = active_auth_path, .data = gamma_auth });
+
+    try tmp.dir.makePath("fake-bin");
+    try writeSuccessfulFakeCodext(tmp.dir);
+    const fake_bin_path = try tmp.dir.realpathAlloc(gpa, "fake-bin");
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const work_codex_home = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "work" });
+    defer gpa.free(work_codex_home);
+    const work_auth_path = try registry.activeAuthPath(gpa, work_codex_home);
+    defer gpa.free(work_auth_path);
+
+    const create_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "create", "work", "alpha@example.com", "beta@example.com" },
+    );
+    defer gpa.free(create_result.stdout);
+    defer gpa.free(create_result.stderr);
+
+    try expectSuccess(create_result);
+    try std.testing.expect(std.mem.indexOf(u8, create_result.stdout, "Group `work` uses") != null);
+    try std.testing.expect(std.mem.indexOf(u8, create_result.stdout, "Added alpha from group `default` to group `work`.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, create_result.stdout, "Added beta from group `default` to group `work`.") != null);
+    try std.testing.expectEqualStrings("", create_result.stderr);
+
+    const manager_config_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups.json" });
+    defer gpa.free(manager_config_path);
+    const manager_config = try bdd.readFileAlloc(gpa, manager_config_path);
+    defer gpa.free(manager_config);
+    try std.testing.expect(std.mem.indexOf(u8, manager_config, "\"name\": \"work\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, manager_config, "\"display_color\"") != null);
+
+    const list_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "list", "--skip-api" },
+    );
+    defer gpa.free(list_result.stdout);
+    defer gpa.free(list_result.stderr);
+
+    try expectSuccess(list_result);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "beta@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "gamma@example.com") == null);
+
+    const blocked_switch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "switch", "gamma" },
+    );
+    defer gpa.free(blocked_switch_result.stdout);
+    defer gpa.free(blocked_switch_result.stderr);
+
+    try expectFailure(blocked_switch_result);
+    try std.testing.expectEqualStrings("", blocked_switch_result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, blocked_switch_result.stderr, "no account matches 'gamma'") != null);
+
+    const beta_switch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "switch", "beta" },
+    );
+    defer gpa.free(beta_switch_result.stdout);
+    defer gpa.free(beta_switch_result.stderr);
+
+    try expectSuccess(beta_switch_result);
+    try std.testing.expectEqualStrings("", beta_switch_result.stdout);
+    try std.testing.expectEqualStrings("", beta_switch_result.stderr);
+
+    const auth_after_beta_switch = try bdd.readFileAlloc(gpa, work_auth_path);
+    defer gpa.free(auth_after_beta_switch);
+    try std.testing.expectEqualStrings(beta_auth, auth_after_beta_switch);
+
+    const gamma_switch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "switch", "gamma" },
+    );
+    defer gpa.free(gamma_switch_result.stdout);
+    defer gpa.free(gamma_switch_result.stderr);
+
+    try expectSuccess(gamma_switch_result);
+    try std.testing.expectEqualStrings("", gamma_switch_result.stdout);
+    try std.testing.expectEqualStrings("", gamma_switch_result.stderr);
+
+    const auth_after_gamma_switch = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after_gamma_switch);
+    try std.testing.expectEqualStrings(gamma_auth, auth_after_gamma_switch);
+
+    const launch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "launch" },
+    );
+    defer gpa.free(launch_result.stdout);
+    defer gpa.free(launch_result.stderr);
+
+    try expectSuccess(launch_result);
+    const launched_codex_home_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codext-codex-home.txt" });
+    defer gpa.free(launched_codex_home_path);
+    const launched_codex_home = try bdd.readFileAlloc(gpa, launched_codex_home_path);
+    defer gpa.free(launched_codex_home);
+    try std.testing.expect(std.mem.indexOf(u8, launched_codex_home, work_codex_home) != null);
+
+    const project_show_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "project", "show" },
+    );
+    defer gpa.free(project_show_result.stdout);
+    defer gpa.free(project_show_result.stderr);
+
+    try expectSuccess(project_show_result);
+    try std.testing.expect(std.mem.indexOf(u8, project_show_result.stdout, "Project group: work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, project_show_result.stdout, work_codex_home) != null);
+
+    const remembered_launch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{"launch"},
+    );
+    defer gpa.free(remembered_launch_result.stdout);
+    defer gpa.free(remembered_launch_result.stderr);
+
+    try expectSuccess(remembered_launch_result);
+    const remembered_launched_codex_home = try bdd.readFileAlloc(gpa, launched_codex_home_path);
+    defer gpa.free(remembered_launched_codex_home);
+    try std.testing.expect(std.mem.indexOf(u8, remembered_launched_codex_home, work_codex_home) != null);
+
+    const resume_launch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "launch", "resume", "019db67d-2190-7563-a899-ce3082e491cf" },
+    );
+    defer gpa.free(resume_launch_result.stdout);
+    defer gpa.free(resume_launch_result.stderr);
+
+    try expectSuccess(resume_launch_result);
+    const resume_launched_codex_home = try bdd.readFileAlloc(gpa, launched_codex_home_path);
+    defer gpa.free(resume_launched_codex_home);
+    try std.testing.expect(std.mem.indexOf(u8, resume_launched_codex_home, work_codex_home) != null);
+    const launched_argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codext-argv.txt" });
+    defer gpa.free(launched_argv_path);
+    const launched_argv = try bdd.readFileAlloc(gpa, launched_argv_path);
+    defer gpa.free(launched_argv);
+    try std.testing.expect(std.mem.indexOf(u8, launched_argv, "resume 019db67d-2190-7563-a899-ce3082e491cf") != null);
+
+    const group_status_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "status" },
+    );
+    defer gpa.free(group_status_result.stdout);
+    defer gpa.free(group_status_result.stderr);
+
+    try expectSuccess(group_status_result);
+    try std.testing.expect(std.mem.indexOf(u8, group_status_result.stdout, "GROUP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, group_status_result.stdout, "work") != null);
+
+    const managed_list_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "list", "--skip-api" },
+    );
+    defer gpa.free(managed_list_result.stdout);
+    defer gpa.free(managed_list_result.stderr);
+
+    try expectSuccess(managed_list_result);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "GROUP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "-- default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "-- work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, managed_list_result.stdout, "gamma@example.com") != null);
+
+    const list_alias_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "list", "work", "--skip-api" },
+    );
+    defer gpa.free(list_alias_result.stdout);
+    defer gpa.free(list_alias_result.stderr);
+
+    try expectSuccess(list_alias_result);
+    try std.testing.expect(std.mem.indexOf(u8, list_alias_result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_alias_result.stdout, "beta@example.com") != null);
+
+    const remove_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "group", "work", "remove", "alpha" },
+    );
+    defer gpa.free(remove_result.stdout);
+    defer gpa.free(remove_result.stderr);
+
+    try expectSuccess(remove_result);
+    try std.testing.expect(std.mem.indexOf(u8, remove_result.stdout, "Removed") != null);
+    try std.testing.expectEqualStrings("", remove_result.stderr);
+
+    var loaded_work = try registry.loadRegistry(gpa, work_codex_home);
+    defer loaded_work.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded_work.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded_work.accounts.items[0].email, "beta@example.com"));
+}
+
+test "Scenario: Given managed account groups when copying and moving then memberships are duplicated or transferred" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath(".codex/accounts");
+    const beta_auth = try writeAuthSnapshotForEmail(gpa, codex_home, "beta@example.com", "plus");
+    defer gpa.free(beta_auth);
+    try seedRegistryAtCodexHome(gpa, codex_home, "beta@example.com", &[_]SeedAccount{
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+
+    const work_codex_home = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "work" });
+    defer gpa.free(work_codex_home);
+    const trading_codex_home = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "trading" });
+    defer gpa.free(trading_codex_home);
+
+    const create_work_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "group", "create", "work" });
+    defer gpa.free(create_work_result.stdout);
+    defer gpa.free(create_work_result.stderr);
+    try expectSuccess(create_work_result);
+
+    const create_trading_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "group", "create", "trading" });
+    defer gpa.free(create_trading_result.stdout);
+    defer gpa.free(create_trading_result.stderr);
+    try expectSuccess(create_trading_result);
+
+    const work_only_auth = try bdd.authJsonWithEmailPlan(gpa, "work-only@example.com", "team");
+    defer gpa.free(work_only_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "work-only-auth.json", .data = work_only_auth });
+    const work_only_import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "work-only-auth.json" });
+    defer gpa.free(work_only_import_path);
+
+    const import_work_only_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "group",
+        "work",
+        "import",
+        work_only_import_path,
+    });
+    defer gpa.free(import_work_only_result.stdout);
+    defer gpa.free(import_work_only_result.stderr);
+    try expectSuccess(import_work_only_result);
+
+    const copy_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "group",
+        "trading",
+        "copy",
+        "beta@example.com",
+    });
+    defer gpa.free(copy_result.stdout);
+    defer gpa.free(copy_result.stderr);
+    try expectSuccess(copy_result);
+    try std.testing.expect(std.mem.indexOf(u8, copy_result.stdout, "Copied ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, copy_result.stdout, "from group `default` to group `trading`.") != null);
+
+    const move_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "group",
+        "trading",
+        "move",
+        "work-only@example.com",
+    });
+    defer gpa.free(move_result.stdout);
+    defer gpa.free(move_result.stderr);
+    try expectSuccess(move_result);
+    try std.testing.expect(std.mem.indexOf(u8, move_result.stdout, "Moved ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, move_result.stdout, "from group `work` to group `trading`.") != null);
+
+    var loaded_default = try registry.loadRegistry(gpa, codex_home);
+    defer loaded_default.deinit(gpa);
+    var loaded_work = try registry.loadRegistry(gpa, work_codex_home);
+    defer loaded_work.deinit(gpa);
+    var loaded_trading = try registry.loadRegistry(gpa, trading_codex_home);
+    defer loaded_trading.deinit(gpa);
+
+    try std.testing.expect(bdd.findAccountIndexByEmail(&loaded_default, "beta@example.com") != null);
+    try std.testing.expect(bdd.findAccountIndexByEmail(&loaded_trading, "beta@example.com") != null);
+    try std.testing.expect(bdd.findAccountIndexByEmail(&loaded_work, "work-only@example.com") == null);
+    try std.testing.expect(bdd.findAccountIndexByEmail(&loaded_trading, "work-only@example.com") != null);
+
+    const list_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "list", "--skip-api" });
+    defer gpa.free(list_result.stdout);
+    defer gpa.free(list_result.stderr);
+    try expectSuccess(list_result);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "-- default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "-- trading") != null);
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(list_result.stdout, "beta@example.com"));
+}
+
+test "Scenario: Given managed account groups when archiving and deleting then folders are moved or removed explicitly" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const archive_group_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "archive-me" });
+    defer gpa.free(archive_group_path);
+    const delete_group_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "codex-auth", "groups", "delete-me" });
+    defer gpa.free(delete_group_path);
+
+    const create_archive_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "group", "create", "archive-me" },
+    );
+    defer gpa.free(create_archive_result.stdout);
+    defer gpa.free(create_archive_result.stderr);
+
+    try expectSuccess(create_archive_result);
+    try fs.cwd().access(archive_group_path, .{});
+
+    const archive_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "group", "archive", "archive-me" },
+    );
+    defer gpa.free(archive_result.stdout);
+    defer gpa.free(archive_result.stderr);
+
+    try expectSuccess(archive_result);
+    try std.testing.expect(std.mem.indexOf(u8, archive_result.stdout, "Archived group `archive-me`") != null);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(archive_group_path, .{}));
+    try std.testing.expect(std.mem.indexOf(u8, archive_result.stdout, "codex-auth/archive/archive-me-") != null);
+
+    const create_delete_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "group", "create", "delete-me" },
+    );
+    defer gpa.free(create_delete_result.stdout);
+    defer gpa.free(create_delete_result.stderr);
+
+    try expectSuccess(create_delete_result);
+    try fs.cwd().access(delete_group_path, .{});
+
+    const blocked_delete_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "group", "delete", "delete-me" },
+    );
+    defer gpa.free(blocked_delete_result.stdout);
+    defer gpa.free(blocked_delete_result.stderr);
+
+    try expectFailure(blocked_delete_result);
+    try std.testing.expect(std.mem.indexOf(u8, blocked_delete_result.stderr, "group delete is permanent") != null);
+    try fs.cwd().access(delete_group_path, .{});
+
+    const delete_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "group", "delete", "delete-me", "--force" },
+    );
+    defer gpa.free(delete_result.stdout);
+    defer gpa.free(delete_result.stderr);
+
+    try expectSuccess(delete_result);
+    try std.testing.expect(std.mem.indexOf(u8, delete_result.stdout, "Deleted group `delete-me`") != null);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(delete_group_path, .{}));
 }
 
 test "Scenario: Given list with api override when api config is disabled then it still requires api refresh executables" {

@@ -6,9 +6,11 @@ const cli = @import("cli.zig");
 const chatgpt_http = @import("chatgpt_http.zig");
 const display_rows = @import("display_rows.zig");
 const registry = @import("registry.zig");
+const group_manager = @import("group_manager.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
 const format = @import("format.zig");
+const timefmt = @import("timefmt.zig");
 const usage_api = @import("usage_api.zig");
 const bdd = @import("tests/bdd_helpers.zig");
 
@@ -156,6 +158,10 @@ fn runMain(init: std.process.Init.Minimal) !void {
     const needs_codex_home = switch (cmd) {
         .version => false,
         .help => |topic| topic == .top_level,
+        .daemon => |opts| switch (opts.mode) {
+            .manager, .manager_once => false,
+            .watch, .once => true,
+        },
         else => true,
     };
     const codex_home = if (needs_codex_home) try registry.resolveCodexHome(allocator) else null;
@@ -171,13 +177,18 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .daemon => |opts| switch (opts.mode) {
             .watch => try auto.runDaemon(allocator, codex_home.?),
             .once => try auto.runDaemonOnce(allocator, codex_home.?),
+            .manager => try auto.runManagerDaemon(allocator),
+            .manager_once => try auto.runManagerDaemonOnce(allocator),
         },
         .config => |opts| try handleConfig(allocator, codex_home.?, opts),
-        .list => |opts| try handleList(allocator, codex_home.?, opts),
+        .list => |opts| try handleList(allocator, codex_home.?, opts, .managed_groups),
         .login => |opts| try handleLogin(allocator, codex_home.?, opts),
         .import_auth => |opts| try handleImport(allocator, codex_home.?, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try handleRemove(allocator, codex_home.?, opts),
+        .group => |opts| try handleGroup(allocator, codex_home.?, opts),
+        .project => |opts| try handleProject(allocator, opts),
+        .launch => |opts| try handleProjectLaunch(allocator, opts),
         .clean => try handleClean(allocator, codex_home.?),
     }
 
@@ -195,13 +206,19 @@ fn isHandledCliError(err: anyerror) bool {
         err == error.SwitchSelectionRequiresTty or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
-        err == error.InvalidRemoveSelectionInput;
+        err == error.InvalidRemoveSelectionInput or
+        err == error.InvalidGroupName or
+        err == error.GroupNotFound or
+        err == error.GroupAlreadyExists or
+        err == error.GroupEmpty or
+        err == error.CodextLaunchFailed;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     if (hasNonEmptyEnvVar(skip_service_reconcile_env)) return false;
     return switch (cmd) {
-        .help, .version, .status, .daemon => false,
+        .help, .version, .status, .daemon, .group, .project, .launch => false,
+        .login => |opts| opts.group_name == null,
         else => true,
     };
 }
@@ -1219,7 +1236,121 @@ fn loadSingleFileImportAuthInfo(
     };
 }
 
-fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions) !void {
+const ListScope = union(enum) {
+    current_group: ?[]const u8,
+    managed_groups,
+};
+
+const ListDisplayState = struct {
+    reg: registry.Registry,
+    usage_state: ForegroundUsageRefreshState,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.usage_state.deinit(allocator);
+        self.reg.deinit(allocator);
+    }
+};
+
+const ManagedListDisplay = struct {
+    group_name: []const u8,
+    display_color: []const u8,
+    reg: registry.Registry,
+    usage_state: ForegroundUsageRefreshState,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.usage_state.deinit(allocator);
+        self.reg.deinit(allocator);
+    }
+};
+
+fn loadListDisplayState(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.ListOptions,
+) !ListDisplayState {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    errdefer reg.deinit(allocator);
+    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
+        try registry.saveRegistry(allocator, codex_home, &reg);
+    }
+
+    const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
+    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+
+    try ensureForegroundNodeAvailableWithApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .list,
+        usage_api_enabled,
+        account_api_enabled,
+    );
+
+    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        usage_api_enabled,
+    );
+    errdefer usage_state.deinit(allocator);
+    try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
+        allocator,
+        codex_home,
+        &reg,
+        .list,
+        defaultAccountFetcher,
+        account_api_enabled,
+    );
+
+    return .{
+        .reg = reg,
+        .usage_state = usage_state,
+    };
+}
+
+fn shouldListManagedGroups(allocator: std.mem.Allocator, codex_home: []const u8) !bool {
+    const default_codex_home = try group_manager.defaultCodexHomeAlloc(allocator);
+    defer allocator.free(default_codex_home);
+    return std.mem.eql(u8, codex_home, default_codex_home);
+}
+
+fn handleManagedGroupList(allocator: std.mem.Allocator, opts: cli.ListOptions) !void {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    var loaded = std.ArrayList(ManagedListDisplay).empty;
+    defer {
+        for (loaded.items) |*item| item.deinit(allocator);
+        loaded.deinit(allocator);
+    }
+
+    for (groups.items.items) |group| {
+        var state = try loadListDisplayState(allocator, group.codex_home, opts);
+        loaded.append(allocator, .{
+            .group_name = group.name,
+            .display_color = group.display_color,
+            .reg = state.reg,
+            .usage_state = state.usage_state,
+        }) catch |err| {
+            state.deinit(allocator);
+            return err;
+        };
+    }
+
+    var views = try allocator.alloc(format.GroupedAccountsView, loaded.items.len);
+    defer allocator.free(views);
+    for (loaded.items, 0..) |*item, idx| {
+        views[idx] = .{
+            .group_name = item.group_name,
+            .display_color = item.display_color,
+            .reg = &item.reg,
+            .usage_overrides = item.usage_state.usage_overrides,
+        };
+    }
+    try format.printGroupedAccountsWithUsageOverrides(views);
+}
+
+fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ListOptions, scope: ListScope) !void {
     if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
 
     if (opts.live) {
@@ -1264,44 +1395,35 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
         return;
     }
 
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
+    if (std.meta.activeTag(scope) == .managed_groups and try shouldListManagedGroups(allocator, codex_home)) {
+        return try handleManagedGroupList(allocator, opts);
     }
 
-    const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
-    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
-
-    try ensureForegroundNodeAvailableWithApiEnabled(
-        allocator,
-        codex_home,
-        &reg,
-        .list,
-        usage_api_enabled,
-        account_api_enabled,
-    );
-
-    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled(
-        allocator,
-        codex_home,
-        &reg,
-        usage_api_enabled,
-    );
-    defer usage_state.deinit(allocator);
-    try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        &reg,
-        .list,
-        defaultAccountFetcher,
-        account_api_enabled,
-    );
-    try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+    var state = try loadListDisplayState(allocator, codex_home, opts);
+    defer state.deinit(allocator);
+    const group_indices = try registry.activeGroupAccountIndicesAlloc(allocator, &state.reg);
+    defer if (group_indices) |indices| allocator.free(indices);
+    switch (scope) {
+        .current_group => |display_color| {
+            try format.printAccountsWithUsageOverridesForGroup(
+                &state.reg,
+                state.usage_state.usage_overrides,
+                group_indices,
+                display_color orelse group_manager.default_group_display_color,
+            );
+        },
+        .managed_groups => {
+            if (group_indices) |indices| {
+                try format.printAccountsWithUsageOverridesForIndices(&state.reg, state.usage_state.usage_overrides, indices);
+            } else {
+                try format.printAccountsWithUsageOverrides(&state.reg, state.usage_state.usage_overrides);
+            }
+        },
+    }
 }
 
-fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
-    try cli.runCodexLogin(opts);
+fn handleLoginInCodexHome(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
+    try cli.runCodexLoginWithCodexHome(allocator, opts, codex_home);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
@@ -1325,6 +1447,21 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     try registry.setActiveAccountKey(allocator, &reg, record_key);
     _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
+    if (opts.group_name) |group_name| {
+        try handleManagedGroupLogin(allocator, group_name, .{ .device_auth = opts.device_auth });
+        return;
+    }
+    try handleLoginInCodexHome(allocator, codex_home, opts);
+}
+
+fn handleManagedGroupLogin(allocator: std.mem.Allocator, group_name: []const u8, opts: cli.LoginOptions) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, group_name);
+    defer group.deinit(allocator);
+    try handleLoginInCodexHome(allocator, group.codex_home, opts);
+    try printGroupMessage("Logged in account to group `{s}` ({s}).", .{ group.name, group.codex_home });
 }
 
 fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ImportOptions) !void {
@@ -1373,7 +1510,10 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
         std.debug.assert(!opts.live);
         std.debug.assert(!opts.auto);
 
-        var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
+        const group_indices = try registry.activeGroupAccountIndicesAlloc(allocator, &reg);
+        defer if (group_indices) |indices| allocator.free(indices);
+
+        var resolution = try resolveSwitchQueryLocallyInScope(allocator, &reg, query, group_indices);
         defer resolution.deinit(allocator);
 
         const selected_account_key = switch (resolution) {
@@ -1432,8 +1572,13 @@ fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.
             return err;
         };
         if (selected_account_key == null) return;
-        try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
-        try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
+        var reg = try registry.loadRegistry(allocator, codex_home);
+        defer reg.deinit(allocator);
+        if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
+            try registry.saveRegistry(allocator, codex_home, &reg);
+        }
+        try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
+        try registry.saveRegistry(allocator, codex_home, &reg);
         return;
     }
 
@@ -1926,27 +2071,135 @@ fn freeOwnedAccountRecord(allocator: std.mem.Allocator, rec: *const registry.Acc
     if (rec.last_local_rollout) |*signature| registry.freeRolloutSignature(allocator, signature);
 }
 
+fn cloneAccountGroup(allocator: std.mem.Allocator, group: *const registry.AccountGroup) !registry.AccountGroup {
+    const name = try allocator.dupe(u8, group.name);
+    errdefer allocator.free(name);
+    const account_keys = try allocator.alloc([]u8, group.account_keys.len);
+    errdefer allocator.free(account_keys);
+    var cloned_count: usize = 0;
+    errdefer {
+        for (account_keys[0..cloned_count]) |key| allocator.free(key);
+    }
+    for (group.account_keys, 0..) |account_key, idx| {
+        account_keys[idx] = try allocator.dupe(u8, account_key);
+        cloned_count += 1;
+    }
+    return .{
+        .name = name,
+        .account_keys = account_keys,
+    };
+}
+
 fn cloneRegistryAlloc(allocator: std.mem.Allocator, reg: *const registry.Registry) !registry.Registry {
     const active_account_key = if (reg.active_account_key) |value|
         try allocator.dupe(u8, value)
     else
         null;
     errdefer if (active_account_key) |value| allocator.free(value);
+    const active_group_name = if (reg.active_group_name) |value|
+        try allocator.dupe(u8, value)
+    else
+        null;
+    errdefer if (active_group_name) |value| allocator.free(value);
 
     var cloned: registry.Registry = .{
         .schema_version = reg.schema_version,
         .active_account_key = active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
+        .active_group_name = active_group_name,
         .auto_switch = reg.auto_switch,
         .api = reg.api,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
+        .groups = std.ArrayList(registry.AccountGroup).empty,
     };
     errdefer cloned.deinit(allocator);
 
     for (reg.accounts.items) |*rec| {
         try cloned.accounts.append(allocator, try cloneAccountRecord(allocator, rec));
     }
+    for (reg.groups.items) |*group| {
+        try cloned.groups.append(allocator, try cloneAccountGroup(allocator, group));
+    }
     return cloned;
+}
+
+fn scopeSwitchSelectionDisplayToActiveGroupAlloc(
+    allocator: std.mem.Allocator,
+    display: cli.OwnedSwitchSelectionDisplay,
+) !cli.OwnedSwitchSelectionDisplay {
+    const group_name = display.reg.active_group_name orelse return display;
+    const indices = try registry.groupAccountIndicesAlloc(allocator, &display.reg, group_name);
+    defer allocator.free(indices);
+
+    var scoped_reg: registry.Registry = .{
+        .schema_version = display.reg.schema_version,
+        .active_account_key = null,
+        .active_account_activated_at_ms = null,
+        .active_group_name = try allocator.dupe(u8, group_name),
+        .auto_switch = display.reg.auto_switch,
+        .api = display.reg.api,
+        .accounts = std.ArrayList(registry.AccountRecord).empty,
+        .groups = std.ArrayList(registry.AccountGroup).empty,
+    };
+    errdefer scoped_reg.deinit(allocator);
+    for (display.reg.groups.items) |*group| {
+        try scoped_reg.groups.append(allocator, try cloneAccountGroup(allocator, group));
+    }
+
+    const usage_overrides = try allocEmptySwitchUsageOverrides(allocator, indices.len);
+    errdefer {
+        for (usage_overrides) |value| {
+            if (value) |text| allocator.free(text);
+        }
+        allocator.free(usage_overrides);
+    }
+
+    for (indices, 0..) |account_idx, scoped_idx| {
+        try scoped_reg.accounts.append(allocator, try cloneAccountRecord(allocator, &display.reg.accounts.items[account_idx]));
+        if (account_idx < display.usage_overrides.len) {
+            if (display.usage_overrides[account_idx]) |text| {
+                usage_overrides[scoped_idx] = try allocator.dupe(u8, text);
+            }
+        }
+    }
+
+    if (display.reg.active_account_key) |active| {
+        if (registry.findAccountIndexByAccountKey(&scoped_reg, active) != null) {
+            scoped_reg.active_account_key = try allocator.dupe(u8, active);
+            scoped_reg.active_account_activated_at_ms = display.reg.active_account_activated_at_ms;
+        }
+    }
+
+    var old_display = display;
+    old_display.deinit(allocator);
+    return .{
+        .reg = scoped_reg,
+        .usage_overrides = usage_overrides,
+    };
+}
+
+fn scopeSwitchLoadedDisplayToActiveGroupAlloc(
+    allocator: std.mem.Allocator,
+    loaded: SwitchLoadedDisplay,
+) !SwitchLoadedDisplay {
+    var scoped = loaded;
+    errdefer {
+        scoped.display.deinit(allocator);
+        if (scoped.refresh_error_name) |name| allocator.free(name);
+    }
+    scoped.display = try scopeSwitchSelectionDisplayToActiveGroupAlloc(allocator, loaded.display);
+    return scoped;
+}
+
+fn maybeScopeSwitchLoadedDisplayToActiveGroupAlloc(
+    allocator: std.mem.Allocator,
+    loaded: SwitchLoadedDisplay,
+    target: ForegroundUsageRefreshTarget,
+) !SwitchLoadedDisplay {
+    return switch (target) {
+        .list, .switch_account => try scopeSwitchLoadedDisplayToActiveGroupAlloc(allocator, loaded),
+        .remove_account => loaded,
+    };
 }
 
 fn cloneSwitchUsageOverridesAlloc(
@@ -2080,17 +2333,27 @@ fn loadStoredSwitchSelectionDisplay(
     api_mode: cli.ApiMode,
 ) !SwitchLoadedDisplay {
     var latest = try registry.loadRegistry(allocator, codex_home);
-    errdefer latest.deinit(allocator);
+    var latest_owned = true;
+    errdefer if (latest_owned) latest.deinit(allocator);
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest)) {
         try registry.saveRegistry(allocator, codex_home, &latest);
     }
-    return .{
+    const usage_overrides = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len);
+    errdefer if (latest_owned) {
+        for (usage_overrides) |value| {
+            if (value) |text| allocator.free(text);
+        }
+        allocator.free(usage_overrides);
+    };
+    const policy = switchLiveRefreshPolicy(&latest, target, api_mode);
+    latest_owned = false;
+    return try maybeScopeSwitchLoadedDisplayToActiveGroupAlloc(allocator, .{
         .display = .{
             .reg = latest,
-            .usage_overrides = try allocEmptySwitchUsageOverrides(allocator, latest.accounts.items.len),
+            .usage_overrides = usage_overrides,
         },
-        .policy = switchLiveRefreshPolicy(&latest, target, api_mode),
-    };
+        .policy = policy,
+    }, target);
 }
 
 fn loadStoredSwitchSelectionDisplayWithRefreshError(
@@ -2191,7 +2454,8 @@ fn loadSwitchSelectionDisplay(
     };
 
     var latest = try registry.loadRegistry(allocator, codex_home);
-    errdefer latest.deinit(allocator);
+    var latest_owned = true;
+    errdefer if (latest_owned) latest.deinit(allocator);
     var latest_changed = try registry.syncActiveAccountFromAuth(allocator, codex_home, &latest);
 
     if (try mergeSwitchLiveRefreshIntoLatest(allocator, &latest, &base, &refreshed)) {
@@ -2208,13 +2472,15 @@ fn loadSwitchSelectionDisplay(
     usage_state.deinit(allocator);
     refreshed.deinit(allocator);
 
-    return .{
+    const policy = switchLiveRefreshPolicy(&latest, target, api_mode);
+    latest_owned = false;
+    return try maybeScopeSwitchLoadedDisplayToActiveGroupAlloc(allocator, .{
         .display = .{
             .reg = latest,
             .usage_overrides = mapped_usage_overrides,
         },
-        .policy = switchLiveRefreshPolicy(&latest, target, api_mode),
-    };
+        .policy = policy,
+    }, target);
 }
 
 fn runSwitchLiveRefreshRound(task_ctx: SwitchLiveRefreshTaskContext) void {
@@ -2470,11 +2736,20 @@ pub fn resolveSwitchQueryLocally(
     reg: *registry.Registry,
     query: []const u8,
 ) !SwitchQueryResolution {
-    if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
+    return resolveSwitchQueryLocallyInScope(allocator, reg, query, null);
+}
+
+pub fn resolveSwitchQueryLocallyInScope(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    query: []const u8,
+    account_indices: ?[]const usize,
+) !SwitchQueryResolution {
+    if (try findAccountIndexByDisplayNumberInScope(allocator, reg, query, account_indices)) |account_idx| {
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }
 
-    var matches = try findMatchingAccounts(allocator, reg, query);
+    var matches = try findMatchingAccountsInScope(allocator, reg, query, account_indices);
     if (matches.items.len == 0) {
         matches.deinit(allocator);
         return .not_found;
@@ -2484,6 +2759,1068 @@ pub fn resolveSwitchQueryLocally(
         return .{ .direct = reg.accounts.items[matches.items[0]].account_key };
     }
     return .{ .multiple = matches };
+}
+
+fn printGroupError(comptime fmt: []const u8, args: anytype) !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    try cli.writeErrorPrefixTo(&writer.interface, false);
+    try writer.interface.print(" " ++ fmt ++ "\n", args);
+    try writer.interface.flush();
+}
+
+fn printGroupMessage(comptime fmt: []const u8, args: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    try writer.interface.print(fmt ++ "\n", args);
+    try writer.interface.flush();
+}
+
+fn printGroupListAll(allocator: std.mem.Allocator) !void {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    try out.writeAll("GROUP    ACCOUNTS  CODEX_HOME\n");
+    try out.writeAll("------------------------------\n");
+    for (groups.items.items) |item| {
+        const account_count: usize = blk: {
+            var reg = registry.loadRegistry(allocator, item.codex_home) catch |err| switch (err) {
+                error.FileNotFound, error.UnsupportedRegistryVersion => break :blk 0,
+                else => return err,
+            };
+            defer reg.deinit(allocator);
+            break :blk reg.accounts.items.len;
+        };
+        try out.print("{s:<8} {d:>8}  {s}\n", .{ item.name, account_count, item.codex_home });
+    }
+    try out.flush();
+}
+
+fn activeAccountLabelOrDashAlloc(allocator: std.mem.Allocator, reg: *registry.Registry) ![]u8 {
+    const account_key = reg.active_account_key orelse return try allocator.dupe(u8, "-");
+    return accountLabelForKeyAlloc(allocator, reg, account_key) catch |err| switch (err) {
+        error.AccountNotFound => try allocator.dupe(u8, "-"),
+        else => return err,
+    };
+}
+
+fn printManagedGroupStatusAll(allocator: std.mem.Allocator) !void {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    try out.writeAll("GROUP    ACCOUNTS  ACTIVE  AUTO  MANAGER  CODEX_HOME\n");
+    try out.writeAll("-----------------------------------------------------\n");
+    for (groups.items.items) |item| {
+        var reg = try registry.loadRegistry(allocator, item.codex_home);
+        defer reg.deinit(allocator);
+        const active_label = try activeAccountLabelOrDashAlloc(allocator, &reg);
+        defer allocator.free(active_label);
+        var status = try auto.getStatusForGroup(allocator, item.name, item.codex_home);
+        defer status.deinit(allocator);
+        try out.print("{s:<8} {d:>8}  {s:<6}  {s:<4}  {s:<7}  {s}\n", .{
+            item.name,
+            reg.accounts.items.len,
+            active_label,
+            auto.helpStateLabel(status.enabled),
+            @tagName(status.runtime),
+            item.codex_home,
+        });
+    }
+    try out.flush();
+}
+
+fn printManagedGroupPath(allocator: std.mem.Allocator, name: []const u8) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+    try printGroupMessage("{s}", .{group.codex_home});
+}
+
+fn managedGroupExists(allocator: std.mem.Allocator, name: []const u8) !bool {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+    return group_manager.findGroupIndex(&groups, name) != null;
+}
+
+fn promptForNewManagedFolderNameAlloc(allocator: std.mem.Allocator, group_name: []const u8) ![]u8 {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    try out.print("New CODEX_HOME folder name for group `{s}` [{s}]: ", .{ group_name, group_name });
+    try out.flush();
+
+    var input: [128]u8 = undefined;
+    const n = try readFileOnce(std.Io.File.stdin(), &input);
+    const line = std.mem.trim(u8, input[0..n], " \n\r\t");
+    const folder_name = if (line.len == 0) group_name else line;
+    group_manager.validateGroupName(folder_name) catch {
+        try printGroupError("invalid folder name `{s}`; use letters, numbers, `-`, or `_`.", .{folder_name});
+        return error.InvalidGroupName;
+    };
+    return try allocator.dupe(u8, folder_name);
+}
+
+fn promptForManagedGroupFolderAlloc(allocator: std.mem.Allocator, group_name: []const u8) !?[]u8 {
+    if (!(std.Io.File.stdin().isTty(app_runtime.io()) catch false)) return null;
+    if (!(std.Io.File.stdout().isTty(app_runtime.io()) catch false)) return null;
+
+    var folders = try group_manager.listAvailableManagedFolderNamesAlloc(allocator);
+    defer folders.deinit(allocator);
+
+    const groups_root = try group_manager.groupsRootAlloc(allocator);
+    defer allocator.free(groups_root);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+
+    if (folders.items.items.len == 0) {
+        try out.print("No unused managed CODEX_HOME folders found under {s}.\n", .{groups_root});
+        try out.flush();
+        return try promptForNewManagedFolderNameAlloc(allocator, group_name);
+    }
+
+    try out.print("Available managed CODEX_HOME folders under {s}:\n", .{groups_root});
+    for (folders.items.items, 0..) |folder_name, idx| {
+        try out.print("  {d}. {s}\n", .{ idx + 1, folder_name });
+    }
+    const create_choice = folders.items.items.len + 1;
+    try out.print("  {d}. Create a new folder\n", .{create_choice});
+    try out.print("Select CODEX_HOME folder for group `{s}` [1-{d}, Enter=create]: ", .{ group_name, create_choice });
+    try out.flush();
+
+    var input: [128]u8 = undefined;
+    const n = try readFileOnce(std.Io.File.stdin(), &input);
+    const line = std.mem.trim(u8, input[0..n], " \n\r\t");
+    if (line.len == 0) return try promptForNewManagedFolderNameAlloc(allocator, group_name);
+
+    const choice = std.fmt.parseUnsigned(usize, line, 10) catch {
+        try printGroupError("invalid folder selection `{s}`.", .{line});
+        return error.InvalidCliUsage;
+    };
+    if (choice >= 1 and choice <= folders.items.items.len) {
+        return try allocator.dupe(u8, folders.items.items[choice - 1]);
+    }
+    if (choice == create_choice) {
+        return try promptForNewManagedFolderNameAlloc(allocator, group_name);
+    }
+
+    try printGroupError("folder selection must be between 1 and {d}.", .{create_choice});
+    return error.InvalidCliUsage;
+}
+
+fn handleManagedGroupCreate(allocator: std.mem.Allocator, opts: cli.GroupMutationOptions) !void {
+    const exists = try managedGroupExists(allocator, opts.name);
+    var group = blk: {
+        if (!exists and !std.mem.eql(u8, opts.name, group_manager.default_group_name)) {
+            if (try promptForManagedGroupFolderAlloc(allocator, opts.name)) |folder_name| {
+                defer allocator.free(folder_name);
+                break :blk try group_manager.ensureManagedGroupWithFolderAlloc(allocator, opts.name, folder_name);
+            }
+        }
+        break :blk try group_manager.ensureManagedGroupAlloc(allocator, opts.name);
+    };
+    defer group.deinit(allocator);
+    try printGroupMessage("Group `{s}` uses {s}.", .{ group.name, group.codex_home });
+    if (opts.selectors.len != 0) {
+        try handleManagedGroupAdd(allocator, group.name, opts.selectors);
+    }
+}
+
+const ManagedGroupAccountMatch = struct {
+    source_group_name: []u8,
+    source_codex_home: []u8,
+    account_key: []u8,
+    snapshot_path: []u8,
+    label: []u8,
+    alias: []u8,
+    plan: []u8,
+    rate_5h: []u8,
+    rate_week: []u8,
+    last_activity: []u8,
+    is_active: bool,
+
+    fn deinit(self: *ManagedGroupAccountMatch, allocator: std.mem.Allocator) void {
+        allocator.free(self.source_group_name);
+        allocator.free(self.source_codex_home);
+        allocator.free(self.account_key);
+        allocator.free(self.snapshot_path);
+        allocator.free(self.label);
+        allocator.free(self.alias);
+        allocator.free(self.plan);
+        allocator.free(self.rate_5h);
+        allocator.free(self.rate_week);
+        allocator.free(self.last_activity);
+    }
+};
+
+const ManagedGroupTransferMode = enum {
+    add,
+    copy,
+    move,
+};
+
+fn managedTransferVerb(mode: ManagedGroupTransferMode) []const u8 {
+    return switch (mode) {
+        .add => "add",
+        .copy => "copy",
+        .move => "move",
+    };
+}
+
+fn managedTransferPastVerb(mode: ManagedGroupTransferMode) []const u8 {
+    return switch (mode) {
+        .add => "Added",
+        .copy => "Copied",
+        .move => "Moved",
+    };
+}
+
+fn managedMatchIsDefault(match: *const ManagedGroupAccountMatch) bool {
+    return std.mem.eql(u8, match.source_group_name, group_manager.default_group_name);
+}
+
+fn replaceManagedMatch(
+    allocator: std.mem.Allocator,
+    matches: *std.ArrayList(ManagedGroupAccountMatch),
+    idx: usize,
+    value: ManagedGroupAccountMatch,
+) void {
+    matches.items[idx].deinit(allocator);
+    matches.items[idx] = value;
+}
+
+fn appendManagedMatchPreferDefault(
+    allocator: std.mem.Allocator,
+    matches: *std.ArrayList(ManagedGroupAccountMatch),
+    value: ManagedGroupAccountMatch,
+) !void {
+    for (matches.items, 0..) |*existing, idx| {
+        if (!std.mem.eql(u8, existing.account_key, value.account_key)) continue;
+        if (!managedMatchIsDefault(existing) and managedMatchIsDefault(&value)) {
+            replaceManagedMatch(allocator, matches, idx, value);
+            return;
+        }
+        var discard = value;
+        discard.deinit(allocator);
+        return;
+    }
+    try matches.append(allocator, value);
+}
+
+fn managedGroupAccountMatchForRecord(
+    allocator: std.mem.Allocator,
+    source: *const group_manager.GroupRef,
+    source_reg: *const registry.Registry,
+    rec: *const registry.AccountRecord,
+) !ManagedGroupAccountMatch {
+    const snapshot_path = try registry.accountAuthPath(allocator, source.codex_home, rec.account_key);
+    errdefer allocator.free(snapshot_path);
+    const label = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
+    errdefer allocator.free(label);
+    const plan = try allocator.dupe(u8, if (registry.resolveDisplayPlan(rec)) |p| registry.planLabel(p) else "-");
+    errdefer allocator.free(plan);
+    const rate_5h_page = try format.formatRateLimitFullAlloc(registry.resolveRateWindow(rec.last_usage, 300, true));
+    defer std.heap.page_allocator.free(rate_5h_page);
+    const rate_5h = try allocator.dupe(u8, rate_5h_page);
+    errdefer allocator.free(rate_5h);
+    const rate_week_page = try format.formatRateLimitFullAlloc(registry.resolveRateWindow(rec.last_usage, 10080, false));
+    defer std.heap.page_allocator.free(rate_week_page);
+    const rate_week = try allocator.dupe(u8, rate_week_page);
+    errdefer allocator.free(rate_week);
+    const last_activity = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, nowSeconds());
+    errdefer allocator.free(last_activity);
+    return .{
+        .source_group_name = try allocator.dupe(u8, source.name),
+        .source_codex_home = try allocator.dupe(u8, source.codex_home),
+        .account_key = try allocator.dupe(u8, rec.account_key),
+        .snapshot_path = snapshot_path,
+        .label = label,
+        .alias = try allocator.dupe(u8, rec.alias),
+        .plan = plan,
+        .rate_5h = rate_5h,
+        .rate_week = rate_week,
+        .last_activity = last_activity,
+        .is_active = if (source_reg.active_account_key) |active| std.mem.eql(u8, active, rec.account_key) else false,
+    };
+}
+
+fn collectManagedGroupMatches(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    target_group_name: []const u8,
+) !std.ArrayList(ManagedGroupAccountMatch) {
+    var result = std.ArrayList(ManagedGroupAccountMatch).empty;
+    errdefer {
+        for (result.items) |*match| match.deinit(allocator);
+        result.deinit(allocator);
+    }
+
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+    for (groups.items.items) |source| {
+        var reg = registry.loadRegistry(allocator, source.codex_home) catch |err| switch (err) {
+            error.FileNotFound, error.UnsupportedRegistryVersion => continue,
+            else => return err,
+        };
+        defer reg.deinit(allocator);
+
+        var matches = try findMatchingAccountsForRemove(allocator, &reg, selector);
+        defer matches.deinit(allocator);
+        for (matches.items) |account_idx| {
+            const rec = &reg.accounts.items[account_idx];
+            if (std.mem.eql(u8, source.name, target_group_name)) continue;
+
+            const match = try managedGroupAccountMatchForRecord(allocator, &source, &reg, rec);
+            try appendManagedMatchPreferDefault(allocator, &result, match);
+        }
+    }
+    return result;
+}
+
+fn collectAllManagedGroupTransferMatches(
+    allocator: std.mem.Allocator,
+    target_group_name: []const u8,
+) !std.ArrayList(ManagedGroupAccountMatch) {
+    var result = std.ArrayList(ManagedGroupAccountMatch).empty;
+    errdefer {
+        for (result.items) |*match| match.deinit(allocator);
+        result.deinit(allocator);
+    }
+
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+    for (groups.items.items) |source| {
+        if (std.mem.eql(u8, source.name, target_group_name)) continue;
+        var reg = registry.loadRegistry(allocator, source.codex_home) catch |err| switch (err) {
+            error.FileNotFound, error.UnsupportedRegistryVersion => continue,
+            else => return err,
+        };
+        defer reg.deinit(allocator);
+
+        for (reg.accounts.items) |*rec| {
+            try result.append(allocator, try managedGroupAccountMatchForRecord(allocator, &source, &reg, rec));
+        }
+    }
+    return result;
+}
+
+fn readFileOnce(file: std.Io.File, buffer: []u8) !usize {
+    var buffers = [_][]u8{buffer};
+    return file.readStreaming(app_runtime.io(), &buffers) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => |e| return e,
+    };
+}
+
+fn confirmAddFromNonDefaultGroup(match: *const ManagedGroupAccountMatch, target_group_name: []const u8) !bool {
+    var buffer: [1024]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &stdout.interface;
+    try out.print("Found {s} in group `{s}`.\n", .{ match.label, match.source_group_name });
+    if (!(std.Io.File.stdin().isTty(app_runtime.io()) catch false)) {
+        try out.print("Skipped {s}; confirmation is required to copy from `{s}` to `{s}`.\n", .{
+            match.label,
+            match.source_group_name,
+            target_group_name,
+        });
+        try out.flush();
+        return false;
+    }
+    try out.print("Add it to group `{s}`? [y/N]: ", .{target_group_name});
+    try out.flush();
+
+    var input: [64]u8 = undefined;
+    const n = try readFileOnce(std.Io.File.stdin(), &input);
+    const line = std.mem.trim(u8, input[0..n], " \n\r\t");
+    return line.len == 1 and (line[0] == 'y' or line[0] == 'Y');
+}
+
+fn appendTransferSelectionUnique(
+    allocator: std.mem.Allocator,
+    selected: *std.ArrayList(usize),
+    idx: usize,
+) !void {
+    for (selected.items) |existing| {
+        if (existing == idx) return;
+    }
+    try selected.append(allocator, idx);
+}
+
+fn managedTransferIndexWidth(count: usize) usize {
+    var value = count;
+    var width: usize = 1;
+    while (value >= 10) : (value /= 10) {
+        width += 1;
+    }
+    return @max(@as(usize, 2), width);
+}
+
+fn writeManagedTransferRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        try out.writeByte(ch);
+    }
+}
+
+fn writeManagedTransferPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
+    try out.writeAll(value);
+    if (value.len < width) {
+        try writeManagedTransferRepeat(out, ' ', width - value.len);
+    }
+}
+
+fn writeManagedTransferIndex(out: *std.Io.Writer, idx: usize, width: usize) !void {
+    var value = idx;
+    var digits: usize = 1;
+    while (value >= 10) : (value /= 10) {
+        digits += 1;
+    }
+    if (digits < width) try writeManagedTransferRepeat(out, '0', width - digits);
+    try out.print("{d}", .{idx});
+}
+
+fn writeManagedTransferSeparator(out: *std.Io.Writer, group_name: []const u8, total_width: usize) !void {
+    try out.print("-- {s} ", .{group_name});
+    const used = group_name.len + 4;
+    if (used < total_width) {
+        try writeManagedTransferRepeat(out, '-', total_width - used);
+    }
+    try out.writeByte('\n');
+}
+
+fn writeManagedTransferPickerTable(out: *std.Io.Writer, matches: []const ManagedGroupAccountMatch) !void {
+    const headers = [_][]const u8{ "GROUP", "ACCOUNT", "PLAN", "5H LEFT", "WEEKLY LEFT", "LAST ACTIVITY" };
+    var widths = [_]usize{
+        headers[0].len,
+        headers[1].len,
+        headers[2].len,
+        headers[3].len,
+        headers[4].len,
+        headers[5].len,
+    };
+    for (matches) |match| {
+        widths[0] = @max(widths[0], match.source_group_name.len);
+        widths[1] = @max(widths[1], match.label.len);
+        widths[2] = @max(widths[2], match.plan.len);
+        widths[3] = @max(widths[3], match.rate_5h.len);
+        widths[4] = @max(widths[4], match.rate_week.len);
+        widths[5] = @max(widths[5], match.last_activity.len);
+    }
+
+    const idx_width = managedTransferIndexWidth(matches.len);
+    const prefix_len: usize = 2 + idx_width + 1;
+    const sep_len: usize = 2;
+    const total_width = prefix_len +
+        widths[0] + widths[1] + widths[2] + widths[3] + widths[4] + widths[5] +
+        sep_len * (widths.len - 1);
+
+    try writeManagedTransferRepeat(out, ' ', prefix_len);
+    inline for (headers, 0..) |header, idx| {
+        if (idx != 0) try out.writeAll("  ");
+        try writeManagedTransferPadded(out, header, widths[idx]);
+    }
+    try out.writeByte('\n');
+    try writeManagedTransferRepeat(out, '-', total_width);
+    try out.writeByte('\n');
+
+    var last_group: ?[]const u8 = null;
+    for (matches, 0..) |match, idx| {
+        if (last_group == null or !std.mem.eql(u8, last_group.?, match.source_group_name)) {
+            try writeManagedTransferSeparator(out, match.source_group_name, total_width);
+            last_group = match.source_group_name;
+        }
+        try out.writeAll(if (match.is_active) "* " else "  ");
+        try writeManagedTransferIndex(out, idx + 1, idx_width);
+        try out.writeByte(' ');
+        try writeManagedTransferPadded(out, match.source_group_name, widths[0]);
+        try out.writeAll("  ");
+        try writeManagedTransferPadded(out, match.label, widths[1]);
+        try out.writeAll("  ");
+        try writeManagedTransferPadded(out, match.plan, widths[2]);
+        try out.writeAll("  ");
+        try writeManagedTransferPadded(out, match.rate_5h, widths[3]);
+        try out.writeAll("  ");
+        try writeManagedTransferPadded(out, match.rate_week, widths[4]);
+        try out.writeAll("  ");
+        try writeManagedTransferPadded(out, match.last_activity, widths[5]);
+        try out.writeByte('\n');
+    }
+}
+
+test "managed transfer picker table includes list account columns" {
+    const gpa = std.testing.allocator;
+    var matches = [_]ManagedGroupAccountMatch{
+        .{
+            .source_group_name = try gpa.dupe(u8, "default"),
+            .source_codex_home = try gpa.dupe(u8, "default-home"),
+            .account_key = try gpa.dupe(u8, "alpha-key"),
+            .snapshot_path = try gpa.dupe(u8, "default-home/accounts/alpha.json"),
+            .label = try gpa.dupe(u8, "alpha@example.com"),
+            .alias = try gpa.dupe(u8, ""),
+            .plan = try gpa.dupe(u8, "Plus"),
+            .rate_5h = try gpa.dupe(u8, "88% (01:00)"),
+            .rate_week = try gpa.dupe(u8, "42% (2 May)"),
+            .last_activity = try gpa.dupe(u8, "4m ago"),
+            .is_active = true,
+        },
+        .{
+            .source_group_name = try gpa.dupe(u8, "work"),
+            .source_codex_home = try gpa.dupe(u8, "work-home"),
+            .account_key = try gpa.dupe(u8, "beta-key"),
+            .snapshot_path = try gpa.dupe(u8, "work-home/accounts/beta.json"),
+            .label = try gpa.dupe(u8, "beta@example.com"),
+            .alias = try gpa.dupe(u8, ""),
+            .plan = try gpa.dupe(u8, "Business"),
+            .rate_5h = try gpa.dupe(u8, "-"),
+            .rate_week = try gpa.dupe(u8, "-"),
+            .last_activity = try gpa.dupe(u8, "-"),
+            .is_active = false,
+        },
+    };
+    defer {
+        for (&matches) |*match| match.deinit(gpa);
+    }
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try writeManagedTransferPickerTable(&aw.writer, &matches);
+
+    const rendered = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "GROUP") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "PLAN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "5H LEFT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "WEEKLY LEFT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "LAST ACTIVITY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-- default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "* 01") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "default") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "88% (01:00)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "-- work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "  02") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "work") != null);
+}
+
+fn selectManagedGroupTransferMatches(
+    allocator: std.mem.Allocator,
+    target_group_name: []const u8,
+    mode: ManagedGroupTransferMode,
+    matches: []const ManagedGroupAccountMatch,
+) !?[]usize {
+    if (matches.len == 0) {
+        try printGroupMessage("No accounts available to {s} into group `{s}`.", .{ managedTransferVerb(mode), target_group_name });
+        return null;
+    }
+    if (!(std.Io.File.stdin().isTty(app_runtime.io()) catch false) or
+        !(std.Io.File.stdout().isTty(app_runtime.io()) catch false))
+    {
+        try printGroupError("`group <name> {s}` requires account selectors when not running interactively.", .{managedTransferVerb(mode)});
+        return error.InvalidCliUsage;
+    }
+
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &stdout.interface;
+    try out.print("Accounts available to {s} into group `{s}`:\n", .{ managedTransferVerb(mode), target_group_name });
+    try writeManagedTransferPickerTable(out, matches);
+    try out.print("Select accounts to {s} [number(s), all, q]: ", .{managedTransferVerb(mode)});
+    try out.flush();
+
+    var input: [1024]u8 = undefined;
+    const n = try readFileOnce(std.Io.File.stdin(), &input);
+    const line = std.mem.trim(u8, input[0..n], " \n\r\t");
+    if (line.len == 0 or (line.len == 1 and (line[0] == 'q' or line[0] == 'Q'))) return null;
+
+    var selected = std.ArrayList(usize).empty;
+    errdefer selected.deinit(allocator);
+
+    if (std.ascii.eqlIgnoreCase(line, "all")) {
+        for (matches, 0..) |_, idx| {
+            try selected.append(allocator, idx);
+        }
+        return try selected.toOwnedSlice(allocator);
+    }
+
+    var tokens = std.mem.tokenizeAny(u8, line, " ,\t");
+    while (tokens.next()) |token| {
+        const choice = std.fmt.parseUnsigned(usize, token, 10) catch {
+            try printGroupError("invalid account selection `{s}`.", .{token});
+            return error.InvalidCliUsage;
+        };
+        if (choice == 0 or choice > matches.len) {
+            try printGroupError("account selection must be between 1 and {d}.", .{matches.len});
+            return error.InvalidCliUsage;
+        }
+        try appendTransferSelectionUnique(allocator, &selected, choice - 1);
+    }
+    if (selected.items.len == 0) return null;
+    return try selected.toOwnedSlice(allocator);
+}
+
+fn importManagedMatchIntoGroup(
+    allocator: std.mem.Allocator,
+    target: *const group_manager.GroupRef,
+    match: *const ManagedGroupAccountMatch,
+    target_reg: *registry.Registry,
+) !registry.ImportOutcome {
+    const alias = if (match.alias.len == 0) null else match.alias;
+    var report = try registry.importAuthPath(allocator, target.codex_home, target_reg, match.snapshot_path, alias);
+    defer report.deinit(allocator);
+    return if (report.events.items.len == 0) .updated else report.events.items[0].outcome;
+}
+
+fn removeManagedMatchFromSource(allocator: std.mem.Allocator, match: *const ManagedGroupAccountMatch) !bool {
+    var source_reg = try registry.loadRegistry(allocator, match.source_codex_home);
+    defer source_reg.deinit(allocator);
+
+    const source_idx = registry.findAccountIndexByAccountKey(&source_reg, match.account_key) orelse return false;
+    const selected = [_]usize{source_idx};
+    try removeSelectedAccountsAndPersist(allocator, match.source_codex_home, &source_reg, &selected, false);
+    return true;
+}
+
+fn transferManagedGroupMatch(
+    allocator: std.mem.Allocator,
+    target: *const group_manager.GroupRef,
+    target_reg: *registry.Registry,
+    match: *const ManagedGroupAccountMatch,
+    mode: ManagedGroupTransferMode,
+    added: *usize,
+    updated: *usize,
+    removed_from_source: *usize,
+) !void {
+    if (mode == .add and !managedMatchIsDefault(match)) {
+        if (!(try confirmAddFromNonDefaultGroup(match, target.name))) return;
+    }
+
+    const outcome = try importManagedMatchIntoGroup(allocator, target, match, target_reg);
+    switch (outcome) {
+        .imported => added.* += 1,
+        .updated => updated.* += 1,
+        .skipped => {
+            try printGroupMessage("Skipped {s} from group `{s}`.", .{ match.label, match.source_group_name });
+            return;
+        },
+    }
+    if (mode == .move) {
+        if (try removeManagedMatchFromSource(allocator, match)) {
+            removed_from_source.* += 1;
+        }
+    }
+    try printGroupMessage("{s} {s} from group `{s}` to group `{s}`.", .{
+        managedTransferPastVerb(mode),
+        match.label,
+        match.source_group_name,
+        target.name,
+    });
+}
+
+fn handleManagedGroupTransfer(
+    allocator: std.mem.Allocator,
+    target_group_name: []const u8,
+    selectors: []const []const u8,
+    mode: ManagedGroupTransferMode,
+) !void {
+    var target = try group_manager.resolveGroupAlloc(allocator, target_group_name);
+    defer target.deinit(allocator);
+
+    var target_reg = try registry.loadRegistry(allocator, target.codex_home);
+    defer target_reg.deinit(allocator);
+
+    var added: usize = 0;
+    var updated: usize = 0;
+    var removed_from_source: usize = 0;
+    var missing = std.ArrayList([]const u8).empty;
+    defer missing.deinit(allocator);
+
+    if (selectors.len == 0) {
+        var matches = try collectAllManagedGroupTransferMatches(allocator, target.name);
+        defer {
+            for (matches.items) |*match| match.deinit(allocator);
+            matches.deinit(allocator);
+        }
+        const selected = try selectManagedGroupTransferMatches(allocator, target.name, mode, matches.items);
+        const selected_indices = selected orelse return;
+        defer allocator.free(selected_indices);
+        for (selected_indices) |match_idx| {
+            try transferManagedGroupMatch(
+                allocator,
+                &target,
+                &target_reg,
+                &matches.items[match_idx],
+                mode,
+                &added,
+                &updated,
+                &removed_from_source,
+            );
+        }
+    } else {
+        for (selectors) |selector| {
+            var matches = try collectManagedGroupMatches(allocator, selector, target.name);
+            defer {
+                for (matches.items) |*match| match.deinit(allocator);
+                matches.deinit(allocator);
+            }
+
+            if (matches.items.len == 0) {
+                try missing.append(allocator, selector);
+                continue;
+            }
+
+            for (matches.items) |*match| {
+                try transferManagedGroupMatch(
+                    allocator,
+                    &target,
+                    &target_reg,
+                    match,
+                    mode,
+                    &added,
+                    &updated,
+                    &removed_from_source,
+                );
+            }
+        }
+    }
+
+    if (added + updated > 0) {
+        try registry.saveRegistry(allocator, target.codex_home, &target_reg);
+    }
+    if (missing.items.len != 0) {
+        try cli.printAccountNotFoundErrors(missing.items);
+        if (added + updated == 0) return error.AccountNotFound;
+    }
+    switch (mode) {
+        .add => try printGroupMessage("Group `{s}` updated: {d} imported, {d} refreshed.", .{ target.name, added, updated }),
+        .copy => try printGroupMessage("Group `{s}` copy complete: {d} imported, {d} refreshed.", .{ target.name, added, updated }),
+        .move => try printGroupMessage("Group `{s}` move complete: {d} imported, {d} refreshed, {d} removed from source groups.", .{
+            target.name,
+            added,
+            updated,
+            removed_from_source,
+        }),
+    }
+}
+
+fn handleManagedGroupAdd(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    try handleManagedGroupTransfer(allocator, target_group_name, selectors, .add);
+}
+
+fn handleManagedGroupCopy(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    try handleManagedGroupTransfer(allocator, target_group_name, selectors, .copy);
+}
+
+fn handleManagedGroupMove(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    try handleManagedGroupTransfer(allocator, target_group_name, selectors, .move);
+}
+
+fn handleManagedGroupRemove(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    var target = try group_manager.resolveGroupAlloc(allocator, target_group_name);
+    defer target.deinit(allocator);
+    try handleRemove(allocator, target.codex_home, .{
+        .selectors = @constCast(selectors),
+        .all = false,
+        .live = false,
+        .api_mode = .skip_api,
+    });
+}
+
+fn handleManagedGroupLaunch(allocator: std.mem.Allocator, name: []const u8, opts: cli.LaunchOptions) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+    try group_manager.rememberCurrentProjectGroup(allocator, group.name);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, "codext");
+    try argv.appendSlice(allocator, opts.argv);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("CODEX_HOME", group.codex_home);
+
+    var child = std.process.spawn(app_runtime.io(), .{
+        .argv = argv.items,
+        .environ_map = &env_map,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        try printGroupError("failed to launch `codext` for group `{s}`: {s}.", .{ name, @errorName(err) });
+        return err;
+    };
+    const term = try child.wait(app_runtime.io());
+    switch (term) {
+        .exited => |code| if (code == 0) return,
+        else => {},
+    }
+    return error.CodextLaunchFailed;
+}
+
+fn handleManagedGroupArchive(allocator: std.mem.Allocator, name: []const u8) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+    if (std.mem.eql(u8, group.name, group_manager.default_group_name)) {
+        try printGroupError("default group cannot be archived.", .{});
+        return error.InvalidGroupName;
+    }
+    auto.handleGroupAutoCommand(allocator, group.name, group.codex_home, .{ .action = .disable }) catch |err| switch (err) {
+        error.FileNotFound, error.UnsupportedRegistryVersion => {},
+        else => return err,
+    };
+    const archive_path = try group_manager.archiveManagedGroupFolder(allocator, group.name, nowMilliseconds());
+    defer allocator.free(archive_path);
+    try printGroupMessage("Archived group `{s}` to {s}.", .{ group.name, archive_path });
+}
+
+fn handleManagedGroupDelete(allocator: std.mem.Allocator, opts: cli.GroupDeleteOptions) !void {
+    if (!opts.force) {
+        try printGroupError("group delete is permanent; run `codex-auth group archive {s}` to move it aside first, or rerun with `--force`.", .{opts.name});
+        return error.InvalidCliUsage;
+    }
+
+    var group = try group_manager.resolveGroupAlloc(allocator, opts.name);
+    defer group.deinit(allocator);
+    if (std.mem.eql(u8, group.name, group_manager.default_group_name)) {
+        try printGroupError("default group cannot be deleted.", .{});
+        return error.InvalidGroupName;
+    }
+    auto.handleGroupAutoCommand(allocator, group.name, group.codex_home, .{ .action = .disable }) catch |err| switch (err) {
+        error.FileNotFound, error.UnsupportedRegistryVersion => {},
+        else => return err,
+    };
+    const deleted_path = try group_manager.deleteManagedGroupFolder(allocator, group.name);
+    defer allocator.free(deleted_path);
+    try printGroupMessage("Deleted group `{s}` from {s}.", .{ group.name, deleted_path });
+}
+
+fn handleProjectShow(allocator: std.mem.Allocator) !void {
+    const remembered = try group_manager.currentProjectGroupAlloc(allocator);
+    defer if (remembered) |name| allocator.free(name);
+    const group_name = remembered orelse group_manager.default_group_name;
+    var group = try group_manager.resolveGroupAlloc(allocator, group_name);
+    defer group.deinit(allocator);
+    try printGroupMessage("Project group: {s}{s}", .{
+        group.name,
+        if (remembered == null) " (default)" else "",
+    });
+    try printGroupMessage("CODEX_HOME: {s}", .{group.codex_home});
+}
+
+fn handleProjectSetGroup(allocator: std.mem.Allocator, name: []const u8) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+    try group_manager.rememberCurrentProjectGroup(allocator, group.name);
+    try printGroupMessage("Project group set to `{s}` ({s}).", .{ group.name, group.codex_home });
+}
+
+fn handleProjectClear(allocator: std.mem.Allocator) !void {
+    const cleared = try group_manager.clearCurrentProjectGroup(allocator);
+    try printGroupMessage("{s}", .{if (cleared) "Project group cleared." else "No project group was set for this directory."});
+}
+
+fn handleProject(allocator: std.mem.Allocator, opts: cli.ProjectOptions) !void {
+    switch (opts) {
+        .show => try handleProjectShow(allocator),
+        .set_group => |name| try handleProjectSetGroup(allocator, name),
+        .clear => try handleProjectClear(allocator),
+    }
+}
+
+fn handleProjectLaunch(allocator: std.mem.Allocator, opts: cli.LaunchOptions) !void {
+    const remembered = try group_manager.currentProjectGroupAlloc(allocator);
+    defer if (remembered) |name| allocator.free(name);
+    const group_name = remembered orelse group_manager.default_group_name;
+    try handleManagedGroupLaunch(allocator, group_name, opts);
+}
+
+fn appendAccountKeyUnique(
+    allocator: std.mem.Allocator,
+    keys: *std.ArrayList([]const u8),
+    account_key: []const u8,
+) !void {
+    for (keys.items) |existing| {
+        if (std.mem.eql(u8, existing, account_key)) return;
+    }
+    try keys.append(allocator, account_key);
+}
+
+fn resolveGroupSelectorsAlloc(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    selectors: []const []const u8,
+) ![]const []const u8 {
+    var keys = std.ArrayList([]const u8).empty;
+    defer keys.deinit(allocator);
+    var missing = std.ArrayList([]const u8).empty;
+    defer missing.deinit(allocator);
+
+    for (selectors) |selector| {
+        if (try findAccountIndexByDisplayNumber(allocator, reg, selector)) |account_idx| {
+            try appendAccountKeyUnique(allocator, &keys, reg.accounts.items[account_idx].account_key);
+            continue;
+        }
+
+        var matches = try findMatchingAccountsForRemove(allocator, reg, selector);
+        defer matches.deinit(allocator);
+        if (matches.items.len == 0) {
+            try missing.append(allocator, selector);
+            continue;
+        }
+        for (matches.items) |account_idx| {
+            try appendAccountKeyUnique(allocator, &keys, reg.accounts.items[account_idx].account_key);
+        }
+    }
+
+    if (missing.items.len != 0) {
+        try cli.printAccountNotFoundErrors(missing.items);
+        return error.AccountNotFound;
+    }
+    return try keys.toOwnedSlice(allocator);
+}
+
+fn printGroupList(reg: *registry.Registry) !void {
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    if (reg.groups.items.len == 0) {
+        try out.writeAll("No groups configured.\n");
+        try out.flush();
+        return;
+    }
+    for (reg.groups.items) |group| {
+        const active = reg.active_group_name != null and std.mem.eql(u8, reg.active_group_name.?, group.name);
+        try out.print("{s} {s} ({d} account(s))\n", .{ if (active) "*" else " ", group.name, group.account_keys.len });
+    }
+    try out.flush();
+}
+
+fn handleGroupMutation(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    opts: cli.GroupMutationOptions,
+    action: enum { create, add, remove },
+) !usize {
+    const account_keys = try resolveGroupSelectorsAlloc(allocator, reg, opts.selectors);
+    defer allocator.free(account_keys);
+
+    return switch (action) {
+        .create => blk: {
+            if (registry.findGroupIndexByName(reg, opts.name) != null) {
+                try printGroupError("group `{s}` already exists.", .{opts.name});
+                return error.GroupAlreadyExists;
+            }
+            try registry.createGroup(allocator, reg, opts.name, account_keys);
+            break :blk account_keys.len;
+        },
+        .add => blk: {
+            if (registry.findGroupIndexByName(reg, opts.name) == null) {
+                try printGroupError("group `{s}` does not exist.", .{opts.name});
+                return error.GroupNotFound;
+            }
+            break :blk try registry.addAccountsToGroup(allocator, reg, opts.name, account_keys);
+        },
+        .remove => blk: {
+            if (registry.findGroupIndexByName(reg, opts.name) == null) {
+                try printGroupError("group `{s}` does not exist.", .{opts.name});
+                return error.GroupNotFound;
+            }
+            break :blk try registry.removeAccountsFromGroup(allocator, reg, opts.name, account_keys);
+        },
+    };
+}
+
+fn handleGroupUse(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry, name: ?[]const u8) !void {
+    if (name == null) {
+        registry.clearActiveGroup(allocator, reg);
+        try registry.saveRegistry(allocator, codex_home, reg);
+        try printGroupMessage("Active group cleared.", .{});
+        return;
+    }
+
+    const group_name = name.?;
+    if (registry.findGroupIndexByName(reg, group_name) == null) {
+        try printGroupError("group `{s}` does not exist.", .{group_name});
+        return error.GroupNotFound;
+    }
+    const indices = try registry.groupAccountIndicesAlloc(allocator, reg, group_name);
+    defer allocator.free(indices);
+    if (indices.len == 0) {
+        try printGroupError("group `{s}` has no accounts.", .{group_name});
+        return error.GroupEmpty;
+    }
+
+    try registry.setActiveGroupName(allocator, reg, group_name);
+    var switched = false;
+    if (reg.active_account_key == null or !registry.accountInActiveGroup(reg, reg.active_account_key.?)) {
+        const best_idx = registry.selectBestAccountIndexByUsageFromIndices(reg, indices) orelse indices[0];
+        try registry.activateAccountByKey(allocator, codex_home, reg, reg.accounts.items[best_idx].account_key);
+        switched = true;
+    }
+    try registry.saveRegistry(allocator, codex_home, reg);
+
+    if (switched) {
+        const label = try accountLabelForKeyAlloc(allocator, reg, reg.active_account_key.?);
+        defer allocator.free(label);
+        try printGroupMessage("Active group: {s}; switched to {s}.", .{ group_name, label });
+    } else {
+        try printGroupMessage("Active group: {s}.", .{group_name});
+    }
+}
+
+fn handleGroup(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.GroupOptions) !void {
+    switch (opts) {
+        .list => try printGroupListAll(allocator),
+        .status => try printManagedGroupStatusAll(allocator),
+        .create => |mutation| try handleManagedGroupCreate(allocator, mutation),
+        .add => |mutation| try handleManagedGroupAdd(allocator, mutation.name, mutation.selectors),
+        .copy => |mutation| try handleManagedGroupCopy(allocator, mutation.name, mutation.selectors),
+        .move => |mutation| try handleManagedGroupMove(allocator, mutation.name, mutation.selectors),
+        .remove => |mutation| try handleManagedGroupRemove(allocator, mutation.name, mutation.selectors),
+        .delete => |delete_opts| try handleManagedGroupDelete(allocator, delete_opts),
+        .archive => |name| try handleManagedGroupArchive(allocator, name),
+        .use => |name| {
+            var reg = try registry.loadRegistry(allocator, codex_home);
+            defer reg.deinit(allocator);
+            if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
+                try registry.saveRegistry(allocator, codex_home, &reg);
+            }
+            try handleGroupUse(allocator, codex_home, &reg, name);
+        },
+        .path => |name| try printManagedGroupPath(allocator, name),
+        .scoped => |scoped| {
+            var group = try group_manager.resolveGroupAlloc(allocator, scoped.name);
+            defer group.deinit(allocator);
+            switch (scoped.action) {
+                .list => |list_opts| try handleList(allocator, group.codex_home, list_opts, .{ .current_group = group.display_color }),
+                .status => try auto.printStatusForGroup(allocator, group.name, group.codex_home),
+                .login => |login_opts| try handleManagedGroupLogin(allocator, group.name, login_opts),
+                .add => |selectors| try handleManagedGroupAdd(allocator, group.name, selectors),
+                .copy => |selectors| try handleManagedGroupCopy(allocator, group.name, selectors),
+                .move => |selectors| try handleManagedGroupMove(allocator, group.name, selectors),
+                .remove => |selectors| try handleManagedGroupRemove(allocator, group.name, selectors),
+                .auto_switch => |auto_opts| try auto.handleGroupAutoCommand(allocator, group.name, group.codex_home, auto_opts),
+                .config => |config_opts| try handleGroupConfig(allocator, group.codex_home, config_opts),
+                .import_auth => |import_opts| try handleImport(allocator, group.codex_home, import_opts),
+                .switch_account => |switch_opts| try handleSwitch(allocator, group.codex_home, switch_opts),
+                .launch => |launch_opts| try handleManagedGroupLaunch(allocator, group.name, launch_opts),
+            }
+        },
+    }
+}
+
+fn handleGroupConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ConfigOptions) !void {
+    switch (opts) {
+        .api => |action| try auto.handleApiCommand(allocator, codex_home, action),
+        .auto_switch => |auto_opts| try auto.handleAutoCommand(allocator, codex_home, auto_opts),
+    }
 }
 
 fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ConfigOptions) !void {
@@ -2502,8 +3839,26 @@ pub fn findMatchingAccounts(
     reg: *registry.Registry,
     query: []const u8,
 ) !std.ArrayList(usize) {
+    return findMatchingAccountsInScope(allocator, reg, query, null);
+}
+
+fn accountIndexInScope(idx: usize, account_indices: ?[]const usize) bool {
+    const indices = account_indices orelse return true;
+    for (indices) |account_idx| {
+        if (account_idx == idx) return true;
+    }
+    return false;
+}
+
+pub fn findMatchingAccountsInScope(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    query: []const u8,
+    account_indices: ?[]const usize,
+) !std.ArrayList(usize) {
     var matches = std.ArrayList(usize).empty;
     for (reg.accounts.items, 0..) |*rec, idx| {
+        if (!accountIndexInScope(idx, account_indices)) continue;
         const matches_email = std.ascii.indexOfIgnoreCase(rec.email, query) != null;
         const matches_alias = rec.alias.len != 0 and std.ascii.indexOfIgnoreCase(rec.alias, query) != null;
         const matches_name = if (rec.account_name) |name|
@@ -2554,9 +3909,18 @@ fn findAccountIndexByDisplayNumber(
     reg: *registry.Registry,
     selector: []const u8,
 ) !?usize {
+    return findAccountIndexByDisplayNumberInScope(allocator, reg, selector, null);
+}
+
+fn findAccountIndexByDisplayNumberInScope(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    selector: []const u8,
+    account_indices: ?[]const usize,
+) !?usize {
     const display_number = parseDisplayNumber(selector) orelse return null;
 
-    var display = try display_rows.buildDisplayRows(allocator, reg, null);
+    var display = try display_rows.buildDisplayRows(allocator, reg, account_indices);
     defer display.deinit(allocator);
 
     if (display_number > display.selectable_row_indices.len) return null;

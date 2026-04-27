@@ -16,6 +16,7 @@ This document describes how `codex-auth` stores accounts, synchronizes auth file
 - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`
+- Account group behavior is documented in [docs/account-groups.md](./account-groups.md).
 
 ## File Permissions
 
@@ -46,12 +47,13 @@ File-permission behavior is documented in [docs/permissions.md](./permissions.md
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - The current binary supports all released schemas:
-  - `schema_version = 3` is the current layout with record-keyed snapshots, active-account activation timestamps, and per-account local rollout dedupe.
-  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `3`.
-- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized `schema_version = 3` format.
+  - `schema_version = 4` is the current layout with record-keyed snapshots, active-account activation timestamps, per-account local rollout dedupe, and optional registry-local account groups.
+  - `schema_version = 3` registries are auto-migrated to schema `4`.
+  - `version = 2` legacy registries using `active_email` and email-keyed snapshots are auto-migrated to schema `4`.
+- The current binary also accepts current-layout files that still use the legacy top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to the normalized `schema_version = 4` format.
 - Loading a supported older schema performs the migration in memory and then rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`; older binaries must not silently rewrite newer registry files.
-- Saving always rewrites `registry.json` into the current field set with `schema_version = 3`.
+- Saving always rewrites `registry.json` into the current field set with `schema_version = 4`.
 - Unknown extra fields are still ignored on load and dropped on save, so additive compatibility is only guaranteed for schemas explicitly supported by the current binary.
 - See `docs/schema-migration.md` for the versioning policy and migration rules.
 

@@ -7,8 +7,10 @@ const builtin = @import("builtin");
 const c_time = @cImport({
     @cInclude("time.h");
 });
+const chatgpt_http = @import("chatgpt_http.zig");
 const cli = @import("cli.zig");
 const io_util = @import("io_util.zig");
+const group_manager = @import("group_manager.zig");
 const registry = @import("registry.zig");
 const sessions = @import("sessions.zig");
 const terminal_color = @import("terminal_color.zig");
@@ -20,6 +22,9 @@ const linux_service_name = "codex-auth-autoswitch.service";
 const linux_timer_name = "codex-auth-autoswitch.timer";
 const mac_label = "com.loongphy.codex-auth.auto";
 const windows_task_name = "CodexAuthAutoSwitch";
+const manager_linux_service_name = "codex-auth-manager.service";
+const manager_mac_label = "com.loongphy.codex-auth.manager";
+const manager_windows_task_name = "CodexAuthManager";
 const windows_helper_name = "codex-auth-auto.exe";
 const windows_task_trigger_kind = "LogonTrigger";
 const windows_task_restart_count = "999";
@@ -27,6 +32,7 @@ const windows_task_restart_count_value: i32 = 999;
 const windows_task_restart_interval_xml = "PT1M";
 const windows_task_execution_time_limit_xml = "PT0S";
 const lock_file_name = "auto-switch.lock";
+const manager_lock_file_name = "auto-switch-manager.lock";
 const watch_poll_interval_ns = 1 * std.time.ns_per_s;
 const api_refresh_interval_ns = 60 * std.time.ns_per_s;
 const free_plan_realtime_guard_5h_percent: i64 = 35;
@@ -39,7 +45,72 @@ pub const Status = struct {
     threshold_weekly_percent: u8,
     api_usage_enabled: bool,
     api_account_enabled: bool,
+    codex_home: []const u8 = "",
+    managed_group: ?[]u8 = null,
+    active_group: ?[]u8 = null,
+
+    pub fn deinit(self: *Status, allocator: std.mem.Allocator) void {
+        if (self.managed_group) |name| allocator.free(name);
+        if (self.active_group) |name| allocator.free(name);
+        self.managed_group = null;
+        self.active_group = null;
+    }
 };
+
+pub const ServiceTarget = struct {
+    linux_service_name: []const u8,
+    linux_timer_name: ?[]const u8 = null,
+    mac_label: []const u8,
+    windows_task_name: []const u8,
+    owned: bool = false,
+
+    pub fn deinit(self: *ServiceTarget, allocator: std.mem.Allocator) void {
+        if (!self.owned) return;
+        allocator.free(self.linux_service_name);
+        if (self.linux_timer_name) |name| allocator.free(name);
+        allocator.free(self.mac_label);
+        allocator.free(self.windows_task_name);
+        self.* = undefined;
+    }
+};
+
+fn defaultServiceTarget() ServiceTarget {
+    return .{
+        .linux_service_name = linux_service_name,
+        .linux_timer_name = linux_timer_name,
+        .mac_label = mac_label,
+        .windows_task_name = windows_task_name,
+    };
+}
+
+pub fn managerServiceTarget() ServiceTarget {
+    return .{
+        .linux_service_name = manager_linux_service_name,
+        .linux_timer_name = null,
+        .mac_label = manager_mac_label,
+        .windows_task_name = manager_windows_task_name,
+    };
+}
+
+pub fn groupServiceTargetAlloc(allocator: std.mem.Allocator, group_name: []const u8) !ServiceTarget {
+    try group_manager.validateGroupName(group_name);
+    if (std.mem.eql(u8, group_name, group_manager.default_group_name)) {
+        return defaultServiceTarget();
+    }
+    const group_linux_service_name = try std.fmt.allocPrint(allocator, "codex-auth-autoswitch-{s}.service", .{group_name});
+    errdefer allocator.free(group_linux_service_name);
+    const group_mac_label = try std.fmt.allocPrint(allocator, "com.loongphy.codex-auth.auto.{s}", .{group_name});
+    errdefer allocator.free(group_mac_label);
+    const group_windows_task_name = try std.fmt.allocPrint(allocator, "CodexAuthAutoSwitch-{s}", .{group_name});
+    errdefer allocator.free(group_windows_task_name);
+    return .{
+        .linux_service_name = group_linux_service_name,
+        .linux_timer_name = null,
+        .mac_label = group_mac_label,
+        .windows_task_name = group_windows_task_name,
+        .owned = true,
+    };
+}
 
 const service_version_env_name = "CODEX_AUTH_VERSION";
 const codex_home_env_name = "CODEX_HOME";
@@ -79,6 +150,7 @@ const CandidateIndex = struct {
         self.deinit(allocator);
         const active = reg.active_account_key;
         for (reg.accounts.items) |*rec| {
+            if (!registry.accountInActiveGroup(reg, rec.account_key)) continue;
             if (active) |account_key| {
                 if (std.mem.eql(u8, rec.account_key, account_key)) continue;
             }
@@ -140,6 +212,12 @@ const CandidateIndex = struct {
             }
         }
 
+        if (!registry.accountInActiveGroup(reg, account_key)) {
+            self.remove(account_key);
+            self.refreshNextScoreChangeAt(reg, now);
+            return;
+        }
+
         const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse {
             self.remove(account_key);
             self.refreshNextScoreChangeAt(reg, now);
@@ -175,6 +253,7 @@ const CandidateIndex = struct {
         const active = reg.active_account_key;
         var next_score_change_at: ?i64 = null;
         for (reg.accounts.items) |*rec| {
+            if (!registry.accountInActiveGroup(reg, rec.account_key)) continue;
             if (active) |account_key| {
                 if (std.mem.eql(u8, rec.account_key, account_key)) continue;
             }
@@ -250,6 +329,9 @@ const CandidateIndex = struct {
 pub const DaemonRefreshState = struct {
     last_api_refresh_at_ns: i128 = 0,
     last_api_refresh_account_key: ?[]u8 = null,
+    active_usage_refresh_account_key: ?[]u8 = null,
+    active_usage_refresh_available: ?bool = null,
+    confirmed_limit_account_key: ?[]u8 = null,
     last_account_name_refresh_at_ns: i128 = 0,
     last_account_name_refresh_account_key: ?[]u8 = null,
     pending_bad_account_key: ?[]u8 = null,
@@ -261,9 +343,12 @@ pub const DaemonRefreshState = struct {
     candidate_check_times: std.StringHashMapUnmanaged(i128) = .empty,
     candidate_rejections: std.StringHashMapUnmanaged(bool) = .empty,
     rollout_scan_cache: sessions.RolloutScanCache = .{},
+    limit_scan_cache: sessions.LimitScanCache = .{},
 
     pub fn deinit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
         self.clearApiRefresh(allocator);
+        self.clearActiveUsageRefresh(allocator);
+        self.clearConfirmedLimit(allocator);
         self.clearAccountNameRefresh(allocator);
         self.clearPending(allocator);
         if (self.current_reg) |*reg| {
@@ -278,6 +363,7 @@ pub const DaemonRefreshState = struct {
             self.candidate_rejections.deinit(allocator);
         }
         self.rollout_scan_cache.deinit(allocator);
+        self.limit_scan_cache.deinit(allocator);
     }
 
     fn clearApiRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
@@ -286,6 +372,57 @@ pub const DaemonRefreshState = struct {
         }
         self.last_api_refresh_account_key = null;
         self.last_api_refresh_at_ns = 0;
+    }
+
+    fn clearActiveUsageRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.active_usage_refresh_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.active_usage_refresh_account_key = null;
+        self.active_usage_refresh_available = null;
+    }
+
+    fn markActiveUsageRefresh(
+        self: *DaemonRefreshState,
+        allocator: std.mem.Allocator,
+        account_key: []const u8,
+        available: bool,
+    ) !void {
+        if (self.active_usage_refresh_account_key) |stored| {
+            if (std.mem.eql(u8, stored, account_key)) {
+                self.active_usage_refresh_available = available;
+                return;
+            }
+        }
+        self.clearActiveUsageRefresh(allocator);
+        self.active_usage_refresh_account_key = try allocator.dupe(u8, account_key);
+        self.active_usage_refresh_available = available;
+    }
+
+    fn activeUsageRefreshUnavailable(self: *const DaemonRefreshState, account_key: []const u8) bool {
+        const stored = self.active_usage_refresh_account_key orelse return false;
+        if (!std.mem.eql(u8, stored, account_key)) return false;
+        return self.active_usage_refresh_available == false;
+    }
+
+    fn clearConfirmedLimit(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
+        if (self.confirmed_limit_account_key) |account_key| {
+            allocator.free(account_key);
+        }
+        self.confirmed_limit_account_key = null;
+    }
+
+    fn setConfirmedLimit(self: *DaemonRefreshState, allocator: std.mem.Allocator, account_key: []const u8) !void {
+        if (self.confirmed_limit_account_key) |stored| {
+            if (std.mem.eql(u8, stored, account_key)) return;
+        }
+        self.clearConfirmedLimit(allocator);
+        self.confirmed_limit_account_key = try allocator.dupe(u8, account_key);
+    }
+
+    fn confirmedLimitMatches(self: *const DaemonRefreshState, account_key: []const u8) bool {
+        const stored = self.confirmed_limit_account_key orelse return false;
+        return std.mem.eql(u8, stored, account_key);
     }
 
     fn clearAccountNameRefresh(self: *DaemonRefreshState, allocator: std.mem.Allocator) void {
@@ -510,22 +647,46 @@ fn colorEnabled() bool {
 }
 
 pub fn printStatus(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const status = try getStatus(allocator, codex_home);
+    var status = try getStatus(allocator, codex_home);
+    defer status.deinit(allocator);
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     try writeStatusWithColor(stdout.out(), status, colorEnabled());
 }
 
 pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
+    const target = managerServiceTarget();
+    return getStatusForTarget(allocator, codex_home, &target);
+}
+
+pub fn printStatusForGroup(allocator: std.mem.Allocator, group_name: []const u8, codex_home: []const u8) !void {
+    var status = try getStatusForGroup(allocator, group_name, codex_home);
+    defer status.deinit(allocator);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try writeStatusWithColor(stdout.out(), status, colorEnabled());
+}
+
+pub fn getStatusForGroup(allocator: std.mem.Allocator, group_name: []const u8, codex_home: []const u8) !Status {
+    const target = managerServiceTarget();
+    var status = try getStatusForTarget(allocator, codex_home, &target);
+    errdefer status.deinit(allocator);
+    status.managed_group = try allocator.dupe(u8, group_name);
+    return status;
+}
+
+fn getStatusForTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !Status {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     return .{
         .enabled = reg.auto_switch.enabled,
-        .runtime = queryRuntimeState(allocator),
+        .runtime = queryRuntimeStateForTarget(allocator, target),
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
         .api_usage_enabled = reg.api.usage,
         .api_account_enabled = reg.api.account,
+        .codex_home = codex_home,
+        .active_group = if (reg.active_group_name) |name| try allocator.dupe(u8, name) else null,
     };
 }
 
@@ -539,13 +700,19 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
     try out.writeAll(helpStateLabel(status.enabled));
     try out.writeAll("\n");
 
+    if (status.managed_group) |group_name| {
+        try out.writeAll("managed group: ");
+        try out.writeAll(group_name);
+        try out.writeAll("\n");
+    }
+
     try out.writeAll("service: ");
     try out.writeAll(@tagName(status.runtime));
     try out.writeAll("\n");
 
     try out.writeAll("thresholds: ");
     try out.print(
-        "5h<{d}%, weekly<{d}%",
+        "5h left<={d}%, weekly left<={d}%",
         .{ status.threshold_5h_percent, status.threshold_weekly_percent },
     );
     try out.writeAll("\n");
@@ -556,6 +723,17 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
 
     try out.writeAll("account: ");
     try out.writeAll(if (status.api_account_enabled) "api" else "disabled");
+    try out.writeAll("\n");
+
+    try out.writeAll("account scope: ");
+    if (status.active_group) |group_name| {
+        try out.print("legacy group {s}", .{group_name});
+    } else {
+        try out.writeAll("all accounts");
+    }
+    if (status.codex_home.len != 0) {
+        try out.print(" in CODEX_HOME: {s}", .{status.codex_home});
+    }
     try out.writeAll("\n");
 
     try out.flush();
@@ -733,12 +911,45 @@ fn fieldSeparator() []const u8 {
 }
 
 pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, cmd: cli.AutoOptions) !void {
+    try handleManagedAutoCommand(allocator, null, codex_home, cmd);
+}
+
+pub fn handleGroupAutoCommand(
+    allocator: std.mem.Allocator,
+    group_name: []const u8,
+    codex_home: []const u8,
+    cmd: cli.AutoOptions,
+) !void {
+    try handleManagedAutoCommand(allocator, group_name, codex_home, cmd);
+}
+
+fn handleAutoCommandForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    target: *const ServiceTarget,
+    cmd: cli.AutoOptions,
+) !void {
     switch (cmd) {
         .action => |action| switch (action) {
-            .enable => try enable(allocator, codex_home),
-            .disable => try disable(allocator, codex_home),
+            .enable => try enableWithTarget(allocator, codex_home, target),
+            .disable => try disableWithTarget(allocator, codex_home, target),
         },
-        .configure => |opts| try configureThresholds(allocator, codex_home, opts),
+        .configure => |opts| try configureThresholdsForTarget(allocator, codex_home, target, opts),
+    }
+}
+
+fn handleManagedAutoCommand(
+    allocator: std.mem.Allocator,
+    group_name: ?[]const u8,
+    codex_home: []const u8,
+    cmd: cli.AutoOptions,
+) !void {
+    switch (cmd) {
+        .action => |action| switch (action) {
+            .enable => try enableManagedAuto(allocator, codex_home),
+            .disable => try disableManagedAuto(allocator, codex_home),
+        },
+        .configure => |opts| try configureManagedAutoThresholds(allocator, group_name, codex_home, opts),
     }
 }
 
@@ -764,27 +975,110 @@ pub fn supportsManagedServiceOnPlatform(os_tag: std.Target.Os.Tag) bool {
 }
 
 pub fn reconcileManagedService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    _ = codex_home;
+    try reconcileManagedServiceManager(allocator);
+}
+
+pub fn reconcileManagedServiceForGroup(
+    allocator: std.mem.Allocator,
+    group_name: []const u8,
+    codex_home: []const u8,
+) !void {
+    _ = group_name;
+    _ = codex_home;
+    try reconcileManagedServiceManager(allocator);
+}
+
+fn reconcileManagedServiceForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    target: *const ServiceTarget,
+) !void {
     if (!supportsManagedServiceOnPlatform(builtin.os.tag)) return;
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
     if (!reg.auto_switch.enabled) {
-        try uninstallService(allocator, codex_home);
+        try uninstallServiceForTarget(allocator, codex_home, target);
         return;
     }
 
     if (builtin.os.tag == .linux and !linuxUserSystemdAvailable(allocator)) return;
 
-    const runtime = queryRuntimeState(allocator);
+    const runtime = queryRuntimeStateForTarget(allocator, target);
     const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
     defer allocator.free(self_exe);
     const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
     defer allocator.free(managed_self_exe);
-    const definition_matches = try currentServiceDefinitionMatches(allocator, codex_home, managed_self_exe);
+    const definition_matches = try currentServiceDefinitionMatchesForTarget(allocator, codex_home, managed_self_exe, target);
     if (!shouldEnsureManagedService(reg.auto_switch.enabled, runtime, definition_matches)) return;
 
-    try installService(allocator, codex_home, managed_self_exe);
+    try installServiceForTarget(allocator, codex_home, managed_self_exe, target);
+}
+
+fn anyAutoSwitchEnabled(allocator: std.mem.Allocator) !bool {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    for (groups.items.items) |item| {
+        var reg = registry.loadRegistry(allocator, item.codex_home) catch |err| switch (err) {
+            error.FileNotFound, error.UnsupportedRegistryVersion => continue,
+            else => return err,
+        };
+        defer reg.deinit(allocator);
+        if (reg.auto_switch.enabled) return true;
+    }
+    return false;
+}
+
+fn cleanupLegacyAutoServices(allocator: std.mem.Allocator) void {
+    var groups = group_manager.loadGroups(allocator) catch return;
+    defer groups.deinit(allocator);
+
+    for (groups.items.items) |item| {
+        var target = groupServiceTargetAlloc(allocator, item.name) catch continue;
+        defer target.deinit(allocator);
+        uninstallServiceForTarget(allocator, item.codex_home, &target) catch {};
+    }
+}
+
+fn managerNodeExecutableForServiceAlloc(allocator: std.mem.Allocator) !?[]u8 {
+    return chatgpt_http.resolveNodeExecutableForLaunchAlloc(allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => null,
+    };
+}
+
+fn ensureManagerServiceInstalled(allocator: std.mem.Allocator) !void {
+    if (!supportsManagedServiceOnPlatform(builtin.os.tag)) return;
+    if (builtin.os.tag == .linux and !linuxUserSystemdAvailable(allocator)) return;
+
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
+    defer allocator.free(self_exe);
+    const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
+    defer allocator.free(managed_self_exe);
+
+    const target = managerServiceTarget();
+    const runtime = queryRuntimeStateForTarget(allocator, &target);
+    const definition_matches = try currentManagerServiceDefinitionMatches(allocator, managed_self_exe);
+    if (!shouldEnsureManagedService(true, runtime, definition_matches)) return;
+
+    try installManagerService(allocator, managed_self_exe);
+    cleanupLegacyAutoServices(allocator);
+}
+
+fn reconcileManagedServiceManager(allocator: std.mem.Allocator) !void {
+    if (!supportsManagedServiceOnPlatform(builtin.os.tag)) return;
+
+    if (!(try anyAutoSwitchEnabled(allocator))) {
+        cleanupLegacyAutoServices(allocator);
+        try uninstallManagerService(allocator);
+        return;
+    }
+
+    try ensureManagerServiceInstalled(allocator);
+    cleanupLegacyAutoServices(allocator);
 }
 
 pub fn runDaemon(allocator: std.mem.Allocator, codex_home: []const u8) !void {
@@ -812,6 +1106,154 @@ pub fn runDaemonOnce(allocator: std.mem.Allocator, codex_home: []const u8) !void
     var refresh_state = DaemonRefreshState{};
     defer refresh_state.deinit(allocator);
     _ = try daemonCycle(allocator, codex_home, &refresh_state);
+}
+
+const ManagerLock = struct {
+    file: std.Io.File,
+
+    fn acquire(allocator: std.mem.Allocator) !?ManagerLock {
+        const root = try group_manager.managerRootAlloc(allocator);
+        defer allocator.free(root);
+        try std.Io.Dir.cwd().createDirPath(app_runtime.io(), root);
+
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ root, manager_lock_file_name });
+        defer allocator.free(path);
+        var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), path, .{ .read = true, .truncate = false });
+        errdefer file.close(app_runtime.io());
+        if (!(try tryExclusiveLock(file))) {
+            file.close(app_runtime.io());
+            return null;
+        }
+        return .{ .file = file };
+    }
+
+    fn release(self: *ManagerLock) void {
+        self.file.unlock(app_runtime.io());
+        self.file.close(app_runtime.io());
+    }
+};
+
+const ManagerGroupRuntimeState = struct {
+    name: []u8,
+    codex_home: []u8,
+    refresh_state: DaemonRefreshState = .{},
+    seen: bool = false,
+
+    fn deinit(self: *ManagerGroupRuntimeState, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.codex_home);
+        self.refresh_state.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+const ManagerDaemonState = struct {
+    groups: std.ArrayList(ManagerGroupRuntimeState) = .empty,
+
+    fn deinit(self: *ManagerDaemonState, allocator: std.mem.Allocator) void {
+        for (self.groups.items) |*item| item.deinit(allocator);
+        self.groups.deinit(allocator);
+    }
+
+    fn resetSeen(self: *ManagerDaemonState) void {
+        for (self.groups.items) |*item| item.seen = false;
+    }
+
+    fn ensureGroup(
+        self: *ManagerDaemonState,
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        codex_home: []const u8,
+    ) !*ManagerGroupRuntimeState {
+        for (self.groups.items) |*item| {
+            if (!std.mem.eql(u8, item.name, name)) continue;
+            if (!std.mem.eql(u8, item.codex_home, codex_home)) {
+                const next_codex_home = try allocator.dupe(u8, codex_home);
+                item.refresh_state.deinit(allocator);
+                allocator.free(item.codex_home);
+                item.codex_home = next_codex_home;
+                item.refresh_state = .{};
+            }
+            item.seen = true;
+            return item;
+        }
+
+        const name_copy = try allocator.dupe(u8, name);
+        errdefer allocator.free(name_copy);
+        const codex_home_copy = try allocator.dupe(u8, codex_home);
+        errdefer allocator.free(codex_home_copy);
+        try self.groups.append(allocator, .{
+            .name = name_copy,
+            .codex_home = codex_home_copy,
+            .seen = true,
+        });
+        return &self.groups.items[self.groups.items.len - 1];
+    }
+
+    fn pruneUnseen(self: *ManagerDaemonState, allocator: std.mem.Allocator) void {
+        var idx: usize = 0;
+        while (idx < self.groups.items.len) {
+            if (self.groups.items[idx].seen) {
+                idx += 1;
+                continue;
+            }
+            self.groups.items[idx].deinit(allocator);
+            _ = self.groups.orderedRemove(idx);
+        }
+    }
+};
+
+fn managerDaemonCycle(allocator: std.mem.Allocator, state: *ManagerDaemonState) !void {
+    state.resetSeen();
+    defer state.pruneUnseen(allocator);
+
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    for (groups.items.items) |item| {
+        var reg = registry.loadRegistry(allocator, item.codex_home) catch |err| switch (err) {
+            error.FileNotFound, error.UnsupportedRegistryVersion => continue,
+            else => return err,
+        };
+        const enabled = reg.auto_switch.enabled;
+        reg.deinit(allocator);
+        if (!enabled) continue;
+
+        try registry.ensureAccountsDir(allocator, item.codex_home);
+        {
+            var group_lock = (try DaemonLock.acquire(allocator, item.codex_home)) orelse continue;
+            defer group_lock.release();
+
+            var runtime_state = try state.ensureGroup(allocator, item.name, item.codex_home);
+            const keep_running = daemonCycle(allocator, item.codex_home, &runtime_state.refresh_state) catch |err| blk: {
+                emitTaggedDaemonLog(.err, item.name, "auto manager cycle failed: {s}", .{@errorName(err)});
+                break :blk true;
+            };
+            if (!keep_running) runtime_state.seen = false;
+        }
+    }
+}
+
+pub fn runManagerDaemon(allocator: std.mem.Allocator) !void {
+    var manager_lock = (try ManagerLock.acquire(allocator)) orelse return;
+    defer manager_lock.release();
+
+    var state = ManagerDaemonState{};
+    defer state.deinit(allocator);
+
+    while (true) {
+        try managerDaemonCycle(allocator, &state);
+        try std.Io.sleep(app_runtime.io(), .fromNanoseconds(watch_poll_interval_ns), .awake);
+    }
+}
+
+pub fn runManagerDaemonOnce(allocator: std.mem.Allocator) !void {
+    var manager_lock = (try ManagerLock.acquire(allocator)) orelse return;
+    defer manager_lock.release();
+
+    var state = ManagerDaemonState{};
+    defer state.deinit(allocator);
+    try managerDaemonCycle(allocator, &state);
 }
 
 pub fn refreshActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry) !bool {
@@ -1024,6 +1466,16 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
     api_fetcher: anytype,
 ) !bool {
     const account_key = reg.active_account_key orelse return false;
+    if (refresh_state.confirmed_limit_account_key) |stored| {
+        if (!std.mem.eql(u8, stored, account_key)) {
+            refresh_state.clearConfirmedLimit(allocator);
+        }
+    }
+    if (refresh_state.active_usage_refresh_account_key) |stored| {
+        if (!std.mem.eql(u8, stored, account_key)) {
+            refresh_state.clearActiveUsageRefresh(allocator);
+        }
+    }
     refresh_state.clearPendingIfAccountChanged(allocator, account_key);
     try refresh_state.resetApiCooldownIfAccountChanged(allocator, account_key);
     const active_idx = registry.findAccountIndexByAccountKey(reg, account_key);
@@ -1040,6 +1492,7 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
     refresh_state.last_api_refresh_at_ns = now_ns;
 
     const fetch_result = api_fetcher(allocator, codex_home) catch |err| {
+        try refresh_state.markActiveUsageRefresh(allocator, account_key, false);
         emitTaggedDaemonLog(.warning, "api", "refresh usage{s}status={s}", .{
             fieldSeparator(),
             @errorName(err),
@@ -1052,6 +1505,7 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
     const missing_auth = fetch_result.missing_auth;
     var status_buf: [24]u8 = undefined;
     if (latest_usage == null) {
+        try refresh_state.markActiveUsageRefresh(allocator, account_key, false);
         emitTaggedDaemonLog(.warning, "api", "refresh usage{s}status={s}", .{
             fieldSeparator(),
             apiStatusLabel(&status_buf, status_code, false, missing_auth),
@@ -1064,6 +1518,7 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
     defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &latest);
 
     if (active_idx == null) {
+        try refresh_state.markActiveUsageRefresh(allocator, account_key, true);
         emitTaggedDaemonLog(.debug, "api", "refresh usage{s}status={s}", .{
             fieldSeparator(),
             apiStatusLabel(&status_buf, status_code, true, missing_auth),
@@ -1071,16 +1526,20 @@ fn refreshActiveUsageForDaemonWithDetailedApiFetcher(
         return false;
     }
     if (registry.rateLimitSnapshotsEqual(reg.accounts.items[active_idx.?].last_usage, latest)) {
+        try refresh_state.markActiveUsageRefresh(allocator, account_key, true);
         emitTaggedDaemonLog(.debug, "api", "refresh usage{s}status={s}", .{
             fieldSeparator(),
             apiStatusLabel(&status_buf, status_code, true, missing_auth),
         });
         refresh_state.clearPending(allocator);
+        refresh_state.clearConfirmedLimit(allocator);
         return false;
     }
 
     registry.updateUsage(allocator, reg, account_key, latest);
     snapshot_consumed = true;
+    try refresh_state.markActiveUsageRefresh(allocator, account_key, true);
+    refresh_state.clearConfirmedLimit(allocator);
     emitTaggedDaemonLog(.info, "api", "refresh usage{s}status={s}", .{
         fieldSeparator(),
         apiStatusLabel(&status_buf, status_code, true, missing_auth),
@@ -1097,6 +1556,16 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
     api_fetcher: anytype,
 ) !bool {
     const account_key = reg.active_account_key orelse return false;
+    if (refresh_state.confirmed_limit_account_key) |stored| {
+        if (!std.mem.eql(u8, stored, account_key)) {
+            refresh_state.clearConfirmedLimit(allocator);
+        }
+    }
+    if (refresh_state.active_usage_refresh_account_key) |stored| {
+        if (!std.mem.eql(u8, stored, account_key)) {
+            refresh_state.clearActiveUsageRefresh(allocator);
+        }
+    }
     refresh_state.clearPendingIfAccountChanged(allocator, account_key);
     try refresh_state.resetApiCooldownIfAccountChanged(allocator, account_key);
     if (try refreshActiveUsageFromSessionsForDaemon(allocator, codex_home, reg, refresh_state)) {
@@ -1112,16 +1581,21 @@ pub fn refreshActiveUsageForDaemonWithApiFetcher(
 
     return switch (try refreshActiveUsageFromApi(allocator, codex_home, reg, api_fetcher)) {
         .updated => blk: {
+            try refresh_state.markActiveUsageRefresh(allocator, account_key, true);
+            refresh_state.clearConfirmedLimit(allocator);
             emitTaggedDaemonLog(.info, "api", "refresh usage{s}status=200", .{fieldSeparator()});
             refresh_state.clearPending(allocator);
             break :blk true;
         },
         .unchanged => blk: {
+            try refresh_state.markActiveUsageRefresh(allocator, account_key, true);
+            refresh_state.clearConfirmedLimit(allocator);
             emitTaggedDaemonLog(.debug, "api", "refresh usage{s}status=200", .{fieldSeparator()});
             refresh_state.clearPending(allocator);
             break :blk false;
         },
         .unavailable => blk: {
+            try refresh_state.markActiveUsageRefresh(allocator, account_key, false);
             emitTaggedDaemonLog(.warning, "api", "refresh usage{s}status=NoUsageLimitsWindow", .{fieldSeparator()});
             break :blk false;
         },
@@ -1170,6 +1644,7 @@ fn refreshActiveUsageFromSessionsForDaemon(
             activated_at_ms,
         )) {
             refresh_state.clearPending(allocator);
+            refresh_state.clearConfirmedLimit(allocator);
             return true;
         }
         if (refresh_state.pendingMatches(account_key, signature)) {
@@ -1199,7 +1674,72 @@ fn refreshActiveUsageFromSessionsForDaemon(
     latest_event.snapshot = null;
     try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest_event.path, latest_event.event_timestamp_ms);
     refresh_state.clearPending(allocator);
+    refresh_state.clearConfirmedLimit(allocator);
     return true;
+}
+
+pub fn applyActiveLimitMessageForDaemon(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    refresh_state: *DaemonRefreshState,
+) !bool {
+    var latest_event = (sessions.scanLatestLimitEventWithCache(allocator, codex_home, &refresh_state.limit_scan_cache) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    }) orelse return false;
+    defer latest_event.deinit(allocator);
+
+    const account_key = reg.active_account_key orelse return false;
+    const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
+    if (latest_event.event_timestamp_ms < activated_at_ms) return false;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
+    if (reg.accounts.items[idx].last_local_rollout) |last_local_rollout| {
+        if (latest_event.event_timestamp_ms <= last_local_rollout.event_timestamp_ms) return false;
+    }
+
+    const exhausted = try exhaustedSnapshotFromExisting(allocator, reg.accounts.items[idx].last_usage);
+    var snapshot_consumed = false;
+    defer if (!snapshot_consumed) registry.freeRateLimitSnapshot(allocator, &exhausted);
+
+    if (registry.rateLimitSnapshotsEqual(reg.accounts.items[idx].last_usage, exhausted)) return false;
+
+    var event_time_buf: [19]u8 = undefined;
+    const event_time = localDateTimeLabel(&event_time_buf, latest_event.event_timestamp_ms);
+    var file_buf: [96]u8 = undefined;
+    const file_label = rolloutFileLabel(&file_buf, latest_event.path);
+    emitTaggedDaemonLog(.notice, "limit", "usage limit message{s}event={s}{s}file={s}", .{
+        fieldSeparator(),
+        event_time,
+        fieldSeparator(),
+        file_label,
+    });
+
+    registry.updateUsage(allocator, reg, account_key, exhausted);
+    snapshot_consumed = true;
+    try refresh_state.setConfirmedLimit(allocator, account_key);
+    try refresh_state.candidate_index.rebuild(allocator, reg, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds());
+    refresh_state.clearPending(allocator);
+    return true;
+}
+
+fn exhaustedSnapshotFromExisting(allocator: std.mem.Allocator, existing: ?registry.RateLimitSnapshot) !registry.RateLimitSnapshot {
+    var snapshot = if (existing) |value|
+        try registry.cloneRateLimitSnapshot(allocator, value)
+    else
+        registry.RateLimitSnapshot{
+            .primary = null,
+            .secondary = null,
+            .credits = null,
+            .plan_type = null,
+        };
+    errdefer registry.freeRateLimitSnapshot(allocator, &snapshot);
+    snapshot.primary = .{
+        .used_percent = 100.0,
+        .window_minutes = 300,
+        .resets_at = null,
+    };
+    return snapshot;
 }
 
 fn applyLatestUsableSnapshotFromRolloutFile(
@@ -1247,6 +1787,7 @@ pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
     var best_idx: ?usize = null;
     var best: ?CandidateScore = null;
     for (reg.accounts.items, 0..) |*rec, idx| {
+        if (!registry.accountInActiveGroup(reg, rec.account_key)) continue;
         if (std.mem.eql(u8, rec.account_key, active)) continue;
         const score = candidateScore(rec, now);
         if (best == null or candidateBetter(score, best.?)) {
@@ -1257,16 +1798,22 @@ pub fn bestAutoSwitchCandidateIndex(reg: *registry.Registry, now: i64) ?usize {
     return best_idx;
 }
 
+fn activeAccountOutsideGroup(reg: *registry.Registry) bool {
+    const account_key = reg.active_account_key orelse return false;
+    return !registry.accountInActiveGroup(reg, account_key);
+}
+
 pub fn shouldSwitchCurrent(reg: *registry.Registry, now: i64) bool {
     const account_key = reg.active_account_key orelse return false;
+    if (!registry.accountInActiveGroup(reg, account_key)) return true;
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
     const rec = &reg.accounts.items[idx];
     const resolved_5h = resolve5hTriggerWindow(rec.last_usage);
     const threshold_5h_percent = effective5hThresholdPercent(reg, rec, resolved_5h.allow_free_guard);
     const rem_5h = registry.remainingPercentAt(resolved_5h.window, now);
     const rem_week = registry.remainingPercentAt(registry.resolveRateWindow(rec.last_usage, 10080, false), now);
-    return (rem_5h != null and rem_5h.? < threshold_5h_percent) or
-        (rem_week != null and rem_week.? < @as(i64, reg.auto_switch.threshold_weekly_percent));
+    return (rem_5h != null and rem_5h.? <= threshold_5h_percent) or
+        (rem_week != null and rem_week.? <= @as(i64, reg.auto_switch.threshold_weekly_percent));
 }
 
 fn effective5hThresholdPercent(reg: *registry.Registry, rec: *const registry.AccountRecord, allow_free_guard: bool) i64 {
@@ -1312,10 +1859,23 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         .switched = false,
     };
     const current = candidateScore(&reg.accounts.items[active_idx], now);
-    const should_switch_current = shouldSwitchCurrent(reg, now);
+    const force_switch_to_group = activeAccountOutsideGroup(reg);
+    const should_switch_current = force_switch_to_group or shouldSwitchCurrent(reg, now);
 
     var changed = false;
     var refreshed_candidates = false;
+
+    if (reg.api.usage and should_switch_current and
+        !force_switch_to_group and
+        !refresh_state.confirmedLimitMatches(active) and
+        refresh_state.activeUsageRefreshUnavailable(active))
+    {
+        return .{
+            .refreshed_candidates = false,
+            .state_changed = false,
+            .switched = false,
+        };
+    }
 
     if (reg.api.usage and !should_switch_current) {
         const upkeep = try refreshDaemonCandidateUpkeepWithUsageFetcher(
@@ -1366,7 +1926,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
             .switched = false,
         };
         const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-        if (candidate.value <= current.value) {
+        if (!force_switch_to_group and candidate.value <= current.value) {
             return .{
                 .refreshed_candidates = refreshed_candidates,
                 .state_changed = changed,
@@ -1404,7 +1964,7 @@ pub fn maybeAutoSwitchForDaemonWithUsageFetcher(
         .switched = false,
     };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) {
+    if (!force_switch_to_group and candidate.value <= current.value) {
         return .{
             .refreshed_candidates = refreshed_candidates,
             .state_changed = changed,
@@ -1441,7 +2001,8 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
     if (!reg.auto_switch.enabled) return .{ .refreshed_candidates = false, .switched = false };
     const active = reg.active_account_key orelse return .{ .refreshed_candidates = false, .switched = false };
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-    if (!shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
+    const force_switch_to_group = activeAccountOutsideGroup(reg);
+    if (!force_switch_to_group and !shouldSwitchCurrent(reg, now)) return .{ .refreshed_candidates = false, .switched = false };
 
     _ = refresh_state;
     const should_refresh_candidates = reg.api.usage;
@@ -1461,7 +2022,7 @@ fn maybeAutoSwitchWithUsageFetcherAndRefreshState(
         .switched = false,
     };
     const candidate = candidateScore(&reg.accounts.items[candidate_idx], now);
-    if (candidate.value <= current.value) {
+    if (!force_switch_to_group and candidate.value <= current.value) {
         return .{
             .refreshed_candidates = refreshed_candidates,
             .switched = false,
@@ -1485,6 +2046,7 @@ fn refreshAutoSwitchCandidatesWithUsageFetcher(
 
     for (reg.accounts.items) |rec| {
         if (std.mem.eql(u8, rec.account_key, active)) continue;
+        if (!registry.accountInActiveGroup(reg, rec.account_key)) continue;
         if (rec.auth_mode != null and rec.auth_mode.? != .chatgpt) continue;
         attempted += 1;
 
@@ -1747,6 +2309,9 @@ fn daemonCycleWithAccountNameFetcher(
     if (try refreshActiveUsageForDaemon(allocator, codex_home, reg, refresh_state)) {
         changed = true;
     }
+    if (try applyActiveLimitMessageForDaemon(allocator, codex_home, reg, refresh_state)) {
+        changed = true;
+    }
     const active_idx_before = if (reg.active_account_key) |account_key|
         registry.findAccountIndexByAccountKey(reg, account_key)
     else
@@ -1786,11 +2351,16 @@ pub fn daemonCycleWithAccountNameFetcherForTest(
 }
 
 fn enable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const target = defaultServiceTarget();
+    try enableWithTarget(allocator, codex_home, &target);
+}
+
+fn enableWithTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !void {
     const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
     defer allocator.free(self_exe);
     const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
     defer allocator.free(managed_self_exe);
-    try enableWithServiceHooks(allocator, codex_home, managed_self_exe, installService, uninstallService);
+    try enableWithServiceTarget(allocator, codex_home, managed_self_exe, target);
 }
 
 fn ensureAutoSwitchCanEnable(allocator: std.mem.Allocator) !void {
@@ -1845,6 +2415,56 @@ pub fn enableWithServiceHooksAndPreflight(
     };
 }
 
+fn enableWithServiceTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    try ensureAutoSwitchCanEnable(allocator);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    reg.auto_switch.enabled = true;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    errdefer {
+        reg.auto_switch.enabled = false;
+        registry.saveRegistry(allocator, codex_home, &reg) catch {};
+    }
+    errdefer uninstallServiceForTarget(allocator, codex_home, target) catch {};
+    try installServiceForTarget(allocator, codex_home, self_exe, target);
+    printAutoEnableUsageNote(reg.api.usage) catch |err| {
+        std.log.warn("failed to print auto-enable usage note: {}", .{err});
+    };
+}
+
+fn enableManagedAuto(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
+    defer allocator.free(self_exe);
+    const managed_self_exe = try managedServiceSelfExePath(allocator, self_exe);
+    defer allocator.free(managed_self_exe);
+
+    try ensureAutoSwitchCanEnable(allocator);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    reg.auto_switch.enabled = true;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+    errdefer {
+        reg.auto_switch.enabled = false;
+        registry.saveRegistry(allocator, codex_home, &reg) catch {};
+    }
+    errdefer uninstallManagerService(allocator) catch {};
+
+    try installManagerService(allocator, managed_self_exe);
+    cleanupLegacyAutoServices(allocator);
+    printAutoEnableUsageNote(reg.api.usage) catch |err| {
+        std.log.warn("failed to print auto-enable usage note: {}", .{err});
+    };
+}
+
 fn printAutoEnableUsageNote(api_enabled: bool) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -1859,11 +2479,30 @@ fn printAutoEnableUsageNote(api_enabled: bool) !void {
 }
 
 fn disable(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const target = defaultServiceTarget();
+    try disableWithTarget(allocator, codex_home, &target);
+}
+
+fn disableWithTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     reg.auto_switch.enabled = false;
     try registry.saveRegistry(allocator, codex_home, &reg);
-    try uninstallService(allocator, codex_home);
+    try uninstallServiceForTarget(allocator, codex_home, target);
+}
+
+fn disableManagedAuto(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    reg.auto_switch.enabled = false;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+
+    cleanupLegacyAutoServices(allocator);
+    if (try anyAutoSwitchEnabled(allocator)) {
+        try ensureManagerServiceInstalled(allocator);
+    } else {
+        try uninstallManagerService(allocator);
+    }
 }
 
 pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThresholdOptions) void {
@@ -1876,11 +2515,51 @@ pub fn applyThresholdConfig(cfg: *registry.AutoSwitchConfig, opts: cli.AutoThres
 }
 
 fn configureThresholds(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.AutoThresholdOptions) !void {
+    const target = defaultServiceTarget();
+    try configureThresholdsForTarget(allocator, codex_home, &target, opts);
+}
+
+fn configureThresholdsForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    target: *const ServiceTarget,
+    opts: cli.AutoThresholdOptions,
+) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     applyThresholdConfig(&reg.auto_switch, opts);
     try registry.saveRegistry(allocator, codex_home, &reg);
-    try printStatus(allocator, codex_home);
+    var status = try getStatusForTarget(allocator, codex_home, target);
+    defer status.deinit(allocator);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try writeStatusWithColor(stdout.out(), status, colorEnabled());
+}
+
+fn configureManagedAutoThresholds(
+    allocator: std.mem.Allocator,
+    group_name: ?[]const u8,
+    codex_home: []const u8,
+    opts: cli.AutoThresholdOptions,
+) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    applyThresholdConfig(&reg.auto_switch, opts);
+    const enabled = reg.auto_switch.enabled;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+
+    if (enabled) {
+        try ensureManagerServiceInstalled(allocator);
+    }
+
+    var status = if (group_name) |name|
+        try getStatusForGroup(allocator, name, codex_home)
+    else
+        try getStatus(allocator, codex_home);
+    defer status.deinit(allocator);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try writeStatusWithColor(stdout.out(), status, colorEnabled());
 }
 
 fn candidateScore(rec: *const registry.AccountRecord, now: i64) CandidateScore {
@@ -1917,34 +2596,79 @@ fn earlierFutureTimestamp(current: ?i64, candidate: ?i64, now: i64) ?i64 {
 }
 
 fn queryRuntimeState(allocator: std.mem.Allocator) RuntimeState {
+    const target = defaultServiceTarget();
+    return queryRuntimeStateForTarget(allocator, &target);
+}
+
+fn queryRuntimeStateForTarget(allocator: std.mem.Allocator, target: *const ServiceTarget) RuntimeState {
     return switch (builtin.os.tag) {
-        .linux => queryLinuxRuntimeState(allocator),
-        .macos => queryMacRuntimeState(allocator),
-        .windows => queryWindowsRuntimeState(allocator),
+        .linux => queryLinuxRuntimeStateForTarget(allocator, target),
+        .macos => queryMacRuntimeStateForTarget(allocator, target),
+        .windows => queryWindowsRuntimeStateForTarget(allocator, target),
         else => .unknown,
     };
 }
 
 fn installService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
+    const target = defaultServiceTarget();
+    try installServiceForTarget(allocator, codex_home, self_exe, &target);
+}
+
+fn installServiceForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
     switch (builtin.os.tag) {
-        .linux => try installLinuxService(allocator, codex_home, self_exe),
-        .macos => try installMacService(allocator, codex_home, self_exe),
-        .windows => try installWindowsService(allocator, codex_home, self_exe),
+        .linux => try installLinuxServiceForTarget(allocator, codex_home, self_exe, target),
+        .macos => try installMacServiceForTarget(allocator, codex_home, self_exe, target),
+        .windows => try installWindowsServiceForTarget(allocator, codex_home, self_exe, target),
+        else => return error.UnsupportedPlatform,
+    }
+}
+
+fn installManagerService(allocator: std.mem.Allocator, self_exe: []const u8) !void {
+    const target = managerServiceTarget();
+    switch (builtin.os.tag) {
+        .linux => try installLinuxManagerService(allocator, self_exe, &target),
+        .macos => try installMacManagerService(allocator, self_exe, &target),
+        .windows => try installWindowsManagerService(allocator, self_exe, &target),
         else => return error.UnsupportedPlatform,
     }
 }
 
 fn uninstallService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+    const target = defaultServiceTarget();
+    try uninstallServiceForTarget(allocator, codex_home, &target);
+}
+
+fn uninstallServiceForTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !void {
     switch (builtin.os.tag) {
-        .linux => try uninstallLinuxService(allocator, codex_home),
-        .macos => try uninstallMacService(allocator, codex_home),
-        .windows => try uninstallWindowsService(allocator),
+        .linux => try uninstallLinuxServiceForTarget(allocator, codex_home, target),
+        .macos => try uninstallMacServiceForTarget(allocator, codex_home, target),
+        .windows => try uninstallWindowsServiceForTarget(allocator, target),
         else => return error.UnsupportedPlatform,
     }
 }
 
-fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    const unit_path = try linuxUnitPath(allocator, linux_service_name);
+fn uninstallManagerService(allocator: std.mem.Allocator) !void {
+    const target = managerServiceTarget();
+    switch (builtin.os.tag) {
+        .linux => try uninstallLinuxServiceForTarget(allocator, "", &target),
+        .macos => try uninstallMacServiceForTarget(allocator, "", &target),
+        .windows => try uninstallWindowsServiceForTarget(allocator, &target),
+        else => return error.UnsupportedPlatform,
+    }
+}
+
+fn installLinuxServiceForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    const unit_path = try linuxUnitPath(allocator, target.linux_service_name);
     defer allocator.free(unit_path);
     const unit_text = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(unit_text);
@@ -1952,19 +2676,46 @@ fn installLinuxService(allocator: std.mem.Allocator, codex_home: []const u8, sel
     const unit_dir = std.fs.path.dirname(unit_path).?;
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), unit_dir);
     try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = unit_path, .data = unit_text });
-    try removeLinuxUnit(allocator, linux_timer_name);
+    if (target.linux_timer_name) |timer_name| {
+        try removeLinuxUnit(allocator, timer_name);
+    }
     try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
-    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", linux_service_name });
-    switch (queryLinuxRuntimeState(allocator)) {
-        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", linux_service_name }),
-        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", linux_service_name }),
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", target.linux_service_name });
+    switch (queryLinuxRuntimeStateForTarget(allocator, target)) {
+        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", target.linux_service_name }),
+        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", target.linux_service_name }),
     }
 }
 
-fn uninstallLinuxService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+fn installLinuxManagerService(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    const unit_path = try linuxUnitPath(allocator, target.linux_service_name);
+    defer allocator.free(unit_path);
+    const node_executable = try managerNodeExecutableForServiceAlloc(allocator);
+    defer if (node_executable) |value| allocator.free(value);
+    const unit_text = try linuxManagerUnitTextWithNode(allocator, self_exe, node_executable);
+    defer allocator.free(unit_text);
+
+    const unit_dir = std.fs.path.dirname(unit_path).?;
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), unit_dir);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = unit_path, .data = unit_text });
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "daemon-reload" });
+    try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "enable", target.linux_service_name });
+    switch (queryLinuxRuntimeStateForTarget(allocator, target)) {
+        .running => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "restart", target.linux_service_name }),
+        else => try runChecked(allocator, &[_][]const u8{ "systemctl", "--user", "start", target.linux_service_name }),
+    }
+}
+
+fn uninstallLinuxServiceForTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !void {
     _ = codex_home;
-    try removeLinuxUnit(allocator, linux_timer_name);
-    try removeLinuxUnit(allocator, linux_service_name);
+    if (target.linux_timer_name) |timer_name| {
+        try removeLinuxUnit(allocator, timer_name);
+    }
+    try removeLinuxUnit(allocator, target.linux_service_name);
 }
 
 fn removeLinuxUnit(allocator: std.mem.Allocator, service_name: []const u8) !void {
@@ -1989,10 +2740,15 @@ fn linuxUserSystemdAvailable(allocator: std.mem.Allocator) bool {
     };
 }
 
-fn installMacService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
-    const plist_path = try macPlistPath(allocator);
+fn installMacServiceForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    const plist_path = try macPlistPathForLabel(allocator, target.mac_label);
     defer allocator.free(plist_path);
-    const plist = try macPlistText(allocator, self_exe, codex_home);
+    const plist = try macPlistTextForLabel(allocator, self_exe, codex_home, target.mac_label);
     defer allocator.free(plist);
 
     const dir = std.fs.path.dirname(plist_path).?;
@@ -2002,9 +2758,28 @@ fn installMacService(allocator: std.mem.Allocator, codex_home: []const u8, self_
     try runChecked(allocator, &[_][]const u8{ "launchctl", "load", plist_path });
 }
 
-fn uninstallMacService(allocator: std.mem.Allocator, codex_home: []const u8) !void {
+fn installMacManagerService(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    const plist_path = try macPlistPathForLabel(allocator, target.mac_label);
+    defer allocator.free(plist_path);
+    const node_executable = try managerNodeExecutableForServiceAlloc(allocator);
+    defer if (node_executable) |value| allocator.free(value);
+    const plist = try macManagerPlistTextForLabelWithNode(allocator, self_exe, target.mac_label, node_executable);
+    defer allocator.free(plist);
+
+    const dir = std.fs.path.dirname(plist_path).?;
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), dir);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = plist_path, .data = plist });
+    _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unload", plist_path }) catch {};
+    try runChecked(allocator, &[_][]const u8{ "launchctl", "load", plist_path });
+}
+
+fn uninstallMacServiceForTarget(allocator: std.mem.Allocator, codex_home: []const u8, target: *const ServiceTarget) !void {
     _ = codex_home;
-    const plist_path = try macPlistPath(allocator);
+    const plist_path = try macPlistPathForLabel(allocator, target.mac_label);
     defer allocator.free(plist_path);
     _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unload", plist_path }) catch {};
     deleteAbsoluteFileIfExists(plist_path);
@@ -2017,7 +2792,12 @@ pub fn deleteAbsoluteFileIfExists(path: []const u8) void {
     };
 }
 
-fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !void {
+fn installWindowsServiceForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
     try std.Io.Dir.cwd().access(app_runtime.io(), helper_path, .{});
@@ -2026,7 +2806,7 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
     defer allocator.free(arguments);
 
     try windows_task_scheduler.installTask(allocator, .{
-        .task_name = windows_task_name,
+        .task_name = target.windows_task_name,
         .executable_path = helper_path,
         .arguments = arguments,
         .restart_count = windows_task_restart_count_value,
@@ -2035,12 +2815,34 @@ fn installWindowsService(allocator: std.mem.Allocator, codex_home: []const u8, s
     });
 }
 
-fn uninstallWindowsService(allocator: std.mem.Allocator) !void {
-    try windows_task_scheduler.uninstallTask(allocator, windows_task_name);
+fn installWindowsManagerService(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !void {
+    const helper_path = try windowsHelperPath(allocator, self_exe);
+    defer allocator.free(helper_path);
+    try std.Io.Dir.cwd().access(app_runtime.io(), helper_path, .{});
+
+    const arguments = try windowsManagerTaskArguments(allocator);
+    defer allocator.free(arguments);
+
+    try windows_task_scheduler.installTask(allocator, .{
+        .task_name = target.windows_task_name,
+        .executable_path = helper_path,
+        .arguments = arguments,
+        .restart_count = windows_task_restart_count_value,
+        .restart_interval = windows_task_restart_interval_xml,
+        .execution_time_limit = windows_task_execution_time_limit_xml,
+    });
 }
 
-fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", linux_service_name }) catch return .unknown;
+fn uninstallWindowsServiceForTarget(allocator: std.mem.Allocator, target: *const ServiceTarget) !void {
+    try windows_task_scheduler.uninstallTask(allocator, target.windows_task_name);
+}
+
+fn queryLinuxRuntimeStateForTarget(allocator: std.mem.Allocator, target: *const ServiceTarget) RuntimeState {
+    const result = runCapture(allocator, &[_][]const u8{ "systemctl", "--user", "is-active", target.linux_service_name }) catch return .unknown;
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
@@ -2051,10 +2853,27 @@ fn queryLinuxRuntimeState(allocator: std.mem.Allocator) RuntimeState {
     };
 }
 
-fn queryMacRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    const plist_path = macPlistPath(allocator) catch return .unknown;
+fn queryMacRuntimeStateForTarget(allocator: std.mem.Allocator, target: *const ServiceTarget) RuntimeState {
+    const plist_path = macPlistPathForLabel(allocator, target.mac_label) catch return .unknown;
     defer allocator.free(plist_path);
-    const result = runCapture(allocator, &[_][]const u8{ "launchctl", "list", mac_label }) catch return .unknown;
+
+    if (macGuiServiceSpecAlloc(allocator, target.mac_label)) |service_spec| {
+        defer allocator.free(service_spec);
+        const result = runCapture(allocator, &[_][]const u8{ "launchctl", "print", service_spec }) catch return .unknown;
+        defer {
+            allocator.free(result.stdout);
+            allocator.free(result.stderr);
+        }
+        switch (result.term) {
+            .exited => |code| {
+                if (code == 0) return parseMacLaunchctlPrintState(result.stdout);
+                if (code == 113) return .stopped;
+            },
+            else => return .unknown,
+        }
+    } else |_| {}
+
+    const result = runCapture(allocator, &[_][]const u8{ "launchctl", "list", target.mac_label }) catch return .unknown;
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
@@ -2065,8 +2884,41 @@ fn queryMacRuntimeState(allocator: std.mem.Allocator) RuntimeState {
     };
 }
 
-fn queryWindowsRuntimeState(allocator: std.mem.Allocator) RuntimeState {
-    return switch (windows_task_scheduler.queryTaskRuntimeState(allocator, windows_task_name)) {
+fn macGuiServiceSpecAlloc(allocator: std.mem.Allocator, label: []const u8) ![]u8 {
+    const uid = try currentUidStringAlloc(allocator);
+    defer allocator.free(uid);
+    return std.fmt.allocPrint(allocator, "gui/{s}/{s}", .{ uid, label });
+}
+
+fn currentUidStringAlloc(allocator: std.mem.Allocator) ![]u8 {
+    const result = try runCapture(allocator, &[_][]const u8{ "id", "-u" });
+    defer {
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
+    }
+    switch (result.term) {
+        .exited => |code| if (code == 0) {
+            const uid = std.mem.trim(u8, result.stdout, " \n\r\t");
+            if (uid.len != 0) return try allocator.dupe(u8, uid);
+        },
+        else => {},
+    }
+    return error.UnableToResolveUid;
+}
+
+fn parseMacLaunchctlPrintState(output: []const u8) RuntimeState {
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \r\t");
+        if (!std.mem.startsWith(u8, line, "state =")) continue;
+        const value = std.mem.trim(u8, line["state =".len..], " \r\t");
+        return if (std.mem.eql(u8, value, "running")) .running else .stopped;
+    }
+    return .unknown;
+}
+
+fn queryWindowsRuntimeStateForTarget(allocator: std.mem.Allocator, target: *const ServiceTarget) RuntimeState {
+    return switch (windows_task_scheduler.queryTaskRuntimeState(allocator, target.windows_task_name)) {
         .running => .running,
         .stopped => .stopped,
         .unknown => .unknown,
@@ -2093,7 +2945,54 @@ pub fn linuxUnitText(allocator: std.mem.Allocator, self_exe: []const u8, codex_h
     );
 }
 
+pub fn linuxManagerUnitText(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
+    return linuxManagerUnitTextWithNode(allocator, self_exe, null);
+}
+
+pub fn linuxManagerUnitTextWithNode(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    node_executable: ?[]const u8,
+) ![]u8 {
+    const exec = try std.fmt.allocPrint(allocator, "\"{s}\" daemon --manager", .{self_exe});
+    defer allocator.free(exec);
+    const escaped_version = try escapeSystemdValue(allocator, version.app_version);
+    defer allocator.free(escaped_version);
+    const node_env = try linuxManagerNodeEnvironmentLine(allocator, node_executable);
+    defer allocator.free(node_env);
+    return try std.fmt.allocPrint(
+        allocator,
+        "[Unit]\nDescription=codex-auth auto-switch manager\n\n[Service]\nType=simple\nRestart=always\nRestartSec=1\nEnvironment=\"{s}={s}\"\n{s}ExecStart={s}\n\n[Install]\nWantedBy=default.target\n",
+        .{
+            service_version_env_name,
+            escaped_version,
+            node_env,
+            exec,
+        },
+    );
+}
+
+fn linuxManagerNodeEnvironmentLine(allocator: std.mem.Allocator, node_executable: ?[]const u8) ![]u8 {
+    const raw = node_executable orelse return try allocator.dupe(u8, "");
+    const escaped_node = try escapeSystemdValue(allocator, raw);
+    defer allocator.free(escaped_node);
+    return try std.fmt.allocPrint(
+        allocator,
+        "Environment=\"{s}={s}\"\n",
+        .{ chatgpt_http.node_executable_env, escaped_node },
+    );
+}
+
 pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_home: []const u8) ![]u8 {
+    return macPlistTextForLabel(allocator, self_exe, codex_home, mac_label);
+}
+
+pub fn macPlistTextForLabel(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    codex_home: []const u8,
+    label: []const u8,
+) ![]u8 {
     const exe = try escapeXml(allocator, self_exe);
     defer allocator.free(exe);
     const current_version = try escapeXml(allocator, version.app_version);
@@ -2103,7 +3002,49 @@ pub fn macPlistText(allocator: std.mem.Allocator, self_exe: []const u8, codex_ho
     return try std.fmt.allocPrint(
         allocator,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--watch</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>{s}</key>\n    <string>{s}</string>\n    <key>{s}</key>\n    <string>{s}</string>\n  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
-        .{ mac_label, exe, service_version_env_name, current_version, codex_home_env_name, escaped_codex_home },
+        .{ label, exe, service_version_env_name, current_version, codex_home_env_name, escaped_codex_home },
+    );
+}
+
+pub fn macManagerPlistText(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
+    return macManagerPlistTextForLabel(allocator, self_exe, manager_mac_label);
+}
+
+pub fn macManagerPlistTextForLabel(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    label: []const u8,
+) ![]u8 {
+    return macManagerPlistTextForLabelWithNode(allocator, self_exe, label, null);
+}
+
+pub fn macManagerPlistTextForLabelWithNode(
+    allocator: std.mem.Allocator,
+    self_exe: []const u8,
+    label: []const u8,
+    node_executable: ?[]const u8,
+) ![]u8 {
+    const exe = try escapeXml(allocator, self_exe);
+    defer allocator.free(exe);
+    const current_version = try escapeXml(allocator, version.app_version);
+    defer allocator.free(current_version);
+    const node_env = try macManagerNodeEnvironmentXml(allocator, node_executable);
+    defer allocator.free(node_env);
+    return try std.fmt.allocPrint(
+        allocator,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>{s}</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{s}</string>\n    <string>daemon</string>\n    <string>--manager</string>\n  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>{s}</key>\n    <string>{s}</string>\n{s}  </dict>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
+        .{ label, exe, service_version_env_name, current_version, node_env },
+    );
+}
+
+fn macManagerNodeEnvironmentXml(allocator: std.mem.Allocator, node_executable: ?[]const u8) ![]u8 {
+    const raw = node_executable orelse return try allocator.dupe(u8, "");
+    const escaped_node = try escapeXml(allocator, raw);
+    defer allocator.free(escaped_node);
+    return try std.fmt.allocPrint(
+        allocator,
+        "    <key>{s}</key>\n    <string>{s}</string>\n",
+        .{ chatgpt_http.node_executable_env, escaped_node },
     );
 }
 
@@ -2117,7 +3058,26 @@ pub fn windowsTaskAction(allocator: std.mem.Allocator, helper_path: []const u8, 
     );
 }
 
+pub fn windowsManagerTaskAction(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    const args = try windowsManagerTaskArguments(allocator);
+    defer allocator.free(args);
+    return try std.fmt.allocPrint(
+        allocator,
+        "\"{s}\" {s}",
+        .{ helper_path, args },
+    );
+}
+
 pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
+    return windowsRegisterTaskScriptForTask(allocator, helper_path, codex_home, windows_task_name);
+}
+
+pub fn windowsRegisterTaskScriptForTask(
+    allocator: std.mem.Allocator,
+    helper_path: []const u8,
+    codex_home: []const u8,
+    task_name: []const u8,
+) ![]u8 {
     const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
     defer allocator.free(escaped_helper_path);
     const args = try windowsTaskArguments(allocator, codex_home);
@@ -2127,36 +3087,70 @@ pub fn windowsRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []co
     return try std.fmt.allocPrint(
         allocator,
         "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '{s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
-        .{ escaped_helper_path, escaped_args, windows_task_restart_count, windows_task_name },
+        .{ escaped_helper_path, escaped_args, windows_task_restart_count, task_name },
+    );
+}
+
+pub fn windowsManagerRegisterTaskScript(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    const escaped_helper_path = try escapePowerShellSingleQuoted(allocator, helper_path);
+    defer allocator.free(escaped_helper_path);
+    const args = try windowsManagerTaskArguments(allocator);
+    defer allocator.free(args);
+    const escaped_args = try escapePowerShellSingleQuoted(allocator, args);
+    defer allocator.free(escaped_args);
+    return try std.fmt.allocPrint(
+        allocator,
+        "$action = New-ScheduledTaskAction -Execute '{s}' -Argument '{s}'; $trigger = New-ScheduledTaskTrigger -AtLogOn; $settings = New-ScheduledTaskSettingsSet -RestartCount {s} -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0); Register-ScheduledTask -TaskName '{s}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null",
+        .{ escaped_helper_path, escaped_args, windows_task_restart_count, manager_windows_task_name },
     );
 }
 
 pub fn windowsTaskMatchScript(allocator: std.mem.Allocator) ![]u8 {
+    return windowsTaskMatchScriptForTask(allocator, windows_task_name);
+}
+
+pub fn windowsTaskMatchScriptForTask(allocator: std.mem.Allocator, task_name: []const u8) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
         "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; $action = $task.Actions | Select-Object -First 1; if ($null -eq $action) {{ exit 2 }}; $xml = [xml](Export-ScheduledTask -TaskName '{s}'); $triggers = @($xml.Task.Triggers.ChildNodes | Where-Object {{ $_.NodeType -eq [System.Xml.XmlNodeType]::Element }}); if ($triggers.Count -ne 1) {{ exit 3 }}; $triggerKind = [string]$triggers[0].LocalName; if ([string]::IsNullOrWhiteSpace($triggerKind)) {{ exit 4 }}; $restartNode = $xml.Task.Settings.RestartOnFailure; if ($null -eq $restartNode) {{ exit 5 }}; $restartCount = [string]$restartNode.Count; $restartInterval = [string]$restartNode.Interval; if ([string]::IsNullOrWhiteSpace($restartCount) -or [string]::IsNullOrWhiteSpace($restartInterval)) {{ exit 6 }}; $executionLimit = [string]$xml.Task.Settings.ExecutionTimeLimit; if ([string]::IsNullOrWhiteSpace($executionLimit)) {{ exit 7 }}; $args = if ([string]::IsNullOrWhiteSpace($action.Arguments)) {{ '' }} else {{ ' ' + $action.Arguments }}; Write-Output ($action.Execute + $args + '|TRIGGER:' + $triggerKind + '|RESTART:' + $restartCount + ',' + $restartInterval + '|LIMIT:' + $executionLimit)",
-        .{ windows_task_name, windows_task_name },
+        .{ task_name, task_name },
     );
 }
 
 pub fn windowsEndTaskScript(allocator: std.mem.Allocator) ![]u8 {
+    return windowsEndTaskScriptForTask(allocator, windows_task_name);
+}
+
+pub fn windowsEndTaskScriptForTask(allocator: std.mem.Allocator, task_name: []const u8) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
         "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 0 }}; if ($task.State -eq 4) {{ Stop-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue }}",
-        .{ windows_task_name, windows_task_name },
+        .{ task_name, task_name },
     );
 }
 
 pub fn windowsDeleteTaskScript(allocator: std.mem.Allocator) ![]u8 {
+    return windowsDeleteTaskScriptForTask(allocator, windows_task_name);
+}
+
+pub fn windowsDeleteTaskScriptForTask(allocator: std.mem.Allocator, task_name: []const u8) ![]u8 {
     return try std.fmt.allocPrint(
         allocator,
         "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 0 }}; Unregister-ScheduledTask -TaskName '{s}' -Confirm:$false",
-        .{ windows_task_name, windows_task_name },
+        .{ task_name, task_name },
     );
 }
 
 pub fn windowsTaskStateScript() []const u8 {
     return "$task = Get-ScheduledTask -TaskName '" ++ windows_task_name ++ "' -ErrorAction SilentlyContinue; if ($null -eq $task) { exit 1 }; Write-Output ([int]$task.State)";
+}
+
+pub fn windowsTaskStateScriptForTask(allocator: std.mem.Allocator, task_name: []const u8) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "$task = Get-ScheduledTask -TaskName '{s}' -ErrorAction SilentlyContinue; if ($null -eq $task) {{ exit 1 }}; Write-Output ([int]$task.State)",
+        .{task_name},
+    );
 }
 
 pub fn parseWindowsTaskStateOutput(output: []const u8) RuntimeState {
@@ -2191,21 +3185,64 @@ pub fn managedServiceSelfExePathFromDir(allocator: std.mem.Allocator, cwd: std.I
 }
 
 fn currentServiceDefinitionMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const target = defaultServiceTarget();
+    return currentServiceDefinitionMatchesForTarget(allocator, codex_home, self_exe, &target);
+}
+
+fn currentServiceDefinitionMatchesForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !bool {
     return switch (builtin.os.tag) {
-        .linux => try linuxUnitMatches(allocator, codex_home, self_exe),
-        .macos => try macPlistMatches(allocator, codex_home, self_exe),
-        .windows => try windowsTaskMatches(allocator, codex_home, self_exe),
+        .linux => try linuxUnitMatchesForTarget(allocator, codex_home, self_exe, target),
+        .macos => try macPlistMatchesForTarget(allocator, codex_home, self_exe, target),
+        .windows => try windowsTaskMatchesForTarget(allocator, codex_home, self_exe, target),
+        else => true,
+    };
+}
+
+fn currentManagerServiceDefinitionMatches(allocator: std.mem.Allocator, self_exe: []const u8) !bool {
+    const target = managerServiceTarget();
+    return switch (builtin.os.tag) {
+        .linux => try linuxManagerUnitMatches(allocator, self_exe, &target),
+        .macos => try macManagerPlistMatches(allocator, self_exe, &target),
+        .windows => try windowsManagerTaskMatches(allocator, self_exe, &target),
         else => true,
     };
 }
 
 fn linuxUnitMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    const unit_path = try linuxUnitPath(allocator, linux_service_name);
+    const target = defaultServiceTarget();
+    return linuxUnitMatchesForTarget(allocator, codex_home, self_exe, &target);
+}
+
+fn linuxUnitMatchesForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !bool {
+    const unit_path = try linuxUnitPath(allocator, target.linux_service_name);
     defer allocator.free(unit_path);
     const expected = try linuxUnitText(allocator, self_exe, codex_home);
     defer allocator.free(expected);
     if (!(try fileEqualsBytes(allocator, unit_path, expected))) return false;
-    return !(try linuxUnitHasLegacyResidue(allocator, linux_timer_name));
+    if (target.linux_timer_name) |timer_name| {
+        return !(try linuxUnitHasLegacyResidue(allocator, timer_name));
+    }
+    return true;
+}
+
+fn linuxManagerUnitMatches(allocator: std.mem.Allocator, self_exe: []const u8, target: *const ServiceTarget) !bool {
+    const unit_path = try linuxUnitPath(allocator, target.linux_service_name);
+    defer allocator.free(unit_path);
+    const node_executable = try managerNodeExecutableForServiceAlloc(allocator);
+    defer if (node_executable) |value| allocator.free(value);
+    const expected = try linuxManagerUnitTextWithNode(allocator, self_exe, node_executable);
+    defer allocator.free(expected);
+    return try fileEqualsBytes(allocator, unit_path, expected);
 }
 
 fn linuxUnitHasLegacyResidue(allocator: std.mem.Allocator, service_name: []const u8) !bool {
@@ -2258,21 +3295,67 @@ fn linuxShowProperty(output: []const u8, key: []const u8) ?[]const u8 {
 }
 
 fn macPlistMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
-    const plist_path = try macPlistPath(allocator);
+    const target = defaultServiceTarget();
+    return macPlistMatchesForTarget(allocator, codex_home, self_exe, &target);
+}
+
+fn macPlistMatchesForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !bool {
+    const plist_path = try macPlistPathForLabel(allocator, target.mac_label);
     defer allocator.free(plist_path);
-    const expected = try macPlistText(allocator, self_exe, codex_home);
+    const expected = try macPlistTextForLabel(allocator, self_exe, codex_home, target.mac_label);
+    defer allocator.free(expected);
+    return try fileEqualsBytes(allocator, plist_path, expected);
+}
+
+fn macManagerPlistMatches(allocator: std.mem.Allocator, self_exe: []const u8, target: *const ServiceTarget) !bool {
+    const plist_path = try macPlistPathForLabel(allocator, target.mac_label);
+    defer allocator.free(plist_path);
+    const node_executable = try managerNodeExecutableForServiceAlloc(allocator);
+    defer if (node_executable) |value| allocator.free(value);
+    const expected = try macManagerPlistTextForLabelWithNode(allocator, self_exe, target.mac_label, node_executable);
     defer allocator.free(expected);
     return try fileEqualsBytes(allocator, plist_path, expected);
 }
 
 fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self_exe: []const u8) !bool {
+    const target = defaultServiceTarget();
+    return windowsTaskMatchesForTarget(allocator, codex_home, self_exe, &target);
+}
+
+fn windowsTaskMatchesForTarget(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    self_exe: []const u8,
+    target: *const ServiceTarget,
+) !bool {
     const helper_path = try windowsHelperPath(allocator, self_exe);
     defer allocator.free(helper_path);
     const expected_action = try windowsExpectedTaskFingerprint(allocator, helper_path, codex_home);
     defer allocator.free(expected_action);
     const expected_fingerprint = try windowsExpectedTaskDefinitionFingerprint(allocator, expected_action);
     defer allocator.free(expected_fingerprint);
-    const task_xml = windows_task_scheduler.readTaskXmlAlloc(allocator, windows_task_name) catch return false;
+    const task_xml = windows_task_scheduler.readTaskXmlAlloc(allocator, target.windows_task_name) catch return false;
+    const xml = task_xml orelse return false;
+    defer allocator.free(xml);
+
+    const actual_fingerprint = (try windowsTaskDefinitionFingerprintFromXml(allocator, xml)) orelse return false;
+    defer allocator.free(actual_fingerprint);
+    return std.mem.eql(u8, actual_fingerprint, expected_fingerprint);
+}
+
+fn windowsManagerTaskMatches(allocator: std.mem.Allocator, self_exe: []const u8, target: *const ServiceTarget) !bool {
+    const helper_path = try windowsHelperPath(allocator, self_exe);
+    defer allocator.free(helper_path);
+    const expected_action = try windowsManagerExpectedTaskFingerprint(allocator, helper_path);
+    defer allocator.free(expected_action);
+    const expected_fingerprint = try windowsExpectedTaskDefinitionFingerprint(allocator, expected_action);
+    defer allocator.free(expected_fingerprint);
+    const task_xml = windows_task_scheduler.readTaskXmlAlloc(allocator, target.windows_task_name) catch return false;
     const xml = task_xml orelse return false;
     defer allocator.free(xml);
 
@@ -2283,6 +3366,12 @@ fn windowsTaskMatches(allocator: std.mem.Allocator, codex_home: []const u8, self
 
 fn windowsExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8, codex_home: []const u8) ![]u8 {
     const args = try windowsTaskArguments(allocator, codex_home);
+    defer allocator.free(args);
+    return try std.fmt.allocPrint(allocator, "{s} {s}", .{ helper_path, args });
+}
+
+fn windowsManagerExpectedTaskFingerprint(allocator: std.mem.Allocator, helper_path: []const u8) ![]u8 {
+    const args = try windowsManagerTaskArguments(allocator);
     defer allocator.free(args);
     return try std.fmt.allocPrint(allocator, "{s} {s}", .{ helper_path, args });
 }
@@ -2474,9 +3563,15 @@ fn windowsHelperPath(allocator: std.mem.Allocator, self_exe: []const u8) ![]u8 {
 }
 
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
+    return macPlistPathForLabel(allocator, mac_label);
+}
+
+fn macPlistPathForLabel(allocator: std.mem.Allocator, label: []const u8) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", mac_label ++ ".plist" });
+    const plist_name = try std.fmt.allocPrint(allocator, "{s}.plist", .{label});
+    defer allocator.free(plist_name);
+    return try std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", plist_name });
 }
 
 fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8) !void {
@@ -2569,6 +3664,14 @@ fn windowsTaskArguments(allocator: std.mem.Allocator, codex_home: []const u8) ![
         allocator,
         "--service-version {s} --codex-home {s}",
         .{ version.app_version, quoted_codex_home },
+    );
+}
+
+fn windowsManagerTaskArguments(allocator: std.mem.Allocator) ![]u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "--service-version {s} --manager",
+        .{version.app_version},
     );
 }
 

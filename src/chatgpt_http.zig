@@ -905,7 +905,7 @@ fn readWindowsRegistryStringAlloc(
     };
 }
 
-fn resolveNodeExecutableForLaunchAlloc(allocator: std.mem.Allocator) ![]u8 {
+pub fn resolveNodeExecutableForLaunchAlloc(allocator: std.mem.Allocator) ![]u8 {
     const node_executable = try resolveNodeExecutable(allocator);
     defer allocator.free(node_executable);
     return ensureExecutableAvailableAlloc(allocator, node_executable);
