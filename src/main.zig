@@ -5,6 +5,7 @@ const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
 const chatgpt_http = @import("chatgpt_http.zig");
 const display_rows = @import("display_rows.zig");
+const group_manager = @import("group_manager.zig");
 const registry = @import("registry.zig");
 const auth = @import("auth.zig");
 const auto = @import("auto.zig");
@@ -178,6 +179,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .import_auth => |opts| try handleImport(allocator, codex_home.?, opts),
         .switch_account => |opts| try handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try handleRemove(allocator, codex_home.?, opts),
+        .group => |opts| try handleGroup(allocator, opts),
         .clean => try handleClean(allocator, codex_home.?),
     }
 
@@ -192,6 +194,10 @@ fn isHandledCliError(err: anyerror) bool {
         err == error.ListLiveRequiresTty or
         err == error.TuiOutputUnavailable or
         err == error.NodeJsRequired or
+        err == error.GroupNotFound or
+        err == error.GroupAlreadyExists or
+        err == error.InvalidGroupName or
+        err == error.CodextLaunchFailed or
         err == error.SwitchSelectionRequiresTty or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
@@ -201,7 +207,7 @@ fn isHandledCliError(err: anyerror) bool {
 pub fn shouldReconcileManagedService(cmd: cli.Command) bool {
     if (hasNonEmptyEnvVar(skip_service_reconcile_env)) return false;
     return switch (cmd) {
-        .help, .version, .status, .daemon => false,
+        .help, .version, .status, .daemon, .group => false,
         else => true,
     };
 }
@@ -1301,6 +1307,11 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
+    if (opts.group_name) |group_name| {
+        try handleManagedGroupLogin(allocator, group_name, opts);
+        return;
+    }
+
     try cli.runCodexLogin(opts);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
@@ -2564,6 +2575,300 @@ fn findAccountIndexByDisplayNumber(
     return display.rows[row_idx].account_index;
 }
 
+fn printGroupMessage(comptime fmt: []const u8, args: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    try stdout.interface.print(fmt ++ "\n", args);
+    try stdout.interface.flush();
+}
+
+fn printGroupError(comptime fmt: []const u8, args: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+    var stderr = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    try stderr.interface.print("error: " ++ fmt ++ "\n", args);
+    try stderr.interface.flush();
+}
+
+fn handleManagedGroupLogin(allocator: std.mem.Allocator, group_name: []const u8, opts: cli.LoginOptions) !void {
+    var group = try group_manager.ensureManagedGroupAlloc(allocator, group_name);
+    defer group.deinit(allocator);
+    try handleLoginInCodexHome(allocator, group.codex_home, opts);
+    try printGroupMessage("Logged in account to group `{s}` ({s}).", .{ group.name, group.codex_home });
+}
+
+fn handleLoginInCodexHome(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
+    try cli.runCodexLoginWithCodexHome(allocator, opts, codex_home);
+    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(auth_path);
+
+    const info = try auth.parseAuthInfo(allocator, auth_path);
+    defer info.deinit(allocator);
+
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+
+    const email = info.email orelse return error.MissingEmail;
+    _ = email;
+    const record_key = info.record_key orelse return error.MissingChatgptUserId;
+    const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(dest);
+
+    try registry.ensureAccountsDir(allocator, codex_home);
+    try registry.copyManagedFile(auth_path, dest);
+
+    const record = try registry.accountFromAuth(allocator, "", &info);
+    try registry.upsertAccount(allocator, &reg, record);
+    try registry.setActiveAccountKey(allocator, &reg, record_key);
+    _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountFetcher);
+    try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn groupAccountCount(allocator: std.mem.Allocator, codex_home: []const u8) !usize {
+    var reg = registry.loadRegistry(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound, error.UnsupportedRegistryVersion => return 0,
+        else => return err,
+    };
+    defer reg.deinit(allocator);
+    return reg.accounts.items.len;
+}
+
+fn printGroupListAll(allocator: std.mem.Allocator) !void {
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &stdout.interface;
+    try out.writeAll("GROUP    ACCOUNTS  CODEX_HOME\n");
+    try out.writeAll("------------------------------\n");
+    for (groups.items.items) |group| {
+        const count = try groupAccountCount(allocator, group.codex_home);
+        try out.print("{s:<8} {d:>8}  {s}\n", .{ group.name, count, group.codex_home });
+    }
+    try out.flush();
+}
+
+fn printManagedGroupPath(allocator: std.mem.Allocator, name: []const u8) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+    try printGroupMessage("{s}", .{group.codex_home});
+}
+
+const ManagedGroupAccountMatch = struct {
+    source_group_name: []u8,
+    source_codex_home: []u8,
+    snapshot_path: []u8,
+    label: []u8,
+    alias: []u8,
+
+    fn deinit(self: *ManagedGroupAccountMatch, allocator: std.mem.Allocator) void {
+        allocator.free(self.source_group_name);
+        allocator.free(self.source_codex_home);
+        allocator.free(self.snapshot_path);
+        allocator.free(self.label);
+        allocator.free(self.alias);
+    }
+};
+
+fn managedGroupAccountMatchForRecord(
+    allocator: std.mem.Allocator,
+    source: *const group_manager.GroupRef,
+    rec: *const registry.AccountRecord,
+) !ManagedGroupAccountMatch {
+    const snapshot_path = try registry.accountAuthPath(allocator, source.codex_home, rec.account_key);
+    errdefer allocator.free(snapshot_path);
+    const label = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
+    errdefer allocator.free(label);
+    return .{
+        .source_group_name = try allocator.dupe(u8, source.name),
+        .source_codex_home = try allocator.dupe(u8, source.codex_home),
+        .snapshot_path = snapshot_path,
+        .label = label,
+        .alias = try allocator.dupe(u8, rec.alias),
+    };
+}
+
+fn appendManagedGroupMatchesFromGroup(
+    allocator: std.mem.Allocator,
+    result: *std.ArrayList(ManagedGroupAccountMatch),
+    selector: []const u8,
+    source: *const group_manager.GroupRef,
+) !void {
+    var reg = registry.loadRegistry(allocator, source.codex_home) catch |err| switch (err) {
+        error.FileNotFound, error.UnsupportedRegistryVersion => return,
+        else => return err,
+    };
+    defer reg.deinit(allocator);
+
+    var matches = std.ArrayList(usize).empty;
+    defer matches.deinit(allocator);
+    if (try findAccountIndexByDisplayNumber(allocator, &reg, selector)) |account_idx| {
+        try matches.append(allocator, account_idx);
+    } else {
+        var fuzzy = try findMatchingAccountsForRemove(allocator, &reg, selector);
+        defer fuzzy.deinit(allocator);
+        try matches.appendSlice(allocator, fuzzy.items);
+    }
+
+    for (matches.items) |account_idx| {
+        try result.append(allocator, try managedGroupAccountMatchForRecord(allocator, source, &reg.accounts.items[account_idx]));
+    }
+}
+
+fn collectManagedGroupMatches(
+    allocator: std.mem.Allocator,
+    selector: []const u8,
+    target_group_name: []const u8,
+) !std.ArrayList(ManagedGroupAccountMatch) {
+    var result = std.ArrayList(ManagedGroupAccountMatch).empty;
+    errdefer {
+        for (result.items) |*match| match.deinit(allocator);
+        result.deinit(allocator);
+    }
+
+    var groups = try group_manager.loadGroups(allocator);
+    defer groups.deinit(allocator);
+
+    if (!std.mem.eql(u8, target_group_name, group_manager.default_group_name)) {
+        if (group_manager.findGroupIndex(&groups, group_manager.default_group_name)) |idx| {
+            try appendManagedGroupMatchesFromGroup(allocator, &result, selector, &groups.items.items[idx]);
+            if (result.items.len != 0) return result;
+        }
+    }
+
+    for (groups.items.items) |source| {
+        if (std.mem.eql(u8, source.name, target_group_name)) continue;
+        if (std.mem.eql(u8, source.name, group_manager.default_group_name)) continue;
+        try appendManagedGroupMatchesFromGroup(allocator, &result, selector, &source);
+    }
+    return result;
+}
+
+fn importManagedMatchIntoGroup(
+    allocator: std.mem.Allocator,
+    target: *const group_manager.GroupRef,
+    target_reg: *registry.Registry,
+    match: *const ManagedGroupAccountMatch,
+) !registry.ImportOutcome {
+    const alias: ?[]const u8 = if (match.alias.len == 0) null else match.alias;
+    var report = try registry.importAuthPath(allocator, target.codex_home, target_reg, match.snapshot_path, alias);
+    defer report.deinit(allocator);
+    if (report.failure) |err| return err;
+    if (report.imported > 0) return .imported;
+    if (report.updated > 0) return .updated;
+    return .skipped;
+}
+
+fn handleManagedGroupAdd(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    var target = try group_manager.resolveGroupAlloc(allocator, target_group_name);
+    defer target.deinit(allocator);
+    var target_reg = try registry.loadRegistry(allocator, target.codex_home);
+    defer target_reg.deinit(allocator);
+
+    var imported: usize = 0;
+    var updated: usize = 0;
+    for (selectors) |selector| {
+        var matches = try collectManagedGroupMatches(allocator, selector, target.name);
+        defer {
+            for (matches.items) |*match| match.deinit(allocator);
+            matches.deinit(allocator);
+        }
+        if (matches.items.len == 0) {
+            try cli.printAccountNotFoundError(selector);
+            return error.AccountNotFound;
+        }
+        for (matches.items) |*match| {
+            switch (try importManagedMatchIntoGroup(allocator, &target, &target_reg, match)) {
+                .imported => imported += 1,
+                .updated => updated += 1,
+                .skipped => {},
+            }
+        }
+    }
+
+    try registry.saveRegistry(allocator, target.codex_home, &target_reg);
+    try printGroupMessage("Group `{s}` updated: {d} imported, {d} refreshed.", .{ target.name, imported, updated });
+}
+
+fn handleManagedGroupCreate(allocator: std.mem.Allocator, opts: cli.GroupMutationOptions) !void {
+    var group = try group_manager.ensureManagedGroupAlloc(allocator, opts.name);
+    defer group.deinit(allocator);
+    try printGroupMessage("Group `{s}` uses {s}.", .{ group.name, group.codex_home });
+    if (opts.selectors.len != 0) {
+        try handleManagedGroupAdd(allocator, group.name, opts.selectors);
+    }
+}
+
+fn handleManagedGroupRemove(allocator: std.mem.Allocator, target_group_name: []const u8, selectors: []const []const u8) !void {
+    var target = try group_manager.resolveGroupAlloc(allocator, target_group_name);
+    defer target.deinit(allocator);
+    try handleRemove(allocator, target.codex_home, .{
+        .selectors = @constCast(selectors),
+        .all = false,
+        .live = false,
+        .api_mode = .default,
+    });
+}
+
+fn handleManagedGroupLaunch(allocator: std.mem.Allocator, name: []const u8, argv_tail: []const []const u8) !void {
+    var group = try group_manager.resolveGroupAlloc(allocator, name);
+    defer group.deinit(allocator);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, "codext");
+    try argv.appendSlice(allocator, argv_tail);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("CODEX_HOME", group.codex_home);
+
+    var child = std.process.spawn(app_runtime.io(), .{
+        .argv = argv.items,
+        .environ_map = &env_map,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    }) catch |err| {
+        try printGroupError("failed to launch `codext` for group `{s}`: {s}.", .{ name, @errorName(err) });
+        return err;
+    };
+    const term = try child.wait(app_runtime.io());
+    switch (term) {
+        .exited => |code| if (code == 0) return,
+        else => {},
+    }
+    return error.CodextLaunchFailed;
+}
+
+fn handleGroup(allocator: std.mem.Allocator, opts: cli.GroupOptions) !void {
+    switch (opts) {
+        .list => try printGroupListAll(allocator),
+        .create => |mutation| try handleManagedGroupCreate(allocator, mutation),
+        .path => |name| try printManagedGroupPath(allocator, name),
+        .scoped => |scoped| {
+            switch (scoped.action) {
+                .login => |login_opts| {
+                    try handleManagedGroupLogin(allocator, scoped.name, login_opts);
+                    return;
+                },
+                else => {},
+            }
+            var group = try group_manager.resolveGroupAlloc(allocator, scoped.name);
+            defer group.deinit(allocator);
+            switch (scoped.action) {
+                .list => |list_opts| try handleList(allocator, group.codex_home, list_opts),
+                .login => unreachable,
+                .add => |selectors| try handleManagedGroupAdd(allocator, group.name, selectors),
+                .remove => |selectors| try handleManagedGroupRemove(allocator, group.name, selectors),
+                .import_auth => |import_opts| try handleImport(allocator, group.codex_home, import_opts),
+                .switch_account => |switch_opts| try handleSwitch(allocator, group.codex_home, switch_opts),
+                .launch => |argv| try handleManagedGroupLaunch(allocator, group.name, argv),
+            }
+        },
+    }
+}
+
 const CurrentAuthState = struct {
     record_key: ?[]u8,
     syncable: bool,
@@ -3647,6 +3952,7 @@ test {
     _ = @import("cli.zig");
     _ = @import("compat_fs.zig");
     _ = @import("format.zig");
+    _ = @import("group_manager.zig");
     _ = @import("timefmt.zig");
     _ = @import("tests/auth_test.zig");
     _ = @import("tests/sessions_test.zig");

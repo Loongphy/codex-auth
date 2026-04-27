@@ -262,6 +262,89 @@ test "Scenario: Given login with duplicate device auth flag when parsing then us
     try expectUsageError(result, .login, "duplicate `--device-auth`");
 }
 
+test "Scenario: Given login with group when parsing then group name and device auth are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "login", "--group", "work", "--device-auth" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .login => |opts| {
+                try std.testing.expect(opts.device_auth);
+                try std.testing.expect(opts.group_name != null);
+                try std.testing.expectEqualStrings("work", opts.group_name.?);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given group create with account selectors when parsing then group mutation is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "create", "work", "01", "jane@example.com" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |opts| switch (opts) {
+                .create => |mutation| {
+                    try std.testing.expectEqualStrings("work", mutation.name);
+                    try std.testing.expectEqual(@as(usize, 2), mutation.selectors.len);
+                    try std.testing.expectEqualStrings("01", mutation.selectors[0]);
+                    try std.testing.expectEqualStrings("jane@example.com", mutation.selectors[1]);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given scoped group commands when parsing then delegated options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "group", "work", "switch", "--live", "--auto", "--skip-api" };
+    var result = try cli.parseArgs(gpa, &args);
+    defer cli.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .group => |opts| switch (opts) {
+                .scoped => |scoped| {
+                    try std.testing.expectEqualStrings("work", scoped.name);
+                    switch (scoped.action) {
+                        .switch_account => |switch_opts| {
+                            try std.testing.expect(switch_opts.live);
+                            try std.testing.expect(switch_opts.auto);
+                            try std.testing.expectEqual(cli.ApiMode.skip_api, switch_opts.api_mode);
+                        },
+                        else => return error.TestExpectedEqual,
+                    }
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given group help when rendering then core group usage is shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.writeCommandHelp(&aw.writer, false, .group);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group create <name> [<account>...]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> login [--device-auth]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth group <name> launch [-- <codext-arg>...]") != null);
+}
+
 test "Scenario: Given command help selector when parsing then command-specific help is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "help", "list" };
@@ -294,6 +377,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "group") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--auto] [--api|--skip-api] | switch <query>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
