@@ -336,6 +336,8 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
 
@@ -361,6 +363,9 @@ test "Scenario: Given complex command help when rendering then examples are show
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth import") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  <path>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Uses `~/.cli-proxy-api` when omitted.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--purge [<path>] Rebuild `registry.json` from auth files.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
 }
 
@@ -377,7 +382,43 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch john@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch 02") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "If a target is ambiguous") == null);
+}
+
+test "Scenario: Given remove command help when rendering then options explain live API all and target forms" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, false, .remove_account);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live remove UI.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--api        Load usage and account data from APIs.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--all        Remove every stored account.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Remove one or more matching accounts.") != null);
+}
+
+test "Scenario: Given config and daemon help when rendering then special modes are explained" {
+    const gpa = std.testing.allocator;
+    var config_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer config_aw.deinit();
+    var daemon_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer daemon_aw.deinit();
+
+    try cli.help.writeCommandHelp(&config_aw.writer, false, .config);
+    try cli.help.writeCommandHelp(&daemon_aw.writer, false, .daemon);
+
+    const config_help = config_aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto enable       Enable background auto-switching.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "--5h <percent>    Set the 5-hour usage threshold from 1 to 100.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "--weekly <percent>\n                    Set the weekly usage threshold from 1 to 100.") != null);
+
+    const daemon_help = daemon_aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, daemon_help, "--watch   Run continuously and switch accounts when thresholds are reached.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, daemon_help, "--once    Run one auto-switch check, then exit.") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -750,6 +791,7 @@ test "Scenario: Given login help when rendering then device auth usage is includ
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth login --device-auth") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --device-auth   Run `codex login --device-auth` before adding the account.") != null);
 }
 
 test "Scenario: Given login options when building codex argv then device auth is forwarded" {

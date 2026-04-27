@@ -126,6 +126,10 @@ pub fn writeCommandHelp(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) 
     try writeCommandHelpHeader(out, use_color, topic);
     try out.writeAll("\n");
     try writeUsageSectionStyled(out, use_color, topic);
+    if (commandHelpHasOptions(topic)) {
+        try out.writeAll("\n\n");
+        try writeOptionsSectionStyled(out, use_color, topic);
+    }
     if (commandHelpHasExamples(topic)) {
         try out.writeAll("\n\n");
         try writeExamplesSectionStyled(out, use_color, topic);
@@ -177,6 +181,13 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
         .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        else => false,
+    };
+}
+
+fn commandHelpHasOptions(topic: HelpTopic) bool {
+    return switch (topic) {
+        .list, .login, .import_auth, .switch_account, .remove_account, .config, .daemon => true,
         else => false,
     };
 }
@@ -253,6 +264,60 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .config => "codex-auth config --help",
         .daemon => "codex-auth daemon --help",
     };
+}
+
+fn writeOptionsSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
+    try writeSectionTitle(out, use_color, "Options:");
+    try out.writeAll("\n");
+    try writeOptionLines(out, topic);
+}
+
+fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
+    switch (topic) {
+        .list => {
+            try out.writeAll("  --live       Open a live-updating table.\n");
+            try out.writeAll("  --api        Load usage and account data from APIs.\n");
+            try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+        },
+        .login => {
+            try out.writeAll("  --device-auth   Run `codex login --device-auth` before adding the account.\n");
+        },
+        .import_auth => {
+            try out.writeAll("  <path>           Import one auth file or every supported auth file in a directory.\n");
+            try out.writeAll("  --cpa [<path>]   Import CPA flat token JSON from a file or directory. Uses `~/.cli-proxy-api` when omitted.\n");
+            try out.writeAll("  --alias <alias>  Set an alias for a single imported account.\n");
+            try out.writeAll("  --purge [<path>] Rebuild `registry.json` from auth files. Uses the accounts directory when omitted.\n");
+        },
+        .switch_account => {
+            try out.writeAll("  --live       Open the live switch UI.\n");
+            try out.writeAll("  --api        Load usage and account data from APIs.\n");
+            try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+            try out.writeAll("  <alias|email|display-number|query>\n");
+            try out.writeAll("               Switch directly when the target resolves to one account.\n");
+        },
+        .remove_account => {
+            try out.writeAll("  --live       Open the live remove UI.\n");
+            try out.writeAll("  --api        Load usage and account data from APIs.\n");
+            try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+            try out.writeAll("  --all        Remove every stored account.\n");
+            try out.writeAll("  <alias|email|display-number|query>...\n");
+            try out.writeAll("               Remove one or more matching accounts.\n");
+        },
+        .config => {
+            try out.writeAll("  auto enable       Enable background auto-switching.\n");
+            try out.writeAll("  auto disable      Disable background auto-switching.\n");
+            try out.writeAll("  --5h <percent>    Set the 5-hour usage threshold from 1 to 100.\n");
+            try out.writeAll("  --weekly <percent>\n");
+            try out.writeAll("                    Set the weekly usage threshold from 1 to 100.\n");
+            try out.writeAll("  api enable        Enable usage and account APIs.\n");
+            try out.writeAll("  api disable       Disable usage and account APIs.\n");
+        },
+        .daemon => {
+            try out.writeAll("  --watch   Run continuously and switch accounts when thresholds are reached.\n");
+            try out.writeAll("  --once    Run one auto-switch check, then exit.\n");
+        },
+        else => {},
+    }
 }
 
 fn writeExamplesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
