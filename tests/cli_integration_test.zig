@@ -2399,7 +2399,11 @@ test "Scenario: Given remove query with no matches when running remove then it e
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expectEqualStrings("error: no account matches 'tmp2'.\n", result.stderr);
+    try std.testing.expectEqualStrings(
+        "error: no account matches 'tmp2'.\n" ++
+            "hint: Run `codex-auth list` to see available accounts, then retry with an alias, email, or number.\n",
+        result.stderr,
+    );
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
@@ -2432,7 +2436,11 @@ test "Scenario: Given multiple remove queries with no matches when running remov
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expectEqualStrings("error: no account matches: 112222, 222222.\n", result.stderr);
+    try std.testing.expectEqualStrings(
+        "error: no account matches: 112222, 222222.\n" ++
+            "hint: Run `codex-auth list` to see available accounts, then retry with aliases, emails, or numbers.\n",
+        result.stderr,
+    );
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }

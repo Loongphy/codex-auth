@@ -176,10 +176,10 @@ pub fn printCommandHelp(topic: HelpTopic) !void {
 pub fn writeCommandHelp(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
     try writeCommandHelpHeader(out, use_color, topic);
     try out.writeAll("\n");
-    try writeUsageSection(out, topic);
+    try writeUsageSectionStyled(out, use_color, topic);
     if (commandHelpHasExamples(topic)) {
         try out.writeAll("\n\n");
-        try writeExamplesSection(out, topic);
+        try writeExamplesSectionStyled(out, use_color, topic);
     }
 }
 
@@ -229,7 +229,16 @@ fn commandHelpHasExamples(topic: HelpTopic) bool {
 }
 
 pub fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
-    try out.writeAll("Usage:\n");
+    try writeUsageSectionStyled(out, false, topic);
+}
+
+pub fn writeUsageSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
+    try writeSectionTitle(out, use_color, "Usage:");
+    try out.writeAll("\n");
+    try writeUsageLines(out, topic);
+}
+
+fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .top_level => {
             try out.writeAll("  codex-auth <command>\n");
@@ -287,8 +296,13 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
     };
 }
 
-fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
-    try out.writeAll("Examples:\n");
+fn writeExamplesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
+    try writeSectionTitle(out, use_color, "Examples:");
+    try out.writeAll("\n");
+    try writeExampleLines(out, topic);
+}
+
+fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .top_level => {
             try out.writeAll("  codex-auth list\n");
@@ -339,4 +353,10 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth daemon --once\n");
         },
     }
+}
+
+fn writeSectionTitle(out: *std.Io.Writer, use_color: bool, title: []const u8) !void {
+    if (use_color) try out.writeAll(style.ansi.cyan);
+    try out.writeAll(title);
+    if (use_color) try out.writeAll(style.ansi.reset);
 }

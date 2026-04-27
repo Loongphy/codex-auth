@@ -30,7 +30,7 @@ pub fn printUsageError(usage_err: *const UsageError) !void {
     try help.writeUsageSection(out, usage_err.topic);
     try out.writeAll("\n");
     try writeHintPrefixTo(out, use_color);
-    try out.print(" Run `{s}` for examples.\n", .{help.helpCommandForTopic(usage_err.topic)});
+    try out.print(" Run `{s}` for help and examples.\n", .{help.helpCommandForTopic(usage_err.topic)});
     try out.flush();
 }
 
@@ -121,6 +121,8 @@ pub fn printAccountNotFoundError(query: []const u8) !void {
     const use_color = style.stderrColorEnabled();
     try writeErrorPrefixTo(out, use_color);
     try out.print(" no account matches '{s}'.\n", .{query});
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Run `codex-auth list` to see available accounts, then retry with an alias, email, or number.\n");
     try out.flush();
 }
 
@@ -141,6 +143,8 @@ pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
         try out.writeAll(query);
     }
     try out.writeAll(".\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Run `codex-auth list` to see available accounts, then retry with aliases, emails, or numbers.\n");
     try out.flush();
 }
 

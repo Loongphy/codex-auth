@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 const cli = @import("codex_auth").cli;
 const registry = @import("codex_auth").registry;
 
+const ansi = struct {
+    const reset = "\x1b[0m";
+    const cyan = "\x1b[36m";
+};
+
 fn makeRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
@@ -320,6 +325,18 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
+}
+
+test "Scenario: Given command help with color when rendering then section titles use header style" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, true, .switch_account);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, ansi.cyan ++ "Usage:" ++ ansi.reset ++ "\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, ansi.cyan ++ "Examples:" ++ ansi.reset ++ "\n") != null);
 }
 
 test "Scenario: Given complex command help when rendering then examples are shown" {
