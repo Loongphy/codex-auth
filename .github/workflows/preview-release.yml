@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        uses: Loongphy/setup-zig@node24-lts-runtime
         with:
           version: 0.16.0
 
