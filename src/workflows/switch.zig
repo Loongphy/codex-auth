@@ -25,7 +25,6 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         }
         std.debug.assert(opts.api_mode == .default);
         std.debug.assert(!opts.live);
-        std.debug.assert(!opts.auto);
 
         var resolution = try resolveSwitchQueryLocally(allocator, &reg, query);
         defer resolution.deinit(allocator);
@@ -122,7 +121,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             .build_status_line = switchLiveRuntimeBuildStatusLine,
         },
         .apply_selection = switchLiveRuntimeApplySelection,
-        .auto_switch = opts.auto,
+        .auto_switch = true,
     };
 
     const transferred_display = initial_display.?;

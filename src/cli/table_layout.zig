@@ -30,7 +30,8 @@ pub const LiveTable = struct {
     columns: [column_count]LiveTableColumn,
     prefix_width: usize,
 
-    pub fn writeHeader(self: *const LiveTable, out: *std.Io.Writer) !void {
+    pub fn writeHeader(self: *const LiveTable, out: *std.Io.Writer, use_color: bool) !void {
+        if (use_color) try out.writeAll(style.ansi.cyan);
         try writeRepeat(out, ' ', self.prefix_width);
         try self.writeCells(out, &.{
             .{ .text = self.columns[0].header },
@@ -39,6 +40,7 @@ pub const LiveTable = struct {
             .{ .text = self.columns[3].header },
             .{ .text = self.columns[4].header },
         });
+        if (use_color) try out.writeAll(style.ansi.reset);
         try out.writeAll("\n");
     }
 
@@ -46,8 +48,8 @@ pub const LiveTable = struct {
         if (use_color) try out.writeAll(style.ansi.dim);
         try writeRepeat(out, ' ', self.prefix_width);
         try writeAccountTruncatedPadded(out, account, self.columns[0].width);
-        try out.writeAll("\n");
         if (use_color) try out.writeAll(style.ansi.reset);
+        try out.writeAll("\n");
     }
 
     pub fn writeDataRow(
@@ -63,8 +65,8 @@ pub const LiveTable = struct {
             try writeRepeat(out, ' ', self.prefix_width - prefix.len);
         }
         try self.writeCells(out, &cells);
-        try out.writeAll("\n");
         if (ansi_style.len != 0) try out.writeAll(style.ansi.reset);
+        try out.writeAll("\n");
     }
 
     fn writeCells(

@@ -21,7 +21,6 @@ pub const ImportOptions = struct {
 pub const SwitchOptions = struct {
     query: ?[]u8,
     live: bool = false,
-    auto: bool = false,
     api_mode: ApiMode = .default,
 };
 pub const RemoveOptions = struct {

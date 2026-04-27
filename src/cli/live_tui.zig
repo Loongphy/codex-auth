@@ -77,14 +77,14 @@ pub fn nowSecond() i64 {
 }
 
 pub fn switchFixedLines(status_line: []const u8, action_line: []const u8) usize {
-    var lines: usize = 5;
+    var lines: usize = 3;
     if (status_line.len != 0) lines += 1;
     if (action_line.len != 0) lines += 1;
     return lines;
 }
 
 pub fn listFixedLines(status_line: []const u8) usize {
-    var lines: usize = 5;
+    var lines: usize = 3;
     if (status_line.len != 0) lines += 1;
     return lines;
 }
@@ -111,6 +111,20 @@ pub fn selectedViewport(
         .start_row = viewport_start.*,
         .max_rows = max_rows,
     };
+}
+
+pub fn selectableViewport(
+    terminal_rows: usize,
+    rows: []const row_data.SwitchRow,
+    selected_display_idx: ?usize,
+    fixed_lines: usize,
+    viewport_start: *usize,
+    follow_selection: bool,
+) render.LiveListViewport {
+    if (follow_selection) {
+        return selectedViewport(terminal_rows, rows, selected_display_idx, fixed_lines, viewport_start);
+    }
+    return listViewport(terminal_rows, rows.len, fixed_lines, viewport_start);
 }
 
 pub fn listViewport(

@@ -107,10 +107,11 @@ test "Scenario: Given live TUI frame output when writing it then redraw moves ho
 
     const line_count = try writeTuiFrameTo(&aw.writer, "abc\ndef\n", 4);
 
-    try std.testing.expectEqual(@as(usize, 3), line_count);
+    try std.testing.expectEqual(@as(usize, 2), line_count);
     try std.testing.expect(std.mem.startsWith(u8, aw.written(), "\x1b[?2026h\x1b[H"));
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[H\x1b[J") == null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "abc\x1b[K\r\ndef\x1b[K") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "def\x1b[K\r\n\x1b[K") == null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\r\n\x1b[2K") != null);
     try std.testing.expect(std.mem.endsWith(u8, aw.written(), "\x1b[?2026l"));
 }

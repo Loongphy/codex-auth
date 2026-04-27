@@ -18,14 +18,6 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             opts.live = true;
             continue;
         }
-        if (std.mem.eql(u8, arg, "--auto")) {
-            if (opts.auto) {
-                if (opts.query) |query| allocator.free(query);
-                return common.usageErrorResult(allocator, .switch_account, "duplicate `--auto` for `switch`.", .{});
-            }
-            opts.auto = true;
-            continue;
-        }
         if (std.mem.eql(u8, arg, "--api")) {
             switch (opts.api_mode) {
                 .default => opts.api_mode = .force_api,
@@ -64,16 +56,12 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         }
         opts.query = try allocator.dupe(u8, arg);
     }
-    if (opts.auto and !opts.live) {
-        if (opts.query) |query| allocator.free(query);
-        return common.usageErrorResult(allocator, .switch_account, "`--auto` requires `--live` for `switch`.", .{});
-    }
-    if (opts.query != null and (opts.api_mode != .default or opts.live or opts.auto)) {
+    if (opts.query != null and (opts.api_mode != .default or opts.live)) {
         if (opts.query) |query| allocator.free(query);
         return common.usageErrorResult(
             allocator,
             .switch_account,
-            "`switch <query>` does not support `--live`, `--auto`, `--api`, or `--skip-api`.",
+            "`switch <query>` does not support `--live`, `--api`, or `--skip-api`.",
             .{},
         );
     }

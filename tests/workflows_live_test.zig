@@ -155,6 +155,11 @@ fn sleepLiveRefreshTask(io: std.Io) void {
     std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
 }
 
+test "live refresh intervals use distinct api and local cadences" {
+    try std.testing.expectEqual(@as(i64, 60_000), switch_live_api_refresh_interval_ms);
+    try std.testing.expectEqual(@as(i64, 30_000), switch_live_local_refresh_interval_ms);
+}
+
 test "initial live selection display uses stored api defaults for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

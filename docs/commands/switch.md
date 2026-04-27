@@ -4,7 +4,7 @@
 
 ```shell
 codex-auth switch [--api|--skip-api]
-codex-auth switch --live [--auto] [--api|--skip-api]
+codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
 ```
 
@@ -25,10 +25,11 @@ codex-auth switch <query>
 - A successful switch patches the current display immediately.
 - In-flight refresh results are discarded after a manual switch.
 - Existing usage overlays stay visible until the next scheduled refresh.
+- The foreground auto-switch loop is enabled automatically in live mode.
 
 ## Foreground Auto Switch
 
-`codex-auth switch --live --auto` adds an auto-switch loop to the live picker.
+`codex-auth switch --live` includes an auto-switch loop in the live picker.
 
 It switches away from the active account when the current live display shows:
 
@@ -49,7 +50,7 @@ Selectors can match:
 - email fragment, or
 - account name fragment.
 
-If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--auto`, `--api`, or `--skip-api`.
+If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--api`, or `--skip-api`.
 
 ## Switch Effects
 

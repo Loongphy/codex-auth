@@ -6,8 +6,8 @@ const targets = @import("targets.zig");
 const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const apiModeUsesApi = preflight.apiModeUsesApi;
 
-pub const switch_live_api_refresh_interval_ms: i64 = 30_000;
-pub const switch_live_local_refresh_interval_ms: i64 = 10_000;
+pub const switch_live_api_refresh_interval_ms: i64 = 60_000;
+pub const switch_live_local_refresh_interval_ms: i64 = 30_000;
 
 pub const SwitchLiveRefreshPolicy = struct {
     usage_api_enabled: bool,

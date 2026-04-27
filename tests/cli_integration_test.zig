@@ -1598,7 +1598,7 @@ test "Scenario: Given switch query with api flag when running switch then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--auto`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch query with skip-api flag when running switch then it returns a usage error" {
@@ -1634,7 +1634,7 @@ test "Scenario: Given switch query with skip-api flag when running switch then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--auto`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch without api flags when running interactively then it requires api refresh executables by default" {

@@ -103,13 +103,13 @@ pub fn writeImportReport(
 }
 
 pub fn writeErrorPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
-    if (use_color) try out.writeAll(style.ansi.bold_red);
+    if (use_color) try out.writeAll(style.ansi.red);
     try out.writeAll("error:");
     if (use_color) try out.writeAll(style.ansi.reset);
 }
 
 pub fn writeHintPrefixTo(out: *std.Io.Writer, use_color: bool) !void {
-    if (use_color) try out.writeAll(style.ansi.bold_cyan);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("hint:");
     if (use_color) try out.writeAll(style.ansi.reset);
 }
@@ -300,7 +300,7 @@ pub fn printSwitchedAccount(
     stdout.init();
     const out = stdout.out();
     const use_color = style.stdoutColorEnabled();
-    if (use_color) try out.writeAll(style.ansi.bold_green);
+    if (use_color) try out.writeAll(style.ansi.green);
     try out.print("Switched to {s}\n", .{label});
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.flush();

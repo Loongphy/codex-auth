@@ -236,14 +236,18 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
     try out.writeAll("\x1b[?2026h\x1b[H");
 
     var line_count: usize = 0;
-    var lines = std.mem.splitScalar(u8, frame, '\n');
+    var start: usize = 0;
     var first = true;
-    while (lines.next()) |line| {
+    while (start < frame.len) {
+        const newline = std.mem.indexOfScalarPos(u8, frame, start, '\n') orelse frame.len;
+        const line = frame[start..newline];
         if (!first) try out.writeAll("\r\n");
         first = false;
         try out.writeAll(line);
         try out.writeAll("\x1b[K");
         line_count += 1;
+        if (newline == frame.len) break;
+        start = newline + 1;
     }
 
     if (previous_line_count > line_count) {
@@ -270,9 +274,7 @@ pub fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
 }
 
 pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    if (use_color) try out.writeAll(style.ansi.dim);
-    try writeTuiLineBounded(out, switchTuiFooterText(builtin.os.tag == .windows), max_cols);
-    if (use_color) try out.writeAll(style.ansi.reset);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterText(builtin.os.tag == .windows), max_cols);
 }
 
 pub fn removeTuiFooterText(is_windows: bool) []const u8 {
@@ -287,16 +289,14 @@ pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
 }
 
 pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    if (use_color) try out.writeAll(style.ansi.dim);
-    try writeTuiLineBounded(out, removeTuiFooterText(builtin.os.tag == .windows), max_cols);
-    if (use_color) try out.writeAll(style.ansi.reset);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterText(builtin.os.tag == .windows), max_cols);
 }
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n"
+        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n"
     else
-        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n";
+        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n";
 }
 
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
@@ -304,16 +304,25 @@ pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
 }
 
 pub fn writeListTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    if (use_color) try out.writeAll(style.ansi.dim);
-    try writeTuiLineBounded(out, listTuiFooterText(builtin.os.tag == .windows), max_cols);
-    if (use_color) try out.writeAll(style.ansi.reset);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterText(builtin.os.tag == .windows), max_cols);
 }
 
 pub fn writeTuiLineBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usize) !void {
+    try writeTuiLineContentBounded(out, text, max_cols);
+    try out.writeAll("\n");
+}
+
+pub fn writeStyledTuiLineBounded(out: *std.Io.Writer, ansi_style: []const u8, text: []const u8, max_cols: ?usize) !void {
+    if (ansi_style.len != 0) try out.writeAll(ansi_style);
+    try writeTuiLineContentBounded(out, text, max_cols);
+    if (ansi_style.len != 0) try out.writeAll(style.ansi.reset);
+    try out.writeAll("\n");
+}
+
+fn writeTuiLineContentBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usize) !void {
     const line = if (std.mem.endsWith(u8, text, "\n")) text[0 .. text.len - 1] else text;
     const limit = max_cols orelse {
         try out.writeAll(line);
-        try out.writeAll("\n");
         return;
     };
     if (line.len <= limit) {
@@ -324,7 +333,6 @@ pub fn writeTuiLineBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usi
         try out.writeAll(line[0 .. limit - 1]);
         try out.writeAll(".");
     }
-    try out.writeAll("\n");
 }
 
 pub fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u8) !void {

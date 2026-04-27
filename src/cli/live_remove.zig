@@ -55,6 +55,7 @@ pub fn runRemoveLiveActions(
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
     var viewport_start: usize = 0;
+    var follow_selection = true;
     var needs_render = true;
     var last_render_second: i64 = -1;
     var last_rows_minute: i64 = -1;
@@ -93,12 +94,13 @@ pub fn runRemoveLiveActions(
             const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
             defer allocator.free(status_line);
             const cursor_display_idx = selectedDisplayIndexForRender(rows, cursor_idx, number_buf[0..number_len]);
-            const viewport = live_tui.selectedViewport(
+            const viewport = live_tui.selectableViewport(
                 tui.terminalRows(),
                 rows.items,
                 cursor_display_idx,
                 live_tui.switchFixedLines(status_line, action_message orelse ""),
                 &viewport_start,
+                follow_selection,
             );
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
@@ -144,35 +146,53 @@ pub fn runRemoveLiveActions(
                         const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
-                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .up)) {
+                                    number_len = 0;
+                                    follow_selection = true;
+                                } else {
+                                    live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
+                                    follow_selection = false;
+                                }
                                 needs_render = true;
                             },
                             .move_down => {
-                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .down)) {
+                                    number_len = 0;
+                                    follow_selection = true;
+                                } else {
+                                    live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, wheel_rows);
+                                    follow_selection = false;
+                                }
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .up, wheel_rows)) number_len = 0;
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
+                                follow_selection = false;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .down, wheel_rows)) number_len = 0;
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, wheel_rows);
+                                follow_selection = false;
                                 needs_render = true;
                             },
                             .page_up => {
                                 if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .up, page_rows)) number_len = 0;
+                                follow_selection = true;
                                 needs_render = true;
                             },
                             .page_down => {
                                 if (try live_tui.moveSelectedIndexBy(allocator, &cursor_account_key, rows, borrowed.reg, .down, page_rows)) number_len = 0;
+                                follow_selection = true;
                                 needs_render = true;
                             },
                             .home => {
                                 if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                follow_selection = true;
                                 needs_render = true;
                             },
                             .end => {
                                 if (try live_tui.moveSelectedIndexToEdge(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                follow_selection = true;
                                 needs_render = true;
                             },
                             .enter => {
@@ -213,6 +233,7 @@ pub fn runRemoveLiveActions(
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
+                                    follow_selection = true;
                                     needs_render = true;
                                 }
                             },
@@ -221,11 +242,13 @@ pub fn runRemoveLiveActions(
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {
                                     if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                    follow_selection = true;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'j') {
                                     if (try live_tui.moveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                    follow_selection = true;
                                     needs_render = true;
                                     continue;
                                 }
@@ -247,6 +270,7 @@ pub fn runRemoveLiveActions(
                                         borrowed.reg,
                                         number_buf[0..number_len],
                                     );
+                                    follow_selection = true;
                                     needs_render = true;
                                 }
                             },

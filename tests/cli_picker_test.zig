@@ -15,24 +15,33 @@ const accountIdForSelectable = cli.picker.accountIdForSelectable;
 const filterErroredRowsFromSelectableIndices = cli.rows.filterErroredRowsFromSelectableIndices;
 const maybeAutoSwitchTargetKeyAlloc = cli.picker.maybeAutoSwitchTargetKeyAlloc;
 const renderSwitchScreen = cli.render.renderSwitchScreen;
+const renderRemoveScreen = cli.render.renderRemoveScreen;
 const renderListScreenViewport = cli.render.renderListScreenViewport;
+const renderSwitchScreenViewport = cli.render.renderSwitchScreenViewport;
 const renderSwitchList = cli.render.renderSwitchList;
 const renderRemoveList = cli.render.renderRemoveList;
 const renderSwitchListViewport = cli.render.renderSwitchListViewport;
 const renderRemoveListViewport = cli.render.renderRemoveListViewport;
+const renderRemoveScreenViewport = cli.render.renderRemoveScreenViewport;
 const liveViewportStartForDisplayIndex = cli.render.liveViewportStartForDisplayIndex;
+const SwitchWidths = cli.render.SwitchWidths;
 const buildSwitchRows = cli.rows.buildSwitchRows;
 const buildSwitchRowsWithUsageOverrides = cli.rows.buildSwitchRowsWithUsageOverrides;
 const SwitchRow = cli.rows.SwitchRow;
 const switchTuiFooterText = cli.tui.switchTuiFooterText;
 const removeTuiFooterText = cli.tui.removeTuiFooterText;
 const listTuiFooterText = cli.tui.listTuiFooterText;
+const writeTuiFrameTo = cli.tui.writeTuiFrameTo;
 const TuiInputKey = cli.tui.TuiInputKey;
 const importReportMarker = cli.output.importReportMarker;
 const mapTuiOutputError = cli.tui.mapTuiOutputError;
 const indexWidth = cli.render.indexWidth;
+const LiveListViewport = cli.render.LiveListViewport;
 const ansi = struct {
+    const dim = "\x1b[2m";
     const red = "\x1b[31m";
+    const green = "\x1b[32m";
+    const cyan = "\x1b[36m";
 };
 
 test "Scenario: Given q quit input when checking switch picker helpers then both line and key shortcuts cancel selection" {
@@ -351,6 +360,160 @@ test "Scenario: Given a narrow live viewport when rendering then the account col
     try std.testing.expect(std.mem.indexOf(u8, output, "very-long-account-name-that-should-not-wrap") == null);
 }
 
+test "Scenario: Given live screens when rendering then vertical spacing stays compact" {
+    var rows = [_]SwitchRow{
+        testAccountRow("account@example.com", "Team", false),
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+    const widths: SwitchWidths = .{
+        .email = 19,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    };
+
+    var switch_buffer: [2048]u8 = undefined;
+    var switch_writer: std.Io.Writer = .fixed(&switch_buffer);
+    try renderSwitchScreen(&switch_writer, &reg, &rows, 2, widths, 0, false, "Live refresh: ready", "Switched to account@example.com", "");
+    const switch_output = switch_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, switch_output, "Select account to activate:\n"));
+    try std.testing.expect(std.mem.indexOf(u8, switch_output, "\n\n") == null);
+
+    var list_buffer: [2048]u8 = undefined;
+    var list_writer: std.Io.Writer = .fixed(&list_buffer);
+    try renderListScreenViewport(&list_writer, &reg, &rows, 2, widths, false, "Live refresh: ready", .{});
+    const list_output = list_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, list_output, "Live account list:\n"));
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "\n\n") == null);
+
+    var remove_buffer: [2048]u8 = undefined;
+    var remove_writer: std.Io.Writer = .fixed(&remove_buffer);
+    const checked = [_]bool{false};
+    try renderRemoveScreen(&remove_writer, &reg, &rows, 2, widths, 0, &checked, false, "Live refresh: ready", "Deleted account@example.com", "");
+    const remove_output = remove_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, remove_output, "Select accounts to delete:\n"));
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, "\n\n") == null);
+
+    try std.testing.expectEqual(@as(usize, 3), live_tui.switchFixedLines("", ""));
+    try std.testing.expectEqual(@as(usize, 5), live_tui.switchFixedLines("status", "action"));
+    try std.testing.expectEqual(@as(usize, 3), live_tui.listFixedLines(""));
+    try std.testing.expectEqual(@as(usize, 4), live_tui.listFixedLines("status"));
+}
+
+test "Scenario: Given live remove number input when toggling a row then the prompt digits are cleared" {
+    var rows = [_]SwitchRow{
+        testAccountRow("first@example.com", "Plus", false),
+        testAccountRow("second@example.com", "Team", false),
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+    const widths: SwitchWidths = .{
+        .email = 18,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    };
+
+    var before_checked = [_]bool{ false, false };
+    var before_buffer: [2048]u8 = undefined;
+    var before_writer: std.Io.Writer = .fixed(&before_buffer);
+    try renderRemoveScreen(&before_writer, &reg, &rows, 2, widths, 1, &before_checked, false, "Live refresh: ready", "", "2");
+    const before_output = before_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, before_output, "Select accounts to delete: 2\n"));
+    try std.testing.expect(std.mem.indexOf(u8, before_output, "> [ ] 02 second@example.com") != null);
+
+    var after_checked = [_]bool{ false, true };
+    var after_buffer: [2048]u8 = undefined;
+    var after_writer: std.Io.Writer = .fixed(&after_buffer);
+    try renderRemoveScreen(&after_writer, &reg, &rows, 2, widths, 1, &after_checked, false, "Live refresh: ready", "", "");
+    const after_output = after_writer.buffered();
+    try std.testing.expect(std.mem.startsWith(u8, after_output, "Select accounts to delete:\n"));
+    try std.testing.expect(std.mem.indexOf(u8, after_output, "Select accounts to delete: 2\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, after_output, "> [x] 02 second@example.com") != null);
+}
+
+test "Scenario: Given long live switch and remove screens when rendering a full-height frame then prompts stay visible" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    for (1..40) |idx| try appendNumberedTestAccount(gpa, &reg, idx);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    const terminal_rows: usize = 12;
+    const status_line = "Live refresh: api | Refresh in 25s";
+    const idx_width = @max(@as(usize, 2), indexWidth(accountRowCount(rows.items)));
+    var viewport_start: usize = 0;
+    const viewport = live_tui.selectedViewport(
+        terminal_rows,
+        rows.items,
+        0,
+        live_tui.switchFixedLines(status_line, ""),
+        &viewport_start,
+    );
+    const bounded_viewport: LiveListViewport = .{
+        .start_row = viewport.start_row,
+        .max_rows = viewport.max_rows,
+        .max_cols = @as(?usize, 80),
+    };
+
+    var switch_frame: std.Io.Writer.Allocating = .init(gpa);
+    defer switch_frame.deinit();
+    try renderSwitchScreenViewport(
+        &switch_frame.writer,
+        &reg,
+        rows.items,
+        idx_width,
+        rows.widths,
+        0,
+        true,
+        status_line,
+        "",
+        "",
+        bounded_viewport,
+    );
+    try std.testing.expect(std.mem.startsWith(u8, switch_frame.written(), "Select account to activate:\n"));
+    try std.testing.expect(!std.mem.endsWith(u8, switch_frame.written(), "\n\x1b[0m"));
+
+    var switch_screen: std.Io.Writer.Allocating = .init(gpa);
+    defer switch_screen.deinit();
+    const switch_line_count = try writeTuiFrameTo(&switch_screen.writer, switch_frame.written(), 0);
+    try std.testing.expect(switch_line_count <= terminal_rows);
+
+    const checked = try gpa.alloc(bool, rows.selectable_row_indices.len);
+    defer gpa.free(checked);
+    @memset(checked, false);
+
+    var remove_frame: std.Io.Writer.Allocating = .init(gpa);
+    defer remove_frame.deinit();
+    try renderRemoveScreenViewport(
+        &remove_frame.writer,
+        &reg,
+        rows.items,
+        idx_width,
+        rows.widths,
+        0,
+        checked,
+        true,
+        status_line,
+        "",
+        "",
+        bounded_viewport,
+    );
+    try std.testing.expect(std.mem.startsWith(u8, remove_frame.written(), "Select accounts to delete:\n"));
+    try std.testing.expect(!std.mem.endsWith(u8, remove_frame.written(), "\n\x1b[0m"));
+
+    var remove_screen: std.Io.Writer.Allocating = .init(gpa);
+    defer remove_screen.deinit();
+    const remove_line_count = try writeTuiFrameTo(&remove_screen.writer, remove_frame.written(), 0);
+    try std.testing.expect(remove_line_count <= terminal_rows);
+}
+
 test "Scenario: Given a live remove viewport when rendering then checked row numbering stays stable" {
     var rows = [_]SwitchRow{
         testAccountRow("first", "Plus", false),
@@ -377,7 +540,7 @@ test "Scenario: Given a live remove viewport when rendering then checked row num
     try std.testing.expect(std.mem.indexOf(u8, output, "03 third") == null);
 }
 
-test "Scenario: Given a selected row below the live viewport then viewport start scrolls it into view" {
+test "Scenario: Given a cursor row below the live viewport then viewport start scrolls it into view" {
     var rows = [_]SwitchRow{
         testHeaderRow("group"),
         testAccountRow("first", "Plus", false),
@@ -399,16 +562,16 @@ test "Scenario: Given a long live list when scrolling down then viewport can rea
     const fixed_lines = live_tui.listFixedLines("Live refresh: local | Refresh in 9s");
     const max_rows = live_tui.maxTableRows(terminal_rows, fixed_lines);
 
-    try std.testing.expectEqual(@as(usize, 60), max_rows);
+    try std.testing.expectEqual(@as(usize, 62), max_rows);
 
     for (0..200) |_| {
         live_tui.scrollListViewport(row_count, max_rows, &viewport_start, .down);
     }
 
-    try std.testing.expectEqual(@as(usize, 45), viewport_start);
+    try std.testing.expectEqual(@as(usize, 43), viewport_start);
     const viewport = live_tui.listViewport(terminal_rows, row_count, fixed_lines, &viewport_start);
-    try std.testing.expectEqual(@as(usize, 45), viewport.start_row);
-    try std.testing.expectEqual(@as(usize, 60), viewport.max_rows.?);
+    try std.testing.expectEqual(@as(usize, 43), viewport.start_row);
+    try std.testing.expectEqual(@as(usize, 62), viewport.max_rows.?);
 }
 
 test "Scenario: Given a long live list when paging or jumping then viewport clamps to valid bounds" {
@@ -488,8 +651,147 @@ test "Scenario: Given a long selectable live list when paging then selection can
         &viewport_start,
     );
 
-    try std.testing.expectEqual(@as(usize, 45), viewport.start_row);
-    try std.testing.expectEqual(@as(usize, 60), viewport.max_rows.?);
+    try std.testing.expectEqual(@as(usize, 43), viewport.start_row);
+    try std.testing.expectEqual(@as(usize, 62), viewport.max_rows.?);
+}
+
+test "Scenario: Given unselectable rows at live switch edges when viewport scrolling then first and final accounts are reachable" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    for (1..139) |idx| try appendNumberedTestAccount(gpa, &reg, idx);
+
+    const usage_overrides = try gpa.alloc(?[]const u8, reg.accounts.items.len);
+    defer gpa.free(usage_overrides);
+    for (usage_overrides, 0..) |*override, idx| {
+        override.* = if (idx < 20 or idx >= 99) "0%" else null;
+    }
+
+    var rows = try live_tui.buildSelectableRows(gpa, .{
+        .reg = &reg,
+        .usage_overrides = usage_overrides,
+    });
+    defer rows.deinit(gpa);
+
+    const max_rows: usize = 60;
+    const first_selectable_idx = selectableIndexForAccountKey(&rows, &reg, "user-021::acc-021") orelse return error.TestExpectedEqual;
+    const first_display_idx = displayedIndexForSelectable(&rows, first_selectable_idx) orelse return error.TestExpectedEqual;
+    var top_start: usize = 20;
+    for (0..10) |_| {
+        live_tui.scrollListViewportBy(rows.items.len, max_rows, &top_start, .up, 6);
+    }
+    try std.testing.expectEqual(@as(usize, 0), top_start);
+
+    var top: std.Io.Writer.Allocating = .init(gpa);
+    defer top.deinit();
+    try renderSwitchListViewport(&top.writer, &reg, rows.items, 3, rows.widths, first_display_idx, false, .{
+        .start_row = top_start,
+        .max_rows = max_rows,
+    });
+    try std.testing.expect(std.mem.indexOf(u8, top.written(), "001 account-001@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, top.written(), "021 account-021@example.com") != null);
+
+    const last_selectable_idx = selectableIndexForAccountKey(&rows, &reg, "user-099::acc-099") orelse return error.TestExpectedEqual;
+    const last_display_idx = displayedIndexForSelectable(&rows, last_selectable_idx) orelse return error.TestExpectedEqual;
+    var bottom_start: usize = 40;
+    for (0..20) |_| {
+        live_tui.scrollListViewportBy(rows.items.len, max_rows, &bottom_start, .down, 6);
+    }
+    try std.testing.expectEqual(@as(usize, 78), bottom_start);
+
+    var bottom: std.Io.Writer.Allocating = .init(gpa);
+    defer bottom.deinit();
+    try renderSwitchListViewport(&bottom.writer, &reg, rows.items, 3, rows.widths, last_display_idx, false, .{
+        .start_row = bottom_start,
+        .max_rows = max_rows,
+    });
+    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), "099 account-099@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), "138 account-138@example.com") != null);
+}
+
+test "Scenario: Given switch selection is at first selectable row when scrolling up then unavailable rows above remain reachable" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    for (1..40) |idx| try appendNumberedTestAccount(gpa, &reg, idx);
+
+    const usage_overrides = try gpa.alloc(?[]const u8, reg.accounts.items.len);
+    defer gpa.free(usage_overrides);
+    for (usage_overrides, 0..) |*override, idx| {
+        override.* = if (idx < 10) "0%" else null;
+    }
+
+    var rows = try live_tui.buildSelectableRows(gpa, .{
+        .reg = &reg,
+        .usage_overrides = usage_overrides,
+    });
+    defer rows.deinit(gpa);
+
+    var selected_key: ?[]u8 = try gpa.dupe(u8, "user-011::acc-011");
+    defer if (selected_key) |key| gpa.free(key);
+
+    const max_rows: usize = 20;
+    const wheel_rows = live_tui.mouseWheelRows(max_rows);
+    var viewport_start: usize = 10;
+    const moved = try live_tui.moveSelectedIndex(gpa, &selected_key, &rows, &reg, .up);
+    try std.testing.expect(!moved);
+    live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .up, wheel_rows);
+    try std.testing.expectEqual(@as(usize, 4), viewport_start);
+
+    const first_selectable_idx = selectableIndexForAccountKey(&rows, &reg, "user-011::acc-011") orelse return error.TestExpectedEqual;
+    const first_display_idx = displayedIndexForSelectable(&rows, first_selectable_idx) orelse return error.TestExpectedEqual;
+    const viewport = live_tui.selectableViewport(24, rows.items, first_display_idx, 4, &viewport_start, false);
+    try std.testing.expectEqual(@as(usize, 4), viewport.start_row);
+
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try renderSwitchListViewport(&out.writer, &reg, rows.items, 2, rows.widths, first_display_idx, false, viewport);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "05 account-005@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "> 11 account-011@example.com") != null);
+}
+
+test "Scenario: Given switch selection is at final selectable row when scrolling down then unavailable rows below remain reachable" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    for (1..40) |idx| try appendNumberedTestAccount(gpa, &reg, idx);
+
+    const usage_overrides = try gpa.alloc(?[]const u8, reg.accounts.items.len);
+    defer gpa.free(usage_overrides);
+    for (usage_overrides, 0..) |*override, idx| {
+        override.* = if (idx >= 30) "0%" else null;
+    }
+
+    var rows = try live_tui.buildSelectableRows(gpa, .{
+        .reg = &reg,
+        .usage_overrides = usage_overrides,
+    });
+    defer rows.deinit(gpa);
+
+    var selected_key: ?[]u8 = try gpa.dupe(u8, "user-030::acc-030");
+    defer if (selected_key) |key| gpa.free(key);
+
+    const max_rows: usize = 20;
+    const wheel_rows = live_tui.mouseWheelRows(max_rows);
+    var viewport_start: usize = 10;
+    const moved = try live_tui.moveSelectedIndex(gpa, &selected_key, &rows, &reg, .down);
+    try std.testing.expect(!moved);
+    live_tui.scrollListViewportBy(rows.items.len, max_rows, &viewport_start, .down, wheel_rows);
+    try std.testing.expectEqual(@as(usize, 16), viewport_start);
+
+    const final_selectable_idx = selectableIndexForAccountKey(&rows, &reg, "user-030::acc-030") orelse return error.TestExpectedEqual;
+    const final_display_idx = displayedIndexForSelectable(&rows, final_selectable_idx) orelse return error.TestExpectedEqual;
+    const viewport = live_tui.selectableViewport(24, rows.items, final_display_idx, 4, &viewport_start, false);
+    try std.testing.expectEqual(@as(usize, 16), viewport.start_row);
+
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try renderSwitchListViewport(&out.writer, &reg, rows.items, 2, rows.widths, final_display_idx, false, viewport);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "> 30 account-030@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "36 account-036@example.com") != null);
 }
 
 test "Scenario: Given a long live table when rendering viewport bounds then both ends are reachable" {
@@ -724,12 +1026,12 @@ test "Scenario: Given usage overrides when rendering switch list then errored ro
     try std.testing.expect(std.mem.indexOf(u8, output, "failed@example.com") != null);
 }
 
-test "Scenario: Given an active account when rendering switch list then non-selected active rows use the list marker" {
+test "Scenario: Given an active account when rendering switch list then non-cursor active rows use the list marker" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "selected@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "cursor@example.com", "", .team);
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "active@example.com", "", .team);
     reg.active_account_key = try gpa.dupe(u8, "user-1::acc-2");
 
@@ -739,26 +1041,26 @@ test "Scenario: Given an active account when rendering switch list then non-sele
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
-    var selected_displayed_idx: ?usize = null;
+    var cursor_displayed_idx: ?usize = null;
     for (rows.selectable_row_indices, 0..) |row_idx, selectable_idx| {
         const account_idx = rows.items[row_idx].account_index.?;
         if (std.mem.eql(u8, reg.accounts.items[account_idx].account_key, "user-1::acc-1")) {
-            selected_displayed_idx = displayedIndexForSelectable(&rows, selectable_idx);
+            cursor_displayed_idx = displayedIndexForSelectable(&rows, selectable_idx);
             break;
         }
     }
 
-    try std.testing.expect(selected_displayed_idx != null);
-    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, selected_displayed_idx.?, false);
+    try std.testing.expect(cursor_displayed_idx != null);
+    try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, cursor_displayed_idx.?, false);
 
     const output = writer.buffered();
-    var expected_selected_line_buf: [128]u8 = undefined;
-    const expected_selected_line = try std.fmt.bufPrint(
-        &expected_selected_line_buf,
-        "> {d:0>2} selected@example.com",
-        .{selected_displayed_idx.? + 1},
+    var expected_cursor_line_buf: [128]u8 = undefined;
+    const expected_cursor_line = try std.fmt.bufPrint(
+        &expected_cursor_line_buf,
+        "> {d:0>2} cursor@example.com",
+        .{cursor_displayed_idx.? + 1},
     );
-    try std.testing.expect(std.mem.indexOf(u8, output, expected_selected_line) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_cursor_line) != null);
 
     const active_displayed_idx = displayedIndexForSelectable(&rows, activeSelectableIndex(&rows).?).?;
     var expected_active_line_buf: [128]u8 = undefined;
@@ -792,6 +1094,33 @@ test "Scenario: Given the active account is selected when rendering switch list 
     try std.testing.expect(std.mem.indexOf(u8, output, "> 01 active@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "* 01 active@example.com") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+}
+
+test "Scenario: Given switch list color output when rendering then header cursor active and primary rows use distinct styles" {
+    var rows = [_]SwitchRow{
+        testAccountRow("cursor@example.com", "Team", false),
+        testAccountRow("active@example.com", "Team", true),
+        testAccountRow("normal@example.com", "Free", false),
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try renderSwitchList(&writer, &reg, &rows, 2, .{
+        .email = 20,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    }, 0, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "> 01 cursor@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "* 02 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "  03 normal@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m  03 normal@example.com") == null);
 }
 
 test "Scenario: Given an active account when rendering remove list then non-cursor active rows use the list marker" {
@@ -857,6 +1186,83 @@ test "Scenario: Given the active account is the remove cursor then the cursor ma
     try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
 }
 
+test "Scenario: Given remove list color output when rendering then cursor checked active and primary rows use distinct styles" {
+    var rows = [_]SwitchRow{
+        testAccountRow("cursor@example.com", "Team", false),
+        testAccountRow("checked@example.com", "Plus", false),
+        testAccountRow("active@example.com", "Free", true),
+        testAccountRow("normal@example.com", "Free", false),
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+    const checked = [_]bool{ false, true, false, false };
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try renderRemoveList(&writer, &reg, &rows, 2, .{
+        .email = 20,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    }, 0, &checked, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "         ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "> [ ] 01 cursor@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "  [x] 02 checked@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "* [ ] 03 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "  [ ] 04 normal@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m  [ ] 04 normal@example.com") == null);
+}
+
+test "Scenario: Given overlapping row states when rendering live lists then color priority is stable" {
+    var switch_rows = [_]SwitchRow{
+        testAccountRow("cursor-error@example.com", "Team", false),
+        testAccountRow("active-error@example.com", "Team", true),
+    };
+    switch_rows[0].has_error = true;
+    switch_rows[1].has_error = true;
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+
+    var switch_buffer: [2048]u8 = undefined;
+    var switch_writer: std.Io.Writer = .fixed(&switch_buffer);
+    try renderSwitchList(&switch_writer, &reg, &switch_rows, 2, .{
+        .email = 28,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    }, 0, true);
+    const switch_output = switch_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.green ++ "> 01 cursor-error@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.green ++ "* 02 active-error@example.com") != null);
+
+    var remove_rows = [_]SwitchRow{
+        testAccountRow("cursor-error@example.com", "Team", false),
+        testAccountRow("checked@example.com", "Team", false),
+        testAccountRow("active-error@example.com", "Team", true),
+    };
+    remove_rows[0].has_error = true;
+    remove_rows[2].has_error = true;
+    const checked = [_]bool{ false, true, true };
+
+    var remove_buffer: [2048]u8 = undefined;
+    var remove_writer: std.Io.Writer = .fixed(&remove_buffer);
+    try renderRemoveList(&remove_writer, &reg, &remove_rows, 2, .{
+        .email = 26,
+        .plan = 4,
+        .rate_5h = 2,
+        .rate_week = 6,
+        .last = 4,
+    }, 0, &checked, true);
+    const remove_output = remove_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.green ++ "> [ ] 01 cursor-error@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.green ++ "  [x] 02 checked@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.green ++ "* [x] 03 active-error@example.com") != null);
+}
+
 test "Scenario: Given switch live feedback when rendering switch screen then the action message stays below the footer" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -887,6 +1293,96 @@ test "Scenario: Given switch live feedback when rendering switch screen then the
     try std.testing.expect(action_pos > footer_pos);
 }
 
+test "Scenario: Given switch live feedback with color when rendering switch screen then success and failure actions use action colors" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "healthy@example.com", "", .team);
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var success_buffer: [2048]u8 = undefined;
+    var success_writer: std.Io.Writer = .fixed(&success_buffer);
+    try renderSwitchScreen(
+        &success_writer,
+        &reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(accountRowCount(rows.items))),
+        rows.widths,
+        0,
+        true,
+        "",
+        "Switched to healthy@example.com",
+        "",
+    );
+    try std.testing.expect(std.mem.indexOf(u8, success_writer.buffered(), ansi.green ++ "Switched to healthy@example.com") != null);
+
+    var failure_buffer: [2048]u8 = undefined;
+    var failure_writer: std.Io.Writer = .fixed(&failure_buffer);
+    try renderSwitchScreen(
+        &failure_writer,
+        &reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(accountRowCount(rows.items))),
+        rows.widths,
+        0,
+        true,
+        "",
+        "Switch failed: denied",
+        "",
+    );
+    try std.testing.expect(std.mem.indexOf(u8, failure_writer.buffered(), ansi.red ++ "Switch failed: denied") != null);
+}
+
+test "Scenario: Given live screen status and footers with color when rendering then status and footer styles match command rules" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "healthy@example.com", "", .team);
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var switch_buffer: [2048]u8 = undefined;
+    var switch_writer: std.Io.Writer = .fixed(&switch_buffer);
+    try renderSwitchScreen(
+        &switch_writer,
+        &reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(accountRowCount(rows.items))),
+        rows.widths,
+        0,
+        true,
+        "Live refresh: api | Refresh in 25s",
+        "",
+        "",
+    );
+    const switch_output = switch_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.cyan ++ "Keys:") != null);
+
+    var remove_buffer: [2048]u8 = undefined;
+    var remove_writer: std.Io.Writer = .fixed(&remove_buffer);
+    var checked = [_]bool{false};
+    try renderRemoveScreen(
+        &remove_writer,
+        &reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(accountRowCount(rows.items))),
+        rows.widths,
+        0,
+        &checked,
+        true,
+        "Live refresh: api | Refresh in 25s",
+        "",
+        "",
+    );
+    const remove_output = remove_writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.cyan ++ "Keys:") != null);
+}
+
 test "Scenario: Given Windows console labels when rendering unicode-prone output then ASCII fallbacks are used" {
     try std.testing.expectEqualStrings(
         "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n",
@@ -897,7 +1393,7 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         removeTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(true),
     );
     try std.testing.expectEqualStrings("[+]", importReportMarker(.imported, true));
@@ -915,7 +1411,7 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         removeTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(false),
     );
     try std.testing.expectEqualStrings("✓", importReportMarker(.imported, false));

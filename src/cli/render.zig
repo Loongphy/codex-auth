@@ -14,9 +14,10 @@ const writeSwitchTuiFooterBounded = tui_mod.writeSwitchTuiFooterBounded;
 const writeListTuiFooterBounded = tui_mod.writeListTuiFooterBounded;
 const writeRemoveTuiFooterBounded = tui_mod.writeRemoveTuiFooterBounded;
 const writeTuiLineBounded = tui_mod.writeTuiLineBounded;
+const writeStyledTuiLineBounded = tui_mod.writeStyledTuiLineBounded;
 
-fn activeRowMarker(is_cursor_or_selected: bool, is_active: bool) []const u8 {
-    return if (is_cursor_or_selected) "> " else if (is_active) "* " else "  ";
+fn activeRowMarker(is_cursor: bool, is_active: bool) []const u8 {
+    return if (is_cursor) "> " else if (is_active) "* " else "  ";
 }
 
 pub fn renderSwitchScreen(
@@ -60,19 +61,13 @@ pub fn renderSwitchScreenViewport(
     viewport: LiveListViewport,
 ) !void {
     try writeTuiPromptLine(out, "Select account to activate:", number_input);
-    try out.writeAll("\n");
     try renderSwitchListViewport(out, reg, rows, idx_width, widths, selected, use_color, viewport);
-    try out.writeAll("\n");
     if (status_line.len != 0) {
-        if (use_color) try out.writeAll(style.ansi.dim);
-        try writeTuiLineBounded(out, status_line, viewport.max_cols);
-        if (use_color) try out.writeAll(style.ansi.reset);
+        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
     }
     try writeSwitchTuiFooterBounded(out, use_color, viewport.max_cols);
     if (action_line.len != 0) {
-        if (use_color) try out.writeAll(style.ansi.bold_green);
-        try writeTuiLineBounded(out, action_line, viewport.max_cols);
-        if (use_color) try out.writeAll(style.ansi.reset);
+        try writeStyledTuiLineBounded(out, if (use_color) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
 }
 
@@ -107,13 +102,10 @@ pub fn renderListScreenViewport(
     status_line: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try out.writeAll("Live account list:\n\n");
+    try out.writeAll("Live account list:\n");
     try renderSwitchListViewport(out, reg, rows, idx_width, widths, null, use_color, viewport);
-    try out.writeAll("\n");
     if (status_line.len != 0) {
-        if (use_color) try out.writeAll(style.ansi.dim);
-        try writeTuiLineBounded(out, status_line, viewport.max_cols);
-        if (use_color) try out.writeAll(style.ansi.reset);
+        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
     }
     try writeListTuiFooterBounded(out, use_color, viewport.max_cols);
 }
@@ -162,19 +154,13 @@ pub fn renderRemoveScreenViewport(
     viewport: LiveListViewport,
 ) !void {
     try writeTuiPromptLine(out, "Select accounts to delete:", number_input);
-    try out.writeAll("\n");
     try renderRemoveListViewport(out, reg, rows, idx_width, widths, cursor, checked, use_color, viewport);
-    try out.writeAll("\n");
     if (status_line.len != 0) {
-        if (use_color) try out.writeAll(style.ansi.dim);
-        try writeTuiLineBounded(out, status_line, viewport.max_cols);
-        if (use_color) try out.writeAll(style.ansi.reset);
+        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
     }
     try writeRemoveTuiFooterBounded(out, use_color, viewport.max_cols);
     if (action_line.len != 0) {
-        if (use_color) try out.writeAll(style.ansi.bold_green);
-        try writeTuiLineBounded(out, action_line, viewport.max_cols);
-        if (use_color) try out.writeAll(style.ansi.reset);
+        try writeStyledTuiLineBounded(out, if (use_color) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
 }
 
@@ -184,10 +170,10 @@ pub fn renderSwitchList(
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
-    selected: ?usize,
+    cursor: ?usize,
     use_color: bool,
 ) !void {
-    try renderSwitchListViewport(out, reg, rows, idx_width, widths, selected, use_color, .{});
+    try renderSwitchListViewport(out, reg, rows, idx_width, widths, cursor, use_color, .{});
 }
 
 pub fn renderSwitchListViewport(
@@ -196,14 +182,14 @@ pub fn renderSwitchListViewport(
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
-    selected: ?usize,
+    cursor: ?usize,
     use_color: bool,
     viewport: LiveListViewport,
 ) !void {
     _ = reg;
     const prefix_width = 2 + idx_width + 1;
     const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
-    try table.writeHeader(out);
+    try table.writeHeader(out, use_color);
 
     const visible = visibleRowRange(rows.len, viewport);
     var displayed_counter = dataRowCount(rows[0..visible.start]);
@@ -213,12 +199,12 @@ pub fn renderSwitchListViewport(
             continue;
         }
 
-        const is_selected = selected != null and selected.? == displayed_counter;
+        const is_cursor = cursor != null and cursor.? == displayed_counter;
         const is_active = row.is_active;
         var prefix_buf: [64]u8 = undefined;
         const prefix = liveTableIndexPrefix(
             &prefix_buf,
-            activeRowMarker(is_selected, is_active),
+            activeRowMarker(is_cursor, is_active),
             displayed_counter + 1,
             idx_width,
         );
@@ -226,7 +212,7 @@ pub fn renderSwitchListViewport(
             out,
             prefix,
             liveAccountCells(row),
-            if (use_color) switchRowStyle(row, is_selected, is_active) else "",
+            if (use_color) switchRowStyle(row, is_cursor, is_active) else "",
         );
         displayed_counter += 1;
     }
@@ -260,7 +246,7 @@ pub fn renderRemoveListViewport(
     const checkbox_width: usize = 3;
     const prefix_width = 2 + checkbox_width + 1 + idx_width + 1;
     const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
-    try table.writeHeader(out);
+    try table.writeHeader(out, use_color);
 
     const visible = visibleRowRange(rows.len, viewport);
     var selectable_counter = dataRowCount(rows[0..visible.start]);
@@ -360,22 +346,33 @@ fn liveAccountCells(row: SwitchRow) [table_layout.column_count]table_layout.Cell
     };
 }
 
-fn switchRowStyle(row: SwitchRow, is_selected: bool, is_active: bool) []const u8 {
-    if (row.has_error) {
-        return if (is_selected or is_active) style.ansi.bold_red else style.ansi.red;
-    }
-    if (is_selected) return style.ansi.bold_green;
+fn switchRowStyle(row: SwitchRow, is_cursor: bool, is_active: bool) []const u8 {
     if (is_active) return style.ansi.green;
-    return style.ansi.dim;
+    if (is_cursor) return style.ansi.green;
+    if (row.has_error) return style.ansi.red;
+    return "";
 }
 
 fn removeRowStyle(row: SwitchRow, is_cursor: bool, is_checked: bool, is_active: bool) []const u8 {
-    if (row.has_error) {
-        return if (is_cursor or is_checked or is_active) style.ansi.bold_red else style.ansi.red;
+    if (is_active) return style.ansi.green;
+    if (is_cursor) return style.ansi.green;
+    if (row.has_error) return style.ansi.red;
+    if (is_checked) return style.ansi.green;
+    return "";
+}
+
+fn actionLineStyle(action_line: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, action_line, "Switch failed:") or
+        std.mem.startsWith(u8, action_line, "Auto-switch failed:") or
+        std.mem.startsWith(u8, action_line, "Delete failed:"))
+    {
+        return style.ansi.red;
     }
-    if (is_cursor) return style.ansi.bold_green;
-    if (is_checked or is_active) return style.ansi.green;
-    return style.ansi.dim;
+    return style.ansi.green;
+}
+
+fn writeLiveStatusLine(out: *std.Io.Writer, status_line: []const u8, use_color: bool, max_cols: ?usize) !void {
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", status_line, max_cols);
 }
 
 fn liveTableIndexPrefix(buf: []u8, marker: []const u8, idx: usize, idx_width: usize) []const u8 {

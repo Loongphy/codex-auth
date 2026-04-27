@@ -16,8 +16,8 @@ const ansi = struct {
     const reset = "\x1b[0m";
     const dim = "\x1b[2m";
     const red = "\x1b[31m";
-    const bold_red = "\x1b[1;31m";
     const green = "\x1b[32m";
+    const cyan = "\x1b[36m";
 };
 
 fn colorEnabled() bool {
@@ -140,7 +140,7 @@ pub fn writeAccountsTableWithUsageOverrides(
     const h4 = try truncateAlloc(header_last, widths[4]);
     defer std.heap.page_allocator.free(h4);
 
-    if (use_color) try out.writeAll(ansi.dim);
+    if (use_color) try out.writeAll(ansi.cyan);
     try writeRepeat(out, ' ', prefix_len);
     try writePadded(out, h0, widths[0]);
     try out.writeAll("  ");
@@ -152,6 +152,7 @@ pub fn writeAccountsTableWithUsageOverrides(
     try out.writeAll("  ");
     try writePadded(out, h4, widths[4]);
     try out.writeAll("\n");
+    if (use_color) try out.writeAll(ansi.reset);
     if (use_color) try out.writeAll(ansi.dim);
     try writeRepeat(out, '-', listTotalWidth(&widths, prefix_len, sep_len));
     try out.writeAll("\n");
@@ -184,16 +185,10 @@ pub fn writeAccountsTableWithUsageOverrides(
             const last_cell = try truncateAlloc(last, widths[4]);
             defer std.heap.page_allocator.free(last_cell);
             if (use_color) {
-                if (usage_override != null) {
-                    if (row.is_active) {
-                        try out.writeAll(ansi.bold_red);
-                    } else {
-                        try out.writeAll(ansi.red);
-                    }
-                } else if (row.is_active) {
+                if (row.is_active) {
                     try out.writeAll(ansi.green);
-                } else {
-                    try out.writeAll(ansi.dim);
+                } else if (usage_override != null) {
+                    try out.writeAll(ansi.red);
                 }
             }
             try out.writeAll(if (row.is_active) "* " else "  ");

@@ -11,6 +11,8 @@ const writeAccountsTable = format.writeAccountsTable;
 const writeAccountsTableWithUsageOverrides = format.writeAccountsTableWithUsageOverrides;
 const ansi = struct {
     const red = "\x1b[31m";
+    const green = "\x1b[32m";
+    const cyan = "\x1b[36m";
 };
 
 fn makeTestRegistry() registry.Registry {
@@ -136,6 +138,25 @@ test "writeAccountsTable highlights usage override rows in red when color is ena
 
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+}
+
+test "writeAccountsTable uses cyan headers green active rows and default normal rows" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "normal@example.com", "", .free);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, true);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "* 01 active@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m  02 normal@example.com") == null);
 }
 
 test "writeAccountsTable prefers usage snapshot plan labels over stored auth plan" {

@@ -22,16 +22,16 @@ pub fn writeHelp(
     auto_cfg: *const registry.AutoSwitchConfig,
     api_cfg: *const registry.ApiConfig,
 ) !void {
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("codex-auth");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll(" ");
-    if (use_color) try out.writeAll(style.ansi.dim);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll(version.app_version);
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll("\n\n");
 
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Auto Switch:");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.print(
@@ -39,7 +39,7 @@ pub fn writeHelp(
         .{ if (auto_cfg.enabled) "ON" else "OFF", auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
     );
 
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Usage API:");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.print(
@@ -47,7 +47,7 @@ pub fn writeHelp(
         .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api" else "local" },
     );
 
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Account API:");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.print(
@@ -55,7 +55,7 @@ pub fn writeHelp(
         .{if (api_cfg.account) "ON" else "OFF"},
     );
 
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Commands:");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll("\n\n");
@@ -66,7 +66,7 @@ pub fn writeHelp(
         .{ .name = "status", .description = "Show auto-switch and usage API status" },
         .{ .name = "login", .description = "Login and add the current account" },
         .{ .name = "import", .description = "Import auth files or rebuild registry" },
-        .{ .name = "switch [--live] [--auto] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
+        .{ .name = "switch [--live] [--api|--skip-api] | switch <query>", .description = "Switch the active account" },
         .{ .name = "remove [--live] [--api|--skip-api] | remove <query> [<query>...] | remove --all", .description = "Remove one or more accounts" },
         .{ .name = "clean", .description = "Delete backup and stale files under accounts/" },
         .{ .name = "config", .description = "Manage configuration" },
@@ -111,7 +111,7 @@ pub fn writeHelp(
     try writeHelpEntry(out, use_color, child_indent, config_detail_col, config_details[4].name, config_details[4].description);
 
     try out.writeAll("\n");
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Notes:");
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll("\n\n");
@@ -146,7 +146,7 @@ fn writeHelpEntry(
     name: []const u8,
     description: []const u8,
 ) !void {
-    if (use_color) try out.writeAll(style.ansi.bold_green);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     var i: usize = 0;
     while (i < indent) : (i += 1) {
         try out.writeAll(" ");
@@ -184,7 +184,7 @@ pub fn writeCommandHelp(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) 
 }
 
 fn writeCommandHelpHeader(out: *std.Io.Writer, use_color: bool, topic: HelpTopic) !void {
-    if (use_color) try out.writeAll(style.ansi.bold);
+    if (use_color) try out.writeAll(style.ansi.cyan);
     try out.print("codex-auth {s}", .{commandNameForTopic(topic)});
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll("\n");
@@ -248,7 +248,7 @@ pub fn writeUsageSection(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import --purge [<path>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth switch [--live] [--auto] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <query>\n");
         },
         .remove_account => {
@@ -314,7 +314,6 @@ fn writeExamplesSection(out: *std.Io.Writer, topic: HelpTopic) !void {
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
             try out.writeAll("  codex-auth switch --live\n");
-            try out.writeAll("  codex-auth switch --live --auto\n");
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
             try out.writeAll("  codex-auth switch work\n");
