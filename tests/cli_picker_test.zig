@@ -385,7 +385,8 @@ test "Scenario: Given live screens when rendering then vertical spacing stays co
     var list_writer: std.Io.Writer = .fixed(&list_buffer);
     try renderListScreenViewport(&list_writer, &reg, &rows, 2, widths, false, "Live refresh: ready", .{});
     const list_output = list_writer.buffered();
-    try std.testing.expect(std.mem.startsWith(u8, list_output, "Live account list:\n"));
+    try std.testing.expect(std.mem.startsWith(u8, list_output, "     ACCOUNT"));
+    try std.testing.expect(std.mem.indexOf(u8, list_output, "Live account list:") == null);
     try std.testing.expect(std.mem.indexOf(u8, list_output, "\n\n") == null);
 
     var remove_buffer: [2048]u8 = undefined;
@@ -398,8 +399,8 @@ test "Scenario: Given live screens when rendering then vertical spacing stays co
 
     try std.testing.expectEqual(@as(usize, 3), live_tui.switchFixedLines("", ""));
     try std.testing.expectEqual(@as(usize, 5), live_tui.switchFixedLines("status", "action"));
-    try std.testing.expectEqual(@as(usize, 3), live_tui.listFixedLines(""));
-    try std.testing.expectEqual(@as(usize, 4), live_tui.listFixedLines("status"));
+    try std.testing.expectEqual(@as(usize, 2), live_tui.listFixedLines(""));
+    try std.testing.expectEqual(@as(usize, 3), live_tui.listFixedLines("status"));
 }
 
 test "Scenario: Given live remove number input when toggling a row then the prompt digits are cleared" {
@@ -562,16 +563,16 @@ test "Scenario: Given a long live list when scrolling down then viewport can rea
     const fixed_lines = live_tui.listFixedLines("Live refresh: local | Refresh in 9s");
     const max_rows = live_tui.maxTableRows(terminal_rows, fixed_lines);
 
-    try std.testing.expectEqual(@as(usize, 62), max_rows);
+    try std.testing.expectEqual(@as(usize, 63), max_rows);
 
     for (0..200) |_| {
         live_tui.scrollListViewport(row_count, max_rows, &viewport_start, .down);
     }
 
-    try std.testing.expectEqual(@as(usize, 43), viewport_start);
+    try std.testing.expectEqual(@as(usize, 42), viewport_start);
     const viewport = live_tui.listViewport(terminal_rows, row_count, fixed_lines, &viewport_start);
-    try std.testing.expectEqual(@as(usize, 43), viewport.start_row);
-    try std.testing.expectEqual(@as(usize, 62), viewport.max_rows.?);
+    try std.testing.expectEqual(@as(usize, 42), viewport.start_row);
+    try std.testing.expectEqual(@as(usize, 63), viewport.max_rows.?);
 }
 
 test "Scenario: Given a long live list when paging or jumping then viewport clamps to valid bounds" {

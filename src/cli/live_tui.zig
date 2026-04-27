@@ -84,7 +84,7 @@ pub fn switchFixedLines(status_line: []const u8, action_line: []const u8) usize 
 }
 
 pub fn listFixedLines(status_line: []const u8) usize {
-    var lines: usize = 3;
+    var lines: usize = 2;
     if (status_line.len != 0) lines += 1;
     return lines;
 }

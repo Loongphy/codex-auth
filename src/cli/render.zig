@@ -102,7 +102,6 @@ pub fn renderListScreenViewport(
     status_line: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try out.writeAll("Live account list:\n");
     try renderSwitchListViewport(out, reg, rows, idx_width, widths, null, use_color, viewport);
     if (status_line.len != 0) {
         try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
