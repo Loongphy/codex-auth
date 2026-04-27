@@ -51,10 +51,10 @@ test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
 
 pub const LiveAutoSwitchState = struct {
     enabled: bool,
-    pending: bool = false,
+    pending: bool,
 
     pub fn init(enabled: bool) @This() {
-        return .{ .enabled = enabled };
+        return .{ .enabled = enabled, .pending = enabled };
     }
 
     pub fn noteRefreshedDisplay(self: *@This()) void {

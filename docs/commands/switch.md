@@ -30,6 +30,8 @@ codex-auth switch <query>
 ## Foreground Auto Switch
 
 `codex-auth switch --live` includes an auto-switch loop in the live picker.
+The loop runs once on the initial live display and then runs again after later
+live refreshes.
 
 It switches away from the active account when the current live display shows:
 

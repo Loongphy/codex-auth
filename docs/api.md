@@ -48,7 +48,7 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - `list` and interactive `switch` follow the same foreground usage mode by default: they honor the stored `api.usage` setting unless the command line overrides it
 - `list --api` and interactive `switch --api` force foreground usage refresh for that command even when `api.usage = false`
 - `list --skip-api` and interactive `switch --skip-api` disable the foreground usage API path for that command
-- in `switch --live`, the active account triggers a foreground auto-switch only when the live display shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
+- in `switch --live`, the initial live display and later refreshed displays trigger a foreground auto-switch when the active account shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
 - `switch --live` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
 - with `--skip-api` or `api.usage = false`, `list` and `switch --live` can still refresh only the active account from local rollout data; non-active `switch` rows and non-active foreground auto-switch candidates still come from stored registry data
 - single-shot `switch --skip-api` skips the pre-render refresh round entirely and shows the stored registry picker directly

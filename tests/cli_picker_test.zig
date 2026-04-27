@@ -598,8 +598,9 @@ test "Scenario: Given queued live list scroll keys before rendering then viewpor
     try std.testing.expectEqual(@as(usize, 45), viewport_start);
 }
 
-test "Scenario: Given live auto switch state when starting then the initial display does not trigger auto-switch" {
+test "Scenario: Given live auto switch state when starting then the initial display triggers auto-switch once" {
     var enabled = live_tui.LiveAutoSwitchState.init(true);
+    try std.testing.expect(enabled.takePending());
     try std.testing.expect(!enabled.takePending());
 
     enabled.noteRefreshedDisplay();
