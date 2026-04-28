@@ -180,11 +180,11 @@ pub fn applyListViewportKey(
     key: tui_mod.TuiInputKey,
 ) bool {
     switch (key) {
-        .move_up => {
+        .move_up, .keyboard_up => {
             scrollListViewportBy(row_count, max_rows, viewport_start, .up, wheel_rows);
             return true;
         },
-        .move_down => {
+        .move_down, .keyboard_down => {
             scrollListViewportBy(row_count, max_rows, viewport_start, .down, wheel_rows);
             return true;
         },
@@ -321,8 +321,8 @@ pub fn moveSelectedIndexForKey(
     key: tui_mod.TuiInputKey,
 ) !bool {
     const direction: ScrollDirection = switch (key) {
-        .move_up => .up,
-        .move_down => .down,
+        .move_up, .keyboard_up => .up,
+        .move_down, .keyboard_down => .down,
         .byte => |ch| switch (ch) {
             'k' => .up,
             'j' => .down,

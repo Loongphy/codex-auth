@@ -104,6 +104,8 @@ pub const live_ui_tick_ms: i32 = 100;
 pub const TuiNavigation = enum {
     up,
     down,
+    keyboard_up,
+    keyboard_down,
     page_up,
     page_down,
     home,
@@ -115,6 +117,7 @@ pub const TuiNavigation = enum {
 pub const TuiEscapeClassification = union(enum) {
     incomplete,
     ignore,
+    keyboard_enhancement_supported,
     navigation: TuiNavigation,
 };
 
@@ -123,12 +126,15 @@ pub const TuiEscapeAction = enum {
     ignore,
     move_up,
     move_down,
+    keyboard_up,
+    keyboard_down,
     page_up,
     page_down,
     home,
     end,
     scroll_up,
     scroll_down,
+    keyboard_enhancement_supported,
 };
 
 pub const TuiEscapeReadResult = struct {
@@ -151,6 +157,8 @@ pub const TuiInputRead = union(enum) {
 pub const TuiInputKey = union(enum) {
     move_up,
     move_down,
+    keyboard_up,
+    keyboard_down,
     page_up,
     page_down,
     home,
@@ -221,11 +229,12 @@ else
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h");
+    try out.writeAll("\x1b[?u\x1b[>7u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[?1007l\x1b[?25h\x1b[?1049l");
+    try out.writeAll("\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l");
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
@@ -361,6 +370,7 @@ pub const TuiSession = struct {
     saved_output_state: TuiSavedOutputState = if (builtin.os.tag == .windows) 0 else {},
     pending_windows_key: ?TuiInputKey = null,
     pending_windows_repeat_count: u16 = 0,
+    keyboard_enhancement_supported: bool = false,
     last_frame_hash: u64 = 0,
     last_frame_line_count: usize = 0,
     has_last_frame: bool = false,
@@ -474,8 +484,10 @@ pub const TuiSession = struct {
                     tui_escape_sequence_timeout_ms,
                 );
                 switch (escape.action) {
-                    .move_up => appendTuiInputKey(keys, &key_count, .move_up),
-                    .move_down => appendTuiInputKey(keys, &key_count, .move_down),
+                    .move_up => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_up else .move_up),
+                    .move_down => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_down else .move_down),
+                    .keyboard_up => appendTuiInputKey(keys, &key_count, .keyboard_up),
+                    .keyboard_down => appendTuiInputKey(keys, &key_count, .keyboard_down),
                     .page_up => appendTuiInputKey(keys, &key_count, .page_up),
                     .page_down => appendTuiInputKey(keys, &key_count, .page_down),
                     .home => appendTuiInputKey(keys, &key_count, .home),
@@ -483,6 +495,7 @@ pub const TuiSession = struct {
                     .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
                     .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
                     .quit => appendTuiInputKey(keys, &key_count, .quit),
+                    .keyboard_enhancement_supported => self.keyboard_enhancement_supported = true,
                     .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
@@ -629,6 +642,45 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
     }
 }
 
+fn isKeyboardEnhancementFlagsResponse(seq: []const u8) bool {
+    if (seq.len < 4 or seq[0] != '[' or seq[1] != '?' or seq[seq.len - 1] != 'u') return false;
+    for (seq[2 .. seq.len - 1]) |ch| {
+        if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+
+fn isEnhancedArrowSuffix(seq: []const u8) bool {
+    if (seq.len < 4) return false;
+    const final = seq[seq.len - 1];
+    if (final != 'A' and final != 'B') return false;
+    if (seq[0] != '[') return false;
+
+    var has_separator = false;
+    for (seq[1 .. seq.len - 1]) |ch| {
+        switch (ch) {
+            ';', ':' => has_separator = true,
+            '0'...'9' => {},
+            else => return false,
+        }
+    }
+    return has_separator;
+}
+
+fn isCsiUKeyboardArrow(seq: []const u8) ?TuiNavigation {
+    if (seq.len < 4 or seq[0] != '[' or seq[seq.len - 1] != 'u') return null;
+    const params = seq[1 .. seq.len - 1];
+    var code_end: usize = 0;
+    while (code_end < params.len and params[code_end] != ':' and params[code_end] != ';') : (code_end += 1) {}
+    if (code_end == 0) return null;
+    const code = std.fmt.parseInt(usize, params[0..code_end], 10) catch return null;
+    return switch (code) {
+        57419 => .keyboard_up,
+        57420 => .keyboard_down,
+        else => null,
+    };
+}
+
 pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     if (seq.len == 0) return .incomplete;
 
@@ -636,6 +688,8 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
         '[' => blk: {
             if (seq.len == 1) break :blk .incomplete;
             const final = seq[seq.len - 1];
+            if (isKeyboardEnhancementFlagsResponse(seq)) break :blk .keyboard_enhancement_supported;
+            if (isCsiUKeyboardArrow(seq)) |direction| break :blk .{ .navigation = direction };
             if (seq[1] == '<') {
                 if (final != 'M' and final != 'm') {
                     if (final >= '@' and final <= '~') break :blk .ignore;
@@ -650,6 +704,9 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                 };
             }
             if (final == 'A' or final == 'B') {
+                if (isEnhancedArrowSuffix(seq)) {
+                    break :blk .{ .navigation = if (final == 'A') .keyboard_up else .keyboard_down };
+                }
                 for (seq[1 .. seq.len - 1]) |ch| {
                     if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
                 }
@@ -709,6 +766,8 @@ pub fn readTuiEscapeAction(
                     .action = switch (direction) {
                         .up => .move_up,
                         .down => .move_down,
+                        .keyboard_up => .keyboard_up,
+                        .keyboard_down => .keyboard_down,
                         .page_up => .page_up,
                         .page_down => .page_down,
                         .home => .home,
@@ -718,6 +777,10 @@ pub fn readTuiEscapeAction(
                     },
                     .buffered_bytes_consumed = buffered_bytes_consumed,
                 };
+            },
+            .keyboard_enhancement_supported => return .{
+                .action = .keyboard_enhancement_supported,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
             },
             .ignore => return .{
                 .action = .ignore,

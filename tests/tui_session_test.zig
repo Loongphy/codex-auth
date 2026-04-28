@@ -21,13 +21,28 @@ test "Scenario: Given tty arrow escape suffixes when classifying them then both 
         else => return error.TestUnexpectedResult,
     }
     switch (classifyTuiEscapeSuffix("[1;2B")) {
-        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.down, direction),
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_down, direction),
         else => return error.TestUnexpectedResult,
     }
     switch (classifyTuiEscapeSuffix("OA")) {
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.up, direction),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "Scenario: Given keyboard enhancement responses and keys when classifying them then enhanced arrows stay distinct from alternate scroll arrows" {
+    try std.testing.expectEqual(TuiEscapeClassification.keyboard_enhancement_supported, classifyTuiEscapeSuffix("[?7u"));
+    switch (classifyTuiEscapeSuffix("[1;1:1A")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[57420;1u")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_down, direction),
+        else => return error.TestUnexpectedResult,
+    }
+
+    const result = try readTuiEscapeAction(std.Io.File.stdin(), "[1;1:1A", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.keyboard_up, result.action);
 }
 
 test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {
@@ -78,9 +93,9 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
     try writeTuiExitTo(&aw.writer);
 
     try std.testing.expectEqualStrings(
-        "\x1b[?1049h\x1b[?25l\x1b[?1007h" ++
+        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?u\x1b[>7u" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[?1007l\x1b[?25h\x1b[?1049l",
+            "\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007h") != null);

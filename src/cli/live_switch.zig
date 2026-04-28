@@ -187,6 +187,16 @@ pub fn runSwitchLiveActions(
                                 }
                                 needs_render = true;
                             },
+                            .keyboard_up => {
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                follow_selection = true;
+                                needs_render = true;
+                            },
+                            .keyboard_down => {
+                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                follow_selection = true;
+                                needs_render = true;
+                            },
                             .scroll_up => {
                                 live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
                                 follow_selection = false;

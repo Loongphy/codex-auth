@@ -147,11 +147,11 @@ pub fn selectAccountWithLiveUpdates(
                     for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
                         switch (key) {
-                            .move_up => {
+                            .move_up, .keyboard_up => {
                                 if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
                                 needs_render = true;
                             },
-                            .move_down => {
+                            .move_down, .keyboard_down => {
                                 if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
                                 needs_render = true;
                             },

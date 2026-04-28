@@ -210,7 +210,7 @@ fn selectInteractiveFromIndices(
 
         if (comptime builtin.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
-                .move_up, .scroll_up, .page_up => {
+                .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (rows.selectable_row_indices.len != 0 and idx > 0) {
                         idx -= 1;
                         number_len = 0;
@@ -222,7 +222,7 @@ fn selectInteractiveFromIndices(
                         number_len = 0;
                     }
                 },
-                .move_down, .scroll_down, .page_down => {
+                .move_down, .keyboard_down, .scroll_down, .page_down => {
                     if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                         idx += 1;
                         number_len = 0;
@@ -291,7 +291,7 @@ fn selectInteractiveFromIndices(
                     tui_escape_sequence_timeout_ms,
                 );
                 switch (escape.action) {
-                    .move_up, .scroll_up, .page_up => {
+                    .move_up, .keyboard_up, .scroll_up, .page_up => {
                         if (rows.selectable_row_indices.len != 0 and idx > 0) {
                             idx -= 1;
                             number_len = 0;
@@ -303,7 +303,7 @@ fn selectInteractiveFromIndices(
                             number_len = 0;
                         }
                     },
-                    .move_down, .scroll_down, .page_down => {
+                    .move_down, .keyboard_down, .scroll_down, .page_down => {
                         if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                             idx += 1;
                             number_len = 0;
@@ -316,7 +316,7 @@ fn selectInteractiveFromIndices(
                         }
                     },
                     .quit => return null,
-                    .ignore => {},
+                    .keyboard_enhancement_supported, .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
                 continue;
@@ -415,7 +415,7 @@ fn selectInteractive(
 
         if (comptime builtin.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
-                .move_up, .scroll_up, .page_up => {
+                .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (rows.selectable_row_indices.len != 0 and idx > 0) {
                         idx -= 1;
                         number_len = 0;
@@ -427,7 +427,7 @@ fn selectInteractive(
                         number_len = 0;
                     }
                 },
-                .move_down, .scroll_down, .page_down => {
+                .move_down, .keyboard_down, .scroll_down, .page_down => {
                     if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                         idx += 1;
                         number_len = 0;
@@ -496,7 +496,7 @@ fn selectInteractive(
                     tui_escape_sequence_timeout_ms,
                 );
                 switch (escape.action) {
-                    .move_up, .scroll_up, .page_up => {
+                    .move_up, .keyboard_up, .scroll_up, .page_up => {
                         if (rows.selectable_row_indices.len != 0 and idx > 0) {
                             idx -= 1;
                             number_len = 0;
@@ -508,7 +508,7 @@ fn selectInteractive(
                             number_len = 0;
                         }
                     },
-                    .move_down, .scroll_down, .page_down => {
+                    .move_down, .keyboard_down, .scroll_down, .page_down => {
                         if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                             idx += 1;
                             number_len = 0;
@@ -521,7 +521,7 @@ fn selectInteractive(
                         }
                     },
                     .quit => return null,
-                    .ignore => {},
+                    .keyboard_enhancement_supported, .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
                 continue;
