@@ -8,10 +8,10 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 3;
+pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
-pub const default_auto_switch_threshold_5h_percent: u8 = 10;
-pub const default_auto_switch_threshold_weekly_percent: u8 = 5;
+pub const default_auto_switch_threshold_5h_percent: u8 = 1;
+pub const default_auto_switch_threshold_weekly_percent: u8 = 1;
 pub const account_name_refresh_lock_file_name = "account-name-refresh.lock";
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
     .windows => .default_file,

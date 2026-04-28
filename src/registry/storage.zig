@@ -402,6 +402,13 @@ fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
     return schemaVersionFieldValue(root_obj) orelse if (root_obj.get("active_email") != null) 2 else current_schema_version;
 }
 
+fn applySchemaMigrations(reg: *Registry, loaded_schema_version: u32) void {
+    if (loaded_schema_version < 4) {
+        reg.auto_switch.threshold_5h_percent = common.default_auto_switch_threshold_5h_percent;
+        reg.auto_switch.threshold_weekly_percent = common.default_auto_switch_threshold_weekly_percent;
+    }
+}
+
 fn logUnsupportedRegistryVersion(version_value: u32) void {
     if (builtin.is_test) return;
     std.log.err(
@@ -448,7 +455,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4 => try loadCurrentRegistry(allocator, root_obj),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",
@@ -458,6 +465,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         },
     };
     errdefer reg.deinit(allocator);
+    applySchemaMigrations(&reg, schema_version);
 
     if (needs_rewrite) {
         try saveRegistry(allocator, codex_home, &reg);

@@ -123,6 +123,23 @@ fn testUsageSnapshot(now: i64, used_5h: f64, used_weekly: f64) registry.RateLimi
     };
 }
 
+fn testUsageSnapshotWithResets(now: i64, used_5h: f64, used_weekly: f64, reset_5h_seconds: i64, reset_weekly_seconds: i64) registry.RateLimitSnapshot {
+    return .{
+        .primary = .{
+            .used_percent = used_5h,
+            .window_minutes = 300,
+            .resets_at = now + reset_5h_seconds,
+        },
+        .secondary = .{
+            .used_percent = used_weekly,
+            .window_minutes = 10080,
+            .resets_at = now + reset_weekly_seconds,
+        },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
 fn testMutableString(comptime value: []const u8) []u8 {
     return @constCast(value);
 }
@@ -921,7 +938,7 @@ test "Scenario: Given live switch navigation shortcuts when an account is unavai
     try std.testing.expectEqualStrings("user-1::acc-1", selected_account_key.?);
 }
 
-test "Scenario: Given exhausted active usage when picking an auto-switch target then the best healthy candidate is chosen" {
+test "Scenario: Given active usage at threshold when picking a live auto-switch target then nearest 5h reset wins" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -932,9 +949,38 @@ test "Scenario: Given exhausted active usage when picking an auto-switch target 
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup-a@example.com", "", .team);
     try appendTestAccount(gpa, &reg, "user-1::acc-3", "backup-b@example.com", "", .team);
     reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
-    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 100, 10);
-    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 35, 15);
-    reg.accounts.items[2].last_usage = testUsageSnapshot(now, 5, 8);
+    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 99, 10, 3600, 7 * 24 * 3600);
+    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 5, 5, 30 * 60, 60 * 60);
+    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 50, 50, 5 * 60 + 1, 2 * 60 * 60);
+
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
+        .reg = &reg,
+        .usage_overrides = null,
+    }, &rows);
+    defer if (target_key) |value| gpa.free(value);
+
+    try std.testing.expect(target_key != null);
+    try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
+}
+
+test "Scenario: Given equal 5h resets when picking a live auto-switch target then nearest weekly reset wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup-a@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-3", "backup-b@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 99, 10, 3600, 7 * 24 * 3600);
+    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 10, 10, 30 * 60, 6 * 60 * 60);
+    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 90, 90, 30 * 60, 30 * 60);
 
     var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
     defer rows.deinit(gpa);

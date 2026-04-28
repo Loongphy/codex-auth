@@ -626,6 +626,7 @@ test "Scenario: Given weekly remaining below threshold when checking current the
     const gpa = std.testing.allocator;
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.auto_switch.threshold_weekly_percent = 5;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
         .primary = .{ .used_percent = 20.0, .window_minutes = 300, .resets_at = null },
@@ -663,6 +664,7 @@ test "Scenario: Given missing window_minutes in the primary slot when checking c
     const gpa = std.testing.allocator;
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
+    reg.auto_switch.threshold_5h_percent = 10;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
         .primary = .{ .used_percent = 95.0, .window_minutes = null, .resets_at = null },
@@ -740,6 +742,7 @@ test "Scenario: Given better candidate when auto switch runs then auth and activ
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 10;
 
     try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
         .primary = .{ .used_percent = 95.0, .window_minutes = 300, .resets_at = null },
@@ -791,6 +794,7 @@ test "Scenario: Given API mode and unknown candidate usage when auto switching t
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 10;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
@@ -845,6 +849,7 @@ test "Scenario: Given API mode and poor refreshed candidate when auto switching 
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 10;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
@@ -891,6 +896,7 @@ test "Scenario: Given repeated daemon candidate refresh attempts within cooldown
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "low@example.com", .{
@@ -944,6 +950,7 @@ test "Scenario: Given switch-time candidate validation returns non-200 then that
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -990,6 +997,7 @@ test "Scenario: Given switch-time candidate validation returns 200 without windo
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -1036,6 +1044,7 @@ test "Scenario: Given a candidate is rejected by API validation then it stays re
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 10;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -1086,6 +1095,7 @@ test "Scenario: Given switch-time candidate validation reports missing auth then
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -1132,6 +1142,7 @@ test "Scenario: Given switch-time candidate validation gets no response then the
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -1178,6 +1189,7 @@ test "Scenario: Given daemon api mode and an api-key candidate when auto switchi
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 2;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{
@@ -1293,6 +1305,7 @@ test "Scenario: Given stale top candidates when daemon switches then it validate
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
     reg.auto_switch.enabled = true;
+    reg.auto_switch.threshold_5h_percent = 10;
     reg.api.usage = true;
 
     try appendAccountWithUsage(gpa, &reg, "active@example.com", .{

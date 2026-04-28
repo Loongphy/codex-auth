@@ -32,12 +32,12 @@ Managed files:
 ## Registry Compatibility
 
 - `registry.json.schema_version` is the on-disk migration gate.
-- `schema_version = 3` is the current layout with record-keyed snapshots, active-account activation timestamps, and per-account local rollout dedupe.
-- `version = 2` registries using `active_email` and email-keyed snapshots are migrated to schema `3`.
-- Current-layout files that still use the top-level `version = 3` key are rewritten to `schema_version = 3`.
+- `schema_version = 4` is the current layout with record-keyed snapshots, active-account activation timestamps, per-account local rollout dedupe, and default auto-switch thresholds reset to `1`.
+- `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
+- Current-layout files that still use the top-level `version = 3` key are rewritten to `schema_version = 4`.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`.
-- Saving always rewrites `registry.json` into the current schema `3` field set.
+- Saving always rewrites `registry.json` into the current schema `4` field set.
 
 See [docs/schema-migration.md](./schema-migration.md) for versioning policy and migration rules.
 

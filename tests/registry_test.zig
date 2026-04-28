@@ -582,6 +582,46 @@ test "registry load defaults missing auto threshold fields" {
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
 }
 
+test "registry load migrates old auto thresholds to default one percent" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 3,
+        \\  "active_account_key": null,
+        \\  "auto_switch": {
+        \\    "enabled": true,
+        \\    "threshold_5h_percent": 12,
+        \\    "threshold_weekly_percent": 8
+        \\  },
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.auto_switch.enabled);
+    try std.testing.expectEqual(registry.current_schema_version, loaded.schema_version);
+    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_5h_percent);
+    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_weekly_percent);
+
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_5h_percent\": 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_weekly_percent\": 1") != null);
+}
+
 test "registry load backfills missing api.account from api.usage and rewrites file" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -652,7 +692,7 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
 }
 
-test "schema 3 registry with legacy rollout attribution rewrites to normalized schema 3" {
+test "legacy schema registry with legacy rollout attribution rewrites to normalized current schema" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -697,7 +737,7 @@ test "schema 3 registry with legacy rollout attribution rewrites to normalized s
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_activated_at_ms\": 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"last_attributed_rollout\"") == null);
 }
@@ -732,7 +772,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
 }
 
@@ -819,7 +859,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);

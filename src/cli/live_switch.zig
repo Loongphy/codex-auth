@@ -65,8 +65,20 @@ pub fn runSwitchLiveActions(
 
     while (true) {
         if (try controller.refresh.maybe_take_updated_display(controller.refresh.context)) |updated| {
+            const previous_active_account_key = if (current_display.reg.active_account_key) |key|
+                try allocator.dupe(u8, key)
+            else
+                null;
+            defer if (previous_active_account_key) |key| allocator.free(key);
+
             current_display.deinit(allocator);
             current_display = updated;
+            if (current_display.reg.active_account_key) |active_account_key| {
+                if (previous_active_account_key == null or !std.mem.eql(u8, previous_active_account_key.?, active_account_key)) {
+                    replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, active_account_key));
+                    follow_selection = true;
+                }
+            }
             auto_switch_state.noteRefreshedDisplay();
             needs_render = true;
             rows_cache.invalidate(allocator);
