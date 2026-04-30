@@ -77,6 +77,13 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth import --purge [<path>]`](./docs/commands/import.md) | Rebuild `registry.json` from auth files |
 | [`codex-auth clean`](./docs/commands/clean.md) | Delete managed backup and stale account files |
 
+### Codex App Launching
+
+| Command | Description |
+|---------|-------------|
+| [`codex-auth app [--app-path <path>] [--cli-path <path>]`](./docs/commands/app.md) | Launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
+| [`codex-auth app status`](./docs/commands/app.md) | Show the effective Codex App launch environment |
+
 ### Configuration
 
 | Command | Description |

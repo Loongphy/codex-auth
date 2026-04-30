@@ -15,6 +15,7 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `config` | [docs/commands/config.md](./config.md) |
 | `status` | [docs/commands/status.md](./status.md) |
 | `daemon` | [docs/commands/daemon.md](./daemon.md) |
+| `app` | [docs/commands/app.md](./app.md) |
 
 ## Shared Behavior
 

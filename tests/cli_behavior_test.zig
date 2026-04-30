@@ -76,6 +76,62 @@ fn expectArgv(actual: []const []const u8, expected: []const []const u8) !void {
     }
 }
 
+test "Scenario: Given app launch overrides when parsing then paths and passthrough args are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{
+        "codex-auth",
+        "app",
+        "--app-path",
+        "C:\\Program Files\\WindowsApps\\OpenAI.Codex",
+        "--cli-path",
+        "codex-custom",
+        "--home",
+        "/mnt/c/Users/Loong/.codext",
+        "--platform",
+        "win",
+        "--dry-run",
+        "--",
+        "--trace",
+    };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .app => |opts| {
+                try std.testing.expectEqual(cli.types.AppAction.launch, opts.action);
+                try std.testing.expectEqualStrings("C:\\Program Files\\WindowsApps\\OpenAI.Codex", opts.app_path.?);
+                try std.testing.expectEqualStrings("codex-custom", opts.cli_path.?);
+                try std.testing.expectEqualStrings("/mnt/c/Users/Loong/.codext", opts.home.?);
+                try std.testing.expectEqual(cli.types.AppPlatform.win, opts.platform.?);
+                try std.testing.expect(opts.dry_run);
+                try std.testing.expect(!opts.wait);
+                try expectArgv(opts.extra_args, &[_][]const u8{"--trace"});
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given app status with passthrough args when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "app", "status", "--", "--trace" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .app, "`app status` does not accept passthrough arguments.");
+}
+
+test "Scenario: Given removed app launch subcommand when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "app", "launch" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .app, "unexpected argument `launch` for `app`.");
+}
+
 fn expectedImportMarker(outcome: registry.ImportOutcome) []const u8 {
     return switch (outcome) {
         .imported => if (builtin.os.tag == .windows) "[+]" else "✓",

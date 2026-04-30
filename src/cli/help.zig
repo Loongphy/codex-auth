@@ -87,6 +87,8 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "config api disable");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "daemon --watch|--once", "Run the background auto-switch daemon");
+    try writeCommandSummary(out, use_color, "app", "Launch Codex App with managed environment overrides");
+    try writeCommandDetail(out, use_color, "app status");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(style.ansi.cyan);
@@ -161,6 +163,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .clean => "clean",
         .config => "config",
         .daemon => "daemon",
+        .app => "app",
     };
 }
 
@@ -176,19 +179,20 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch, API, and live refresh configuration.",
         .daemon => "Run the background auto-switch daemon.",
+        .app => "Launch Codex App with CODEX_HOME and CODEX_CLI_PATH overrides.",
     };
 }
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .import_auth, .switch_account, .remove_account, .config, .daemon, .app => true,
         else => false,
     };
 }
 
 fn commandHelpHasOptions(topic: HelpTopic) bool {
     return switch (topic) {
-        .list, .login, .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .list, .login, .import_auth, .switch_account, .remove_account, .config, .daemon, .app => true,
         else => false,
     };
 }
@@ -250,6 +254,10 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth daemon --watch\n");
             try out.writeAll("  codex-auth daemon --once\n");
         },
+        .app => {
+            try out.writeAll("  codex-auth app [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app status [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
+        },
     }
 }
 
@@ -265,6 +273,7 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .clean => "codex-auth clean --help",
         .config => "codex-auth config --help",
         .daemon => "codex-auth daemon --help",
+        .app => "codex-auth app --help",
     };
 }
 
@@ -319,6 +328,16 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .daemon => {
             try out.writeAll("  --watch   Run continuously and switch accounts when thresholds are reached.\n");
             try out.writeAll("  --once    Run one auto-switch check, then exit.\n");
+        },
+        .app => {
+            try out.writeAll("  --app-path <path>  Official Codex App executable or install directory.\n");
+            try out.writeAll("  --cli-path <path>  Value injected as CODEX_CLI_PATH. Defaults to cached/latest Loongphy codext.\n");
+            try out.writeAll("  --home <path>      Value injected as CODEX_HOME for this launch.\n");
+            try out.writeAll("  --platform win|wsl|mac\n");
+            try out.writeAll("                     Preselect the app platform. Defaults to the current app setting on Windows and mac on macOS.\n");
+            try out.writeAll("  --dry-run          Print the effective launch environment without starting the app.\n");
+            try out.writeAll("  --wait             Wait for the launched app process to exit.\n");
+            try out.writeAll("  -- <args>          Pass additional arguments to the app executable.\n");
         },
         else => {},
     }
@@ -382,6 +401,11 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .daemon => {
             try out.writeAll("  codex-auth daemon --watch\n");
             try out.writeAll("  codex-auth daemon --once\n");
+        },
+        .app => {
+            try out.writeAll("  codex-auth app\n");
+            try out.writeAll("  codex-auth app --platform win\n");
+            try out.writeAll("  codex-auth app status --app-path /Applications/Codex.app --cli-path /usr/local/bin/codext\n");
         },
     }
 }

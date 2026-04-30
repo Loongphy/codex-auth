@@ -25,13 +25,18 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.SwitchSelectionRequiresTty or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
-        err == error.InvalidRemoveSelectionInput;
+        err == error.InvalidRemoveSelectionInput or
+        err == error.AppPathRequired or
+        err == error.WindowsAppLaunchRequiresWindows or
+        err == error.WindowsAppPlatformRequiresWindows or
+        err == error.MacAppPlatformRequiresMacOS or
+        err == error.WindowsPassthroughArgsUnsupported;
 }
 
 pub fn shouldReconcileManagedService(cmd: cli.types.Command) bool {
     if (hasNonEmptyEnvVar(skip_service_reconcile_env)) return false;
     return switch (cmd) {
-        .help, .version, .status, .daemon => false,
+        .help, .version, .status, .daemon, .app => false,
         else => true,
     };
 }

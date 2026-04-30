@@ -50,6 +50,18 @@ pub const ConfigOptions = union(enum) {
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
+pub const AppAction = enum { launch, status };
+pub const AppPlatform = enum { win, wsl, mac };
+pub const AppOptions = struct {
+    action: AppAction,
+    app_path: ?[]const u8 = null,
+    cli_path: ?[]const u8 = null,
+    home: ?[]const u8 = null,
+    platform: ?AppPlatform = null,
+    dry_run: bool = false,
+    wait: bool = false,
+    extra_args: []const []const u8 = &.{},
+};
 pub const HelpTopic = enum {
     top_level,
     list,
@@ -61,6 +73,7 @@ pub const HelpTopic = enum {
     clean,
     config,
     daemon,
+    app,
 };
 
 pub const Command = union(enum) {
@@ -73,6 +86,7 @@ pub const Command = union(enum) {
     config: ConfigOptions,
     status: void,
     daemon: DaemonOptions,
+    app: AppOptions,
     version: void,
     help: HelpTopic,
 };
