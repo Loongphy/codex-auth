@@ -87,8 +87,10 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "config api disable");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "daemon --watch|--once", "Run the background auto-switch daemon");
-    try writeCommandSummary(out, use_color, "app", "Launch Codex App with managed environment overrides");
+    try writeCommandSummary(out, use_color, "app", "Launch or patch Codex App with managed CLI overrides");
     try writeCommandDetail(out, use_color, "app status");
+    try writeCommandDetail(out, use_color, "app patch");
+    try writeCommandDetail(out, use_color, "app unpatch");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(style.ansi.cyan);
@@ -179,7 +181,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch, API, and live refresh configuration.",
         .daemon => "Run the background auto-switch daemon.",
-        .app => "Launch Codex App with CODEX_HOME and CODEX_CLI_PATH overrides.",
+        .app => "Launch or persistently patch Codex App CLI overrides.",
     };
 }
 
@@ -257,6 +259,8 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .app => {
             try out.writeAll("  codex-auth app [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
             try out.writeAll("  codex-auth app status [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app patch [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app unpatch\n");
         },
     }
 }
@@ -331,7 +335,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .app => {
             try out.writeAll("  --app-path <path>  Official Codex App executable or install directory.\n");
-            try out.writeAll("  --cli-path <path>  Value injected as CODEX_CLI_PATH. Defaults to cached/latest Loongphy codext.\n");
+            try out.writeAll("  --cli-path <path>  Value injected or persisted as CODEX_CLI_PATH. Defaults to cached/latest Loongphy codext.\n");
             try out.writeAll("  --home <path>      Value injected as CODEX_HOME for this launch.\n");
             try out.writeAll("  --platform win|wsl|mac\n");
             try out.writeAll("                     Preselect the app platform. Defaults to the current app setting on Windows and mac on macOS.\n");
@@ -405,6 +409,8 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .app => {
             try out.writeAll("  codex-auth app\n");
             try out.writeAll("  codex-auth app --platform win\n");
+            try out.writeAll("  codex-auth app patch --platform wsl\n");
+            try out.writeAll("  codex-auth app unpatch\n");
             try out.writeAll("  codex-auth app status --app-path /Applications/Codex.app --cli-path /usr/local/bin/codext\n");
         },
     }

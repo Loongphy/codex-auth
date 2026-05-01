@@ -8,6 +8,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (common.isHelpFlag(first)) return .{ .command = .{ .help = .app } };
 
     if (std.mem.eql(u8, first, "status")) return parseOptions(allocator, .status, args[1..]);
+    if (std.mem.eql(u8, first, "patch")) return parseOptions(allocator, .patch, args[1..]);
+    if (std.mem.eql(u8, first, "unpatch")) return parseOptions(allocator, .unpatch, args[1..]);
     return parseOptions(allocator, .launch, args);
 }
 
@@ -79,7 +81,7 @@ fn parseOptions(
     }
 
     if (opts.extra_args.len != 0 and action != .launch) {
-        return common.usageErrorResult(allocator, .app, "`app status` does not accept passthrough arguments.", .{});
+        return common.usageErrorResult(allocator, .app, "`app {s}` does not accept passthrough arguments.", .{@tagName(action)});
     }
     return .{ .command = .{ .app = opts } };
 }

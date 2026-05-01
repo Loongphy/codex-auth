@@ -50,7 +50,7 @@ pub const ConfigOptions = union(enum) {
 };
 pub const DaemonMode = enum { watch, once };
 pub const DaemonOptions = struct { mode: DaemonMode };
-pub const AppAction = enum { launch, status };
+pub const AppAction = enum { launch, status, patch, unpatch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {
     action: AppAction,

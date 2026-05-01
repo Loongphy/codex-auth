@@ -12,6 +12,7 @@ const app_path_env = "CODEX_AUTH_APP_PATH";
 const wsl_agent_mode_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_cache_dir_name = "codext-cli";
+const mac_persistent_env_label = "com.codex-auth.app-env";
 
 const ValueSource = enum { explicit, env, detected, cached, downloaded, not_set };
 
@@ -33,15 +34,20 @@ const ResolvedPlatform = struct {
 pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, opts: types.AppOptions) !void {
     const effective_home = opts.home orelse resolved_codex_home;
     const effective_platform = try resolvePlatform(allocator, effective_home, opts.platform);
-    if (opts.action == .launch and !opts.dry_run) try validateAppPlatform(effective_platform.value);
+    if ((opts.action == .launch or opts.action == .patch) and !opts.dry_run) try validateAppPlatform(effective_platform.value);
     const effective_app_path = try resolveAppPath(allocator, opts);
     defer effective_app_path.deinit(allocator);
-    const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, opts.action == .launch and !opts.dry_run);
+    const allow_download = (opts.action == .launch or opts.action == .patch) and !opts.dry_run;
+    const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, allow_download);
     defer effective_cli_path.deinit(allocator);
+    const persistent_cli_path = if (opts.action == .status or opts.dry_run) try readPersistentCliPath(allocator) else null;
+    defer if (persistent_cli_path) |path| allocator.free(path);
 
     switch (opts.action) {
-        .status => try printStatus(effective_app_path, effective_cli_path, effective_home, effective_platform, opts),
-        .launch => try launchApp(allocator, effective_app_path, effective_cli_path, effective_home, effective_platform, opts),
+        .status => try printStatus(effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
+        .launch => try launchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
+        .patch => try patchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
+        .unpatch => try unpatchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
     }
 }
 
@@ -69,7 +75,9 @@ fn resolveCliPath(
     allow_download: bool,
 ) !ResolvedValue {
     if (opts.cli_path) |path| return .{ .value = path, .source = .explicit };
-    if (getOptionalEnv(allocator, codex_cli_path_env)) |path| return .{ .value = path, .source = .env, .owned = true };
+    if (opts.action != .patch) {
+        if (getOptionalEnv(allocator, codex_cli_path_env)) |path| return .{ .value = path, .source = .env, .owned = true };
+    }
 
     const target_platform = platform orelse nativeDefaultPlatform();
     if (try cachedCodextCliPath(allocator, home, target_platform)) |path| return .{ .value = path, .source = .cached, .owned = true };
@@ -125,6 +133,7 @@ fn readWindowsWslBackendSetting(allocator: std.mem.Allocator, home: []const u8) 
 fn printStatus(
     app_path: ResolvedValue,
     cli_path: ResolvedValue,
+    persistent_cli_path: ?[]const u8,
     home: []const u8,
     platform: ResolvedPlatform,
     opts: types.AppOptions,
@@ -136,7 +145,8 @@ fn printStatus(
     try out.print("  app path: {s} ({s})\n", .{ app_path.value orelse "(not set)", valueSourceName(app_path.source) });
     try out.print("  CODEX_HOME: {s}\n", .{home});
     try out.print("  CODEX_CLI_PATH: {s} ({s})\n", .{ cli_path.value orelse "(not cached)", valueSourceName(cli_path.source) });
-    try out.print("  platform: {s} ({s})\n", .{appPlatformName(platform.value), valueSourceName(platform.source)});
+    try out.print("  persistent CODEX_CLI_PATH: {s}\n", .{persistent_cli_path orelse "(not set)"});
+    try out.print("  platform: {s} ({s})\n", .{ appPlatformName(platform.value), valueSourceName(platform.source) });
     try out.print("  dry run: {s}\n", .{if (opts.dry_run) "yes" else "no"});
     try out.print("  wait: {s}\n", .{if (opts.wait) "yes" else "no"});
     try out.flush();
@@ -146,6 +156,7 @@ fn launchApp(
     allocator: std.mem.Allocator,
     app_path: ResolvedValue,
     cli_path: ResolvedValue,
+    persistent_cli_path: ?[]const u8,
     home: []const u8,
     platform: ResolvedPlatform,
     opts: types.AppOptions,
@@ -155,7 +166,7 @@ fn launchApp(
         return error.AppPathRequired;
     };
     if (opts.dry_run) {
-        try printStatus(app_path, cli_path, home, platform, opts);
+        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
         return;
     }
     try validateAppPlatform(platform.value);
@@ -169,6 +180,46 @@ fn launchApp(
         return error.WindowsAppLaunchRequiresWindows;
     }
     return launchNative(allocator, target, cli_path.value, home, opts);
+}
+
+fn patchApp(
+    allocator: std.mem.Allocator,
+    app_path: ResolvedValue,
+    cli_path: ResolvedValue,
+    persistent_cli_path: ?[]const u8,
+    home: []const u8,
+    platform: ResolvedPlatform,
+    opts: types.AppOptions,
+) !void {
+    if (opts.dry_run) {
+        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
+        return;
+    }
+    try validateAppPlatform(platform.value);
+    try applyAppPlatform(allocator, home, platform.value);
+    const target_cli = cli_path.value orelse {
+        try writeAppError("app patch could not resolve CODEX_CLI_PATH. Pass `--cli-path <path>` or allow the default Loongphy codext download.\n");
+        return error.CliPathRequired;
+    };
+    try persistCliPath(allocator, target_cli);
+    try writeAppOutput("persistent CODEX_CLI_PATH={s}\n", .{target_cli});
+}
+
+fn unpatchApp(
+    allocator: std.mem.Allocator,
+    app_path: ResolvedValue,
+    cli_path: ResolvedValue,
+    persistent_cli_path: ?[]const u8,
+    home: []const u8,
+    platform: ResolvedPlatform,
+    opts: types.AppOptions,
+) !void {
+    if (opts.dry_run) {
+        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
+        return;
+    }
+    try clearPersistentCliPath(allocator);
+    try writeAppOutput("persistent CODEX_CLI_PATH cleared\n", .{});
 }
 
 fn appPlatformName(value: ?types.AppPlatform) []const u8 {
@@ -194,11 +245,11 @@ fn validateAppPlatform(value: ?types.AppPlatform) !void {
     const platform = value orelse return;
     switch (platform) {
         .win, .wsl => if (builtin.os.tag != .windows) {
-            try writeAppError("app launch with `--platform win` or `--platform wsl` must run from the Windows codex-auth executable.\n");
+            try writeAppError("app with `--platform win` or `--platform wsl` must run from the Windows codex-auth executable.\n");
             return error.WindowsAppPlatformRequiresWindows;
         },
         .mac => if (builtin.os.tag != .macos) {
-            try writeAppError("app launch with `--platform mac` must run from the macOS codex-auth executable.\n");
+            try writeAppError("app with `--platform mac` must run from the macOS codex-auth executable.\n");
             return error.MacAppPlatformRequiresMacOS;
         },
     }
@@ -359,6 +410,164 @@ fn isDirectory(path: []const u8) bool {
 fn fileExists(path: []const u8) bool {
     std.Io.Dir.cwd().access(app_runtime.io(), path, .{}) catch return false;
     return true;
+}
+
+fn readPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
+    return switch (builtin.os.tag) {
+        .windows => readWindowsPersistentCliPath(allocator),
+        .macos => readMacPersistentCliPath(allocator),
+        else => null,
+    };
+}
+
+fn readWindowsPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
+    var result = http_child.runChildCapture(
+        allocator,
+        &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", "[Console]::Out.Write([Environment]::GetEnvironmentVariable('CODEX_CLI_PATH','User'))" },
+        7000,
+        null,
+    ) catch return null;
+    defer result.deinit(allocator);
+    return switch (result.term) {
+        .exited => |code| if (code == 0) try dupTrimmedOrNull(allocator, result.stdout) else null,
+        else => null,
+    };
+}
+
+fn readMacPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
+    var result = http_child.runChildCapture(
+        allocator,
+        &[_][]const u8{ "launchctl", "getenv", codex_cli_path_env },
+        7000,
+        null,
+    ) catch return null;
+    defer result.deinit(allocator);
+    return switch (result.term) {
+        .exited => |code| if (code == 0) try dupTrimmedOrNull(allocator, result.stdout) else null,
+        else => null,
+    };
+}
+
+fn dupTrimmedOrNull(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    return try allocator.dupe(u8, trimmed);
+}
+
+fn persistCliPath(allocator: std.mem.Allocator, cli_path: []const u8) !void {
+    switch (builtin.os.tag) {
+        .windows => try persistWindowsCliPath(allocator, cli_path),
+        .macos => try persistMacCliPath(allocator, cli_path),
+        else => {
+            try writeAppError("app patch is supported only from the Windows or macOS codex-auth executable.\n");
+            return error.UnsupportedPlatform;
+        },
+    }
+}
+
+fn clearPersistentCliPath(allocator: std.mem.Allocator) !void {
+    switch (builtin.os.tag) {
+        .windows => try clearWindowsPersistentCliPath(allocator),
+        .macos => try clearMacPersistentCliPath(allocator),
+        else => {
+            try writeAppError("app unpatch is supported only from the Windows or macOS codex-auth executable.\n");
+            return error.UnsupportedPlatform;
+        },
+    }
+}
+
+fn persistWindowsCliPath(allocator: std.mem.Allocator, cli_path: []const u8) !void {
+    const cli_quoted = try psSingleQuoteAlloc(allocator, cli_path);
+    defer allocator.free(cli_quoted);
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "$ErrorActionPreference='Stop'; [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH',{s},'User'); try {{ $sig='[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int Msg, UIntPtr wParam, string lParam, int fuFlags, int uTimeout, out UIntPtr lpdwResult);'; Add-Type -MemberDefinition $sig -Name NativeMethods -Namespace CodexAuthEnv -ErrorAction SilentlyContinue; $r=[UIntPtr]::Zero; [CodexAuthEnv.NativeMethods]::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',0x2,5000,[ref]$r) | Out-Null }} catch {{ }}",
+        .{cli_quoted},
+    );
+    defer allocator.free(script);
+    try runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 7000);
+}
+
+fn clearWindowsPersistentCliPath(allocator: std.mem.Allocator) !void {
+    const script =
+        "$ErrorActionPreference='Stop'; [Environment]::SetEnvironmentVariable('CODEX_CLI_PATH',$null,'User'); try { $sig='[DllImport(\"user32.dll\", SetLastError=true, CharSet=CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int Msg, UIntPtr wParam, string lParam, int fuFlags, int uTimeout, out UIntPtr lpdwResult);'; Add-Type -MemberDefinition $sig -Name NativeMethods -Namespace CodexAuthEnv -ErrorAction SilentlyContinue; $r=[UIntPtr]::Zero; [CodexAuthEnv.NativeMethods]::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',0x2,5000,[ref]$r) | Out-Null } catch { }";
+    try runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 7000);
+}
+
+fn persistMacCliPath(allocator: std.mem.Allocator, cli_path: []const u8) !void {
+    const plist_path = try macPersistentEnvPlistPath(allocator);
+    defer allocator.free(plist_path);
+    const plist = try macPersistentEnvPlistText(allocator, cli_path);
+    defer allocator.free(plist);
+
+    if (std.fs.path.dirname(plist_path)) |dir| {
+        try std.Io.Dir.cwd().createDirPath(app_runtime.io(), dir);
+    }
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = plist_path, .data = plist });
+    _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unload", plist_path }, 7000) catch {};
+    try runChecked(allocator, &[_][]const u8{ "launchctl", "load", plist_path }, 7000);
+    try runChecked(allocator, &[_][]const u8{ "launchctl", "setenv", codex_cli_path_env, cli_path }, 7000);
+}
+
+fn clearMacPersistentCliPath(allocator: std.mem.Allocator) !void {
+    const plist_path = try macPersistentEnvPlistPath(allocator);
+    defer allocator.free(plist_path);
+    _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unsetenv", codex_cli_path_env }, 7000) catch {};
+    _ = runChecked(allocator, &[_][]const u8{ "launchctl", "unload", plist_path }, 7000) catch {};
+    std.Io.Dir.deleteFileAbsolute(app_runtime.io(), plist_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn macPersistentEnvPlistPath(allocator: std.mem.Allocator) ![]u8 {
+    const home = getOptionalEnv(allocator, "HOME") orelse return error.EnvironmentVariableNotFound;
+    defer allocator.free(@constCast(home));
+    return try std.fs.path.join(allocator, &.{ home, "Library", "LaunchAgents", "com.codex-auth.app-env.plist" });
+}
+
+fn macPersistentEnvPlistText(allocator: std.mem.Allocator, cli_path: []const u8) ![]u8 {
+    const escaped_path = try xmlEscapeAlloc(allocator, cli_path);
+    defer allocator.free(escaped_path);
+    return try std.fmt.allocPrint(
+        allocator,
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        \\<plist version="1.0">
+        \\<dict>
+        \\  <key>Label</key>
+        \\  <string>{s}</string>
+        \\  <key>ProgramArguments</key>
+        \\  <array>
+        \\    <string>/bin/launchctl</string>
+        \\    <string>setenv</string>
+        \\    <string>CODEX_CLI_PATH</string>
+        \\    <string>{s}</string>
+        \\  </array>
+        \\  <key>RunAtLoad</key>
+        \\  <true/>
+        \\</dict>
+        \\</plist>
+        \\
+    ,
+        .{ mac_persistent_env_label, escaped_path },
+    );
+}
+
+fn xmlEscapeAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (value) |ch| {
+        switch (ch) {
+            '&' => try out.appendSlice(allocator, "&amp;"),
+            '<' => try out.appendSlice(allocator, "&lt;"),
+            '>' => try out.appendSlice(allocator, "&gt;"),
+            '"' => try out.appendSlice(allocator, "&quot;"),
+            '\'' => try out.appendSlice(allocator, "&apos;"),
+            else => try out.append(allocator, ch),
+        }
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 fn detectInstalledAppPath(allocator: std.mem.Allocator) !?[]u8 {
@@ -664,6 +873,14 @@ fn writeAppError(message: []const u8) !void {
 fn writeAppInfo(comptime format: []const u8, args: anytype) !void {
     var buffer: [1024]u8 = undefined;
     var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    try out.print(format, args);
+    try out.flush();
+}
+
+fn writeAppOutput(comptime format: []const u8, args: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
     const out = &writer.interface;
     try out.print(format, args);
     try out.flush();

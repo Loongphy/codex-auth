@@ -132,6 +132,40 @@ test "Scenario: Given removed app launch subcommand when parsing then usage erro
     try expectUsageError(result, .app, "unexpected argument `launch` for `app`.");
 }
 
+test "Scenario: Given app patch when parsing then patch action is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "app", "patch", "--platform", "wsl", "--dry-run" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .app => |opts| {
+                try std.testing.expectEqual(cli.types.AppAction.patch, opts.action);
+                try std.testing.expectEqual(cli.types.AppPlatform.wsl, opts.platform.?);
+                try std.testing.expect(opts.dry_run);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given app unpatch when parsing then unpatch action is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "app", "unpatch" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .app => |opts| try std.testing.expectEqual(cli.types.AppAction.unpatch, opts.action),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 fn expectedImportMarker(outcome: registry.ImportOutcome) []const u8 {
     return switch (outcome) {
         .imported => if (builtin.os.tag == .windows) "[+]" else "✓",
