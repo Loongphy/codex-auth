@@ -16,7 +16,7 @@ installs a persistent CLI override for normal app launches.
 
 - `codex-auth app` launches the app. There is no `launch` subcommand.
 - `codex-auth app status` prints the effective defaults without downloading the CLI or launching the app.
-- `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock use the managed CLI without running `codex-auth app` each time.
+- `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock go through a generated guarded shim without running `codex-auth app` each time.
 - `codex-auth app unpatch` removes the persistent `CODEX_CLI_PATH` patch.
 - `--app-path <path>` points to the App executable or an installed package/app directory.
 - `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch. If it is omitted, `CODEX_CLI_PATH` is reused when set; otherwise launch downloads the latest Loongphy codext release into the accounts cache and uses that cached binary.
@@ -42,7 +42,8 @@ uses `win`. macOS defaults to `mac`.
 
 `app patch` uses the same platform resolution and writes the same Windows
 setting before persisting `CODEX_CLI_PATH`, so the selected backend keeps using
-the matching native Windows or Linux codext binary.
+the matching native Windows or Linux codext binary while the installed app
+version still matches the patch.
 
 Default downloaded CLIs are cached under:
 
@@ -61,13 +62,29 @@ Windows app path such as `C:\Program Files\WindowsApps\...\app\Codex.exe` for
 
 On Windows, `app patch` writes the user environment variable with
 `[Environment]::SetEnvironmentVariable(..., 'User')` and broadcasts an
-environment change. Existing Codex App processes must still be closed; some
+environment change. The value points to a generated guarded shim under
+`$CODEX_HOME/accounts/codext-cli/app-patch/<platform>/`, not directly to the
+codext binary. Existing Codex App processes must still be closed; some
 already-running parent processes may require a fresh Explorer session, sign-out,
 or reboot before Start-menu launches inherit the updated variable.
 
 On macOS, `app patch` sets the current `launchctl` GUI-session environment and
 installs `~/Library/LaunchAgents/com.codex-auth.app-env.plist` so the variable is
-restored at login. `app unpatch` unloads and removes that LaunchAgent.
+restored at login. The LaunchAgent also points at a generated guarded shim.
+`app unpatch` unloads and removes that LaunchAgent.
+
+The guarded shim is version-bound:
+
+- Windows MSIX/AppX patches are tied to the package install path, which includes
+  the AppX package version.
+- WSL patches use the same package-root guard after Windows paths are converted
+  to WSL paths.
+- macOS patches are tied to the app bundle's `CFBundleVersion`.
+
+If the app updates or a different Codex-family app inherits the same user-level
+`CODEX_CLI_PATH`, the shim does not continue using the patched codext binary. It
+falls back to the bundled/default CLI for that app where available, so a new app
+version requires running `codex-auth app patch` again.
 
 This follows the same durable-hook idea as app-bundle patchers, but it uses the
 official `CODEX_CLI_PATH` hook instead of editing the app package. That avoids
@@ -84,7 +101,7 @@ the app executable inside `Contents/MacOS`. The packaged macOS app normally uses
 injects `CODEX_CLI_PATH` and takes precedence over that bundled resource.
 
 The Electron app currently appends `--analytics-default-enabled` when it starts
-`app-server`. A plain `CODEX_CLI_PATH` override changes which binary is executed
-but does not remove that argument. To suppress it at launch time, point
-`--cli-path` at a wrapper/shim that filters that argument before execing the real
-codext binary.
+`app-server`. The `CODEX_CLI_PATH` override changes which binary is executed but
+does not remove that argument. To suppress it at launch time, point `--cli-path`
+at a wrapper/shim that filters that argument before execing the real codext
+binary; `app patch` will still wrap that path in its own version guard.

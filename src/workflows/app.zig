@@ -12,6 +12,9 @@ const app_path_env = "CODEX_AUTH_APP_PATH";
 const wsl_agent_mode_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_cache_dir_name = "codext-cli";
+const guarded_shim_dir_name = "app-patch";
+const guarded_script_name = "codex-auth-app-shim";
+const guarded_windows_shim_name = "codex-auth-app-shim.exe";
 const mac_persistent_env_label = "com.codex-auth.app-env";
 
 const ValueSource = enum { explicit, env, detected, cached, downloaded, not_set };
@@ -201,8 +204,18 @@ fn patchApp(
         try writeAppError("app patch could not resolve CODEX_CLI_PATH. Pass `--cli-path <path>` or allow the default Loongphy codext download.\n");
         return error.CliPathRequired;
     };
-    try persistCliPath(allocator, target_cli);
-    try writeAppOutput("persistent CODEX_CLI_PATH={s}\n", .{target_cli});
+    const target_app = app_path.value orelse {
+        try writeAppError("app patch could not find the installed Codex app. Pass `--app-path <path>` or set CODEX_AUTH_APP_PATH.\n");
+        return error.AppPathRequired;
+    };
+    const launch_path = try resolveLaunchPath(allocator, target_app);
+    defer allocator.free(launch_path);
+    const target_platform = platform.value orelse return error.UnsupportedPlatform;
+    const shim_path = try installGuardedCliShim(allocator, home, launch_path, target_cli, target_platform);
+    defer allocator.free(shim_path);
+    try persistCliPath(allocator, shim_path);
+    try writeAppOutput("persistent CODEX_CLI_PATH={s}\n", .{shim_path});
+    try writeAppOutput("guarded target CLI={s}\n", .{target_cli});
 }
 
 fn unpatchApp(
@@ -412,6 +425,318 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+pub fn isGuardedShimExecutablePath(path: []const u8) bool {
+    const base = std.fs.path.basename(path);
+    return std.mem.eql(u8, base, guarded_windows_shim_name) or std.mem.eql(u8, base, guarded_script_name);
+}
+
+const GuardedShimConfig = struct {
+    expected_root: []u8,
+    target_cli: []u8,
+
+    fn deinit(self: GuardedShimConfig, allocator: std.mem.Allocator) void {
+        allocator.free(self.expected_root);
+        allocator.free(self.target_cli);
+    }
+};
+
+pub fn runGuardedAppShim(allocator: std.mem.Allocator, init: std.process.Init.Minimal) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const args = try init.args.toSlice(arena_state.allocator());
+
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
+    defer allocator.free(self_exe);
+    const config = try readGuardedShimConfig(allocator, self_exe);
+    defer config.deinit(allocator);
+
+    const cwd_z = try std.process.currentPathAlloc(app_runtime.io(), allocator);
+    defer allocator.free(cwd_z);
+    const cwd = std.mem.sliceTo(cwd_z, 0);
+
+    const target = if (pathHasRoot(cwd, config.expected_root, builtin.os.tag == .windows))
+        try allocator.dupe(u8, config.target_cli)
+    else
+        try fallbackCliForCurrentApp(allocator, cwd);
+    defer allocator.free(target);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, target);
+    for (args[1..]) |arg| try argv.append(allocator, std.mem.sliceTo(arg, 0));
+
+    var env_map = try registry.getEnvMap(allocator);
+    defer env_map.deinit();
+    var child = try std.process.spawn(app_runtime.io(), .{
+        .argv = argv.items,
+        .environ_map = &env_map,
+        .stdin = .inherit,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const term = try child.wait(app_runtime.io());
+    switch (term) {
+        .exited => |code| std.process.exit(@intCast(@min(code, 255))),
+        else => std.process.exit(1),
+    }
+}
+
+fn readGuardedShimConfig(allocator: std.mem.Allocator, self_exe: []const u8) !GuardedShimConfig {
+    const config_path = try std.fmt.allocPrint(allocator, "{s}.json", .{self_exe});
+    defer allocator.free(config_path);
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{});
+    defer file.close(app_runtime.io());
+    const data = try registry.readFileAlloc(file, allocator, 1024 * 1024);
+    defer allocator.free(data);
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
+    defer parsed.deinit();
+    const object = switch (parsed.value) {
+        .object => |object| object,
+        else => return error.InvalidGuardedShimConfig,
+    };
+    const expected_root = switch (object.get("expected_root") orelse return error.InvalidGuardedShimConfig) {
+        .string => |value| try allocator.dupe(u8, value),
+        else => return error.InvalidGuardedShimConfig,
+    };
+    errdefer allocator.free(expected_root);
+    const target_cli = switch (object.get("target_cli") orelse return error.InvalidGuardedShimConfig) {
+        .string => |value| try allocator.dupe(u8, value),
+        else => return error.InvalidGuardedShimConfig,
+    };
+    return .{ .expected_root = expected_root, .target_cli = target_cli };
+}
+
+fn fallbackCliForCurrentApp(allocator: std.mem.Allocator, cwd: []const u8) ![]u8 {
+    const candidates = [_][]const u8{ "codex.exe", "codex" };
+    for (candidates) |name| {
+        const candidate = try std.fs.path.join(allocator, &.{ cwd, name });
+        if (fileExists(candidate)) return candidate;
+        allocator.free(candidate);
+    }
+    try writeAppError("codex-auth app shim skipped the guarded override because the app package changed, but no bundled fallback CLI was found in the current app resources.\n");
+    return error.GuardedShimFallbackNotFound;
+}
+
+fn pathHasRoot(path: []const u8, root: []const u8, case_insensitive: bool) bool {
+    if (path.len < root.len) return false;
+    const path_prefix = path[0..root.len];
+    const prefix_matches = if (case_insensitive)
+        std.ascii.eqlIgnoreCase(path_prefix, root)
+    else
+        std.mem.eql(u8, path_prefix, root);
+    if (!prefix_matches) return false;
+    if (path.len == root.len) return true;
+    return path[root.len] == '/' or path[root.len] == '\\';
+}
+
+fn installGuardedCliShim(
+    allocator: std.mem.Allocator,
+    home: []const u8,
+    app_launch_path: []const u8,
+    target_cli: []const u8,
+    platform: types.AppPlatform,
+) ![]u8 {
+    const expected_root = try appGuardRootAlloc(allocator, app_launch_path, platform);
+    defer allocator.free(expected_root);
+    const shim_dir = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, guarded_shim_dir_name, appPlatformName(platform) });
+    defer allocator.free(shim_dir);
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), shim_dir);
+
+    return switch (platform) {
+        .win => try installWindowsGuardedCliShim(allocator, shim_dir, expected_root, target_cli),
+        .wsl => try installWslGuardedCliShim(allocator, shim_dir, home, expected_root, target_cli),
+        .mac => try installMacGuardedCliShim(allocator, shim_dir, expected_root, target_cli),
+    };
+}
+
+fn installWindowsGuardedCliShim(
+    allocator: std.mem.Allocator,
+    shim_dir: []const u8,
+    expected_root: []const u8,
+    target_cli: []const u8,
+) ![]u8 {
+    const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
+    defer allocator.free(self_exe);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_windows_shim_name });
+    errdefer allocator.free(shim_path);
+    try std.Io.Dir.copyFileAbsolute(self_exe, shim_path, app_runtime.io(), .{ .replace = true, .make_path = true });
+    const config_path = try std.fmt.allocPrint(allocator, "{s}.json", .{shim_path});
+    defer allocator.free(config_path);
+    const config = try guardedShimConfigText(allocator, expected_root, target_cli);
+    defer allocator.free(config);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = config_path, .data = config });
+    return shim_path;
+}
+
+fn installWslGuardedCliShim(
+    allocator: std.mem.Allocator,
+    shim_dir: []const u8,
+    home: []const u8,
+    expected_root: []const u8,
+    target_cli: []const u8,
+) ![]u8 {
+    const expected_wsl = try windowsPathToWslPathAlloc(allocator, expected_root);
+    defer allocator.free(expected_wsl);
+    const target_wsl = try windowsPathToWslPathAlloc(allocator, target_cli);
+    defer allocator.free(target_wsl);
+    const home_wsl = try windowsPathToWslPathAlloc(allocator, home);
+    defer allocator.free(home_wsl);
+    const script = try wslGuardedShimScript(allocator, expected_wsl, target_wsl, home_wsl);
+    defer allocator.free(script);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_script_name });
+    errdefer allocator.free(shim_path);
+    try writeExecutableTextFile(shim_path, script);
+    return shim_path;
+}
+
+fn installMacGuardedCliShim(
+    allocator: std.mem.Allocator,
+    shim_dir: []const u8,
+    expected_root: []const u8,
+    target_cli: []const u8,
+) ![]u8 {
+    const expected_version = try readMacBundleVersion(allocator, expected_root);
+    defer allocator.free(expected_version);
+    const script = try macGuardedShimScript(allocator, expected_root, expected_version, target_cli);
+    defer allocator.free(script);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_script_name });
+    errdefer allocator.free(shim_path);
+    try writeExecutableTextFile(shim_path, script);
+    return shim_path;
+}
+
+fn writeExecutableTextFile(path: []const u8, data: []const u8) !void {
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = path, .data = data });
+    if (builtin.os.tag != .windows) {
+        try std.Io.Dir.cwd().setFilePermissions(app_runtime.io(), path, std.Io.File.Permissions.fromMode(0o755), .{});
+    }
+}
+
+fn guardedShimConfigText(allocator: std.mem.Allocator, expected_root: []const u8, target_cli: []const u8) ![]u8 {
+    const escaped_root = try jsonEscapeAlloc(allocator, expected_root);
+    defer allocator.free(escaped_root);
+    const escaped_target = try jsonEscapeAlloc(allocator, target_cli);
+    defer allocator.free(escaped_target);
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"expected_root\":\"{s}\",\"target_cli\":\"{s}\"}}\n",
+        .{ escaped_root, escaped_target },
+    );
+}
+
+fn wslGuardedShimScript(allocator: std.mem.Allocator, expected_root: []const u8, target_cli: []const u8, fallback_home: []const u8) ![]u8 {
+    const expected_quoted = try shellSingleQuoteAlloc(allocator, expected_root);
+    defer allocator.free(expected_quoted);
+    const target_quoted = try shellSingleQuoteAlloc(allocator, target_cli);
+    defer allocator.free(target_quoted);
+    const fallback_home_quoted = try shellSingleQuoteAlloc(allocator, fallback_home);
+    defer allocator.free(fallback_home_quoted);
+    return try std.fmt.allocPrint(
+        allocator,
+        \\#!/usr/bin/env bash
+        \\set -e
+        \\expected={s}
+        \\target={s}
+        \\fallback_home={s}
+        \\case "$PWD" in
+        \\  "$expected"|"$expected"/*) exec "$target" "$@" ;;
+        \\esac
+        \\for fallback in "${{CODEX_HOME:-}}/bin/wsl/codex" "$fallback_home/bin/wsl/codex"; do
+        \\  if [ -x "$fallback" ]; then exec "$fallback" "$@"; fi
+        \\done
+        \\printf '%s\n' 'codex-auth app shim skipped the guarded override because the app package changed, but no bundled fallback CLI was found.' >&2
+        \\exit 126
+        \\
+    ,
+        .{ expected_quoted, target_quoted, fallback_home_quoted },
+    );
+}
+
+fn macGuardedShimScript(allocator: std.mem.Allocator, expected_root: []const u8, expected_version: []const u8, target_cli: []const u8) ![]u8 {
+    const root_quoted = try shellSingleQuoteAlloc(allocator, expected_root);
+    defer allocator.free(root_quoted);
+    const version_quoted = try shellSingleQuoteAlloc(allocator, expected_version);
+    defer allocator.free(version_quoted);
+    const target_quoted = try shellSingleQuoteAlloc(allocator, target_cli);
+    defer allocator.free(target_quoted);
+    return try std.fmt.allocPrint(
+        allocator,
+        \\#!/usr/bin/env bash
+        \\set -e
+        \\expected_root={s}
+        \\expected_version={s}
+        \\target={s}
+        \\current_version=$(/usr/bin/defaults read "$expected_root/Contents/Info" CFBundleVersion 2>/dev/null || true)
+        \\if [ "$current_version" = "$expected_version" ]; then
+        \\  exec "$target" "$@"
+        \\fi
+        \\for fallback in "$PWD/codex" "$expected_root/Contents/Resources/codex"; do
+        \\  if [ -x "$fallback" ]; then exec "$fallback" "$@"; fi
+        \\done
+        \\printf '%s\n' 'codex-auth app shim skipped the guarded override because the app bundle version changed, but no bundled fallback CLI was found.' >&2
+        \\exit 126
+        \\
+    ,
+        .{ root_quoted, version_quoted, target_quoted },
+    );
+}
+
+fn appGuardRootAlloc(allocator: std.mem.Allocator, app_launch_path: []const u8, platform: types.AppPlatform) ![]u8 {
+    if (platform == .mac) {
+        if (std.mem.indexOf(u8, app_launch_path, ".app")) |idx| {
+            return try allocator.dupe(u8, app_launch_path[0 .. idx + ".app".len]);
+        }
+    }
+
+    if (indexOfIgnoreCase(app_launch_path, "\\app\\codex.exe")) |idx| return try allocator.dupe(u8, app_launch_path[0..idx]);
+    if (indexOfIgnoreCase(app_launch_path, "/app/codex.exe")) |idx| return try allocator.dupe(u8, app_launch_path[0..idx]);
+    if (std.fs.path.dirname(app_launch_path)) |dir| {
+        if (std.fs.path.dirname(dir)) |parent| return try allocator.dupe(u8, parent);
+        return try allocator.dupe(u8, dir);
+    }
+    return try allocator.dupe(u8, app_launch_path);
+}
+
+fn readMacBundleVersion(allocator: std.mem.Allocator, app_root: []const u8) ![]u8 {
+    const info_path = try std.fs.path.join(allocator, &.{ app_root, "Contents", "Info.plist" });
+    defer allocator.free(info_path);
+    var result = try http_child.runChildCapture(
+        allocator,
+        &[_][]const u8{ "/usr/bin/plutil", "-extract", "CFBundleVersion", "raw", "-o", "-", info_path },
+        7000,
+        null,
+    );
+    defer result.deinit(allocator);
+    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
+    if (trimmed.len == 0) return error.MacBundleVersionNotFound;
+    return try allocator.dupe(u8, trimmed);
+}
+
+fn windowsPathToWslPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, path, "/")) return try allocator.dupe(u8, path);
+    if (path.len >= 3 and std.ascii.isAlphabetic(path[0]) and path[1] == ':' and (path[2] == '\\' or path[2] == '/')) {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(allocator);
+        try out.appendSlice(allocator, "/mnt/");
+        try out.append(allocator, std.ascii.toLower(path[0]));
+        for (path[2..]) |ch| {
+            try out.append(allocator, if (ch == '\\') '/' else ch);
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+    return try allocator.dupe(u8, path);
+}
+
+fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len == 0) return 0;
+    if (haystack.len < needle.len) return null;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
 fn readPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
     return switch (builtin.os.tag) {
         .windows => readWindowsPersistentCliPath(allocator),
@@ -567,6 +892,37 @@ fn xmlEscapeAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
             else => try out.append(allocator, ch),
         }
     }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn jsonEscapeAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    for (value) |ch| {
+        switch (ch) {
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            else => try out.append(allocator, ch),
+        }
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn shellSingleQuoteAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try out.append(allocator, '\'');
+    for (value) |ch| {
+        if (ch == '\'') {
+            try out.appendSlice(allocator, "'\\''");
+        } else {
+            try out.append(allocator, ch);
+        }
+    }
+    try out.append(allocator, '\'');
     return try out.toOwnedSlice(allocator);
 }
 

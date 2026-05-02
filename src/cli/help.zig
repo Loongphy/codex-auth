@@ -87,7 +87,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "config api disable");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "daemon --watch|--once", "Run the background auto-switch daemon");
-    try writeCommandSummary(out, use_color, "app", "Launch or patch Codex App with managed CLI overrides");
+    try writeCommandSummary(out, use_color, "app", "Launch or version-bound patch Codex App CLI overrides");
     try writeCommandDetail(out, use_color, "app status");
     try writeCommandDetail(out, use_color, "app patch");
     try writeCommandDetail(out, use_color, "app unpatch");
@@ -181,7 +181,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage auto-switch, API, and live refresh configuration.",
         .daemon => "Run the background auto-switch daemon.",
-        .app => "Launch or persistently patch Codex App CLI overrides.",
+        .app => "Launch or persistently patch version-bound Codex App CLI overrides.",
     };
 }
 
