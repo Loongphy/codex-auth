@@ -1,6 +1,7 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
+const me_api = @import("../api/me.zig");
 const account_api = @import("../api/account.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
@@ -134,6 +135,9 @@ pub const applyAccountNamesForUser = account_ops.applyAccountNamesForUser;
 pub const activateAccountByKey = account_ops.activateAccountByKey;
 pub const replaceActiveAuthWithAccountByKey = account_ops.replaceActiveAuthWithAccountByKey;
 pub const accountFromAuth = account_ops.accountFromAuth;
+pub const accountFromApiKeyMe = account_ops.accountFromApiKeyMe;
+pub const apiKeyAccountKeyAlloc = account_ops.apiKeyAccountKeyAlloc;
+pub const apiKeyAccountNameAlloc = account_ops.apiKeyAccountNameAlloc;
 pub const upsertAccount = account_ops.upsertAccount;
 const syncActiveAccountFromAuthWithImporter = account_ops.syncActiveAccountFromAuthWithImporter;
 
@@ -155,6 +159,31 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
 
     const info = try @import("../auth/auth.zig").parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
+    if (info.auth_mode == .apikey) {
+        const api_key = info.openai_api_key orelse return false;
+        var me = me_api.fetchMeForApiKey(allocator, api_key) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                std.log.warn("auth.json API key import skipped: {s}", .{@errorName(err)});
+                return false;
+            },
+        };
+        defer me.deinit(allocator);
+
+        const record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+        defer allocator.free(record_key);
+
+        const dest = try accountAuthPath(allocator, codex_home, record_key);
+        defer allocator.free(dest);
+
+        try ensureAccountsDir(allocator, codex_home);
+        try copyManagedFile(auth_path, dest);
+
+        const record = try accountFromApiKeyMe(allocator, "", &info, &me);
+        try upsertAccount(allocator, reg, record);
+        try setActiveAccountKey(allocator, reg, record_key);
+        return true;
+    }
     _ = info.email orelse {
         std.log.warn("auth.json missing email; cannot import", .{});
         return false;

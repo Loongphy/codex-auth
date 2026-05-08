@@ -8,6 +8,7 @@ pub const AuthInfo = struct {
     chatgpt_user_id: ?[]u8,
     record_key: ?[]u8,
     access_token: ?[]u8,
+    openai_api_key: ?[]u8 = null,
     last_refresh: ?[]u8,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
@@ -18,6 +19,7 @@ pub const AuthInfo = struct {
         if (self.chatgpt_user_id) |id| allocator.free(id);
         if (self.record_key) |key| allocator.free(key);
         if (self.access_token) |token| allocator.free(token);
+        if (self.openai_api_key) |key| allocator.free(key);
         if (self.last_refresh) |value| allocator.free(value);
     }
 };
@@ -71,12 +73,14 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
             if (obj.get("OPENAI_API_KEY")) |key_val| {
                 switch (key_val) {
                     .string => |s| {
-                        if (s.len > 0) return AuthInfo{
+                        const trimmed = std.mem.trim(u8, s, &std.ascii.whitespace);
+                        if (trimmed.len > 0) return AuthInfo{
                             .email = null,
                             .chatgpt_account_id = null,
                             .chatgpt_user_id = null,
                             .record_key = null,
                             .access_token = null,
+                            .openai_api_key = try allocator.dupe(u8, trimmed),
                             .last_refresh = null,
                             .plan = null,
                             .auth_mode = .apikey,
@@ -189,6 +193,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 .chatgpt_user_id = chatgpt_user_id_value,
                                                 .record_key = record_key,
                                                 .access_token = access_token,
+                                                .openai_api_key = null,
                                                 .last_refresh = last_refresh,
                                                 .plan = plan,
                                                 .auth_mode = .chatgpt,
@@ -220,6 +225,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
         .chatgpt_user_id = null,
         .record_key = null,
         .access_token = null,
+        .openai_api_key = null,
         .last_refresh = null,
         .plan = null,
         .auth_mode = .chatgpt,

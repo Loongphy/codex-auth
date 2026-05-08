@@ -27,6 +27,7 @@ pub const ParsedNodeHttpOutput = types.ParsedNodeHttpOutput;
 pub const ChildCaptureResult = types.ChildCaptureResult;
 
 pub const runGetJsonCommand = node.runGetJsonCommand;
+pub const runBearerGetJsonCommand = node.runBearerGetJsonCommand;
 pub const runGetJsonBatchCommand = node.runGetJsonBatchCommand;
 pub const ensureNodeExecutableAvailable = node.ensureNodeExecutableAvailable;
 pub const resolveNodeExecutableAlloc = node.resolveNodeExecutableAlloc;

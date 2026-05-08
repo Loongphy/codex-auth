@@ -45,12 +45,23 @@ See [docs/schema-migration.md](./schema-migration.md) for versioning policy and 
 
 `codex-auth` separates the user identity from the ChatGPT workspace/account context.
 
+For ChatGPT OAuth auth:
+
 - `tokens.account_id` is stored as `chatgpt_account_id` and is used for API calls.
 - `chatgpt_user_id` is read from JWT auth claims, falling back to `user_id`.
 - The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`.
 - `account_key` stores this local `record_key`.
 - Snapshot filenames are derived from `record_key`; filename-unsafe values are base64url-encoded.
 - Email is normalized to lowercase and used for display/grouping, not identity.
+
+For OpenAI API-key auth:
+
+- `OPENAI_API_KEY` is read from `auth.json`.
+- The key is verified with `GET https://api.openai.com/v1/me`.
+- `email` from `/v1/me` is normalized to lowercase and used for display/grouping.
+- The local unique key is `account_key = "apikey::" + me.id + "::" + sha256(OPENAI_API_KEY)`.
+- The raw API key is stored only in the managed auth snapshot, never in `registry.json`, snapshot filenames, or display labels.
+- API-key rows use a local `API key <fingerprint>` account label so multiple keys under the same email remain distinguishable.
 
 ## Auth Parsing
 
