@@ -544,11 +544,9 @@ fn syncCurrentApiKeyAuthBestEffort(
             allocator.free(reg.accounts.items[idx].email);
             reg.accounts.items[idx].email = new_email;
         }
-        if (reg.accounts.items[idx].account_name == null or reg.accounts.items[idx].account_name.?.len == 0) {
-            const account_name = try account_ops.apiKeyAccountNameAlloc(allocator, api_key);
-            defer allocator.free(account_name);
-            _ = try common.replaceOptionalStringAlloc(allocator, &reg.accounts.items[idx].account_name, account_name);
-        }
+        const account_name = try account_ops.apiKeyAccountNameAlloc(allocator, api_key);
+        defer allocator.free(account_name);
+        _ = try common.replaceOptionalStringAlloc(allocator, &reg.accounts.items[idx].account_name, account_name);
         reg.accounts.items[idx].auth_mode = .apikey;
     } else {
         var record = try accountFromApiKeyMe(allocator, "", info, &me);

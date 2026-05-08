@@ -41,6 +41,29 @@ fn appendAccount(
     });
 }
 
+fn appendApiKeyAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    email: []const u8,
+) !void {
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, account_key),
+        .chatgpt_account_id = try allocator.dupe(u8, ""),
+        .chatgpt_user_id = try allocator.dupe(u8, "user_api"),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, ""),
+        .account_name = null,
+        .plan = null,
+        .auth_mode = .apikey,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
 test "Scenario: Given same email with two team accounts and one plus account when building display rows then they are grouped and numbered" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
@@ -209,4 +232,35 @@ test "Scenario: Given grouped accounts with account names when building display 
                 std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)")),
     );
     try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
+}
+
+test "Scenario: Given a single API key account when building display rows then the row stays as the email" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendApiKeyAccount(gpa, &reg, "apikey::user_api::7f3c1d9a2b4e8c2042ce", "user@example.com");
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), rows.rows.len);
+    try std.testing.expectEqualStrings("user@example.com", rows.rows[0].account_cell);
+}
+
+test "Scenario: Given two API key accounts for one email when building display rows then child labels are masked fingerprints" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendApiKeyAccount(gpa, &reg, "apikey::user_api::7f3c1d9a2b4e8c2042ce", "user@example.com");
+    try appendApiKeyAccount(gpa, &reg, "apikey::user_api::12345abcdeffedc67890", "user@example.com");
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 3), rows.rows.len);
+    try std.testing.expectEqualStrings("user@example.com", rows.rows[0].account_cell);
+    try std.testing.expectEqualStrings("sk-12345***7890", rows.rows[1].account_cell);
+    try std.testing.expectEqualStrings("sk-7f3c1***42ce", rows.rows[2].account_cell);
 }

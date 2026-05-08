@@ -54,6 +54,29 @@ fn appendTestAccount(
     });
 }
 
+fn appendApiKeyTestAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    email: []const u8,
+) !void {
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, account_key),
+        .chatgpt_account_id = try allocator.dupe(u8, ""),
+        .chatgpt_user_id = try allocator.dupe(u8, "user_api"),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, ""),
+        .account_name = null,
+        .plan = null,
+        .auth_mode = .apikey,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
 test "printTableRow handles long cells without underflow" {
     var buffer: [256]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
@@ -179,4 +202,20 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
+}
+
+test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendApiKeyTestAccount(gpa, &reg, "apikey::user_api::7f3c1d9a2b4e8c2042ce", "user@example.com");
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "user@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "API_KEY") != null);
 }

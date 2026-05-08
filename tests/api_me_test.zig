@@ -61,4 +61,6 @@ test "API key auth record uses /v1/me email for list grouping" {
     try std.testing.expectEqualStrings("user_123", rec.chatgpt_user_id);
     try std.testing.expect(std.mem.startsWith(u8, rec.account_key, "apikey::user_123::"));
     try std.testing.expect(rec.account_name != null);
+    try std.testing.expect(std.mem.startsWith(u8, rec.account_name.?, "sk-"));
+    try std.testing.expect(std.mem.indexOf(u8, rec.account_name.?, "***") != null);
 }

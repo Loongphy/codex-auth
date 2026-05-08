@@ -38,7 +38,7 @@ pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8)
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "API key {s}", .{hex[0..12]});
+    return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
 }
 
 pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
@@ -228,7 +228,7 @@ fn syncActiveApiKeyAccountFromAuth(
         reg.accounts.items[idx].email = new_email;
         changed = true;
     }
-    if (!hasStoredAccountName(&reg.accounts.items[idx])) {
+    {
         const account_name = try apiKeyAccountNameAlloc(allocator, api_key);
         if (try replaceOptionalStringAlloc(allocator, &reg.accounts.items[idx].account_name, account_name)) {
             changed = true;

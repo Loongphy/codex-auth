@@ -25,6 +25,7 @@ fn colorEnabled() bool {
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
     if (registry.resolveDisplayPlan(rec)) |p| return registry.planLabel(p);
     return missing;
 }
