@@ -214,40 +214,57 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
     try dir.makePath("fake-node-bin");
     const me_body_b64 = "eyJpZCI6InVzZXJfYXBpX2UyZSIsImVtYWlsIjoiYXBpa2V5LWZsb3dAZXhhbXBsZS5jb20iLCJuYW1lIjoiQVBJIEZsb3cifQ==";
     const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
-    const script = if (builtin.os.tag == .windows)
-        try std.fmt.allocPrint(
+
+    if (builtin.os.tag == .windows) {
+        const ps_script = try std.fmt.allocPrint(
             allocator,
-            "@echo off\r\n" ++
-                "if \"%~1\"==\"--version\" (\r\n" ++
-                "  echo v22.0.0\r\n" ++
-                "  exit /b 0\r\n" ++
-                ")\r\n" ++
-                "if \"%~3\"==\"\" (\r\n" ++
-                "  echo {s}\r\n" ++
-                "  echo 200\r\n" ++
-                "  echo ok\r\n" ++
-                "  exit /b 0\r\n" ++
-                ")\r\n" ++
-                "echo {s}\r\n" ++
-                "echo 200\r\n" ++
-                "echo ok\r\n",
-            .{ batch_body_b64, me_body_b64 },
-        )
-    else
-        try std.fmt.allocPrint(
-            allocator,
-            "#!/bin/sh\n" ++
-                "if [ \"$1\" = \"--version\" ]; then\n" ++
-                "  echo v22.0.0\n" ++
-                "  exit 0\n" ++
-                "fi\n" ++
-                "if [ -z \"${{3:-}}\" ]; then\n" ++
-                "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
-                "  exit 0\n" ++
-                "fi\n" ++
-                "printf '%s\\n200\\nok\\n' '{s}'\n",
+            "$mode = if ($args.Count -gt 0) {{ $args[0] }} else {{ '' }}\r\n" ++
+                "if ($mode -eq 'version') {{\r\n" ++
+                "  Write-Output 'v22.0.0'\r\n" ++
+                "  exit 0\r\n" ++
+                "}}\r\n" ++
+                "$stdinText = ''\r\n" ++
+                "if ([Console]::IsInputRedirected) {{ $stdinText = [Console]::In.ReadToEnd() }}\r\n" ++
+                "if ($stdinText.Length -gt 0) {{\r\n" ++
+                "  Write-Output '{s}'\r\n" ++
+                "  Write-Output '200'\r\n" ++
+                "  Write-Output 'ok'\r\n" ++
+                "  exit 0\r\n" ++
+                "}}\r\n" ++
+                "Write-Output '{s}'\r\n" ++
+                "Write-Output '200'\r\n" ++
+                "Write-Output 'ok'\r\n",
             .{ batch_body_b64, me_body_b64 },
         );
+        defer allocator.free(ps_script);
+        try dir.writeFile(.{ .sub_path = "fake-node-bin/node.ps1", .data = ps_script });
+        try dir.writeFile(.{
+            .sub_path = fakeNodeCommandPath(),
+            .data = "@echo off\r\n" ++
+                "if \"%~1\"==\"--version\" (\r\n" ++
+                "  pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0node.ps1\" version\r\n" ++
+                "  exit /b %ERRORLEVEL%\r\n" ++
+                ")\r\n" ++
+                "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0node.ps1\" request\r\n" ++
+                "exit /b %ERRORLEVEL%\r\n",
+        });
+        return;
+    }
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "#!/bin/sh\n" ++
+            "if [ \"$1\" = \"--version\" ]; then\n" ++
+            "  echo v22.0.0\n" ++
+            "  exit 0\n" ++
+            "fi\n" ++
+            "if [ -z \"${{3:-}}\" ]; then\n" ++
+            "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
+            "  exit 0\n" ++
+            "fi\n" ++
+            "printf '%s\\n200\\nok\\n' '{s}'\n",
+        .{ batch_body_b64, me_body_b64 },
+    );
     defer allocator.free(script);
 
     const sub_path = fakeNodeCommandPath();
@@ -524,6 +541,19 @@ fn expectFailure(result: std.process.RunResult) !void {
         .exited => |code| try std.testing.expect(code != 0),
         else => return error.TestUnexpectedResult,
     }
+}
+
+fn logRunResultIfFailed(label: []const u8, result: std.process.RunResult) void {
+    switch (result.term) {
+        .exited => |code| if (code == 0) return,
+        else => {},
+    }
+    std.log.err("{s} failed with term {any}\nstdout:\n{s}\nstderr:\n{s}", .{
+        label,
+        result.term,
+        result.stdout,
+        result.stderr,
+    });
 }
 
 fn authJsonPathAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
@@ -1073,6 +1103,7 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     defer gpa.free(import_result.stdout);
     defer gpa.free(import_result.stderr);
 
+    logRunResultIfFailed("api key import", import_result);
     try expectSuccess(import_result);
     try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "imported") != null);
     try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "api-key") != null);
@@ -1123,6 +1154,7 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     defer gpa.free(first_list.stdout);
     defer gpa.free(first_list.stderr);
 
+    logRunResultIfFailed("api key list before stale snapshot", first_list);
     try expectSuccess(first_list);
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "apikey-flow@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
@@ -1150,6 +1182,7 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     defer gpa.free(second_list.stdout);
     defer gpa.free(second_list.stderr);
 
+    logRunResultIfFailed("api key list after stale snapshot", second_list);
     try expectSuccess(second_list);
     try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "apikey-flow@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "API_KEY") != null);
