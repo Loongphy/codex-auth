@@ -69,6 +69,7 @@ pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
 
+    if (info.auth_mode == .apikey) return .{ .snapshot = null, .status_code = null };
     if (info.auth_mode != .chatgpt) return .{ .snapshot = null, .status_code = null, .missing_auth = true };
     const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
     const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
@@ -104,6 +105,9 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         };
         defer info.deinit(arena);
 
+        if (info.auth_mode == .apikey) {
+            continue;
+        }
         if (info.auth_mode != .chatgpt) {
             results[idx].missing_auth = true;
             continue;

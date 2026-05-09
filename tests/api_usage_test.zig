@@ -106,7 +106,7 @@ test "parse usage api response maps prolite plan" {
     try std.testing.expectEqual(registry.PlanType.prolite, snapshot.plan_type.?);
 }
 
-test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing auth" {
+test "fetch usage for API key auth skips ChatGPT usage refresh without missing auth" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -126,7 +126,7 @@ test "fetch usage for auth path groups non-chatgpt or incomplete auth as missing
     const result = try usage_api.fetchUsageForAuthPathDetailed(gpa, auth_path);
     try std.testing.expect(result.snapshot == null);
     try std.testing.expect(result.status_code == null);
-    try std.testing.expect(result.missing_auth);
+    try std.testing.expect(!result.missing_auth);
 }
 
 test "parse 401 usage error response extracts error code" {

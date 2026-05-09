@@ -71,6 +71,29 @@ fn appendAccount(
     });
 }
 
+fn appendApiKeyAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    email: []const u8,
+) !void {
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, account_key),
+        .chatgpt_account_id = try allocator.dupe(u8, ""),
+        .chatgpt_user_id = try allocator.dupe(u8, "user_api"),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, ""),
+        .account_name = null,
+        .plan = null,
+        .auth_mode = .apikey,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
 fn writeSnapshot(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8, plan: []const u8) !void {
     const account_key = try fixtures.accountKeyForEmailAlloc(allocator, email);
     defer allocator.free(account_key);
@@ -493,6 +516,51 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(?registry.PlanType, .team), reg.accounts.items[0].last_usage.?.plan_type);
     try std.testing.expectEqual(@as(f64, 18), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
+}
+
+test "Scenario: Given API key auth when refreshing foreground usage then overrides stay empty and rows remain placeholder-driven" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    const account_key = "apikey::user_api::7f3c1d9a2b4e8c2042ce";
+    try appendApiKeyAccount(gpa, &reg, account_key, "user@example.com");
+
+    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(auth_path);
+    try fs.cwd().writeFile(.{
+        .sub_path = auth_path,
+        .data =
+        \\{
+        \\  "auth_mode": "apikey",
+        \\  "OPENAI_API_KEY": "sk-test"
+        \\}
+        ,
+    });
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expect(!state.local_only_mode);
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.updated);
+    try std.testing.expectEqual(@as(usize, 0), state.failed);
+    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expect(state.usage_overrides[0] == null);
+    try std.testing.expect(!state.outcomes[0].missing_auth);
+    try std.testing.expect(state.outcomes[0].unchanged);
 }
 
 test "Scenario: Given more than five foreground usage jobs when refreshing usage then pool init is capped at five workers" {
