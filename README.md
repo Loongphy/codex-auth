@@ -75,6 +75,8 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth import <path> [--alias <alias>]`](./docs/commands/import.md) | Import a single auth file or batch import a folder |
 | [`codex-auth import --cpa [<path>]`](./docs/commands/import.md) | Import CLIProxyAPI token JSON |
 | [`codex-auth import --purge [<path>]`](./docs/commands/import.md) | Rebuild `registry.json` from auth files |
+| [`codex-auth export [<dir>]`](./docs/commands/export.md) | Export stored account auth files |
+| [`codex-auth export --cpa [<dir>]`](./docs/commands/export.md) | Export CLIProxyAPI token JSON |
 | [`codex-auth clean`](./docs/commands/clean.md) | Delete managed backup and stale account files |
 
 ### Configuration
