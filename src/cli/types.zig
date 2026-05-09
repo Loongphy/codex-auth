@@ -18,6 +18,11 @@ pub const ImportOptions = struct {
     purge: bool,
     source: ImportSource,
 };
+pub const ExportFormat = enum { standard, cpa };
+pub const ExportOptions = struct {
+    dest_path: ?[]u8,
+    format: ExportFormat,
+};
 pub const SwitchOptions = struct {
     query: ?[]u8,
     live: bool = false,
@@ -56,6 +61,7 @@ pub const HelpTopic = enum {
     status,
     login,
     import_auth,
+    export_auth,
     switch_account,
     remove_account,
     clean,
@@ -67,6 +73,7 @@ pub const Command = union(enum) {
     list: ListOptions,
     login: LoginOptions,
     import_auth: ImportOptions,
+    export_auth: ExportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
     clean: CleanOptions,

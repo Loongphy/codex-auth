@@ -7,6 +7,7 @@ const clean = @import("clean.zig");
 const account_ops = @import("account_ops.zig");
 const parse = @import("parse.zig");
 const import_mod = @import("import.zig");
+const export_mod = @import("export.zig");
 const storage = @import("storage.zig");
 pub const PlanType = common.PlanType;
 pub const AuthMode = common.AuthMode;
@@ -115,6 +116,10 @@ const importAuthInfo = import_mod.importAuthInfo;
 const importAccountsSnapshotDirectory = import_mod.importAccountsSnapshotDirectory;
 const sortAccountsByEmail = import_mod.sortAccountsByEmail;
 const syncCurrentAuthBestEffort = import_mod.syncCurrentAuthBestEffort;
+
+pub const ExportSummary = export_mod.ExportSummary;
+pub const defaultExportDirectory = export_mod.defaultExportDirectory;
+pub const exportAccounts = export_mod.exportAccounts;
 
 pub const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 pub const setActiveAccountKey = account_ops.setActiveAccountKey;

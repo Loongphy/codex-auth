@@ -34,6 +34,14 @@ const StandardAuthJson = struct {
     last_refresh: []const u8,
 };
 
+const CpaAuthJson = struct {
+    id_token: []const u8,
+    access_token: []const u8,
+    refresh_token: []const u8,
+    account_id: []const u8,
+    last_refresh: []const u8,
+};
+
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     var buf = try allocator.alloc(u8, email.len);
     for (email, 0..) |ch, i| {
@@ -250,6 +258,36 @@ pub fn convertCpaAuthJson(allocator: std.mem.Allocator, data: []const u8) ![]u8 
             .refresh_token = refresh_token,
             .account_id = jsonStringFieldOrDefault(obj, "account_id"),
         },
+        .last_refresh = jsonStringFieldOrDefault(obj, "last_refresh"),
+    }, .{ .whitespace = .indent_2 }, &out.writer);
+    try out.writer.writeAll("\n");
+    return try out.toOwnedSlice();
+}
+
+pub fn convertStandardAuthJsonToCpa(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
+    defer parsed.deinit();
+
+    const obj = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return error.InvalidAuthFormat,
+    };
+    const tokens_val = obj.get("tokens") orelse return error.MissingTokens;
+    const tokens = switch (tokens_val) {
+        .object => |tokens| tokens,
+        else => return error.MissingTokens,
+    };
+    const refresh_token = jsonStringField(tokens, "refresh_token") orelse return error.MissingRefreshToken;
+    if (refresh_token.len == 0) return error.MissingRefreshToken;
+
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try std.json.Stringify.value(CpaAuthJson{
+        .id_token = jsonStringFieldOrDefault(tokens, "id_token"),
+        .access_token = jsonStringFieldOrDefault(tokens, "access_token"),
+        .refresh_token = refresh_token,
+        .account_id = jsonStringFieldOrDefault(tokens, "account_id"),
         .last_refresh = jsonStringFieldOrDefault(obj, "last_refresh"),
     }, .{ .whitespace = .indent_2 }, &out.writer);
     try out.writer.writeAll("\n");

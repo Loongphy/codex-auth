@@ -1649,3 +1649,85 @@ test "import cpa path with directory imports multiple json files and skips bad f
     try std.testing.expect(report.total_files == 4);
     try std.testing.expectEqual(@as(usize, 2), reg.accounts.items.len);
 }
+
+test "export accounts writes standard auth snapshots to explicit directory" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "export-standard@example.com", "plus");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer import_report.deinit(gpa);
+
+    const export_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "exports" });
+    defer gpa.free(export_dir);
+    var summary = try registry.exportAccounts(gpa, codex_home, &reg, export_dir, .standard);
+    defer summary.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), summary.exported);
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "export-standard@example.com");
+    defer gpa.free(account_key);
+    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
+    defer gpa.free(snapshot_name);
+    const exported_path = try fs.path.join(gpa, &[_][]const u8{ export_dir, snapshot_name });
+    defer gpa.free(exported_path);
+    const exported = try fixtures.readFileAlloc(gpa, exported_path);
+    defer gpa.free(exported);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\": {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-standard@example.com\"") != null);
+}
+
+test "export accounts writes cpa token files to default backup directory" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "export-cpa@example.com", "pro");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer import_report.deinit(gpa);
+
+    var summary = try registry.exportAccounts(gpa, codex_home, &reg, null, .cpa);
+    defer summary.deinit(gpa);
+
+    const default_dir = try registry.defaultExportDirectory(gpa, codex_home);
+    defer gpa.free(default_dir);
+    try std.testing.expectEqualStrings(default_dir, summary.dest_path);
+    try std.testing.expectEqual(@as(usize, 1), summary.exported);
+
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "export-cpa@example.com");
+    defer gpa.free(account_key);
+    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
+    defer gpa.free(snapshot_name);
+    const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{ snapshot_name[0 .. snapshot_name.len - ".auth.json".len], ".json" });
+    defer gpa.free(cpa_name);
+    const exported_path = try fs.path.join(gpa, &[_][]const u8{ default_dir, cpa_name });
+    defer gpa.free(exported_path);
+    const exported = try fixtures.readFileAlloc(gpa, exported_path);
+    defer gpa.free(exported);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
+}
