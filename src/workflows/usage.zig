@@ -33,6 +33,10 @@ const ForegroundUsageWorkerResult = struct {
     }
 };
 
+fn skipsChatGptUsage(rec: *const registry.AccountRecord) bool {
+    return rec.auth_mode != null and rec.auth_mode.? == .apikey;
+}
+
 pub const ForegroundUsageOutcome = struct {
     attempted: bool = false,
     status_code: ?u16 = null,
@@ -224,22 +228,32 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         defer auth_path_arena_state.deinit();
         const auth_path_arena = auth_path_arena_state.allocator();
 
-        const auth_paths = try auth_path_arena.alloc([]const u8, reg.accounts.items.len);
+        var fetch_account_indices = std.ArrayList(usize).empty;
+        defer fetch_account_indices.deinit(auth_path_arena);
+
         for (reg.accounts.items, 0..) |account, idx| {
-            auth_paths[idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+            if (skipsChatGptUsage(&account)) continue;
+            try fetch_account_indices.append(auth_path_arena, idx);
+        }
+        if (fetch_account_indices.items.len == 0) break :batch_fetch;
+
+        const auth_paths = try auth_path_arena.alloc([]const u8, fetch_account_indices.items.len);
+        for (fetch_account_indices.items, 0..) |account_idx, fetch_idx| {
+            const account = &reg.accounts.items[account_idx];
+            auth_paths[fetch_idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
         }
 
         const batch_results = fetch_batch(
             allocator,
             auth_paths,
-            @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            @min(fetch_account_indices.items.len, foreground_usage_refresh_concurrency),
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 if (batch_fetch_failures_are_fatal) return err;
                 const error_name = @errorName(err);
-                for (worker_results, 0..) |*worker_result, idx| {
-                    _ = idx;
+                for (fetch_account_indices.items) |account_idx| {
+                    const worker_result = &worker_results[account_idx];
                     worker_result.* = .{ .error_name = error_name };
                 }
                 break :batch_fetch;
@@ -250,7 +264,8 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             allocator.free(batch_results);
         }
 
-        for (batch_results, 0..) |*batch_result, idx| {
+        for (batch_results, 0..) |*batch_result, fetch_idx| {
+            const idx = fetch_account_indices.items[fetch_idx];
             worker_results[idx] = .{
                 .status_code = batch_result.status_code,
                 .error_code = batch_result.error_code,
@@ -419,6 +434,11 @@ fn foregroundUsageRefreshWorker(
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
 ) void {
+    if (skipsChatGptUsage(&reg.accounts.items[account_idx])) {
+        results[account_idx] = .{};
+        return;
+    }
+
     var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

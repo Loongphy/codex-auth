@@ -563,6 +563,39 @@ test "Scenario: Given API key auth when refreshing foreground usage then overrid
     try std.testing.expect(state.outcomes[0].unchanged);
 }
 
+test "Scenario: Given API key registry record with stale snapshot when refreshing foreground usage then MissingAuth is not shown" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    const account_key = "apikey::user_api::7f3c1d9a2b4e8c2042ce";
+    try appendApiKeyAccount(gpa, &reg, account_key, "user@example.com");
+
+    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(auth_path);
+    try fs.cwd().writeFile(.{
+        .sub_path = auth_path,
+        .data = "{}",
+    });
+
+    var state = try main_mod.refreshForegroundUsageForDisplay(gpa, codex_home, &reg);
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.failed);
+    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expect(state.usage_overrides[0] == null);
+    try std.testing.expect(!state.outcomes[0].missing_auth);
+    try std.testing.expect(state.outcomes[0].unchanged);
+}
+
 test "Scenario: Given more than five foreground usage jobs when refreshing usage then pool init is capped at five workers" {
     const gpa = std.testing.allocator;
 

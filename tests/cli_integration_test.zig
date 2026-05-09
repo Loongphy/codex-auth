@@ -210,6 +210,59 @@ fn writeFailingFakeNode(dir: fs.Dir) !void {
     }
 }
 
+fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
+    try dir.makePath("fake-node-bin");
+    const me_body_b64 = "eyJpZCI6InVzZXJfYXBpX2UyZSIsImVtYWlsIjoiYXBpa2V5LWZsb3dAZXhhbXBsZS5jb20iLCJuYW1lIjoiQVBJIEZsb3cifQ==";
+    const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
+    const script = if (builtin.os.tag == .windows)
+        try std.fmt.allocPrint(
+            allocator,
+            "@echo off\r\n" ++
+                "if \"%~1\"==\"--version\" (\r\n" ++
+                "  echo v22.0.0\r\n" ++
+                "  exit /b 0\r\n" ++
+                ")\r\n" ++
+                "set \"PAYLOAD=\"\r\n" ++
+                "set /p PAYLOAD=\r\n" ++
+                "if not \"%PAYLOAD%\"==\"\" (\r\n" ++
+                "  echo {s}\r\n" ++
+                "  echo 200\r\n" ++
+                "  echo ok\r\n" ++
+                "  exit /b 0\r\n" ++
+                ")\r\n" ++
+                "echo {s}\r\n" ++
+                "echo 200\r\n" ++
+                "echo ok\r\n",
+            .{ batch_body_b64, me_body_b64 },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\n" ++
+                "if [ \"$1\" = \"--version\" ]; then\n" ++
+                "  echo v22.0.0\n" ++
+                "  exit 0\n" ++
+                "fi\n" ++
+                "payload=$(cat)\n" ++
+                "if [ -n \"$payload\" ]; then\n" ++
+                "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
+                "  exit 0\n" ++
+                "fi\n" ++
+                "printf '%s\\n200\\nok\\n' '{s}'\n",
+            .{ batch_body_b64, me_body_b64 },
+        );
+    defer allocator.free(script);
+
+    const sub_path = fakeNodeCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
@@ -984,6 +1037,129 @@ test "Scenario: Given repeated single-file import when running import then first
     defer gpa.free(expected_second_stdout);
     try std.testing.expectEqualStrings(expected_second_stdout, second.stdout);
     try std.testing.expectEqualStrings("", second.stderr);
+}
+
+test "Scenario: Given API key import when listing with api refresh then stale snapshots do not render MissingAuth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+    try writeApiKeyFlowFakeNode(gpa, tmp.dir);
+
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
+
+    const api_key = "sk-e2e-api-key-flow";
+    try tmp.dir.writeFile(.{
+        .sub_path = "imports/api-key.json",
+        .data = "{\"OPENAI_API_KEY\":\"sk-e2e-api-key-flow\"}",
+    });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "api-key.json" });
+    defer gpa.free(import_path);
+
+    const import_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "import", import_path },
+    );
+    defer gpa.free(import_result.stdout);
+    defer gpa.free(import_result.stderr);
+
+    try expectSuccess(import_result);
+    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "imported") != null);
+    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "api-key") != null);
+    try std.testing.expectEqualStrings("", import_result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expectEqual(registry.AuthMode.apikey, loaded.accounts.items[0].auth_mode.?);
+    try std.testing.expectEqualStrings("apikey-flow@example.com", loaded.accounts.items[0].email);
+    const api_account_key = try gpa.dupe(u8, loaded.accounts.items[0].account_key);
+    defer gpa.free(api_account_key);
+
+    const api_snapshot_path = try registry.accountAuthPath(gpa, codex_home, api_account_key);
+    defer gpa.free(api_snapshot_path);
+    const api_snapshot = try fixtures.readFileAlloc(gpa, api_snapshot_path);
+    defer gpa.free(api_snapshot);
+    try std.testing.expect(std.mem.indexOf(u8, api_snapshot, api_key) != null);
+
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const registry_data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(registry_data);
+    try std.testing.expect(std.mem.indexOf(u8, registry_data, api_key) == null);
+
+    const chatgpt_email = "chatgpt-flow@example.com";
+    try fixtures.appendAccount(gpa, &loaded, chatgpt_email, "chatgpt", .plus);
+    const chatgpt_key = try fixtures.accountKeyForEmailAlloc(gpa, chatgpt_email);
+    defer gpa.free(chatgpt_key);
+    const chatgpt_snapshot_path = try registry.accountAuthPath(gpa, codex_home, chatgpt_key);
+    defer gpa.free(chatgpt_snapshot_path);
+    const chatgpt_auth = try fixtures.authJsonWithEmailPlan(gpa, chatgpt_email, "plus");
+    defer gpa.free(chatgpt_auth);
+    try registry.ensureAccountsDir(gpa, codex_home);
+    try fs.cwd().writeFile(.{ .sub_path = chatgpt_snapshot_path, .data = chatgpt_auth });
+    try registry.saveRegistry(gpa, codex_home, &loaded);
+
+    const first_list = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "list", "--api" },
+    );
+    defer gpa.free(first_list.stdout);
+    defer gpa.free(first_list.stderr);
+
+    try expectSuccess(first_list);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "88%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "66%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "MissingAuth") == null);
+    try std.testing.expectEqualStrings("", first_list.stderr);
+
+    var refreshed = try registry.loadRegistry(gpa, codex_home);
+    defer refreshed.deinit(gpa);
+    const chatgpt_idx = registry.findAccountIndexByAccountKey(&refreshed, chatgpt_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 12), refreshed.accounts.items[chatgpt_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 34), refreshed.accounts.items[chatgpt_idx].last_usage.?.secondary.?.used_percent);
+
+    try fs.cwd().writeFile(.{ .sub_path = api_snapshot_path, .data = "{}" });
+
+    const second_list = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "list", "--api" },
+    );
+    defer gpa.free(second_list.stdout);
+    defer gpa.free(second_list.stderr);
+
+    try expectSuccess(second_list);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "MissingAuth") == null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "88%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "66%") != null);
+    try std.testing.expectEqualStrings("", second_list.stderr);
 }
 
 test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {
