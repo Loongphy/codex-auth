@@ -222,9 +222,7 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
                 "  echo v22.0.0\r\n" ++
                 "  exit /b 0\r\n" ++
                 ")\r\n" ++
-                "set \"PAYLOAD=\"\r\n" ++
-                "set /p PAYLOAD=\r\n" ++
-                "if not \"%PAYLOAD%\"==\"\" (\r\n" ++
+                "if \"%~3\"==\"\" (\r\n" ++
                 "  echo {s}\r\n" ++
                 "  echo 200\r\n" ++
                 "  echo ok\r\n" ++
@@ -243,8 +241,7 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
                 "  echo v22.0.0\n" ++
                 "  exit 0\n" ++
                 "fi\n" ++
-                "payload=$(cat)\n" ++
-                "if [ -n \"$payload\" ]; then\n" ++
+                "if [ -z \"${{3:-}}\" ]; then\n" ++
                 "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
                 "  exit 0\n" ++
                 "fi\n" ++
