@@ -127,6 +127,23 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
 }
 
+test "writeAccountsTable keeps usage headers short" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "5H") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "WEEKLY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "USAGE") == null);
+}
+
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

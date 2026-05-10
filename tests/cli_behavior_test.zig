@@ -153,6 +153,43 @@ test "Scenario: Given import cpa with purge when parsing then usage error is ret
     try expectUsageError(result, .import_auth, "`--purge`");
 }
 
+test "Scenario: Given export directory when parsing then export options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "/tmp/codex-backup" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .export_auth => |opts| {
+                try std.testing.expect(opts.dest_path != null);
+                try std.testing.expectEqualStrings("/tmp/codex-backup", opts.dest_path.?);
+                try std.testing.expectEqual(cli.types.ExportFormat.standard, opts.format);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given export cpa without directory when parsing then cpa mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "--cpa" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .export_auth => |opts| {
+                try std.testing.expect(opts.dest_path == null);
+                try std.testing.expectEqual(cli.types.ExportFormat.cpa, opts.format);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given import unknown short purge flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "import", "-P", "/tmp/auth.json" };

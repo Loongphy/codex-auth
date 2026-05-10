@@ -25,6 +25,7 @@ Managed files:
 - `<codex_home>/auth.json`
 - `<codex_home>/accounts/registry.json`
 - `<codex_home>/accounts/<account file key>.auth.json`
+- `<codex_home>/accounts/backup/`
 - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`

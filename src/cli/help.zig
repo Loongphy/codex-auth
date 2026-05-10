@@ -70,6 +70,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "import <path> [--alias <alias>]");
     try writeCommandDetail(out, use_color, "import --cpa [<path>] [--alias <alias>]");
     try writeCommandDetail(out, use_color, "import --purge [<path>]");
+    try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
@@ -156,6 +157,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .status => "status",
         .login => "login",
         .import_auth => "import",
+        .export_auth => "export",
         .switch_account => "switch",
         .remove_account => "remove",
         .clean => "clean",
@@ -171,6 +173,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .status => "Show auto-switch, service, and usage API status.",
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
+        .export_auth => "Export stored account auth files.",
         .switch_account => "Switch the active account by alias, email, display number, or partial query.",
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
@@ -181,14 +184,14 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .import_auth, .export_auth, .switch_account, .remove_account, .config, .daemon => true,
         else => false,
     };
 }
 
 fn commandHelpHasOptions(topic: HelpTopic) bool {
     return switch (topic) {
-        .list, .login, .import_auth, .switch_account, .remove_account, .config, .daemon => true,
+        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .config, .daemon => true,
         else => false,
     };
 }
@@ -227,6 +230,10 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import --cpa [<path>] [--alias <alias>]\n");
             try out.writeAll("  codex-auth import --purge [<path>]\n");
         },
+        .export_auth => {
+            try out.writeAll("  codex-auth export [<dir>]\n");
+            try out.writeAll("  codex-auth export --cpa [<dir>]\n");
+        },
         .switch_account => {
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
@@ -260,6 +267,7 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .status => "codex-auth status --help",
         .login => "codex-auth login --help",
         .import_auth => "codex-auth import --help",
+        .export_auth => "codex-auth export --help",
         .switch_account => "codex-auth switch --help",
         .remove_account => "codex-auth remove --help",
         .clean => "codex-auth clean --help",
@@ -289,6 +297,10 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --cpa [<path>]   Import CPA flat token JSON from a file or directory. Uses `~/.cli-proxy-api` when omitted.\n");
             try out.writeAll("  --alias <alias>  Set an alias for a single imported account.\n");
             try out.writeAll("  --purge [<path>] Rebuild `registry.json` from auth files. Uses the accounts directory when omitted.\n");
+        },
+        .export_auth => {
+            try out.writeAll("  <dir>   Directory to write exported account files. Uses `CODEX_HOME/accounts/backup` when omitted.\n");
+            try out.writeAll("  --cpa   Export CPA flat token JSON. Without this, exports Codex auth snapshots.\n");
         },
         .switch_account => {
             try out.writeAll("  --live       Open the live switch UI.\n");
@@ -352,6 +364,11 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
             try out.writeAll("  codex-auth import --cpa /path/to/token.json --alias work\n");
             try out.writeAll("  codex-auth import --purge\n");
+        },
+        .export_auth => {
+            try out.writeAll("  codex-auth export\n");
+            try out.writeAll("  codex-auth export /path/to/backup\n");
+            try out.writeAll("  codex-auth export --cpa /path/to/cpa-backup\n");
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");

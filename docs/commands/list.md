@@ -15,7 +15,7 @@ codex-auth list --skip-api
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Shows `ACCOUNT`, `PLAN`, `5H USAGE`, `WEEKLY USAGE`, and `LAST ACTIVITY`.
+- Shows `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, and `LAST ACTIVITY`.
 
 ## Refresh Modes
 

@@ -56,7 +56,7 @@ width is assigned by usefulness rather than visual order.
 Wide enough:
 
 ```text
-ACCOUNT                          PLAN      5H USAGE  WEEKLY USAGE  LAST ACTIVITY
+ACCOUNT                          PLAN      5H   WEEKLY  LAST ACTIVITY
 work-main                        Business  31%       42%           Now
 very-long-account-name@example.com Team     88%       71%           -
 ```

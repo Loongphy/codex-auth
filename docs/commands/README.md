@@ -9,6 +9,7 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `list` | [docs/commands/list.md](./list.md) |
 | `login` | [docs/commands/login.md](./login.md) |
 | `import` | [docs/commands/import.md](./import.md) |
+| `export` | [docs/commands/export.md](./export.md) |
 | `switch` | [docs/commands/switch.md](./switch.md) |
 | `remove` | [docs/commands/remove.md](./remove.md) |
 | `clean` | [docs/commands/clean.md](./clean.md) |
