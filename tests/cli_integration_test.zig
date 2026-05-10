@@ -230,7 +230,9 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
         // On Windows, use the compiled fake-node.exe to avoid batch-script argument validation.
         const built = try builtFakeNodePathAlloc(allocator, project_root);
         defer allocator.free(built);
-        const exe_bytes = try fs.cwd().readFileAlloc(allocator, built, std.math.maxInt(usize));
+        const src = try fs.openFileAbsolute(built, .{});
+        defer src.close();
+        const exe_bytes = try src.readToEndAlloc(allocator, std.math.maxInt(usize));
         defer allocator.free(exe_bytes);
         try dir.writeFile(.{ .sub_path = fakeNodeCommandPath(), .data = exe_bytes });
 
