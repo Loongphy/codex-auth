@@ -216,38 +216,26 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
     const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
 
     if (builtin.os.tag == .windows) {
-        const ps_script = try std.fmt.allocPrint(
+        const script = try std.fmt.allocPrint(
             allocator,
-            "$mode = if ($args.Count -gt 0) {{ $args[0] }} else {{ '' }}\r\n" ++
-                "if ($mode -eq 'version') {{\r\n" ++
-                "  Write-Output 'v22.0.0'\r\n" ++
-                "  exit 0\r\n" ++
-                "}}\r\n" ++
-                "$stdinText = ''\r\n" ++
-                "if ([Console]::IsInputRedirected) {{ $stdinText = [Console]::In.ReadToEnd() }}\r\n" ++
-                "if ($stdinText.Length -gt 0) {{\r\n" ++
-                "  Write-Output '{s}'\r\n" ++
-                "  Write-Output '200'\r\n" ++
-                "  Write-Output 'ok'\r\n" ++
-                "  exit 0\r\n" ++
-                "}}\r\n" ++
-                "Write-Output '{s}'\r\n" ++
-                "Write-Output '200'\r\n" ++
-                "Write-Output 'ok'\r\n",
+            "@echo off\r\n" ++
+                "if \"%~1\"==\"--version\" (\r\n" ++
+                "  echo v22.0.0\r\n" ++
+                "  exit /b 0\r\n" ++
+                ")\r\n" ++
+                "if \"%~3\"==\"\" (\r\n" ++
+                "  echo {s}\r\n" ++
+                "  echo 200\r\n" ++
+                "  echo ok\r\n" ++
+                "  exit /b 0\r\n" ++
+                ")\r\n" ++
+                "echo {s}\r\n" ++
+                "echo 200\r\n" ++
+                "echo ok\r\n",
             .{ batch_body_b64, me_body_b64 },
         );
-        defer allocator.free(ps_script);
-        try dir.writeFile(.{ .sub_path = "fake-node-bin/node.ps1", .data = ps_script });
-        try dir.writeFile(.{
-            .sub_path = fakeNodeCommandPath(),
-            .data = "@echo off\r\n" ++
-                "if \"%~1\"==\"--version\" (\r\n" ++
-                "  pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0node.ps1\" version\r\n" ++
-                "  exit /b %ERRORLEVEL%\r\n" ++
-                ")\r\n" ++
-                "pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%~dp0node.ps1\" request\r\n" ++
-                "exit /b %ERRORLEVEL%\r\n",
-        });
+        defer allocator.free(script);
+        try dir.writeFile(.{ .sub_path = fakeNodeCommandPath(), .data = script });
         return;
     }
 
