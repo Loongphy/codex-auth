@@ -227,15 +227,9 @@ fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
 
     if (builtin.os.tag == .windows) {
-        // On Windows, use the compiled fake-node.exe to avoid batch-script argument validation.
-        const built = try builtFakeNodePathAlloc(allocator, project_root);
-        defer allocator.free(built);
-        const src = try fs.openFileAbsolute(built, .{});
-        defer src.close();
-        const exe_bytes = try src.readToEndAlloc(allocator, std.math.maxInt(usize));
-        defer allocator.free(exe_bytes);
-        try dir.writeFile(.{ .sub_path = fakeNodeCommandPath(), .data = exe_bytes });
-
+        // On Windows, the .cmd fake node can't receive multi-line script args.
+        // The compiled fake-node.exe is used instead via CODEX_AUTH_NODE_EXECUTABLE.
+        // Just write the response files; the caller handles the env var.
         try dir.writeFile(.{ .sub_path = "fake-node-bin/batch_body_b64.txt", .data = batch_body_b64 });
         try dir.writeFile(.{ .sub_path = "fake-node-bin/me_body_b64.txt", .data = me_body_b64 });
         return;
@@ -275,6 +269,43 @@ fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
     return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
+}
+
+fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    fake_node_response_dir: []const u8,
+    args: []const []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
+    try env_map.put("CODEX_FAKE_NODE_RESPONSE_DIR", fake_node_response_dir);
+
+    // On Windows, point directly to the compiled fake-node.exe so we avoid
+    // the .cmd batch-script argument validation in Zig 0.16.
+    if (builtin.os.tag == .windows) {
+        const built = try builtFakeNodePathAlloc(allocator, project_root);
+        defer allocator.free(built);
+        try env_map.put("CODEX_AUTH_NODE_EXECUTABLE", built);
+    }
+
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHome(
@@ -1085,11 +1116,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "api-key.json" });
     defer gpa.free(import_path);
 
-    const import_result = try runCliWithIsolatedHomeAndPath(
+    const import_result = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
         gpa,
         project_root,
         home_root,
         path_override,
+        fake_node_dir,
         &[_][]const u8{ "import", import_path },
     );
     defer gpa.free(import_result.stdout);
@@ -1136,11 +1168,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     try fs.cwd().writeFile(.{ .sub_path = chatgpt_snapshot_path, .data = chatgpt_auth });
     try registry.saveRegistry(gpa, codex_home, &loaded);
 
-    const first_list = try runCliWithIsolatedHomeAndPath(
+    const first_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
         gpa,
         project_root,
         home_root,
         path_override,
+        fake_node_dir,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(first_list.stdout);
@@ -1164,11 +1197,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     try fs.cwd().writeFile(.{ .sub_path = api_snapshot_path, .data = "{}" });
 
-    const second_list = try runCliWithIsolatedHomeAndPath(
+    const second_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
         gpa,
         project_root,
         home_root,
         path_override,
+        fake_node_dir,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(second_list.stdout);
