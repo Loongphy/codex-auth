@@ -50,6 +50,17 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(auto_exe);
     }
 
+    const fake_node_module = b.createModule(.{
+        .root_source_file = b.path("tests/fake_node.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fake_node_exe = b.addExecutable(.{
+        .name = "fake-node",
+        .root_module = fake_node_module,
+    });
+    b.installArtifact(fake_node_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {
         run_cmd.addArgs(args);

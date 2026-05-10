@@ -210,35 +210,37 @@ fn writeFailingFakeNode(dir: fs.Dir) !void {
     }
 }
 
-fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir) !void {
+fn builtFakeNodePathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
+    const exe_name = if (builtin.os.tag == .windows) "fake-node.exe" else "fake-node";
+    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
+    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
+}
+
+fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     try dir.makePath("fake-node-bin");
     const me_body_b64 = "eyJpZCI6InVzZXJfYXBpX2UyZSIsImVtYWlsIjoiYXBpa2V5LWZsb3dAZXhhbXBsZS5jb20iLCJuYW1lIjoiQVBJIEZsb3cifQ==";
     const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
 
     if (builtin.os.tag == .windows) {
-        const script = try std.fmt.allocPrint(
-            allocator,
-            "@echo off\r\n" ++
-                "if \"%~1\"==\"--version\" (\r\n" ++
-                "  echo v22.0.0\r\n" ++
-                "  exit /b 0\r\n" ++
-                ")\r\n" ++
-                "if \"%~3\"==\"\" (\r\n" ++
-                "  echo {s}\r\n" ++
-                "  echo 200\r\n" ++
-                "  echo ok\r\n" ++
-                "  exit /b 0\r\n" ++
-                ")\r\n" ++
-                "echo {s}\r\n" ++
-                "echo 200\r\n" ++
-                "echo ok\r\n",
-            .{ batch_body_b64, me_body_b64 },
-        );
-        defer allocator.free(script);
-        try dir.writeFile(.{ .sub_path = fakeNodeCommandPath(), .data = script });
+        // On Windows, use the compiled fake-node.exe to avoid batch-script argument validation.
+        const built = try builtFakeNodePathAlloc(allocator, project_root);
+        defer allocator.free(built);
+        const exe_bytes = try fs.cwd().readFileAlloc(allocator, built, std.math.maxInt(usize));
+        defer allocator.free(exe_bytes);
+        try dir.writeFile(.{ .sub_path = fakeNodeCommandPath(), .data = exe_bytes });
+
+        try dir.writeFile(.{ .sub_path = "fake-node-bin/batch_body_b64.txt", .data = batch_body_b64 });
+        try dir.writeFile(.{ .sub_path = "fake-node-bin/me_body_b64.txt", .data = me_body_b64 });
         return;
     }
 
+    // On Linux/macOS, use a shell script. This avoids the game of copying the compiled
+    // fake-node binary and ensures the test runs fast.
     const script = try std.fmt.allocPrint(
         allocator,
         "#!/bin/sh\n" ++
@@ -1066,7 +1068,7 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath("imports");
-    try writeApiKeyFlowFakeNode(gpa, tmp.dir);
+    try writeApiKeyFlowFakeNode(gpa, tmp.dir, project_root);
 
     const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
     defer gpa.free(fake_node_dir);
