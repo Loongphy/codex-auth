@@ -298,12 +298,10 @@ fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
     try env_map.put("CODEX_FAKE_NODE_RESPONSE_DIR", fake_node_response_dir);
 
-    // On Windows, point directly to the compiled fake-node.exe so we avoid
-    // the .cmd batch-script argument validation in Zig 0.16.
+    // On Windows, point to the compiled fake-node.exe via a relative path so
+    // the access check uses cwd().access() which works in the test runner.
     if (builtin.os.tag == .windows) {
-        const built = try builtFakeNodePathAlloc(allocator, project_root);
-        defer allocator.free(built);
-        try env_map.put("CODEX_AUTH_NODE_EXECUTABLE", built);
+        try env_map.put("CODEX_AUTH_NODE_EXECUTABLE", "zig-out\\bin\\fake-node.exe");
     }
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
