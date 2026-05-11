@@ -43,6 +43,11 @@ pub fn exportAccounts(
 
     var exported: usize = 0;
     for (reg.accounts.items) |rec| {
+        if (format == .cpa and rec.auth_mode != null and rec.auth_mode.? == .apikey) {
+            std.log.warn("skipping API-key account {s}: CPA export requires ChatGPT tokens", .{rec.email});
+            continue;
+        }
+
         const src = try accountAuthPath(allocator, codex_home, rec.account_key);
         defer allocator.free(src);
 
