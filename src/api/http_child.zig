@@ -45,6 +45,7 @@ pub fn runChildCaptureWithInputAndOutputLimit(
         .stdin = if (stdin_bytes != null) .pipe else .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
+        .create_no_window = true,
     }) catch |err| switch (err) {
         else => return err,
     };
