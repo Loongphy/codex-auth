@@ -1171,13 +1171,14 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "apikey-flow@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "API_KEY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "88%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "66%") != null);
     try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "MissingAuth") == null);
     try std.testing.expectEqualStrings("", first_list.stderr);
 
     var refreshed = try registry.loadRegistry(gpa, codex_home);
     defer refreshed.deinit(gpa);
+    const refreshed_api_idx = registry.findAccountIndexByAccountKey(&refreshed, api_account_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 88), refreshed.accounts.items[refreshed_api_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 66), refreshed.accounts.items[refreshed_api_idx].last_usage.?.secondary.?.used_percent);
     const chatgpt_idx = registry.findAccountIndexByAccountKey(&refreshed, chatgpt_key) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(f64, 12), refreshed.accounts.items[chatgpt_idx].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 34), refreshed.accounts.items[chatgpt_idx].last_usage.?.secondary.?.used_percent);
@@ -1200,9 +1201,13 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "apikey-flow@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "API_KEY") != null);
     try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "MissingAuth") == null);
-    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "88%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "66%") != null);
     try std.testing.expectEqualStrings("", second_list.stderr);
+
+    var refreshed_again = try registry.loadRegistry(gpa, codex_home);
+    defer refreshed_again.deinit(gpa);
+    const refreshed_again_api_idx = registry.findAccountIndexByAccountKey(&refreshed_again, api_account_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 88), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 66), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.secondary.?.used_percent);
 }
 
 test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {
