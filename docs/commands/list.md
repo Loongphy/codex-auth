@@ -4,6 +4,7 @@
 
 ```shell
 codex-auth list
+codex-auth list --active
 codex-auth list --live
 codex-auth list --api
 codex-auth list --skip-api
@@ -20,6 +21,7 @@ codex-auth list --skip-api
 ## Refresh Modes
 
 - Default mode performs foreground usage and account-name API refresh.
+- `--active` refreshes usage only for the active account before rendering and skips account-name API refresh. Other rows use stored registry snapshots.
 - `--api` is accepted as an explicit equivalent to default mode.
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.

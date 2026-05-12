@@ -232,6 +232,21 @@ test "Scenario: Given list with skip-api flag when parsing then local-only displ
     }
 }
 
+test "Scenario: Given list with active flag when parsing then active-only refresh mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--active" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| try std.testing.expect(opts.active_only),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given list with live flag when parsing then live mode is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "list", "--live" };
@@ -331,7 +346,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)\n\nCommands:\n  --help, -h") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "help <command>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--version, -V") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login [--device-auth]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "import <path> [--alias <alias>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "import --cpa [<path>] [--alias <alias>]") != null);
@@ -370,8 +385,9 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--active     Refresh only the active account before rendering.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }

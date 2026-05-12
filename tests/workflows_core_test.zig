@@ -516,6 +516,82 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
 }
 
+test "Scenario: Given active-only foreground usage refresh then only the active account is requested" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const TestUsageFetcher = struct {
+        var requested: usize = 0;
+
+        fn snapshot(plan: registry.PlanType, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = used_5h,
+                    .window_minutes = 300,
+                    .resets_at = 1773491460,
+                },
+                .secondary = .{
+                    .used_percent = used_weekly,
+                    .window_minutes = 10080,
+                    .resets_at = 1773749620,
+                },
+                .credits = null,
+                .plan_type = plan,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_paths: []const []const u8, max_concurrency: usize) ![]usage_api.BatchUsageFetchResult {
+            _ = max_concurrency;
+            requested += auth_paths.len;
+            const results = try allocator.alloc(usage_api.BatchUsageFetchResult, auth_paths.len);
+            for (results) |*result| {
+                result.* = .{
+                    .snapshot = snapshot(.team, 18, 40),
+                    .status_code = 200,
+                };
+            }
+            return results;
+        }
+    };
+
+    TestUsageFetcher.requested = 0;
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, secondary_record_key);
+
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, secondary_account_id);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        TestUsageFetcher.fetch,
+        main_mod.initForegroundUsagePool,
+        true,
+        false,
+        false,
+        true,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), TestUsageFetcher.requested);
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expect(!state.outcomes[0].attempted);
+    try std.testing.expect(state.outcomes[1].attempted);
+    try std.testing.expect(reg.accounts.items[0].last_usage == null);
+    try std.testing.expect(reg.accounts.items[1].last_usage != null);
+}
+
 test "Scenario: Given API key auth when refreshing foreground usage then overrides stay empty and rows remain placeholder-driven" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

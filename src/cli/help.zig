@@ -48,7 +48,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "--help, -h", "Show this help");
     try writeCommandSummary(out, use_color, "help <command>", "Show command-specific help");
     try writeCommandSummary(out, use_color, "--version, -V", "Show version");
-    try writeCommandSummary(out, use_color, "list [--live] [--api|--skip-api]", "List available accounts");
+    try writeCommandSummary(out, use_color, "list [--live] [--active] [--api|--skip-api]", "List available accounts");
     try writeCommandSummary(out, use_color, "status", "Show auto-switch and service status");
     try writeCommandSummary(out, use_color, "login [--device-auth]", "Login and add the current account");
     try writeCommandSummary(out, use_color, "import", "Import auth files or rebuild registry");
@@ -202,7 +202,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
-        .list => try out.writeAll("  codex-auth list [--live] [--api|--skip-api]\n"),
+        .list => try out.writeAll("  codex-auth list [--live] [--active] [--api|--skip-api]\n"),
         .status => try out.writeAll("  codex-auth status\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -267,6 +267,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .list => {
             try out.writeAll("  --live       Open a live-updating table.\n");
+            try out.writeAll("  --active     Refresh only the active account before rendering.\n");
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
         },
@@ -330,6 +331,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .list => {
             try out.writeAll("  codex-auth list\n");
+            try out.writeAll("  codex-auth list --active\n");
             try out.writeAll("  codex-auth list --live\n");
             try out.writeAll("  codex-auth list --api\n");
             try out.writeAll("  codex-auth list --skip-api\n");

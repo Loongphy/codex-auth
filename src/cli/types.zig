@@ -7,6 +7,7 @@ pub const ApiMode = enum {
 pub const ListOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
+    active_only: bool = false,
 };
 pub const LoginOptions = struct {
     device_auth: bool = false,
