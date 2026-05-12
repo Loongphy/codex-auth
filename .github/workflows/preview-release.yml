@@ -50,9 +50,6 @@ jobs:
         run: |
           mkdir -p "artifacts/${{ matrix.id }}/binary"
           cp "zig-out/bin/${{ matrix.binary_name }}" "artifacts/${{ matrix.id }}/binary/${{ matrix.binary_name }}"
-          if [[ "${{ matrix.id }}" == win32-* ]]; then
-            cp "zig-out/bin/codex-auth-auto.exe" "artifacts/${{ matrix.id }}/binary/codex-auth-auto.exe"
-          fi
 
       - name: Upload artifact bundle
         uses: actions/upload-artifact@v7
