@@ -3,7 +3,6 @@ const common = @import("common.zig");
 
 const PlanType = common.PlanType;
 const AuthMode = common.AuthMode;
-const AutoSwitchConfig = common.AutoSwitchConfig;
 const LiveConfig = common.LiveConfig;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RateLimitWindow = common.RateLimitWindow;
@@ -45,30 +44,6 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSna
     if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
     if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
     return snap;
-}
-
-pub fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: std.json.Value) void {
-    _ = allocator;
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return,
-    };
-    if (obj.get("enabled")) |enabled| {
-        switch (enabled) {
-            .bool => |flag| cfg.enabled = flag,
-            else => {},
-        }
-    }
-    if (obj.get("threshold_5h_percent")) |threshold| {
-        if (parseThresholdPercent(threshold)) |value| {
-            cfg.threshold_5h_percent = value;
-        }
-    }
-    if (obj.get("threshold_weekly_percent")) |threshold| {
-        if (parseThresholdPercent(threshold)) |value| {
-            cfg.threshold_weekly_percent = value;
-        }
-    }
 }
 
 pub fn parseLiveConfig(cfg: *LiveConfig, v: std.json.Value) void {

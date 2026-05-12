@@ -5,8 +5,6 @@ const clean = @import("clean.zig");
 const common = @import("common.zig");
 
 const AccountRecord = common.AccountRecord;
-const AutoSwitchConfig = common.AutoSwitchConfig;
-const LiveConfig = common.LiveConfig;
 const Registry = common.Registry;
 const current_schema_version = common.current_schema_version;
 const ensureAccountsDir = common.ensureAccountsDir;
@@ -26,8 +24,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .schema_version = current_schema_version,
         .active_account_key = reg.active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
-        .auto_switch = reg.auto_switch,
-        .live = reg.live,
+        .interval_seconds = reg.live.interval_seconds,
         .accounts = reg.accounts.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -106,7 +103,6 @@ const RegistryOut = struct {
     schema_version: u32,
     active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
-    auto_switch: AutoSwitchConfig,
-    live: LiveConfig,
+    interval_seconds: u16,
     accounts: []const AccountRecord,
 };

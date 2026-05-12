@@ -5,10 +5,7 @@ const cli = @import("../cli/root.zig");
 const registry = @import("../registry/root.zig");
 const account_names = @import("account_names.zig");
 const targets = @import("targets.zig");
-const workflow_env = @import("env.zig");
 
-const skip_service_reconcile_env = workflow_env.skip_service_reconcile_env;
-const hasNonEmptyEnvVar = workflow_env.hasNonEmptyEnvVar;
 const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const LiveTtyTarget = targets.LiveTtyTarget;
 const liveTtyPreflightError = targets.liveTtyPreflightError;
@@ -26,14 +23,6 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput;
-}
-
-pub fn shouldReconcileManagedService(cmd: cli.types.Command) bool {
-    if (hasNonEmptyEnvVar(skip_service_reconcile_env)) return false;
-    return switch (cmd) {
-        .help, .version, .status, .daemon => false,
-        else => true,
-    };
 }
 
 pub fn ensureLiveTty(target: LiveTtyTarget) !void {

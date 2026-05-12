@@ -66,7 +66,6 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
 | [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
-| [`codex-auth status`](./docs/commands/status.md) | Show auto-switch, service, and usage status |
 
 ### Import and Maintenance
 
@@ -83,8 +82,6 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 | Command | Description |
 |---------|-------------|
-| [`codex-auth config auto enable\|disable`](./docs/commands/config.md) | Enable or disable background auto-switching |
-| [`codex-auth config auto --5h <percent> [--weekly <percent>]`](./docs/commands/config.md) | Configure background auto-switch thresholds |
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
 
 ## Quick Examples
@@ -97,7 +94,6 @@ codex-auth switch 02
 codex-auth remove work
 codex-auth import /path/to/auth.json --alias personal
 codex-auth list --skip-api
-codex-auth status
 ```
 
 ## Q&A

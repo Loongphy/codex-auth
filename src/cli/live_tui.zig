@@ -49,6 +49,10 @@ test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
     try std.testing.expectEqual(@as(usize, 85), viewport_start);
 }
 
+pub fn nowSecond() i64 {
+    return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+}
+
 pub const LiveAutoSwitchState = struct {
     enabled: bool,
     pending: bool,
@@ -71,10 +75,6 @@ pub const LiveAutoSwitchState = struct {
         return true;
     }
 };
-
-pub fn nowSecond() i64 {
-    return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-}
 
 pub fn switchFixedLines(status_line: []const u8, action_line: []const u8) usize {
     var lines: usize = 3;

@@ -5,35 +5,24 @@ const selection = @import("selection.zig");
 const row_data = @import("rows.zig");
 const nav = @import("picker_nav.zig");
 
-const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
 const SwitchRows = row_data.SwitchRows;
-const resolveRateWindow = row_data.resolveRateWindow;
-const usageOverrideForAccount = row_data.usageOverrideForAccount;
+const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
 const accountKeyForSelectableAlloc = nav.accountKeyForSelectableAlloc;
+const resolveRateWindow = row_data.resolveRateWindow;
 
-fn numericUsageOverrideStatus(usage_override: ?[]const u8) ?u16 {
-    const value = usage_override orelse return null;
-    return std.fmt.parseInt(u16, value, 10) catch null;
-}
-
-fn accountCrossesSwitchThreshold(reg: *const registry.Registry, rec: *const registry.AccountRecord, now: i64) bool {
+fn accountHasNoRemaining(rec: *const registry.AccountRecord, now: i64) bool {
     const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
     const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
     const rem_5h = registry.remainingPercentAt(rate_5h, now);
     const rem_week = registry.remainingPercentAt(rate_week, now);
-    return (rem_5h != null and rem_5h.? <= @as(i64, reg.auto_switch.threshold_5h_percent)) or
-        (rem_week != null and rem_week.? <= @as(i64, reg.auto_switch.threshold_weekly_percent));
+    return (rem_5h != null and rem_5h.? == 0) or
+        (rem_week != null and rem_week.? == 0);
 }
 
 fn shouldAutoSwitchActiveAccount(display: SwitchSelectionDisplay, now: i64) bool {
     const active_account_key = display.reg.active_account_key orelse return false;
     const active_idx = registry.findAccountIndexByAccountKey(display.reg, active_account_key) orelse return false;
-
-    if (numericUsageOverrideStatus(usageOverrideForAccount(display.usage_overrides, active_idx))) |status_code| {
-        return status_code != 200;
-    }
-
-    return accountCrossesSwitchThreshold(display.reg, &display.reg.accounts.items[active_idx], now);
+    return accountHasNoRemaining(&display.reg.accounts.items[active_idx], now);
 }
 
 fn resetDistanceSeconds(window: ?registry.RateLimitWindow, now: i64) i64 {
@@ -69,7 +58,7 @@ fn bestAutoSwitchCandidateSelectableIndex(
         const account_idx = rows.items[row_idx].account_index orelse continue;
         const rec = &reg.accounts.items[account_idx];
         if (std.mem.eql(u8, rec.account_key, active_account_key)) continue;
-        if (accountCrossesSwitchThreshold(reg, rec, now)) continue;
+        if (accountHasNoRemaining(rec, now)) continue;
 
         if (best_account_idx == null or autoSwitchCandidateIsBetter(rec, &reg.accounts.items[best_account_idx.?], now)) {
             best_selectable_idx = selectable_idx;

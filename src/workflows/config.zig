@@ -1,12 +1,10 @@
 const std = @import("std");
 const cli = @import("../cli/root.zig");
-const auto = @import("../auto/root.zig");
 const io_util = @import("../core/io_util.zig");
 const registry = @import("../registry/root.zig");
 
 pub fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ConfigOptions) !void {
     switch (opts) {
-        .auto_switch => |auto_opts| try auto.handleAutoCommand(allocator, codex_home, auto_opts),
         .live => |live_opts| try handleLiveCommand(allocator, codex_home, live_opts),
     }
 }

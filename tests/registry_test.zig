@@ -88,7 +88,6 @@ fn makeEmptyRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -288,8 +287,6 @@ test "registry save/load" {
     const active_account_key = try accountKeyForEmailAlloc(gpa, "a@b.com");
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
-    reg.auto_switch.threshold_5h_percent = 12;
-    reg.auto_switch.threshold_weekly_percent = 8;
     reg.api.usage = true;
     try registry.setAccountLastLocalRollout(gpa, &reg.accounts.items[0], "/tmp/sessions/run-1/rollout-a.jsonl", 1735689600000);
 
@@ -304,8 +301,6 @@ test "registry save/load" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
-    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
-    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
@@ -549,84 +544,6 @@ test "registry save omits api config" {
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
-test "registry load defaults missing auto threshold fields" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-    try tmp.dir.writeFile(.{
-        .sub_path = "accounts/registry.json",
-        .data =
-        \\{
-        \\  "schema_version": 3,
-        \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true
-        \\  },
-        \\  "accounts": []
-        \\}
-        ,
-    });
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expect(loaded.auto_switch.enabled);
-    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
-    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
-    try std.testing.expect(loaded.api.usage);
-    try std.testing.expect(loaded.api.account);
-    try std.testing.expect(loaded.active_account_activated_at_ms == null);
-
-    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
-    defer gpa.free(registry_path);
-    const saved = try fixtures.readFileAlloc(gpa, registry_path);
-    defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
-}
-
-test "registry load migrates old auto thresholds to default one percent" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-    try tmp.dir.writeFile(.{
-        .sub_path = "accounts/registry.json",
-        .data =
-        \\{
-        \\  "schema_version": 3,
-        \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true,
-        \\    "threshold_5h_percent": 12,
-        \\    "threshold_weekly_percent": 8
-        \\  },
-        \\  "accounts": []
-        \\}
-        ,
-    });
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expect(loaded.auto_switch.enabled);
-    try std.testing.expectEqual(registry.current_schema_version, loaded.schema_version);
-    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_5h_percent);
-    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_weekly_percent);
-
-    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
-    defer gpa.free(registry_path);
-    const saved = try fixtures.readFileAlloc(gpa, registry_path);
-    defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"schema_version\": 4") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_5h_percent\": 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_weekly_percent\": 1") != null);
-}
-
 test "registry load ignores legacy api.usage and rewrites file without api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -759,9 +676,6 @@ test "legacy current-layout registry version field rewrites to schema_version" {
         \\{
         \\  "version": 3,
         \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true
-        \\  },
         \\  "accounts": []
         \\}
         ,
@@ -776,6 +690,8 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"interval_seconds\": 60") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"live\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
 }
 
@@ -1274,7 +1190,6 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.3", .data = "a3" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.1", .data = "r1" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.2", .data = "r2" });
-    try tmp.dir.writeFile(.{ .sub_path = "accounts/" ++ registry.account_name_refresh_lock_file_name, .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = keep_rel_path, .data = "keep" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .data = "legacy" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/notes.txt", .data = "junk" });
@@ -1294,8 +1209,6 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try std.testing.expect(try countBackups(accounts, "registry.json") == 0);
     var kept = try tmp.dir.openFile(keep_rel_path, .{});
     kept.close();
-    var refresh_lock = try tmp.dir.openFile("accounts/" ++ registry.account_name_refresh_lock_file_name, .{});
-    refresh_lock.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/notes.txt", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/tmpdir/old.txt", .{}));

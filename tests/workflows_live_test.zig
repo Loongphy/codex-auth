@@ -2,7 +2,6 @@ const std = @import("std");
 const codex_auth = @import("codex_auth");
 
 const account_api = codex_auth.api.account;
-const account_name_refresh = codex_auth.auth.account;
 const app_runtime = codex_auth.core.runtime;
 const cli = codex_auth.cli;
 const fixtures = @import("support/fixtures.zig");
@@ -23,51 +22,12 @@ const loadStoredSwitchSelectionDisplayWithRefreshError = main_mod.loadStoredSwit
 const mergeSwitchLiveRefreshIntoLatest = main_mod.mergeSwitchLiveRefreshIntoLatest;
 const nowMilliseconds = main_mod.nowMilliseconds;
 const removeLiveRuntimeApplySelection = main_mod.removeLiveRuntimeApplySelection;
-const runBackgroundAccountNameRefreshWithLockAcquirer = main_mod.runBackgroundAccountNameRefreshWithLockAcquirer;
 const switch_live_default_refresh_interval_ms = main_mod.switch_live_default_refresh_interval_ms;
 const switchLiveRuntimeApplySelection = main_mod.switchLiveRuntimeApplySelection;
 const findAccountIndexByAccountKeyConst = main_mod.findAccountIndexByAccountKeyConst;
 const nowSeconds = main_mod.nowSeconds;
 const mapSwitchUsageOverridesToLatest = main_mod.mapSwitchUsageOverridesToLatest;
 const replaceOptionalOwnedString = main_mod.replaceOptionalOwnedString;
-
-test "background account-name refresh returns early when another refresh holds the lock" {
-    const TestState = struct {
-        var fetch_count: usize = 0;
-
-        fn lockUnavailable(_: std.mem.Allocator, _: []const u8) !?account_name_refresh.BackgroundRefreshLock {
-            return null;
-        }
-
-        fn unexpectedFetcher(
-            allocator: std.mem.Allocator,
-            access_token: []const u8,
-            account_id: []const u8,
-        ) !account_api.FetchResult {
-            _ = allocator;
-            _ = access_token;
-            _ = account_id;
-            fetch_count += 1;
-            return error.TestUnexpectedFetch;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    TestState.fetch_count = 0;
-    try runBackgroundAccountNameRefreshWithLockAcquirer(
-        gpa,
-        codex_home,
-        TestState.unexpectedFetcher,
-        TestState.lockUnavailable,
-    );
-    try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
-}
 
 test "handled cli errors include missing node" {
     try std.testing.expect(isHandledCliError(error.NodeJsRequired));
@@ -82,7 +42,6 @@ fn saveLivePolicyTestRegistry(
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .live = live_config,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
@@ -241,7 +200,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -252,7 +210,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -264,7 +221,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -321,7 +277,6 @@ test "switch live action patches the current display after switching" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -426,7 +381,6 @@ test "switch live action does not wait for an in-flight refresh" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -504,7 +458,6 @@ test "remove live action patches the current display after deleting the active a
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -624,7 +577,6 @@ test "remove live action does not wait for an in-flight refresh" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -733,7 +685,6 @@ test "live fallback display preserves the refresh error name" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -774,7 +725,6 @@ test "buildStatusLine releases mutex on allocation failure" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };

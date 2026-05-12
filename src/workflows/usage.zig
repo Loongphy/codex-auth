@@ -1,6 +1,6 @@
 const std = @import("std");
-const auto = @import("../auto/root.zig");
 const registry = @import("../registry/root.zig");
+const sessions = @import("../session.zig");
 const usage_api = @import("../api/usage.zig");
 
 const foreground_usage_refresh_concurrency: usize = 5;
@@ -295,7 +295,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
     if (!usage_api_enabled) {
         state.local_only_mode = true;
-        if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
+        if (try refreshActiveUsageFromLocalSessions(allocator, codex_home, reg)) {
             if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
         }
         return state;
@@ -438,6 +438,43 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     }
 
     return state;
+}
+
+fn refreshActiveUsageFromLocalSessions(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !bool {
+    const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    if (latest_usage == null) return false;
+
+    var latest = latest_usage.?;
+    var snapshot_consumed = false;
+    defer {
+        allocator.free(latest.path);
+        if (!snapshot_consumed) {
+            registry.freeRateLimitSnapshot(allocator, &latest.snapshot);
+        }
+    }
+
+    const account_key = reg.active_account_key orelse return false;
+    const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
+    if (latest.event_timestamp_ms < activated_at_ms) return false;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
+
+    const signature: registry.RolloutSignature = .{
+        .path = latest.path,
+        .event_timestamp_ms = latest.event_timestamp_ms,
+    };
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return false;
+
+    registry.updateUsage(allocator, reg, account_key, latest.snapshot);
+    snapshot_consumed = true;
+    try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest.path, latest.event_timestamp_ms);
+    return true;
 }
 
 pub fn initForegroundUsagePool(

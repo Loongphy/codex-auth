@@ -8,10 +8,8 @@ const parse = @import("parse.zig");
 const account_ops = @import("account_ops.zig");
 
 const PlanType = common.PlanType;
-const AutoSwitchConfig = common.AutoSwitchConfig;
 const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
-const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 const freeAccountRecord = common.freeAccountRecord;
 const normalizeEmailAlloc = common.normalizeEmailAlloc;
 const activeAuthPath = common.activeAuthPath;
@@ -28,7 +26,6 @@ const getNonEmptyEnvVarOwned = common.getNonEmptyEnvVarOwned;
 const registryPath = common.registryPath;
 const backupAuthIfChanged = clean.backupAuthIfChanged;
 const backupDir = clean.backupDir;
-const parseAutoSwitch = parse.parseAutoSwitch;
 const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 const setActiveAccountKey = account_ops.setActiveAccountKey;
 const activateAccountByKey = account_ops.activateAccountByKey;
@@ -41,7 +38,6 @@ fn defaultRegistry() Registry {
         .schema_version = common.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = defaultAutoSwitchConfig(),
         .api = common.defaultApiConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
     };
@@ -81,7 +77,6 @@ pub fn purgeRegistryFromImportSourceWithSaver(
     const carry_forward = try loadPurgeCarryForwardConfig(allocator, codex_home);
 
     var reg = defaultRegistry();
-    reg.auto_switch = carry_forward.auto_switch;
     reg.live = carry_forward.live;
     defer reg.deinit(allocator);
 

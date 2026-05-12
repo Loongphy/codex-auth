@@ -14,14 +14,12 @@ const PlanType = common.PlanType;
 const AuthMode = common.AuthMode;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RolloutSignature = common.RolloutSignature;
-const AutoSwitchConfig = common.AutoSwitchConfig;
 const LiveConfig = common.LiveConfig;
 const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
 const current_schema_version = common.current_schema_version;
 const min_supported_schema_version = common.min_supported_schema_version;
 const private_file_permissions = common.private_file_permissions;
-const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 const defaultApiConfig = common.defaultApiConfig;
 const defaultLiveConfig = common.defaultLiveConfig;
 const freeAccountRecord = common.freeAccountRecord;
@@ -40,12 +38,10 @@ const normalizeEmailAlloc = common.normalizeEmailAlloc;
 const parsePlanType = parse.parsePlanType;
 const parseAuthMode = parse.parseAuthMode;
 const parseUsage = parse.parseUsage;
-const parseAutoSwitch = parse.parseAutoSwitch;
 const parseLiveConfig = parse.parseLiveConfig;
-const liveConfigNeedsRewrite = parse.liveConfigNeedsRewrite;
+const parseLiveIntervalSeconds = parse.parseLiveIntervalSeconds;
 const parseRolloutSignature = parse.parseRolloutSignature;
 const readInt = parse.readInt;
-const parseThresholdPercent = parse.parseThresholdPercent;
 const parseAccountRecord = storage_parse.parseAccountRecord;
 const accountFromAuth = account_ops.accountFromAuth;
 const upsertAccount = account_ops.upsertAccount;
@@ -79,7 +75,6 @@ pub fn defaultRegistry() Registry {
         .schema_version = current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = defaultAutoSwitchConfig(),
         .api = defaultApiConfig(),
         .live = defaultLiveConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
@@ -300,12 +295,7 @@ fn loadLegacyRegistryV2(
         }
     }
 
-    if (root_obj.get("auto_switch")) |v| {
-        parseAutoSwitch(allocator, &reg.auto_switch, v);
-    }
-    if (root_obj.get("live")) |v| {
-        parseLiveConfig(&reg.live, v);
-    }
+    parseRegistryLiveConfig(&reg.live, root_obj);
 
     for (legacy_accounts.items) |*legacy| {
         try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
@@ -347,12 +337,7 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
         }
     }
 
-    if (root_obj.get("auto_switch")) |v| {
-        parseAutoSwitch(allocator, &reg.auto_switch, v);
-    }
-    if (root_obj.get("live")) |v| {
-        parseLiveConfig(&reg.live, v);
-    }
+    parseRegistryLiveConfig(&reg.live, root_obj);
 
     return reg;
 }
@@ -376,12 +361,26 @@ fn usesLegacyVersionField(root_obj: std.json.ObjectMap) bool {
 fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     if (root_obj.get("last_attributed_rollout") != null) return true;
     if (root_obj.get("api") != null) return true;
-    if (root_obj.get("live")) |v| {
-        if (liveConfigNeedsRewrite(v)) return true;
+    if (root_obj.get("auto_switch") != null) return true;
+    if (root_obj.get("live") != null) return true;
+    if (root_obj.get("interval_seconds")) |v| {
+        if (parseLiveIntervalSeconds(v) == null) return true;
     } else {
         return true;
     }
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
+}
+
+fn parseRegistryLiveConfig(live: *LiveConfig, root_obj: std.json.ObjectMap) void {
+    if (root_obj.get("interval_seconds")) |v| {
+        if (parseLiveIntervalSeconds(v)) |value| {
+            live.interval_seconds = value;
+            return;
+        }
+    }
+    if (root_obj.get("live")) |v| {
+        parseLiveConfig(live, v);
+    }
 }
 
 fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
@@ -389,10 +388,8 @@ fn detectSchemaVersion(root_obj: std.json.ObjectMap) u32 {
 }
 
 fn applySchemaMigrations(reg: *Registry, loaded_schema_version: u32) void {
-    if (loaded_schema_version < 4) {
-        reg.auto_switch.threshold_5h_percent = common.default_auto_switch_threshold_5h_percent;
-        reg.auto_switch.threshold_weekly_percent = common.default_auto_switch_threshold_weekly_percent;
-    }
+    _ = reg;
+    _ = loaded_schema_version;
 }
 
 fn logUnsupportedRegistryVersion(version_value: u32) void {

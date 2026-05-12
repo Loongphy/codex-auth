@@ -6,10 +6,7 @@ const account_names = @import("account_names.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const usage_refresh = @import("usage.zig");
-const workflow_env = @import("env.zig");
 
-const isAccountNameRefreshOnlyMode = workflow_env.isAccountNameRefreshOnlyMode;
-const runBackgroundAccountNameRefresh = account_names.runBackgroundAccountNameRefresh;
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const maybeRefreshForegroundAccountNamesWithAccountApiEnabled = account_names.maybeRefreshForegroundAccountNamesWithAccountApiEnabled;
 const ensureLiveTty = preflight.ensureLiveTty;
@@ -23,8 +20,6 @@ const switchLiveRuntimeMaybeTakeUpdatedDisplay = live_flow.switchLiveRuntimeMayb
 const switchLiveRuntimeBuildStatusLine = live_flow.switchLiveRuntimeBuildStatusLine;
 
 pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !void {
-    if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
-
     if (opts.live) {
         try ensureLiveTty(.list);
         const live_allocator = std.heap.smp_allocator;

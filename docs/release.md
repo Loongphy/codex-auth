@@ -63,7 +63,6 @@ This document describes the repository's CI, preview package publishing, and tag
 - The root package exposes the `codex-auth` command and depends on the platform packages through `optionalDependencies`.
 - Each platform package declares `os` and `cpu`, so npm installs only the matching binary package for the current host platform.
 - GitHub Release assets and npm packages currently target Linux x64, Linux ARM64, macOS x64, macOS ARM64, Windows x64, and Windows ARM64.
-- Windows builds include both `codex-auth.exe` and `codex-auth-auto.exe`; the helper is used only by the managed auto-switch task.
 - Platform package metadata, target triples, binary names, and GitHub Release archive names are defined in `scripts/npm/metadata.mjs`.
 - `scripts/npm/check-release-metadata.mjs` verifies that `scripts/npm/metadata.mjs`, `package.json`, `bin/codex-auth.js`, and the release/preview workflow matrices stay aligned.
 - GitHub Release archives use `.tar.gz` for Linux/macOS targets and `.zip` for Windows targets.

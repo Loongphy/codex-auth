@@ -10,7 +10,6 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 ## Current Policy
 
-- `codex-auth` keeps a single `registry.json`; persisted feature state such as `auto_switch` and `live` stays in that file.
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
   - current `schema_version = 4`
@@ -35,15 +34,17 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - `active_account_key`
   - `active_account_activated_at_ms`
   - Per-account `last_local_rollout`
-  - Current `auto_switch` block
   - Legacy top-level `api` block, now ignored and omitted on rewrite
   - Per-account `account_key`
   - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
 - `schema_version = 4`
-  - Same layout as schema `3`
-  - Migrates existing `auto_switch.threshold_5h_percent` and `auto_switch.threshold_weekly_percent` values back to the new default `1`
+  - Same account layout as schema `3`
+  - Live refresh interval stored as top-level `interval_seconds`
+  - Older `live.interval_seconds` and removed `auto_switch` blocks are omitted on rewrite
 
 ## When To Bump `schema_version`
+
+Before bumping `schema_version`, ask the user whether this change should bump the schema. Do not bump it silently.
 
 Bump the schema version whenever the persisted `registry.json` shape or semantics change. That includes:
 

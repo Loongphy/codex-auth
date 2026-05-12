@@ -1,13 +1,11 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const account_api = @import("../api/account.zig");
-const account_name_refresh = @import("../auth/account.zig");
 const cli = @import("../cli/root.zig");
 const chatgpt_http = @import("../api/http.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const auth = @import("../auth/auth.zig");
-const auto = @import("../auto/root.zig");
 const format = @import("../tui/table.zig");
 const usage_api = @import("../api/usage.zig");
 const account_names = @import("account_names.zig");
@@ -28,7 +26,6 @@ const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
 const usage_refresh = @import("usage.zig");
 
-const isAccountNameRefreshOnlyMode = workflow_env.isAccountNameRefreshOnlyMode;
 pub const nowMilliseconds = workflow_env.nowMilliseconds;
 pub const nowSeconds = workflow_env.nowSeconds;
 pub const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
@@ -56,10 +53,6 @@ pub const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfter
 pub const refreshAccountNamesAfterSwitch = account_names.refreshAccountNamesAfterSwitch;
 pub const refreshAccountNamesForList = account_names.refreshAccountNamesForList;
 const shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled = account_names.shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled;
-pub const shouldScheduleBackgroundAccountNameRefresh = account_names.shouldScheduleBackgroundAccountNameRefresh;
-pub const runBackgroundAccountNameRefresh = account_names.runBackgroundAccountNameRefresh;
-pub const runBackgroundAccountNameRefreshWithLockAcquirer = account_names.runBackgroundAccountNameRefreshWithLockAcquirer;
-const maybeSpawnBackgroundAccountNameRefresh = account_names.maybeSpawnBackgroundAccountNameRefresh;
 pub const refreshAccountNamesAfterImport = account_names.refreshAccountNamesAfterImport;
 const loadSingleFileImportAuthInfo = account_names.loadSingleFileImportAuthInfo;
 pub const reconcileActiveAuthAfterRemove = active_auth.reconcileActiveAuthAfterRemove;
@@ -73,7 +66,6 @@ pub const findMatchingAccounts = query_mod.findMatchingAccounts;
 const findMatchingAccountsForRemove = query_mod.findMatchingAccountsForRemove;
 const findAccountIndexByDisplayNumber = query_mod.findAccountIndexByDisplayNumber;
 pub const isHandledCliError = preflight.isHandledCliError;
-pub const shouldReconcileManagedService = preflight.shouldReconcileManagedService;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
 const ensureForegroundNodeAvailableWithApiEnabled = preflight.ensureForegroundNodeAvailableWithApiEnabled;
@@ -96,8 +88,6 @@ const loadSwitchSelectionDisplay = live_flow.loadSwitchSelectionDisplay;
 const removeSelectedAccountsAndPersist = live_flow.removeSelectedAccountsAndPersist;
 pub const switchLiveRuntimeApplySelection = live_flow.switchLiveRuntimeApplySelection;
 pub const removeLiveRuntimeApplySelection = live_flow.removeLiveRuntimeApplySelection;
-pub const HelpConfig = help_workflow.HelpConfig;
-pub const loadHelpConfig = help_workflow.loadHelpConfig;
 
 pub fn main(init: std.process.Init.Minimal) !void {
     var exit_code: u8 = 0;
@@ -135,7 +125,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
 
     const needs_codex_home = switch (cmd) {
         .version => false,
-        .help => |topic| topic == .top_level,
+        .help => false,
         else => true,
     };
     const codex_home = if (needs_codex_home) try registry.resolveCodexHome(allocator) else null;
@@ -144,13 +134,8 @@ fn runMain(init: std.process.Init.Minimal) !void {
     switch (cmd) {
         .version => try cli.output.printVersion(),
         .help => |topic| switch (topic) {
-            .top_level => try help_workflow.handleTopLevelHelp(allocator, codex_home.?),
+            .top_level => try help_workflow.handleTopLevelHelp(),
             else => try cli.help.printCommandHelp(topic),
-        },
-        .status => try auto.printStatus(allocator, codex_home.?),
-        .daemon => |opts| switch (opts.mode) {
-            .watch => try auto.runDaemon(allocator, codex_home.?),
-            .once => try auto.runDaemonOnce(allocator, codex_home.?),
         },
         .config => |opts| try config_workflow.handleConfig(allocator, codex_home.?, opts),
         .list => |opts| try list_workflow.handleList(allocator, codex_home.?, opts),
@@ -160,10 +145,6 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .switch_account => |opts| try switch_workflow.handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
         .clean => try clean_workflow.handleClean(allocator, codex_home.?),
-    }
-
-    if (shouldReconcileManagedService(cmd)) {
-        try auto.reconcileManagedService(allocator, codex_home.?);
     }
 }
 

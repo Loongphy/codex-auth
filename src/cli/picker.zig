@@ -38,5 +38,4 @@ pub const removeOwnedAccountKey = nav.removeOwnedAccountKey;
 pub const containsOwnedAccountKey = nav.containsOwnedAccountKey;
 pub const toggleOwnedAccountKey = nav.toggleOwnedAccountKey;
 pub const clearOwnedAccountKeys = nav.clearOwnedAccountKeys;
-
 pub const maybeAutoSwitchTargetKeyAlloc = auto.maybeAutoSwitchTargetKeyAlloc;

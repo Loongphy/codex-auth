@@ -10,9 +10,6 @@ pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
-pub const default_auto_switch_threshold_5h_percent: u8 = 1;
-pub const default_auto_switch_threshold_weekly_percent: u8 = 1;
-pub const account_name_refresh_lock_file_name = "account-name-refresh.lock";
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
     .windows => .default_file,
     else => .fromMode(0o600),
@@ -79,12 +76,6 @@ pub const RolloutSignature = struct {
     event_timestamp_ms: i64,
 };
 
-pub const AutoSwitchConfig = struct {
-    enabled: bool = false,
-    threshold_5h_percent: u8 = default_auto_switch_threshold_5h_percent,
-    threshold_weekly_percent: u8 = default_auto_switch_threshold_weekly_percent,
-};
-
 pub const ApiConfig = struct {
     usage: bool = true,
     account: bool = true,
@@ -145,7 +136,6 @@ pub const Registry = struct {
     schema_version: u32,
     active_account_key: ?[]u8,
     active_account_activated_at_ms: ?i64,
-    auto_switch: AutoSwitchConfig,
     api: ApiConfig,
     live: LiveConfig = defaultLiveConfig(),
     accounts: std.ArrayList(AccountRecord),
@@ -158,10 +148,6 @@ pub const Registry = struct {
         self.accounts.deinit(allocator);
     }
 };
-
-pub fn defaultAutoSwitchConfig() AutoSwitchConfig {
-    return .{};
-}
 
 pub fn defaultApiConfig() ApiConfig {
     return .{};

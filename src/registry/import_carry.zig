@@ -1,19 +1,16 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const common = @import("common.zig");
-const parse = @import("parse.zig");
 
-const AutoSwitchConfig = common.AutoSwitchConfig;
 const LiveConfig = common.LiveConfig;
-const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 const defaultLiveConfig = common.defaultLiveConfig;
 const registryPath = common.registryPath;
 const readFileAlloc = common.readFileAlloc;
-const parseAutoSwitch = parse.parseAutoSwitch;
+const parse = @import("parse.zig");
 const parseLiveConfig = parse.parseLiveConfig;
+const parseLiveIntervalSeconds = parse.parseLiveIntervalSeconds;
 
 const PurgeCarryForwardConfig = struct {
-    auto_switch: AutoSwitchConfig = defaultAutoSwitchConfig(),
     live: LiveConfig = defaultLiveConfig(),
 };
 
@@ -38,24 +35,30 @@ fn parsePurgeCarryForwardConfig(allocator: std.mem.Allocator, data: []const u8) 
     var cfg = PurgeCarryForwardConfig{};
 
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch {
-        applyCarryForwardObjectSlice(allocator, data, "auto_switch", &cfg.auto_switch, parseCarryForwardAutoSwitch);
         applyCarryForwardObjectSlice(allocator, data, "live", &cfg.live, parseCarryForwardLiveConfig);
+        applyCarryForwardScalarSlice(data, "interval_seconds", &cfg.live);
         return cfg;
     };
     defer parsed.deinit();
 
     switch (parsed.value) {
         .object => |obj| {
-            if (obj.get("auto_switch")) |v| parseAutoSwitch(allocator, &cfg.auto_switch, v);
             if (obj.get("live")) |v| parseLiveConfig(&cfg.live, v);
+            if (obj.get("interval_seconds")) |v| {
+                if (parseLiveIntervalSeconds(v)) |value| cfg.live.interval_seconds = value;
+            }
         },
         else => {},
     }
     return cfg;
 }
 
-fn parseCarryForwardAutoSwitch(allocator: std.mem.Allocator, value: std.json.Value, target: *AutoSwitchConfig) void {
-    parseAutoSwitch(allocator, target, value);
+fn applyCarryForwardScalarSlice(data: []const u8, field_name: []const u8, target: *LiveConfig) void {
+    const slice = findJsonScalarFieldSlice(data, field_name) orelse return;
+    const value = std.fmt.parseInt(i64, std.mem.trim(u8, slice, " \r\n\t,"), 10) catch return;
+    if (parseLiveIntervalSeconds(.{ .integer = value })) |interval| {
+        target.interval_seconds = interval;
+    }
 }
 
 fn parseCarryForwardLiveConfig(_: std.mem.Allocator, value: std.json.Value, target: *LiveConfig) void {
@@ -94,6 +97,23 @@ fn findJsonObjectFieldSlice(data: []const u8, field_name: []const u8) ?[]const u
         return data[idx .. end_idx + 1];
     }
     return null;
+}
+
+fn findJsonScalarFieldSlice(data: []const u8, field_name: []const u8) ?[]const u8 {
+    var pattern_buffer: [64]u8 = undefined;
+    if (field_name.len + 2 > pattern_buffer.len) return null;
+    pattern_buffer[0] = '"';
+    @memcpy(pattern_buffer[1 .. 1 + field_name.len], field_name);
+    pattern_buffer[1 + field_name.len] = '"';
+    const pattern = pattern_buffer[0 .. field_name.len + 2];
+
+    const name_idx = std.mem.indexOf(u8, data, pattern) orelse return null;
+    var idx = skipJsonWhitespace(data, name_idx + pattern.len);
+    if (idx >= data.len or data[idx] != ':') return null;
+    idx = skipJsonWhitespace(data, idx + 1);
+    const start = idx;
+    while (idx < data.len and data[idx] != ',' and data[idx] != '\n' and data[idx] != '\r' and data[idx] != '}') : (idx += 1) {}
+    return data[start..idx];
 }
 
 fn skipJsonWhitespace(data: []const u8, start: usize) usize {

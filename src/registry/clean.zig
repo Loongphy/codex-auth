@@ -7,7 +7,6 @@ const c_time = @cImport({
 });
 
 const Registry = common.Registry;
-const account_name_refresh_lock_file_name = common.account_name_refresh_lock_file_name;
 const accountSnapshotFileName = common.accountSnapshotFileName;
 const accountAuthPath = common.accountAuthPath;
 const readFileAlloc = common.readFileAlloc;
@@ -216,8 +215,6 @@ pub fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bo
 
 pub fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
     if (std.mem.eql(u8, entry_name, "registry.json")) return true;
-    if (std.mem.eql(u8, entry_name, "auto-switch.lock")) return true;
-    if (std.mem.eql(u8, entry_name, account_name_refresh_lock_file_name)) return true;
     if (std.mem.eql(u8, entry_name, "backups")) return true;
     return isAllowedCurrentSnapshot(reg, entry_name);
 }

@@ -296,7 +296,6 @@ fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
     try env_map.put("CODEX_FAKE_NODE_RESPONSE_DIR", fake_node_response_dir);
 
     // On Windows, point to the compiled fake-node.exe via a relative path so
@@ -328,7 +327,6 @@ fn runCliWithIsolatedHome(
     try env_map.put("USERPROFILE", home_root);
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -354,7 +352,6 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try env_map.put("USERPROFILE", home_root);
     try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -382,7 +379,6 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -409,7 +405,6 @@ fn runCliWithIsolatedHomeAndPath(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -437,7 +432,6 @@ fn runCliWithIsolatedHomeAndPathAndStdin(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     var child = std.process.spawn(fs.io(), .{
         .argv = argv.items,
@@ -505,7 +499,6 @@ fn runCliWithIsolatedHomeAndStdin(
     try env_map.put("USERPROFILE", home_root);
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     var child = std.process.spawn(fs.io(), .{
         .argv = argv.items,
@@ -3304,30 +3297,7 @@ test "Scenario: Given parseable auth without email for the active account when r
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
 }
 
-test "Scenario: Given default api usage when rendering status then no warning is printed" {
-    const gpa = std.testing.allocator;
-    const project_root = try projectRootAlloc(gpa);
-    defer gpa.free(project_root);
-    try buildCliBinary(gpa, project_root);
-
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(home_root);
-
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"status"});
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "auto-switch: OFF") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "usage:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "account:") == null);
-    try std.testing.expectEqualStrings("", result.stderr);
-}
-
-test "Scenario: Given config live interval when running command then registry and status show the interval" {
+test "Scenario: Given config live interval when running command then registry stores the interval" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -3352,11 +3322,12 @@ test "Scenario: Given config live interval when running command then registry an
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(u16, 45), loaded.live.interval_seconds);
 
-    const status_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"status"});
-    defer gpa.free(status_result.stdout);
-    defer gpa.free(status_result.stderr);
-    try expectSuccess(status_result);
-    try std.testing.expect(std.mem.indexOf(u8, status_result.stdout, "live refresh: 45s") != null);
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    const data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(data);
+    try std.testing.expect(std.mem.indexOf(u8, data, "\"interval_seconds\": 45") != null);
+    try std.testing.expect(std.mem.indexOf(u8, data, "\"live\"") == null);
 }
 
 test "Scenario: Given default api usage when listing accounts then no warning is printed" {

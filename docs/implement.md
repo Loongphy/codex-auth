@@ -6,7 +6,6 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 
 - Command behavior: [docs/commands/README.md](./commands/README.md)
 - API refresh and endpoint rules: [docs/api.md](./api.md)
-- Background auto-switching: [docs/auto-switch.md](./auto-switch.md)
 - File permissions: [docs/permissions.md](./permissions.md)
 - Schema migration: [docs/schema-migration.md](./schema-migration.md)
 - Test organization: [docs/tests.md](./tests.md)
@@ -33,7 +32,6 @@ Managed files:
 ## Registry Compatibility
 
 - `registry.json.schema_version` is the on-disk migration gate.
-- `schema_version = 4` is the current layout with record-keyed snapshots, active-account activation timestamps, per-account local rollout dedupe, and default auto-switch thresholds reset to `1`.
 - `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
 - Current-layout files that still use the top-level `version = 3` key are rewritten to `schema_version = 4`.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
@@ -74,7 +72,7 @@ If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwis
 - JWT `https://api.openai.com/auth.chatgpt_account_id`
 - JWT user identity from `chatgpt_user_id` or `user_id`
 
-If account identity fields are missing or mismatched, import/login fails. Existing-registry foreground and background sync skip unsyncable auth files and continue with registry state already on disk.
+If account identity fields are missing or mismatched, import/login fails. Existing-registry foreground sync skips unsyncable auth files and continues with registry state already on disk.
 
 ## Active Auth Sync
 
@@ -113,7 +111,6 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Rate limits map `window_minutes = 300` to 5h and `window_minutes = 10080` to weekly.
 - Past reset timestamps render as `100%`.
 
-API-backed refresh details live in [docs/api.md](./api.md). Background watcher refresh details live in [docs/auto-switch.md](./auto-switch.md).
 
 ## Display Model
 

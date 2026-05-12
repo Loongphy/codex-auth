@@ -14,8 +14,6 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `remove` | [docs/commands/remove.md](./remove.md) |
 | `clean` | [docs/commands/clean.md](./clean.md) |
 | `config` | [docs/commands/config.md](./config.md) |
-| `status` | [docs/commands/status.md](./status.md) |
-| `daemon` | [docs/commands/daemon.md](./daemon.md) |
 
 ## Shared Behavior
 
