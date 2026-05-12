@@ -286,8 +286,7 @@ fn mockAccountNameFetcherWithRegistryMutation(
         const codex_home = mutate_registry_codex_home orelse return error.TestExpectedEqual;
         var reg = try registry.loadRegistry(allocator, codex_home);
         defer reg.deinit(allocator);
-        reg.api.usage = false;
-        reg.api.account = false;
+        reg.live.interval_seconds = 45;
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
@@ -347,7 +346,6 @@ test "Scenario: Given foreground commands when checking reconcile policy then co
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = null,
     } } } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api = .enable } }));
     try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .live = .{ .interval_seconds = 30 } } }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = .top_level }));
     try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
@@ -1014,7 +1012,7 @@ test "Scenario: Given switched account with missing account names when refreshin
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
 }
 
-test "Scenario: Given api disabled while background account-name refresh is in flight when it finishes then the latest api config is preserved" {
+test "Scenario: Given registry changes while background account-name refresh is in flight when it finishes then latest config is preserved" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1039,10 +1037,9 @@ test "Scenario: Given api disabled while background account-name refresh is in f
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
-    try std.testing.expect(!loaded.api.account);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(loaded.accounts.items[0].account_name == null);
-    try std.testing.expect(loaded.accounts.items[1].account_name == null);
+    try std.testing.expectEqual(@as(u16, 45), loaded.live.interval_seconds);
+    try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[0].account_name.?);
+    try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[1].account_name.?);
 }
 
 test "Scenario: Given grouped stored snapshots without active auth when running background account-name refresh then it updates the missing names" {
@@ -1421,5 +1418,4 @@ test "Scenario: Given newer registry schema when loading help config then defaul
 
     const help_cfg = main_mod.loadHelpConfig(gpa, codex_home);
     try std.testing.expectEqual(registry.defaultAutoSwitchConfig(), help_cfg.auto_switch);
-    try std.testing.expectEqual(registry.defaultApiConfig(), help_cfg.api);
 }

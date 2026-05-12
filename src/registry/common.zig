@@ -98,12 +98,6 @@ pub const LiveConfig = struct {
     interval_seconds: u16 = default_live_refresh_interval_seconds,
 };
 
-pub const ApiConfigParseResult = struct {
-    has_object: bool = false,
-    has_usage: bool = false,
-    has_account: bool = false,
-};
-
 pub const AccountRecord = struct {
     account_key: []u8,
     chatgpt_account_id: []u8,

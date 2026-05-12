@@ -76,7 +76,6 @@ test "handled cli errors include missing node" {
 fn saveLivePolicyTestRegistry(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
-    api_config: registry.ApiConfig,
     live_config: registry.LiveConfig,
 ) !void {
     var reg: registry.Registry = .{
@@ -84,7 +83,7 @@ fn saveLivePolicyTestRegistry(
         .active_account_key = null,
         .active_account_activated_at_ms = null,
         .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = api_config,
+        .api = registry.defaultApiConfig(),
         .live = live_config,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -160,7 +159,7 @@ test "live refresh interval uses the shared live config cadence" {
     try std.testing.expectEqual(@as(i64, 60_000), switch_live_default_refresh_interval_ms);
 }
 
-test "initial live selection display uses stored api defaults for list, switch, and remove" {
+test "initial live selection display uses api defaults for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -168,34 +167,11 @@ test "initial live selection display uses stored api defaults for list, switch, 
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = true,
-            .account_api_enabled = true,
-            .interval_ms = switch_live_default_refresh_interval_ms,
-            .label = "api",
-        });
-    }
-}
-
-test "initial live selection display preserves mixed stored api defaults for list, switch, and remove" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    try saveLivePolicyTestRegistry(gpa, codex_home, .{
-        .usage = false,
-        .account = true,
-    }, registry.defaultLiveConfig());
-
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
-        try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
-            .usage_api_enabled = false,
             .account_api_enabled = true,
             .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "api",
@@ -211,10 +187,7 @@ test "initial live selection display honors explicit api mode overrides for list
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, .{
-        .usage = false,
-        .account = false,
-    }, registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .force_api, .{
@@ -225,7 +198,7 @@ test "initial live selection display honors explicit api mode overrides for list
         });
     }
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .skip_api, .{
@@ -245,7 +218,7 @@ test "initial live selection display uses configured live refresh interval for a
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), .{ .interval_seconds = 45 });
+    try saveLivePolicyTestRegistry(gpa, codex_home, .{ .interval_seconds = 45 });
     try expectInitialLiveSelectionPolicy(gpa, codex_home, .list, .default, .{
         .usage_api_enabled = true,
         .account_api_enabled = true,

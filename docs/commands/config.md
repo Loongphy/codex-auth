@@ -6,8 +6,8 @@
 codex-auth config auto enable
 codex-auth config auto disable
 codex-auth config auto --5h <percent> [--weekly <percent>]
-codex-auth config api enable
-codex-auth config api disable
+codex-auth config auto --weekly <percent>
+codex-auth config live --interval <seconds>
 ```
 
 ## Auto-Switch Config
@@ -22,12 +22,14 @@ codex-auth config api disable
 
 Threshold flags update the stored background auto-switch thresholds. Auto-switch behavior and platform integration details live in [docs/auto-switch.md](../auto-switch.md).
 
-## API Refresh Config
+## Live Refresh Config
 
-`config api enable` enables remote usage and account-name refresh by default.
+`config live --interval <seconds>` sets the live TUI refresh interval.
 
-`config api disable` switches default foreground behavior to local-only mode.
+- Allowed range: `5` to `3600`.
 
-Changing `config api` updates `registry.json` immediately. Per-command `--api` and `--skip-api` can override the stored mode for a single foreground command.
+## API Refresh
+
+API-backed refresh is the default for supported foreground and background paths. Use per-command `--skip-api` to run a foreground command with local data only. Older `registry.json` files may contain an `api` object; current builds ignore it and omit it on the next registry save.
 
 API behavior and endpoint details live in [docs/api.md](../api.md).

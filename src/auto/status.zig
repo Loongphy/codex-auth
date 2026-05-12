@@ -12,8 +12,6 @@ pub const Status = struct {
     runtime: RuntimeState,
     threshold_5h_percent: u8,
     threshold_weekly_percent: u8,
-    api_usage_enabled: bool,
-    api_account_enabled: bool,
     live_interval_seconds: u16,
 };
 
@@ -40,8 +38,6 @@ pub fn getStatus(allocator: std.mem.Allocator, codex_home: []const u8) !Status {
         .runtime = queryRuntimeState(allocator),
         .threshold_5h_percent = reg.auto_switch.threshold_5h_percent,
         .threshold_weekly_percent = reg.auto_switch.threshold_weekly_percent,
-        .api_usage_enabled = reg.api.usage,
-        .api_account_enabled = reg.api.account,
         .live_interval_seconds = reg.live.interval_seconds,
     };
 }
@@ -65,14 +61,6 @@ fn writeStatusWithColor(out: *std.Io.Writer, status: Status, use_color: bool) !v
         "5h<{d}%, weekly<{d}%",
         .{ status.threshold_5h_percent, status.threshold_weekly_percent },
     );
-    try out.writeAll("\n");
-
-    try out.writeAll("usage: ");
-    try out.writeAll(if (status.api_usage_enabled) "api" else "local");
-    try out.writeAll("\n");
-
-    try out.writeAll("account: ");
-    try out.writeAll(if (status.api_account_enabled) "api" else "disabled");
     try out.writeAll("\n");
 
     try out.writeAll("live refresh: ");

@@ -4,14 +4,11 @@ const common = @import("common.zig");
 const PlanType = common.PlanType;
 const AuthMode = common.AuthMode;
 const AutoSwitchConfig = common.AutoSwitchConfig;
-const ApiConfig = common.ApiConfig;
-const ApiConfigParseResult = common.ApiConfigParseResult;
 const LiveConfig = common.LiveConfig;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RateLimitWindow = common.RateLimitWindow;
 const RolloutSignature = common.RolloutSignature;
 const CreditsSnapshot = common.CreditsSnapshot;
-const defaultApiConfig = common.defaultApiConfig;
 
 pub fn parsePlanType(s: []const u8) ?PlanType {
     if (std.mem.eql(u8, s, "free")) return .free;
@@ -74,16 +71,6 @@ pub fn parseAutoSwitch(allocator: std.mem.Allocator, cfg: *AutoSwitchConfig, v: 
     }
 }
 
-pub fn parseApiConfig(cfg: *ApiConfig, v: std.json.Value) void {
-    _ = parseApiConfigDetailed(cfg, v);
-}
-
-pub fn apiConfigNeedsRewrite(v: std.json.Value) bool {
-    var cfg = defaultApiConfig();
-    const result = parseApiConfigDetailed(&cfg, v);
-    return !result.has_object or !result.has_usage or !result.has_account;
-}
-
 pub fn parseLiveConfig(cfg: *LiveConfig, v: std.json.Value) void {
     const obj = switch (v) {
         .object => |o| o,
@@ -107,38 +94,6 @@ pub fn liveConfigNeedsRewrite(v: std.json.Value) bool {
         }
     }
     return true;
-}
-
-pub fn parseApiConfigDetailed(cfg: *ApiConfig, v: std.json.Value) ApiConfigParseResult {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return .{},
-    };
-    var result = ApiConfigParseResult{ .has_object = true };
-    if (obj.get("usage")) |usage| {
-        switch (usage) {
-            .bool => |flag| {
-                cfg.usage = flag;
-                result.has_usage = true;
-            },
-            else => {},
-        }
-    }
-    if (obj.get("account")) |account| {
-        switch (account) {
-            .bool => |flag| {
-                cfg.account = flag;
-                result.has_account = true;
-            },
-            else => {},
-        }
-    }
-    if (result.has_usage and !result.has_account) {
-        cfg.account = cfg.usage;
-    } else if (result.has_account and !result.has_usage) {
-        cfg.usage = cfg.account;
-    }
-    return result;
 }
 
 pub fn parseRolloutSignature(allocator: std.mem.Allocator, v: std.json.Value) ?RolloutSignature {

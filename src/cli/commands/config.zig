@@ -12,9 +12,6 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, scope, "auto")) {
         return parseAuto(allocator, args[1..]);
     }
-    if (std.mem.eql(u8, scope, "api")) {
-        return parseApi(allocator, args[1..]);
-    }
     if (std.mem.eql(u8, scope, "live")) {
         return parseLive(allocator, args[1..]);
     }
@@ -64,17 +61,6 @@ fn parseAuto(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         .threshold_5h_percent = threshold_5h_percent,
         .threshold_weekly_percent = threshold_weekly_percent,
     } } } } };
-}
-
-fn parseApi(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
-    if (args.len == 1 and common.isHelpFlag(std.mem.sliceTo(args[0], 0))) {
-        return .{ .command = .{ .help = .config } };
-    }
-    if (args.len != 1) return common.usageErrorResult(allocator, .config, "`config api` requires `enable` or `disable`.", .{});
-    const action = std.mem.sliceTo(args[0], 0);
-    if (std.mem.eql(u8, action, "enable")) return .{ .command = .{ .config = .{ .api = .enable } } };
-    if (std.mem.eql(u8, action, "disable")) return .{ .command = .{ .config = .{ .api = .disable } } };
-    return common.usageErrorResult(allocator, .config, "unknown action `{s}` for `config api`.", .{action});
 }
 
 fn parseLive(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {

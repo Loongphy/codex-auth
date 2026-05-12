@@ -30,7 +30,6 @@ pub const RateLimitSnapshot = common.RateLimitSnapshot;
 pub const RolloutSignature = common.RolloutSignature;
 pub const AutoSwitchConfig = common.AutoSwitchConfig;
 pub const ApiConfig = common.ApiConfig;
-pub const ApiConfigParseResult = common.ApiConfigParseResult;
 pub const default_live_refresh_interval_seconds = common.default_live_refresh_interval_seconds;
 pub const min_live_refresh_interval_seconds = common.min_live_refresh_interval_seconds;
 pub const max_live_refresh_interval_seconds = common.max_live_refresh_interval_seconds;

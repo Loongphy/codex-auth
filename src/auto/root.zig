@@ -118,15 +118,6 @@ pub fn handleAutoCommand(allocator: std.mem.Allocator, codex_home: []const u8, c
     }
 }
 
-pub fn handleApiCommand(allocator: std.mem.Allocator, codex_home: []const u8, action: cli.types.ApiAction) !void {
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    const enabled = action == .enable;
-    reg.api.usage = enabled;
-    reg.api.account = enabled;
-    try registry.saveRegistry(allocator, codex_home, &reg);
-}
-
 pub fn shouldEnsureManagedService(enabled: bool, runtime: RuntimeState, definition_matches: bool) bool {
     if (!enabled) return false;
     return runtime != .running or !definition_matches;
@@ -313,21 +304,16 @@ pub fn enableWithServiceHooksAndPreflight(
     // any managed artifacts before persisting the disabled rollback state.
     errdefer uninstaller(allocator, codex_home) catch {};
     try installer(allocator, codex_home, self_exe);
-    printAutoEnableUsageNote(reg.api.usage) catch |err| {
+    printAutoEnableUsageNote() catch |err| {
         std.log.warn("failed to print auto-enable usage note: {}", .{err});
     };
 }
 
-fn printAutoEnableUsageNote(api_enabled: bool) !void {
+fn printAutoEnableUsageNote() !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    if (api_enabled) {
-        try out.writeAll("auto-switch enabled; usage mode: api (default, most accurate for switching decisions)\n");
-    } else {
-        try out.writeAll("auto-switch enabled; usage mode: local-only (switching still works, but candidate validation is less accurate)\n");
-        try out.writeAll("Tip: run `codex-auth config api enable` for the most accurate switching decisions.\n");
-    }
+    try out.writeAll("auto-switch enabled\n");
     try out.flush();
 }
 

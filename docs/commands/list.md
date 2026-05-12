@@ -19,8 +19,8 @@ codex-auth list --skip-api
 
 ## Refresh Modes
 
-- Default mode honors the stored `config api` setting.
-- `--api` forces foreground usage and account-name API refresh.
+- Default mode performs foreground usage and account-name API refresh.
+- `--api` is accepted as an explicit equivalent to default mode.
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
 

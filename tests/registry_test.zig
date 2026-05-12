@@ -299,7 +299,7 @@ test "registry save/load" {
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -520,7 +520,7 @@ test "applyAccountNamesForUser updates same-user records across personal and tea
     try std.testing.expectEqualStrings("Unrelated Workspace", reg.accounts.items[2].account_name.?);
 }
 
-test "registry save/load round-trips api.account false" {
+test "registry save omits api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -540,7 +540,13 @@ test "registry save/load round-trips api.account false" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(loaded.api.account);
+
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const saved = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(saved);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
 test "registry load defaults missing auto threshold fields" {
@@ -578,8 +584,7 @@ test "registry load defaults missing auto threshold fields" {
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
 test "registry load migrates old auto thresholds to default one percent" {
@@ -622,7 +627,7 @@ test "registry load migrates old auto thresholds to default one percent" {
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_weekly_percent\": 1") != null);
 }
 
-test "registry load backfills missing api.account from api.usage and rewrites file" {
+test "registry load ignores legacy api.usage and rewrites file without api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -646,18 +651,17 @@ test "registry load backfills missing api.account from api.usage and rewrites fi
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
-test "registry load backfills missing api.usage from api.account and rewrites file" {
+test "registry load ignores legacy api.account and rewrites file without api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -681,15 +685,14 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
 test "legacy schema registry with legacy rollout attribution rewrites to normalized current schema" {

@@ -318,20 +318,17 @@ test "Scenario: Given help when rendering then login and command help notes are 
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     var auto_cfg = registry.defaultAutoSwitchConfig();
-    var api_cfg = registry.defaultApiConfig();
     auto_cfg.enabled = true;
     auto_cfg.threshold_5h_percent = 12;
     auto_cfg.threshold_weekly_percent = 8;
-    api_cfg.usage = true;
-    api_cfg.account = true;
 
-    try cli.help.writeHelp(&aw.writer, false, &auto_cfg, &api_cfg);
+    try cli.help.writeHelp(&aw.writer, false, &auto_cfg);
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Account API: ON") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)\nUsage API: ON (api)\nAccount API: ON\n\nCommands:\n  --help, -h") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage API:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Account API:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)\n\nCommands:\n  --help, -h") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "help <command>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--version, -V") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--api|--skip-api]") != null);
@@ -340,7 +337,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "import --cpa [<path>] [--alias <alias>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "import --alias <alias>\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Run `codex-auth <command> --help` for command-specific usage details.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "API-backed refresh is the default") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
@@ -355,8 +352,8 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "auto disable") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto --weekly <percent>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "api enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "api disable") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "api enable") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "api disable") == null);
     try std.testing.expect(std.mem.indexOf(u8, help, "live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "daemon --watch|--once") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
@@ -611,42 +608,6 @@ test "Scenario: Given config auto enable when parsing then auto action is preser
     }
 }
 
-test "Scenario: Given config api enable when parsing then api action is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "api", "enable" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .api => |action| try std.testing.expectEqual(cli.types.ApiAction.enable, action),
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config api disable when parsing then api disable action is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "api", "disable" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .api => |action| try std.testing.expectEqual(cli.types.ApiAction.disable, action),
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
 test "Scenario: Given config auto action mixed with threshold flags when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "auto", "enable", "--5h", "12" };
@@ -726,13 +687,13 @@ test "Scenario: Given removed top-level auto command when parsing then usage err
     try expectUsageError(result, .top_level, "unknown command `auto`");
 }
 
-test "Scenario: Given config api unknown action when parsing then usage error is returned" {
+test "Scenario: Given removed config api section when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "api", "status" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .config, "unknown action `status`");
+    try expectUsageError(result, .config, "unknown config section `api`");
 }
 
 test "Scenario: Given config live interval when parsing then interval is preserved" {

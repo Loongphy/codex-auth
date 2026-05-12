@@ -15,7 +15,6 @@ const AuthMode = common.AuthMode;
 const RateLimitSnapshot = common.RateLimitSnapshot;
 const RolloutSignature = common.RolloutSignature;
 const AutoSwitchConfig = common.AutoSwitchConfig;
-const ApiConfig = common.ApiConfig;
 const LiveConfig = common.LiveConfig;
 const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
@@ -42,9 +41,6 @@ const parsePlanType = parse.parsePlanType;
 const parseAuthMode = parse.parseAuthMode;
 const parseUsage = parse.parseUsage;
 const parseAutoSwitch = parse.parseAutoSwitch;
-const parseApiConfig = parse.parseApiConfig;
-const apiConfigNeedsRewrite = parse.apiConfigNeedsRewrite;
-const parseApiConfigDetailed = parse.parseApiConfigDetailed;
 const parseLiveConfig = parse.parseLiveConfig;
 const liveConfigNeedsRewrite = parse.liveConfigNeedsRewrite;
 const parseRolloutSignature = parse.parseRolloutSignature;
@@ -307,9 +303,6 @@ fn loadLegacyRegistryV2(
     if (root_obj.get("auto_switch")) |v| {
         parseAutoSwitch(allocator, &reg.auto_switch, v);
     }
-    if (root_obj.get("api")) |v| {
-        parseApiConfig(&reg.api, v);
-    }
     if (root_obj.get("live")) |v| {
         parseLiveConfig(&reg.live, v);
     }
@@ -357,9 +350,6 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     if (root_obj.get("auto_switch")) |v| {
         parseAutoSwitch(allocator, &reg.auto_switch, v);
     }
-    if (root_obj.get("api")) |v| {
-        parseApiConfig(&reg.api, v);
-    }
     if (root_obj.get("live")) |v| {
         parseLiveConfig(&reg.live, v);
     }
@@ -385,11 +375,7 @@ fn usesLegacyVersionField(root_obj: std.json.ObjectMap) bool {
 
 fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     if (root_obj.get("last_attributed_rollout") != null) return true;
-    if (root_obj.get("api")) |v| {
-        if (apiConfigNeedsRewrite(v)) return true;
-    } else {
-        return true;
-    }
+    if (root_obj.get("api") != null) return true;
     if (root_obj.get("live")) |v| {
         if (liveConfigNeedsRewrite(v)) return true;
     } else {

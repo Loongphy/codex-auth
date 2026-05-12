@@ -10,7 +10,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 ## Current Policy
 
-- `codex-auth` keeps a single `registry.json`; feature state such as `auto_switch` and `api` stays in that file.
+- `codex-auth` keeps a single `registry.json`; persisted feature state such as `auto_switch` and `live` stays in that file.
 - The latest binary supports every released schema. Right now that means:
   - legacy `version = 2`
   - current `schema_version = 4`
@@ -36,7 +36,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - `active_account_activated_at_ms`
   - Per-account `last_local_rollout`
   - Current `auto_switch` block
-  - Current top-level `api` block
+  - Legacy top-level `api` block, now ignored and omitted on rewrite
   - Per-account `account_key`
   - Each account also stores `chatgpt_account_id` and `chatgpt_user_id`
 - `schema_version = 4`

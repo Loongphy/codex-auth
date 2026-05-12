@@ -33,7 +33,7 @@ codex-auth import --purge [<path>]
 - Without a path, it scans `~/.codex/accounts/`.
 - With a path, it scans auth files from that directory.
 - It also tries to import the current `~/.codex/auth.json` last.
-- It preserves stored `auto_switch` and `api` configuration.
+- It preserves stored `auto_switch` and live refresh configuration.
 - It clears and rebuilds account records, stored usage, active-account activation time, and local rollout dedupe state.
 - It does not delete old snapshot files or backups.
 

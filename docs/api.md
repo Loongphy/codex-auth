@@ -39,18 +39,17 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 ## Usage Refresh Rules
 
-- `api.usage = true`: foreground refresh uses the usage API.
-- `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- when `api.usage = true`, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
+- foreground refresh uses the usage API by default.
+- `--skip-api` reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
+- by default, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
 - when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
-- when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
-- `list` and interactive `switch` follow the same foreground usage mode by default: they honor the stored `api.usage` setting unless the command line overrides it
-- `list --api` and interactive `switch --api` force foreground usage refresh for that command even when `api.usage = false`
+- with `--skip-api`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
+- `list` and interactive `switch` use the API-backed path by default; `--api` is accepted as an explicit equivalent
 - `list --skip-api` and interactive `switch --skip-api` disable the foreground usage API path for that command
 - in `switch --live`, the initial live display and later refreshed displays trigger a foreground auto-switch when the active account shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
 - `switch --live` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
-- with `--skip-api` or `api.usage = false`, `list` and `switch --live` can still refresh only the active account from local rollout data; non-active `switch` rows and non-active foreground auto-switch candidates still come from stored registry data
+- with `--skip-api`, `list` and `switch --live` can still refresh only the active account from local rollout data; non-active `switch` rows and non-active foreground auto-switch candidates still come from stored registry data
 - single-shot `switch --skip-api` skips the pre-render refresh round entirely and shows the stored registry picker directly
 - `switch <query>` always resolves selectors locally from stored data and does not accept `--live`, `--api`, or `--skip-api`
 - interactive `remove`, including `remove --live`, always stays local-only and never makes foreground usage API requests
@@ -65,12 +64,12 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 ## Account Name Refresh Rules
 
-- `api.account = true` is required.
+- Account-name refresh uses the account API by default.
 - A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
-- `list` and interactive `switch` follow the same foreground account-name refresh mode by default: they honor the stored `api.account` setting unless the command line overrides it.
-- `list --api` and interactive `switch --api` force synchronous `accounts/check` refresh for that command even when `api.account = false`; `list --skip-api` and interactive `switch --skip-api` skip it and use stored metadata only.
+- `list` and interactive `switch` refresh account names by default; `--api` is accepted as an explicit equivalent.
+- `list --skip-api` and interactive `switch --skip-api` skip account-name refresh and use stored metadata only.
 - `switch <query>` always stays local-only and does not accept `--live`, `--api`, or `--skip-api`.
 - `remove <query>` and `remove --all` always stay local-only and do not accept `--live`.
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.

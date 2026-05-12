@@ -160,7 +160,7 @@ fn fetchGroupedAccountNames(
     return buildGroupedAccountNamesFetchResult(allocator);
 }
 
-fn fetchGroupedAccountNamesAfterConcurrentUsageDisable(
+fn fetchGroupedAccountNamesAfterConcurrentRegistryRewrite(
     allocator: std.mem.Allocator,
     access_token: []const u8,
     account_id: []const u8,
@@ -172,7 +172,7 @@ fn fetchGroupedAccountNamesAfterConcurrentUsageDisable(
     const codex_home = daemon_account_name_fetch_registry_rewrite_codex_home orelse return error.TestMissingCodexHome;
     var latest = try registry.loadRegistry(allocator, codex_home);
     defer latest.deinit(allocator);
-    latest.api.usage = false;
+    latest.live.interval_seconds = 45;
     try registry.saveRegistry(allocator, codex_home, &latest);
 
     return buildGroupedAccountNamesFetchResult(allocator);
@@ -283,13 +283,13 @@ test "Scenario: Given daemon account-name refresh when registry changes during f
         gpa,
         codex_home,
         &refresh_state,
-        fetchGroupedAccountNamesAfterConcurrentUsageDisable,
+        fetchGroupedAccountNamesAfterConcurrentRegistryRewrite,
     ));
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), daemon_account_name_fetch_count);
-    try std.testing.expect(!loaded.api.usage);
+    try std.testing.expectEqual(@as(u16, 45), loaded.live.interval_seconds);
     try std.testing.expectEqualStrings("Primary Workspace", loaded.accounts.items[0].account_name.?);
     try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[1].account_name.?);
 }
@@ -1600,7 +1600,7 @@ test "Scenario: Given windows task state output when parsing then localized text
     try std.testing.expect(auto.parseWindowsTaskStateOutput("garbled\r\n") == .unknown);
 }
 
-test "Scenario: Given status when rendering then auto and usage api settings are shown" {
+test "Scenario: Given status when rendering then auto settings are shown" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -1610,8 +1610,6 @@ test "Scenario: Given status when rendering then auto and usage api settings are
         .runtime = .running,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
-        .api_usage_enabled = false,
-        .api_account_enabled = false,
         .live_interval_seconds = 60,
     });
 
@@ -1619,13 +1617,13 @@ test "Scenario: Given status when rendering then auto and usage api settings are
     try std.testing.expect(std.mem.indexOf(u8, output, "auto-switch: ON") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "service: running") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "thresholds: 5h<12%, weekly<8%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "usage: local") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "account: disabled") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "live refresh: 60s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "usage:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account:") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
 }
 
-test "Scenario: Given api usage mode when rendering status body then risk warning stays off stdout" {
+test "Scenario: Given status with custom live interval when rendering status body then risk warning stays off stdout" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
@@ -1635,17 +1633,14 @@ test "Scenario: Given api usage mode when rendering status body then risk warnin
         .runtime = .running,
         .threshold_5h_percent = 12,
         .threshold_weekly_percent = 8,
-        .api_usage_enabled = true,
-        .api_account_enabled = true,
         .live_interval_seconds = 45,
     });
 
     const output = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, output, "usage: api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "account: api") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "live refresh: 45s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "usage:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "account:") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Warning: Usage refresh is currently using the ChatGPT usage API") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "`codex-auth config api disable`") == null);
 }
 
 test "Scenario: Given missing sessions dir when refreshing active usage then it is skipped without error" {

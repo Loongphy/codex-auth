@@ -7,12 +7,12 @@ const style = @import("style.zig");
 
 const HelpTopic = types.HelpTopic;
 
-pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig, api_cfg: *const registry.ApiConfig) !void {
+pub fn printHelp(auto_cfg: *const registry.AutoSwitchConfig) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     const use_color = style.stdoutColorEnabled();
-    try writeHelp(out, use_color, auto_cfg, api_cfg);
+    try writeHelp(out, use_color, auto_cfg);
     try out.flush();
 }
 
@@ -20,7 +20,6 @@ pub fn writeHelp(
     out: *std.Io.Writer,
     use_color: bool,
     auto_cfg: *const registry.AutoSwitchConfig,
-    api_cfg: *const registry.ApiConfig,
 ) !void {
     if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("codex-auth");
@@ -39,21 +38,7 @@ pub fn writeHelp(
         .{ if (auto_cfg.enabled) "ON" else "OFF", auto_cfg.threshold_5h_percent, auto_cfg.threshold_weekly_percent },
     );
 
-    if (use_color) try out.writeAll(style.ansi.cyan);
-    try out.writeAll("Usage API:");
-    if (use_color) try out.writeAll(style.ansi.reset);
-    try out.print(
-        " {s} ({s})\n",
-        .{ if (api_cfg.usage) "ON" else "OFF", if (api_cfg.usage) "api" else "local" },
-    );
-
-    if (use_color) try out.writeAll(style.ansi.cyan);
-    try out.writeAll("Account API:");
-    if (use_color) try out.writeAll(style.ansi.reset);
-    try out.print(
-        " {s}\n\n",
-        .{if (api_cfg.account) "ON" else "OFF"},
-    );
+    try out.writeAll("\n");
 
     if (use_color) try out.writeAll(style.ansi.cyan);
     try out.writeAll("Commands:");
@@ -64,7 +49,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "help <command>", "Show command-specific help");
     try writeCommandSummary(out, use_color, "--version, -V", "Show version");
     try writeCommandSummary(out, use_color, "list [--live] [--api|--skip-api]", "List available accounts");
-    try writeCommandSummary(out, use_color, "status", "Show auto-switch, service, and usage API status");
+    try writeCommandSummary(out, use_color, "status", "Show auto-switch and service status");
     try writeCommandSummary(out, use_color, "login [--device-auth]", "Login and add the current account");
     try writeCommandSummary(out, use_color, "import", "Import auth files or rebuild registry");
     try writeCommandDetail(out, use_color, "import <path> [--alias <alias>]");
@@ -84,8 +69,6 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "config auto disable");
     try writeCommandDetail(out, use_color, "config auto --5h <percent> [--weekly <percent>]");
     try writeCommandDetail(out, use_color, "config auto --weekly <percent>");
-    try writeCommandDetail(out, use_color, "config api enable");
-    try writeCommandDetail(out, use_color, "config api disable");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "daemon --watch|--once", "Run the background auto-switch daemon");
 
@@ -95,7 +78,7 @@ pub fn writeHelp(
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.writeAll("\n");
     try out.writeAll("  Run `codex-auth <command> --help` for command-specific usage details.\n");
-    try out.writeAll("  `config api enable` may trigger OpenAI account restrictions or suspension in some environments.\n");
+    try out.writeAll("  API-backed refresh is the default; use `--skip-api` for a local-only foreground command.\n");
 }
 
 fn writeCommandSummary(out: *std.Io.Writer, use_color: bool, command: []const u8, description: []const u8) !void {
@@ -170,14 +153,14 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
     return switch (topic) {
         .top_level => "Command-line account management for Codex.",
         .list => "List available accounts.",
-        .status => "Show auto-switch, service, and usage API status.",
+        .status => "Show auto-switch and service status.",
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
         .export_auth => "Export stored account auth files.",
         .switch_account => "Switch the active account by alias, email, display number, or partial query.",
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
-        .config => "Manage auto-switch, API, and live refresh configuration.",
+        .config => "Manage auto-switch and live refresh configuration.",
         .daemon => "Run the background auto-switch daemon.",
     };
 }
@@ -249,8 +232,6 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth config auto disable\n");
             try out.writeAll("  codex-auth config auto --5h <percent> [--weekly <percent>]\n");
             try out.writeAll("  codex-auth config auto --weekly <percent>\n");
-            try out.writeAll("  codex-auth config api enable\n");
-            try out.writeAll("  codex-auth config api disable\n");
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
         .daemon => {
@@ -323,8 +304,6 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --5h <percent>    Set the 5-hour usage threshold from 1 to 100.\n");
             try out.writeAll("  --weekly <percent>\n");
             try out.writeAll("                    Set the weekly usage threshold from 1 to 100.\n");
-            try out.writeAll("  api enable        Enable usage and account APIs.\n");
-            try out.writeAll("  api disable       Disable usage and account APIs.\n");
             try out.writeAll("  live --interval <seconds>\n");
             try out.writeAll("                    Set the live TUI refresh interval from 5 to 3600 seconds.\n");
         },
@@ -393,7 +372,6 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .clean => try out.writeAll("  codex-auth clean\n"),
         .config => {
             try out.writeAll("  codex-auth config auto --5h 12 --weekly 8\n");
-            try out.writeAll("  codex-auth config api enable\n");
             try out.writeAll("  codex-auth config live --interval 60\n");
         },
         .daemon => {
