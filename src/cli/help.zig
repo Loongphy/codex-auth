@@ -51,6 +51,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
     try writeCommandDetail(out, use_color, "remove --all");
     try writeCommandSummary(out, use_color, "clean", "Delete backup and stale files under accounts/");
+    try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
 
@@ -203,7 +204,10 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth remove <alias|email|display-number|query>...\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
-        .clean => try out.writeAll("  codex-auth clean\n"),
+        .clean => {
+            try out.writeAll("  codex-auth clean\n");
+            try out.writeAll("  codex-auth clean background\n");
+        },
         .config => {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
@@ -328,7 +332,10 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth remove john@example.com jane@example.com\n");
             try out.writeAll("  codex-auth remove --all\n");
         },
-        .clean => try out.writeAll("  codex-auth clean\n"),
+        .clean => {
+            try out.writeAll("  codex-auth clean\n");
+            try out.writeAll("  codex-auth clean background\n");
+        },
         .config => {
             try out.writeAll("  codex-auth config live --interval 60\n");
         },

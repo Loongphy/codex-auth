@@ -144,7 +144,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .export_auth => |opts| try export_workflow.handleExport(allocator, codex_home.?, opts),
         .switch_account => |opts| try switch_workflow.handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
-        .clean => try clean_workflow.handleClean(allocator, codex_home.?),
+        .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
     }
 }
 

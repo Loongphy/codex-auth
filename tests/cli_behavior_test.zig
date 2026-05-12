@@ -572,6 +572,21 @@ test "Scenario: Given clean when parsing then clean command is preserved" {
     }
 }
 
+test "Scenario: Given clean background when parsing then background target is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "clean", "background" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .clean => |opts| try std.testing.expectEqual(cli.types.CleanTarget.background, opts.target),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given codex login access denied when rendering then plain English retry hint is included" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);

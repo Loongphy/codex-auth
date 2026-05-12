@@ -35,7 +35,10 @@ pub const RemoveOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
 };
-pub const CleanOptions = struct {};
+pub const CleanTarget = enum { accounts, background };
+pub const CleanOptions = struct {
+    target: CleanTarget = .accounts,
+};
 pub const LiveOptions = struct {
     interval_seconds: u16,
 };
