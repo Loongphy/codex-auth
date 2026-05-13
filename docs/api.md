@@ -60,6 +60,8 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 - Account-name refresh uses the account API by default.
 - A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
+- `chatgpt_account_id` is the stored ChatGPT account context. It normally comes from `tokens.account_id` or JWT `chatgpt_account_id`; for phone-login auth files that omit both legacy fields, it can be an `org-...` organization id selected from JWT `organizations[]`.
+- Organization fallback prefers `is_default = true`; if no default organization is present, it uses the first non-empty organization id.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
 - `list` and interactive `switch` refresh account names by default; `--api` is accepted as an explicit equivalent.
@@ -83,7 +85,7 @@ That scope includes:
 
 - all records with the same `chatgpt_user_id`
 
-`chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those workspaces can include personal and Team records under the same email.
+`chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those values can be legacy account ids or organization fallback ids.
 
 This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it belongs to the same `chatgpt_user_id` as Team records.
 
@@ -131,4 +133,3 @@ Then:
 
 - `Team #1` is filled with `Prod Workspace`
 - `Team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
-
