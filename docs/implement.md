@@ -46,7 +46,7 @@ See [docs/schema-migration.md](./schema-migration.md) for versioning policy and 
 
 For ChatGPT OAuth auth:
 
-- `tokens.account_id` is stored as `chatgpt_account_id` and is used for API calls.
+- `chatgpt_account_id` is read from `tokens.account_id`, falling back to JWT `chatgpt_account_id`, then the default/first JWT `organizations[].id`.
 - `chatgpt_user_id` is read from JWT auth claims, falling back to `user_id`.
 - The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`.
 - `account_key` stores this local `record_key`.
@@ -67,9 +67,8 @@ For OpenAI API-key auth:
 If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwise, ChatGPT auth requires:
 
 - `tokens.access_token`
-- `tokens.account_id`
 - `tokens.id_token`
-- JWT `https://api.openai.com/auth.chatgpt_account_id`
+- a ChatGPT account context from `tokens.account_id`, JWT `https://api.openai.com/auth.chatgpt_account_id`, or JWT `https://api.openai.com/auth.organizations[].id`
 - JWT user identity from `chatgpt_user_id` or `user_id`
 
 If account identity fields are missing or mismatched, import/login fails. Existing-registry foreground sync skips unsyncable auth files and continues with registry state already on disk.

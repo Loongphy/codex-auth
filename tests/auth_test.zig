@@ -56,6 +56,43 @@ test "parse auth info from jwt" {
     try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-user@example.com"));
 }
 
+test "parse auth info uses default organization when account id is missing" {
+    const gpa = std.testing.allocator;
+    const chatgpt_account_id = "org-AAUtH9infujszmwhH1BkVd9n";
+    const chatgpt_user_id = "user-FWx8fOqtJ2EIvndopK8mPrk4";
+
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = "{\"email\":\"org-user@example.com\",\"https://api.openai.com/auth\":{\"organizations\":[{\"id\":\"org-other\",\"is_default\":false,\"role\":\"member\",\"title\":\"Other\"},{\"id\":\"org-AAUtH9infujszmwhH1BkVd9n\",\"is_default\":true,\"role\":\"owner\",\"title\":\"Default\"}],\"groups\":[],\"localhost\":true,\"user_id\":\"user-FWx8fOqtJ2EIvndopK8mPrk4\"}}";
+
+    const h64 = try b64url(gpa, header);
+    defer gpa.free(h64);
+    const p64 = try b64url(gpa, payload);
+    defer gpa.free(p64);
+
+    const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
+    defer gpa.free(jwt);
+
+    const json = try std.fmt.allocPrint(
+        gpa,
+        "{{\"tokens\":{{\"access_token\":\"access-org-user@example.com\",\"account_id\":\"\",\"id_token\":\"{s}\"}}}}",
+        .{jwt},
+    );
+    defer gpa.free(json);
+
+    const info = try auth.parseAuthInfoData(gpa, json);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.email != null);
+    try std.testing.expect(std.mem.eql(u8, info.email.?, "org-user@example.com"));
+    try std.testing.expect(info.chatgpt_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.chatgpt_account_id.?, chatgpt_account_id));
+    try std.testing.expect(info.chatgpt_user_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.chatgpt_user_id.?, chatgpt_user_id));
+    try std.testing.expect(info.record_key != null);
+    const expected_record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    defer gpa.free(expected_record_key);
+    try std.testing.expect(std.mem.eql(u8, info.record_key.?, expected_record_key));
+}
+
 test "api key auth" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

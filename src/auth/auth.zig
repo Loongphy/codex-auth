@@ -157,6 +157,9 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                                 else => {},
                                                             }
                                                         }
+                                                        if (jwt_chatgpt_account_id == null) {
+                                                            jwt_chatgpt_account_id = try organizationAccountIdAlloc(allocator, aobj);
+                                                        }
                                                         if (aobj.get("chatgpt_plan_type")) |pt| {
                                                             switch (pt) {
                                                                 .string => |s| plan = parsePlanType(s),
@@ -187,11 +190,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 }
                                             }
 
-                                            const chatgpt_account_id = token_chatgpt_account_id orelse return error.MissingAccountId;
-                                            if (jwt_chatgpt_account_id == null) return error.MissingAccountId;
-                                            if (!std.mem.eql(u8, chatgpt_account_id, jwt_chatgpt_account_id.?)) return error.AccountIdMismatch;
-                                            allocator.free(jwt_chatgpt_account_id.?);
-                                            jwt_chatgpt_account_id = null;
+                                            const chatgpt_account_id = try resolveChatGptAccountId(token_chatgpt_account_id, jwt_chatgpt_account_id);
                                             const chatgpt_user_id_value = chatgpt_user_id orelse return error.MissingChatgptUserId;
                                             const record_key = try recordKeyAlloc(allocator, chatgpt_user_id_value, chatgpt_account_id);
 
@@ -207,7 +206,11 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 .auth_mode = .chatgpt,
                                             };
                                             email = null;
-                                            token_chatgpt_account_id = null;
+                                            if (token_chatgpt_account_id != null) {
+                                                token_chatgpt_account_id = null;
+                                            } else {
+                                                jwt_chatgpt_account_id = null;
+                                            }
                                             chatgpt_user_id = null;
                                             access_token = null;
                                             last_refresh = null;
@@ -329,6 +332,49 @@ fn parsePlanType(s: []const u8) registry.PlanType {
     if (std.ascii.eqlIgnoreCase(s, "enterprise")) return .enterprise;
     if (std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
     return .unknown;
+}
+
+fn organizationAccountIdAlloc(allocator: std.mem.Allocator, auth_obj: std.json.ObjectMap) !?[]u8 {
+    const organizations_val = auth_obj.get("organizations") orelse return null;
+    const organizations = switch (organizations_val) {
+        .array => |arr| arr,
+        else => return null,
+    };
+
+    var first_id: ?[]const u8 = null;
+    for (organizations.items) |organization_val| {
+        const organization_obj = switch (organization_val) {
+            .object => |obj| obj,
+            else => continue,
+        };
+        const id = jsonStringField(organization_obj, "id") orelse continue;
+        if (id.len == 0) continue;
+        if (first_id == null) first_id = id;
+
+        const is_default = if (organization_obj.get("is_default")) |is_default_val| switch (is_default_val) {
+            .bool => |value| value,
+            else => false,
+        } else false;
+        if (is_default) return try allocator.dupe(u8, id);
+    }
+
+    if (first_id) |id| return try allocator.dupe(u8, id);
+    return null;
+}
+
+fn resolveChatGptAccountId(
+    token_chatgpt_account_id: ?[]u8,
+    jwt_chatgpt_account_id: ?[]u8,
+) ![]u8 {
+    if (token_chatgpt_account_id) |token_id| {
+        if (jwt_chatgpt_account_id) |jwt_id| {
+            if (!std.mem.eql(u8, token_id, jwt_id)) return error.AccountIdMismatch;
+        }
+        return token_id;
+    }
+
+    const jwt_id = jwt_chatgpt_account_id orelse return error.MissingAccountId;
+    return jwt_id;
 }
 
 fn jsonStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {

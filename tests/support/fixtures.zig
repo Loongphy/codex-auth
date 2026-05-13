@@ -163,12 +163,10 @@ pub fn authJsonWithoutEmailForEmail(allocator: std.mem.Allocator, email: []const
 pub fn authJsonWithoutAccountId(allocator: std.mem.Allocator, email: []const u8, plan: []const u8) ![]u8 {
     const chatgpt_user_id = try chatgptUserIdForEmailAlloc(allocator, email);
     defer allocator.free(chatgpt_user_id);
-    const chatgpt_account_id = try chatgptAccountIdForEmailAlloc(allocator, email);
-    defer allocator.free(chatgpt_account_id);
     const payload = try std.fmt.allocPrint(
         allocator,
-        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"{s}\",\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
-        .{ email, chatgpt_account_id, chatgpt_user_id, chatgpt_user_id, plan },
+        "{{\"email\":\"{s}\",\"https://api.openai.com/auth\":{{\"chatgpt_user_id\":\"{s}\",\"user_id\":\"{s}\",\"chatgpt_plan_type\":\"{s}\"}}}}",
+        .{ email, chatgpt_user_id, chatgpt_user_id, plan },
     );
     defer allocator.free(payload);
     const auth = try authJsonFromPayload(allocator, payload);
