@@ -19,7 +19,7 @@ installs a persistent CLI override for normal app launches.
 - `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock go through a generated guarded shim without running `codex-auth app` each time.
 - `codex-auth app unpatch` removes the persistent `CODEX_CLI_PATH` patch.
 - `--app-path <path>` points to the App executable or an installed package/app directory.
-- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, `app` and `app patch` fetch the latest Loongphy codext release, replace the managed cached CLI, and use that file; they do not reuse an existing `CODEX_CLI_PATH` from the current shell. `app status` only reports the current cache and does not download.
+- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, `app` and `app patch` fetch the latest Loongphy codext release metadata, compare it with the managed cached CLI version, download only when the cached version differs or is missing, and use that file; they do not reuse an existing `CODEX_CLI_PATH` from the current shell. `app status` only reports the current cache and does not download.
 - `--home <path>` is injected as `CODEX_HOME` for `app` launches. For `app patch`, it selects the accounts cache and the Windows platform-state file that are prepared before persisting `CODEX_CLI_PATH`; it does not persist `CODEX_HOME`.
 - `--platform win|wsl|mac` selects the app runtime platform:
   - `win` writes the Windows global setting so the app runs the agent natively.
@@ -48,6 +48,7 @@ Default downloaded CLIs are cached directly under:
 
 ```text
 $CODEX_HOME/accounts/codext-cli/codex-<platform>
+$CODEX_HOME/accounts/codext-cli/codex-<platform>.version
 ```
 
 On Windows, the default download prepares both the Windows-native and WSL Linux

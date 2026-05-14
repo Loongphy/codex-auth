@@ -998,13 +998,11 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
     if (builtin.os.tag == .windows) {
         const win_asset = release.assetFor(.win) orelse return error.CodextReleaseAssetNotFound;
         const wsl_asset = release.assetFor(.wsl) orelse return error.CodextReleaseAssetNotFound;
-        try writeAppInfo("downloading from {s}\ndownloading from {s}\n", .{ win_asset.url, wsl_asset.url });
-        try downloadAndInstallCodextAsset(allocator, cache_root, .win, win_asset);
-        try downloadAndInstallCodextAsset(allocator, cache_root, .wsl, wsl_asset);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .win, win_asset);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .wsl, wsl_asset);
     } else {
         const asset = release.assetFor(platform) orelse return error.CodextReleaseAssetNotFound;
-        try writeAppInfo("downloading from {s}\n", .{asset.url});
-        try downloadAndInstallCodextAsset(allocator, cache_root, platform, asset);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, platform, asset);
     }
 
     const installed = try managedCodextExecutablePath(allocator, home, platform);
@@ -1019,6 +1017,58 @@ fn managedCodextExecutablePath(allocator: std.mem.Allocator, home: []const u8, p
     const name = try managedCodextExecutableName(allocator, platform);
     defer allocator.free(name);
     return try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, name });
+}
+
+fn ensureCodextAssetInstalled(
+    allocator: std.mem.Allocator,
+    cache_root: []const u8,
+    tag: []const u8,
+    platform: types.AppPlatform,
+    asset: CodextAsset,
+) !void {
+    if (try managedCodextAssetIsCurrent(allocator, cache_root, tag, platform, asset)) return;
+    try writeAppInfo("downloading from {s}\n", .{asset.url});
+    try downloadAndInstallCodextAsset(allocator, cache_root, tag, platform, asset);
+}
+
+fn managedCodextAssetIsCurrent(
+    allocator: std.mem.Allocator,
+    cache_root: []const u8,
+    tag: []const u8,
+    platform: types.AppPlatform,
+    asset: CodextAsset,
+) !bool {
+    const executable_name = try managedCodextExecutableName(allocator, platform);
+    defer allocator.free(executable_name);
+    const executable_path = try std.fs.path.join(allocator, &.{ cache_root, executable_name });
+    defer allocator.free(executable_path);
+    if (!fileExists(executable_path)) return false;
+
+    const version_path = try managedCodextVersionPath(allocator, cache_root, platform);
+    defer allocator.free(version_path);
+    var file = std.Io.Dir.cwd().openFile(app_runtime.io(), version_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer file.close(app_runtime.io());
+    const data = try registry.readFileAlloc(file, allocator, 16 * 1024);
+    defer allocator.free(data);
+
+    const expected = try managedCodextVersionText(allocator, tag, asset);
+    defer allocator.free(expected);
+    return std.mem.eql(u8, data, expected);
+}
+
+fn managedCodextVersionPath(allocator: std.mem.Allocator, cache_root: []const u8, platform: types.AppPlatform) ![]u8 {
+    const executable_name = try managedCodextExecutableName(allocator, platform);
+    defer allocator.free(executable_name);
+    const version_name = try std.fmt.allocPrint(allocator, "{s}.version", .{executable_name});
+    defer allocator.free(version_name);
+    return try std.fs.path.join(allocator, &.{ cache_root, version_name });
+}
+
+fn managedCodextVersionText(allocator: std.mem.Allocator, tag: []const u8, asset: CodextAsset) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "tag={s}\nasset={s}\n", .{ tag, asset.name });
 }
 
 const CodextAsset = struct {
@@ -1112,6 +1162,7 @@ fn dupeCodextAsset(allocator: std.mem.Allocator, name: []const u8, url: []const 
 fn downloadAndInstallCodextAsset(
     allocator: std.mem.Allocator,
     cache_root: []const u8,
+    tag: []const u8,
     platform: types.AppPlatform,
     asset: CodextAsset,
 ) !void {
@@ -1139,6 +1190,21 @@ fn downloadAndInstallCodextAsset(
         try runChecked(allocator, &[_][]const u8{ tarExecutable(), "-xzf", archive_path, "-C", extract_dir }, 120000);
     }
     try installManagedCodextExecutable(allocator, cache_root, extract_dir, platform);
+    try writeManagedCodextVersion(allocator, cache_root, tag, platform, asset);
+}
+
+fn writeManagedCodextVersion(
+    allocator: std.mem.Allocator,
+    cache_root: []const u8,
+    tag: []const u8,
+    platform: types.AppPlatform,
+    asset: CodextAsset,
+) !void {
+    const version_path = try managedCodextVersionPath(allocator, cache_root, platform);
+    defer allocator.free(version_path);
+    const data = try managedCodextVersionText(allocator, tag, asset);
+    defer allocator.free(data);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = version_path, .data = data });
 }
 
 fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8, timeout_ms: u64) !void {
