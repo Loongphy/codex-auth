@@ -12,7 +12,6 @@ const app_path_env = "CODEX_AUTH_APP_PATH";
 const wsl_agent_mode_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_cache_dir_name = "codext-cli";
-const guarded_shim_dir_name = "app-patch";
 const guarded_script_name = "codex-auth-app-shim";
 const guarded_windows_shim_name = "codex-auth-app-shim.exe";
 const mac_persistent_env_label = "com.codex-auth.app-env";
@@ -80,11 +79,12 @@ fn resolveCliPath(
     if (opts.cli_path) |path| return .{ .value = path, .source = .explicit };
 
     const target_platform = platform orelse nativeDefaultPlatform();
+    if (allow_download) {
+        const path = try downloadDefaultCodextCli(allocator, home, target_platform);
+        return .{ .value = path, .source = .downloaded, .owned = true };
+    }
     if (try cachedCodextCliPath(allocator, home, target_platform)) |path| return .{ .value = path, .source = .cached, .owned = true };
-    if (!allow_download) return .{ .value = null, .source = .not_set };
-
-    const path = try downloadDefaultCodextCli(allocator, home, target_platform);
-    return .{ .value = path, .source = .downloaded, .owned = true };
+    return .{ .value = null, .source = .not_set };
 }
 
 fn resolvePlatform(allocator: std.mem.Allocator, home: []const u8, explicit: ?types.AppPlatform) !ResolvedPlatform {
@@ -424,7 +424,9 @@ fn fileExists(path: []const u8) bool {
 
 pub fn isGuardedShimExecutablePath(path: []const u8) bool {
     const base = std.fs.path.basename(path);
-    return std.mem.eql(u8, base, guarded_windows_shim_name) or std.mem.eql(u8, base, guarded_script_name);
+    return std.mem.eql(u8, base, guarded_windows_shim_name) or
+        std.mem.eql(u8, base, guarded_script_name) or
+        (std.mem.startsWith(u8, base, "codex-patch-") and (std.mem.endsWith(u8, base, ".exe") or std.mem.indexOfScalar(u8, base, '.') == null));
 }
 
 const GuardedShimConfig = struct {
@@ -535,7 +537,7 @@ fn installGuardedCliShim(
 ) ![]u8 {
     const expected_root = try appGuardRootAlloc(allocator, app_launch_path, platform);
     defer allocator.free(expected_root);
-    const shim_dir = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, guarded_shim_dir_name, appPlatformName(platform) });
+    const shim_dir = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
     defer allocator.free(shim_dir);
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), shim_dir);
 
@@ -554,7 +556,9 @@ fn installWindowsGuardedCliShim(
 ) ![]u8 {
     const self_exe = try std.process.executablePathAlloc(app_runtime.io(), allocator);
     defer allocator.free(self_exe);
-    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_windows_shim_name });
+    const shim_name = try guardedShimFileName(allocator, .win);
+    defer allocator.free(shim_name);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, shim_name });
     errdefer allocator.free(shim_path);
     try std.Io.Dir.copyFileAbsolute(self_exe, shim_path, app_runtime.io(), .{ .replace = true, .make_path = true });
     const config_path = try std.fmt.allocPrint(allocator, "{s}.json", .{shim_path});
@@ -580,7 +584,9 @@ fn installWslGuardedCliShim(
     defer allocator.free(home_wsl);
     const script = try wslGuardedShimScript(allocator, expected_wsl, target_wsl, home_wsl);
     defer allocator.free(script);
-    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_script_name });
+    const shim_name = try guardedShimFileName(allocator, .wsl);
+    defer allocator.free(shim_name);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, shim_name });
     errdefer allocator.free(shim_path);
     try writeExecutableTextFile(shim_path, script);
     return shim_path;
@@ -596,7 +602,9 @@ fn installMacGuardedCliShim(
     defer allocator.free(expected_version);
     const script = try macGuardedShimScript(allocator, expected_root, expected_version, target_cli);
     defer allocator.free(script);
-    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, guarded_script_name });
+    const shim_name = try guardedShimFileName(allocator, .mac);
+    defer allocator.free(shim_name);
+    const shim_path = try std.fs.path.join(allocator, &.{ shim_dir, shim_name });
     errdefer allocator.free(shim_path);
     try writeExecutableTextFile(shim_path, script);
     return shim_path;
@@ -607,6 +615,13 @@ fn writeExecutableTextFile(path: []const u8, data: []const u8) !void {
     if (builtin.os.tag != .windows) {
         try std.Io.Dir.cwd().setFilePermissions(app_runtime.io(), path, std.Io.File.Permissions.fromMode(0o755), .{});
     }
+}
+
+fn guardedShimFileName(allocator: std.mem.Allocator, platform: types.AppPlatform) ![]u8 {
+    return if (platform == .win)
+        try std.fmt.allocPrint(allocator, "codex-patch-{s}.exe", .{codextPlatformCacheName(platform)})
+    else
+        try std.fmt.allocPrint(allocator, "codex-patch-{s}", .{codextPlatformCacheName(platform)});
 }
 
 fn guardedShimConfigText(allocator: std.mem.Allocator, expected_root: []const u8, target_cli: []const u8) ![]u8 {

@@ -19,7 +19,7 @@ installs a persistent CLI override for normal app launches.
 - `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock go through a generated guarded shim without running `codex-auth app` each time.
 - `codex-auth app unpatch` removes the persistent `CODEX_CLI_PATH` patch.
 - `--app-path <path>` points to the App executable or an installed package/app directory.
-- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, the command uses the managed cached/latest Loongphy codext CLI; it does not reuse an existing `CODEX_CLI_PATH` from the current shell.
+- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, `app` and `app patch` fetch the latest Loongphy codext release, replace the managed cached CLI, and use that file; they do not reuse an existing `CODEX_CLI_PATH` from the current shell. `app status` only reports the current cache and does not download.
 - `--home <path>` is injected as `CODEX_HOME` for `app` launches. For `app patch`, it selects the accounts cache and the Windows platform-state file that are prepared before persisting `CODEX_CLI_PATH`; it does not persist `CODEX_HOME`.
 - `--platform win|wsl|mac` selects the app runtime platform:
   - `win` writes the Windows global setting so the app runs the agent natively.
@@ -44,7 +44,7 @@ setting before persisting `CODEX_CLI_PATH`, so the selected backend keeps using
 the matching native Windows or Linux codext binary while the installed app
 version still matches the patch.
 
-Default downloaded CLIs are cached under:
+Default downloaded CLIs are cached directly under:
 
 ```text
 $CODEX_HOME/accounts/codext-cli/codex-<platform>
@@ -62,10 +62,11 @@ Windows app path such as `C:\Program Files\WindowsApps\...\app\Codex.exe` for
 On Windows, `app patch` writes the user environment variable with
 `[Environment]::SetEnvironmentVariable(..., 'User')` and broadcasts an
 environment change. The value points to a generated guarded shim under
-`$CODEX_HOME/accounts/codext-cli/app-patch/<platform>/`, not directly to the
-codext binary. Existing Codex App processes must still be closed; some
-already-running parent processes may require a fresh Explorer session, sign-out,
-or reboot before Start-menu launches inherit the updated variable.
+`$CODEX_HOME/accounts/codext-cli/codex-patch-<platform>`, and that shim points to
+the managed `codex-<platform>` file in the same directory. Existing Codex App
+processes must still be closed; some already-running parent processes may
+require a fresh Explorer session, sign-out, or reboot before Start-menu launches
+inherit the updated variable.
 
 On macOS, `app patch` sets the current `launchctl` GUI-session environment and
 installs `~/Library/LaunchAgents/com.codex-auth.app-env.plist` so the variable is
