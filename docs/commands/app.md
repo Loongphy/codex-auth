@@ -19,15 +19,14 @@ installs a persistent CLI override for normal app launches.
 - `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock go through a generated guarded shim without running `codex-auth app` each time.
 - `codex-auth app unpatch` removes the persistent `CODEX_CLI_PATH` patch.
 - `--app-path <path>` points to the App executable or an installed package/app directory.
-- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch. If it is omitted, `CODEX_CLI_PATH` is reused when set; otherwise launch downloads the latest Loongphy codext release into the accounts cache and uses that cached binary.
-- For `app patch`, an omitted `--cli-path` intentionally uses the managed cached/latest Loongphy codext CLI instead of reusing the current process environment.
+- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, the command uses the managed cached/latest Loongphy codext CLI; it does not reuse an existing `CODEX_CLI_PATH` from the current shell.
 - `--home <path>` is injected as `CODEX_HOME` for `app` launches. For `app patch`, it selects the accounts cache and the Windows platform-state file that are prepared before persisting `CODEX_CLI_PATH`; it does not persist `CODEX_HOME`.
 - `--platform win|wsl|mac` selects the app runtime platform:
   - `win` writes the Windows global setting so the app runs the agent natively.
   - `wsl` writes the Windows global setting so the app runs the agent inside WSL.
   - `mac` launches the macOS app directly and does not use the Windows WSL setting.
 - `--dry-run` prints the effective launch environment without starting the app.
-- `--wait` waits for the launched process to exit.
+- `--wait` waits for the launched process to exit and keeps its stdout/stderr attached. Without `--wait`, `app` starts the GUI app quietly and detaches from terminal output.
 - `-- <args>` passes remaining arguments to the app executable on non-Windows platforms.
 
 If `--app-path` is omitted, `CODEX_AUTH_APP_PATH` is used when set; otherwise
@@ -75,7 +74,8 @@ restored at login. The LaunchAgent also points at a generated guarded shim.
 
 This is only needed for persistent GUI launches from Finder, Dock, Spotlight, or
 login-restored sessions. One-shot `codex-auth app` launches do not need the
-LaunchAgent; they pass `CODEX_CLI_PATH` directly to the launched process.
+LaunchAgent; they pass the resolved `CODEX_CLI_PATH` directly to the launched
+process.
 
 The guarded shim is version-bound:
 

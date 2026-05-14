@@ -78,9 +78,6 @@ fn resolveCliPath(
     allow_download: bool,
 ) !ResolvedValue {
     if (opts.cli_path) |path| return .{ .value = path, .source = .explicit };
-    if (opts.action != .patch) {
-        if (getOptionalEnv(allocator, codex_cli_path_env)) |path| return .{ .value = path, .source = .env, .owned = true };
-    }
 
     const target_platform = platform orelse nativeDefaultPlatform();
     if (try cachedCodextCliPath(allocator, home, target_platform)) |path| return .{ .value = path, .source = .cached, .owned = true };
@@ -386,8 +383,8 @@ fn launchNative(
         .argv = argv.items,
         .environ_map = &env_map,
         .stdin = .ignore,
-        .stdout = .inherit,
-        .stderr = .inherit,
+        .stdout = if (opts.wait) .inherit else .ignore,
+        .stderr = if (opts.wait) .inherit else .ignore,
     });
     if (opts.wait) {
         _ = try child.wait(app_runtime.io());
@@ -1260,8 +1257,8 @@ fn launchWindowsViaPowerShell(
     var child = try std.process.spawn(app_runtime.io(), .{
         .argv = &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script },
         .stdin = .ignore,
-        .stdout = .inherit,
-        .stderr = .inherit,
+        .stdout = if (opts.wait) .inherit else .ignore,
+        .stderr = if (opts.wait) .inherit else .ignore,
     });
     _ = try child.wait(app_runtime.io());
 }
