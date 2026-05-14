@@ -11,6 +11,7 @@ pub const SwitchLiveActionController = selection.SwitchLiveActionController;
 pub const RemoveLiveActionController = selection.RemoveLiveActionController;
 
 pub const selectAccountWithLiveUpdates = live_view.selectAccountWithLiveUpdates;
+pub const viewAccountsWithSortableTable = live_view.viewAccountsWithSortableTable;
 pub const viewAccountsWithLiveUpdates = live_view.viewAccountsWithLiveUpdates;
 pub const runSwitchLiveActions = live_switch.runSwitchLiveActions;
 pub const runRemoveLiveActions = live_remove.runRemoveLiveActions;

@@ -21,6 +21,7 @@ const mapTuiOutputError = tui_mod.mapTuiOutputError;
 const indexWidth = row_data.indexWidth;
 const renderSwitchScreenViewport = render.renderSwitchScreenViewport;
 const renderListScreenViewport = render.renderListScreenViewport;
+const renderSwitchListViewport = render.renderSwitchListViewport;
 const shouldUseNumberedSwitchSelector = picker.shouldUseNumberedSwitchSelector;
 const selectWithNumbers = picker.selectWithNumbers;
 const dupeOptionalAccountKey = picker.dupeOptionalAccountKey;
@@ -63,6 +64,7 @@ pub fn selectAccountWithLiveUpdates(
 
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
+    var sort_spec: ?row_data.SortSpec = null;
     var viewport_start: usize = 0;
     var needs_render = true;
     var last_render_second: i64 = -1;
@@ -88,7 +90,7 @@ pub fn selectAccountWithLiveUpdates(
         }
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+            const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
             const total_accounts = accountRowCount(rows.items);
             if (total_accounts == 0) return null;
 
@@ -135,7 +137,7 @@ pub fn selectAccountWithLiveUpdates(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+                    const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
                     const total_accounts = accountRowCount(rows.items);
                     if (total_accounts == 0) return null;
                     const page_rows = live_tui.maxTableRows(
@@ -144,7 +146,7 @@ pub fn selectAccountWithLiveUpdates(
                     );
                     const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
-                    for (key_buf[0..key_count]) |key| {
+                    key_loop: for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up, .keyboard_up => {
@@ -201,6 +203,16 @@ pub fn selectAccountWithLiveUpdates(
                                 }
                             },
                             .redraw => needs_render = true,
+                            .mouse_click => |click| {
+                                const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
+                                if (live_tui.switchHeaderSortFieldForClick(rows, idx_width, 2, tui.terminalCols(), click)) |field| {
+                                    sort_spec = live_tui.toggledSortSpec(sort_spec, field);
+                                    viewport_start = 0;
+                                    rows_cache.invalidate(allocator);
+                                    needs_render = true;
+                                    break :key_loop;
+                                }
+                            },
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return null;
                                 if (ch == 'k') {
@@ -244,11 +256,14 @@ pub fn viewAccountsWithLiveUpdates(
 
     var tui: TuiSession = undefined;
     try tui.init();
-    defer tui.deinit();
+    var tui_deinitialized = false;
+    errdefer if (!tui_deinitialized) tui.deinit();
 
     const use_color = terminal_color.fileColorEnabled(tui.output);
     var viewport_start: usize = 0;
     var rendered_row_count: usize = current_display.reg.accounts.items.len;
+    var last_viewport: render.LiveListViewport = .{};
+    var sort_spec: ?row_data.SortSpec = null;
     var needs_render = true;
     var last_render_second: i64 = -1;
     var last_rows_minute: i64 = -1;
@@ -257,7 +272,7 @@ pub fn viewAccountsWithLiveUpdates(
     var frame: std.Io.Writer.Allocating = .init(allocator);
     defer frame.deinit();
 
-    while (true) {
+    main_loop: while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
             current_display.deinit(allocator);
             current_display = updated;
@@ -272,7 +287,7 @@ pub fn viewAccountsWithLiveUpdates(
             last_rows_minute = now_minute;
         }
         if (needs_render or now_second != last_render_second) {
-            const rows = try rows_cache.ensure(allocator, current_display.borrowed());
+            const rows = try rows_cache.ensureList(allocator, current_display.borrowed(), sort_spec);
             rendered_row_count = rows.items.len;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
@@ -297,6 +312,7 @@ pub fn viewAccountsWithLiveUpdates(
                 bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
             try tui.drawFrame(frame.written());
+            last_viewport = bounded_viewport;
             last_render_second = now_second;
             needs_render = false;
         }
@@ -307,24 +323,34 @@ pub fn viewAccountsWithLiveUpdates(
                 try controller.maybe_start_refresh(controller.context);
                 continue;
             },
-            .closed => return,
+            .closed => break :main_loop,
             .ready => |key_count| {
                 if (key_count != 0) {
                     const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines("status"));
                     const wheel_rows = live_tui.mouseWheelRows(max_rows);
-                    const rows = try rows_cache.ensure(allocator, current_display.borrowed());
+                    const rows = try rows_cache.ensureList(allocator, current_display.borrowed(), sort_spec);
                     rendered_row_count = rows.items.len;
 
-                    for (key_buf[0..key_count]) |key| {
+                    key_loop: for (key_buf[0..key_count]) |key| {
                         if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {
                             needs_render = true;
                             continue;
                         }
                         switch (key) {
-                            .quit => return,
+                            .quit => break :main_loop,
                             .redraw => needs_render = true,
+                            .mouse_click => |click| {
+                                const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+                                if (live_tui.listHeaderSortFieldForClick(rows, idx_width, tui.terminalCols(), click)) |field| {
+                                    sort_spec = live_tui.toggledSortSpec(sort_spec, field);
+                                    viewport_start = 0;
+                                    rows_cache.invalidate(allocator);
+                                    needs_render = true;
+                                    break :key_loop;
+                                }
+                            },
                             .byte => |ch| {
-                                if (isQuitKey(ch)) return;
+                                if (isQuitKey(ch)) break :main_loop;
                             },
                             else => {},
                         }
@@ -333,4 +359,154 @@ pub fn viewAccountsWithLiveUpdates(
             },
         }
     }
+
+    const final_table = try buildListExitTableSnapshot(
+        allocator,
+        current_display.borrowed(),
+        &rows_cache,
+        sort_spec,
+        use_color,
+        last_viewport,
+    );
+    defer allocator.free(final_table);
+
+    tui.deinit();
+    tui_deinitialized = true;
+    try writeListExitTable(final_table);
+}
+
+pub fn viewAccountsWithSortableTable(
+    allocator: std.mem.Allocator,
+    display: SwitchSelectionDisplay,
+) !void {
+    var tui: TuiSession = undefined;
+    try tui.init();
+    var tui_deinitialized = false;
+    errdefer if (!tui_deinitialized) tui.deinit();
+
+    const use_color = terminal_color.fileColorEnabled(tui.output);
+    var viewport_start: usize = 0;
+    var rendered_row_count: usize = display.reg.accounts.items.len;
+    var last_viewport: render.LiveListViewport = .{};
+    var sort_spec: ?row_data.SortSpec = null;
+    var needs_render = true;
+    var rows_cache: live_tui.RowsCache = .{};
+    defer rows_cache.deinit(allocator);
+    var frame: std.Io.Writer.Allocating = .init(allocator);
+    defer frame.deinit();
+
+    main_loop: while (true) {
+        if (needs_render) {
+            const rows = try rows_cache.ensureList(allocator, display, sort_spec);
+            rendered_row_count = rows.items.len;
+            const viewport = live_tui.listViewport(
+                tui.terminalRows(),
+                rows.items.len,
+                live_tui.listFixedLines(""),
+                &viewport_start,
+            );
+            var bounded_viewport = viewport;
+            bounded_viewport.max_cols = tui.terminalCols();
+
+            frame.clearRetainingCapacity();
+            renderListScreenViewport(
+                &frame.writer,
+                display.reg,
+                rows.items,
+                @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)),
+                rows.widths,
+                use_color,
+                "",
+                bounded_viewport,
+            ) catch |err| return mapTuiOutputError(err);
+            try tui.drawFrame(frame.written());
+            last_viewport = bounded_viewport;
+            needs_render = false;
+        }
+
+        var key_buf: [live_tui.key_buffer_len]tui_mod.TuiInputKey = undefined;
+        switch (try tui.readInputKeys(-1, &key_buf)) {
+            .timeout => continue,
+            .closed => break :main_loop,
+            .ready => |key_count| {
+                if (key_count != 0) {
+                    const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines(""));
+                    const wheel_rows = live_tui.mouseWheelRows(max_rows);
+                    const rows = try rows_cache.ensureList(allocator, display, sort_spec);
+                    rendered_row_count = rows.items.len;
+
+                    key_loop: for (key_buf[0..key_count]) |key| {
+                        if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {
+                            needs_render = true;
+                            continue;
+                        }
+                        switch (key) {
+                            .quit => break :main_loop,
+                            .redraw => needs_render = true,
+                            .mouse_click => |click| {
+                                const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+                                if (live_tui.listHeaderSortFieldForClick(rows, idx_width, tui.terminalCols(), click)) |field| {
+                                    sort_spec = live_tui.toggledSortSpec(sort_spec, field);
+                                    viewport_start = 0;
+                                    rows_cache.invalidate(allocator);
+                                    needs_render = true;
+                                    break :key_loop;
+                                }
+                            },
+                            .byte => |ch| {
+                                if (isQuitKey(ch)) break :main_loop;
+                            },
+                            else => {},
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    const final_table = try buildListExitTableSnapshot(
+        allocator,
+        display,
+        &rows_cache,
+        sort_spec,
+        use_color,
+        last_viewport,
+    );
+    defer allocator.free(final_table);
+
+    tui.deinit();
+    tui_deinitialized = true;
+    try writeListExitTable(final_table);
+}
+
+fn buildListExitTableSnapshot(
+    allocator: std.mem.Allocator,
+    display: SwitchSelectionDisplay,
+    rows_cache: *live_tui.RowsCache,
+    sort_spec: ?row_data.SortSpec,
+    use_color: bool,
+    viewport: render.LiveListViewport,
+) ![]u8 {
+    const rows = try rows_cache.ensureList(allocator, display, sort_spec);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    errdefer output.deinit();
+    renderSwitchListViewport(
+        &output.writer,
+        display.reg,
+        rows.items,
+        @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)),
+        rows.widths,
+        null,
+        use_color,
+        viewport,
+    ) catch |err| return mapTuiOutputError(err);
+    return try output.toOwnedSlice();
+}
+
+fn writeListExitTable(table: []const u8) !void {
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
+    const out = &stdout.interface;
+    try out.writeAll(table);
+    try out.flush();
 }

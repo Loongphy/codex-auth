@@ -114,11 +114,17 @@ pub const TuiNavigation = enum {
     scroll_down,
 };
 
+pub const TuiMouseClick = struct {
+    col: usize,
+    row: usize,
+};
+
 pub const TuiEscapeClassification = union(enum) {
     incomplete,
     ignore,
     keyboard_enhancement_supported,
     navigation: TuiNavigation,
+    mouse_click: TuiMouseClick,
 };
 
 pub const TuiEscapeAction = enum {
@@ -134,11 +140,13 @@ pub const TuiEscapeAction = enum {
     end,
     scroll_up,
     scroll_down,
+    mouse_click,
     keyboard_enhancement_supported,
 };
 
 pub const TuiEscapeReadResult = struct {
     action: TuiEscapeAction,
+    mouse_click: ?TuiMouseClick = null,
     buffered_bytes_consumed: usize,
 };
 
@@ -169,6 +177,7 @@ pub const TuiInputKey = union(enum) {
     quit,
     backspace,
     redraw,
+    mouse_click: TuiMouseClick,
     byte: u8,
 };
 
@@ -228,13 +237,13 @@ else
     }.call;
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h");
+    try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h");
     try out.writeAll("\x1b[?u\x1b[>7u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l");
+    try out.writeAll("\x1b[<1u\x1b[?1006l\x1b[?1000l\x1b[?1007l\x1b[?25h\x1b[?1049l");
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
@@ -273,9 +282,9 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
 
 pub fn switchTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n"
+        "Keys: Up/Down or j/k, 1-9 type, click headers sort, Enter select, Esc or q quit\n"
     else
-        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n";
+        "Keys: ↑/↓ or j/k, 1-9 type, click headers sort, Enter select, Esc or q quit\n";
 }
 
 pub fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
@@ -288,9 +297,9 @@ pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_col
 
 pub fn removeTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n"
+        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, click headers sort, Enter delete, Esc or q quit\n"
     else
-        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n";
+        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, click headers sort, Enter delete, Esc or q quit\n";
 }
 
 pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
@@ -303,9 +312,9 @@ pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_col
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n"
+        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, click headers sort, Esc or q quit\n"
     else
-        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n";
+        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, click headers sort, Esc or q quit\n";
 }
 
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
@@ -494,6 +503,9 @@ pub const TuiSession = struct {
                     .end => appendTuiInputKey(keys, &key_count, .end),
                     .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
                     .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
+                    .mouse_click => if (escape.mouse_click) |mouse_click| {
+                        appendTuiInputKey(keys, &key_count, .{ .mouse_click = mouse_click });
+                    },
                     .quit => appendTuiInputKey(keys, &key_count, .quit),
                     .keyboard_enhancement_supported => self.keyboard_enhancement_supported = true,
                     .ignore => {},
@@ -695,11 +707,11 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                     if (final >= '@' and final <= '~') break :blk .ignore;
                     break :blk .incomplete;
                 }
-                const first_semicolon = std.mem.indexOfScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
-                const button_code = std.fmt.parseInt(usize, seq[2 .. 2 + first_semicolon], 10) catch break :blk .ignore;
-                break :blk switch (button_code) {
+                const mouse = parseSgrMouse(seq) orelse break :blk .ignore;
+                break :blk switch (mouse.button_code) {
                     64 => .{ .navigation = .scroll_up },
                     65 => .{ .navigation = .scroll_down },
+                    0 => if (mouse.pressed) .{ .mouse_click = .{ .col = mouse.col, .row = mouse.row } } else .ignore,
                     else => .ignore,
                 };
             }
@@ -749,6 +761,36 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     };
 }
 
+const SgrMouseEvent = struct {
+    button_code: usize,
+    col: usize,
+    row: usize,
+    pressed: bool,
+};
+
+fn parseSgrMouse(seq: []const u8) ?SgrMouseEvent {
+    if (seq.len < "[<0;1;1M".len or seq[0] != '[' or seq[1] != '<') return null;
+    const final = seq[seq.len - 1];
+    if (final != 'M' and final != 'm') return null;
+
+    var parts = std.mem.splitScalar(u8, seq[2 .. seq.len - 1], ';');
+    const button_raw = parts.next() orelse return null;
+    const col_raw = parts.next() orelse return null;
+    const row_raw = parts.next() orelse return null;
+    if (parts.next() != null) return null;
+
+    const button_code = std.fmt.parseInt(usize, button_raw, 10) catch return null;
+    const col = std.fmt.parseInt(usize, col_raw, 10) catch return null;
+    const row = std.fmt.parseInt(usize, row_raw, 10) catch return null;
+    if (col == 0 or row == 0) return null;
+    return .{
+        .button_code = button_code,
+        .col = col,
+        .row = row,
+        .pressed = final == 'M',
+    };
+}
+
 pub fn readTuiEscapeAction(
     tty: std.Io.File,
     buffered_tail: []const u8,
@@ -777,6 +819,11 @@ pub fn readTuiEscapeAction(
                     },
                     .buffered_bytes_consumed = buffered_bytes_consumed,
                 };
+            },
+            .mouse_click => |mouse_click| return .{
+                .action = .mouse_click,
+                .mouse_click = mouse_click,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
             },
             .keyboard_enhancement_supported => return .{
                 .action = .keyboard_enhancement_supported,

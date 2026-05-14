@@ -7,6 +7,7 @@ const terminal_color = @import("../terminal/color.zig");
 const row_data = @import("rows.zig");
 const render = @import("render.zig");
 const tui_mod = @import("tui.zig");
+const live_tui = @import("live_tui.zig");
 const style = @import("style.zig");
 const io = @import("io.zig");
 const nav = @import("picker_nav.zig");
@@ -23,6 +24,8 @@ const writeRemoveTuiFooter = tui_mod.writeRemoveTuiFooter;
 const mapTuiOutputError = tui_mod.mapTuiOutputError;
 const readFileOnce = io.readFileOnce;
 const accountIndexForSelectable = nav.accountIndexForSelectable;
+const accountIdForSelectable = nav.accountIdForSelectable;
+const selectableIndexForAccountKey = nav.selectableIndexForAccountKey;
 const isQuitKey = nav.isQuitKey;
 
 pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool, stdout_is_tty: bool) bool {
@@ -65,14 +68,13 @@ fn selectRemoveWithNumbers(
     defer rows.deinit(allocator);
     const use_color = style.stdoutColorEnabled();
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
-    const widths = rows.widths;
 
     var checked = try allocator.alloc(bool, rows.selectable_row_indices.len);
     defer allocator.free(checked);
     @memset(checked, false);
 
     try out.writeAll("Select accounts to delete:\n\n");
-    try renderRemoveList(out, reg, rows.items, idx_width, widths, null, checked, use_color);
+    try renderRemoveList(out, reg, rows.items, idx_width, rows.widths, null, checked, use_color);
     try out.writeAll("Enter account numbers (comma/space separated, empty to cancel): ");
     try out.flush();
 
@@ -147,13 +149,13 @@ fn selectRemoveInteractive(
     var number_len: usize = 0;
     const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
-    const widths = rows.widths;
+    var sort_spec: ?row_data.SortSpec = null;
 
     while (true) {
         try tui.resetFrame();
         writeTuiPromptLine(out, "Select accounts to delete:", number_buf[0..number_len]) catch |err| return mapTuiOutputError(err);
         out.writeAll("\n") catch |err| return mapTuiOutputError(err);
-        renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color) catch |err| return mapTuiOutputError(err);
+        renderRemoveList(out, reg, rows.items, idx_width, rows.widths, idx, checked, use_color) catch |err| return mapTuiOutputError(err);
         out.writeAll("\n") catch |err| return mapTuiOutputError(err);
         writeRemoveTuiFooter(out, use_color) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
@@ -210,6 +212,7 @@ fn selectRemoveInteractive(
                     }
                 },
                 .redraw => continue,
+                .mouse_click => {},
                 .byte => |ch| {
                     if (isQuitKey(ch)) return null;
                     if (ch == 'k' and idx > 0) {
@@ -265,6 +268,23 @@ fn selectRemoveInteractive(
                         }
                     },
                     .quit => return null,
+                    .mouse_click => {
+                        if (escape.mouse_click) |click| {
+                            if (live_tui.removeHeaderSortFieldForClick(&rows, idx_width, 3, tui.terminalCols(), click)) |field| {
+                                try rebuildInteractiveRemoveRowsForSort(
+                                    allocator,
+                                    reg,
+                                    usage_overrides,
+                                    &rows,
+                                    &checked,
+                                    &idx,
+                                    &sort_spec,
+                                    field,
+                                );
+                                number_len = 0;
+                            }
+                        }
+                    },
                     .keyboard_enhancement_supported, .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
@@ -326,5 +346,53 @@ fn selectRemoveInteractive(
                 continue;
             }
         }
+    }
+}
+
+fn rebuildInteractiveRemoveRowsForSort(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    rows: *row_data.SwitchRows,
+    checked: *[]bool,
+    idx: *usize,
+    sort_spec: *?row_data.SortSpec,
+    field: row_data.SortField,
+) !void {
+    const selected_key = if (rows.selectable_row_indices.len != 0)
+        try allocator.dupe(u8, accountIdForSelectable(rows, reg, idx.*))
+    else
+        null;
+    defer if (selected_key) |key| allocator.free(key);
+
+    const checked_by_account = try allocator.alloc(bool, reg.accounts.items.len);
+    defer allocator.free(checked_by_account);
+    @memset(checked_by_account, false);
+    for (checked.*, 0..) |flag, selectable_idx| {
+        if (flag) checked_by_account[accountIndexForSelectable(rows, selectable_idx)] = true;
+    }
+
+    sort_spec.* = live_tui.toggledSortSpec(sort_spec.*, field);
+    var next_rows = try row_data.buildSortableRowsWithUsageOverrides(allocator, reg, null, usage_overrides, sort_spec.*);
+    errdefer next_rows.deinit(allocator);
+
+    const next_checked = try allocator.alloc(bool, next_rows.selectable_row_indices.len);
+    errdefer allocator.free(next_checked);
+    for (next_checked, 0..) |*flag, selectable_idx| {
+        flag.* = checked_by_account[accountIndexForSelectable(&next_rows, selectable_idx)];
+    }
+
+    rows.deinit(allocator);
+    rows.* = next_rows;
+    allocator.free(checked.*);
+    checked.* = next_checked;
+
+    if (selected_key) |key| {
+        idx.* = selectableIndexForAccountKey(rows, reg, key) orelse 0;
+    } else {
+        idx.* = 0;
+    }
+    if (rows.selectable_row_indices.len != 0 and idx.* >= rows.selectable_row_indices.len) {
+        idx.* = rows.selectable_row_indices.len - 1;
     }
 }

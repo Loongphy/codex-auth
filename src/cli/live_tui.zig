@@ -5,6 +5,7 @@ const picker = @import("picker.zig");
 const render = @import("render.zig");
 const row_data = @import("rows.zig");
 const selection = @import("selection.zig");
+const table_layout = @import("table_layout.zig");
 const tui_mod = @import("tui.zig");
 
 pub const tick_ms = tui_mod.live_ui_tick_ms;
@@ -235,6 +236,82 @@ pub fn applyListViewportKey(
     }
 }
 
+pub fn toggledSortSpec(current: ?row_data.SortSpec, field: row_data.SortField) row_data.SortSpec {
+    if (current) |spec| {
+        if (spec.field == field) {
+            return .{
+                .field = field,
+                .direction = if (spec.direction == .asc) .desc else .asc,
+            };
+        }
+    }
+    return .{ .field = field, .direction = .asc };
+}
+
+pub fn listHeaderSortFieldForClick(
+    rows: *const row_data.SwitchRows,
+    idx_width: usize,
+    max_cols: ?usize,
+    click: tui_mod.TuiMouseClick,
+) ?row_data.SortField {
+    return tableHeaderSortFieldForClick(rows, 2 + idx_width + 1, 1, max_cols, click);
+}
+
+pub fn switchHeaderSortFieldForClick(
+    rows: *const row_data.SwitchRows,
+    idx_width: usize,
+    header_row: usize,
+    max_cols: ?usize,
+    click: tui_mod.TuiMouseClick,
+) ?row_data.SortField {
+    return tableHeaderSortFieldForClick(rows, 2 + idx_width + 1, header_row, max_cols, click);
+}
+
+pub fn removeHeaderSortFieldForClick(
+    rows: *const row_data.SwitchRows,
+    idx_width: usize,
+    header_row: usize,
+    max_cols: ?usize,
+    click: tui_mod.TuiMouseClick,
+) ?row_data.SortField {
+    return tableHeaderSortFieldForClick(rows, 2 + 3 + 1 + idx_width + 1, header_row, max_cols, click);
+}
+
+pub fn tableHeaderSortFieldForClick(
+    rows: *const row_data.SwitchRows,
+    prefix_width: usize,
+    header_row: usize,
+    max_cols: ?usize,
+    click: tui_mod.TuiMouseClick,
+) ?row_data.SortField {
+    if (click.row != header_row) return null;
+
+    const bounded = table_layout.boundWidths(rows.widths, prefix_width, max_cols);
+    const widths = [_]usize{
+        bounded.email,
+        bounded.plan,
+        bounded.rate_5h,
+        bounded.rate_week,
+        bounded.last,
+    };
+    const fields = [_]row_data.SortField{
+        .account,
+        .plan,
+        .five_hour,
+        .weekly,
+        .last_activity,
+    };
+
+    var start_col = prefix_width + 1;
+    for (widths, 0..) |width, idx| {
+        if (width != 0 and click.col >= start_col and click.col < start_col + width) {
+            return fields[idx];
+        }
+        start_col += width + 2;
+    }
+    return null;
+}
+
 pub fn buildSelectableRows(
     allocator: std.mem.Allocator,
     display: selection.SwitchSelectionDisplay,
@@ -269,6 +346,17 @@ pub const RowsCache = struct {
         return &self.rows.?;
     }
 
+    pub fn ensureList(
+        self: *RowsCache,
+        allocator: std.mem.Allocator,
+        display: selection.SwitchSelectionDisplay,
+        sort_spec: ?row_data.SortSpec,
+    ) !*row_data.SwitchRows {
+        if (self.rows) |*rows| return rows;
+        self.rows = try row_data.buildListRowsWithUsageOverrides(allocator, display.reg, display.usage_overrides, sort_spec);
+        return &self.rows.?;
+    }
+
     pub fn ensureSelectable(
         self: *RowsCache,
         allocator: std.mem.Allocator,
@@ -277,6 +365,20 @@ pub const RowsCache = struct {
         if (self.rows) |*rows| return rows;
         var rows = try buildSelectableRows(allocator, display);
         errdefer rows.deinit(allocator);
+        self.rows = rows;
+        return &self.rows.?;
+    }
+
+    pub fn ensureSortable(
+        self: *RowsCache,
+        allocator: std.mem.Allocator,
+        display: selection.SwitchSelectionDisplay,
+        sort_spec: ?row_data.SortSpec,
+    ) !*row_data.SwitchRows {
+        if (self.rows) |*rows| return rows;
+        var rows = try row_data.buildSortableRowsWithUsageOverrides(allocator, display.reg, null, display.usage_overrides, sort_spec);
+        errdefer rows.deinit(allocator);
+        try row_data.filterErroredRowsFromSelectableIndices(allocator, &rows);
         self.rows = rows;
         return &self.rows.?;
     }

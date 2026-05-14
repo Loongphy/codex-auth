@@ -1,4 +1,5 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const cli = @import("../cli/root.zig");
 const format = @import("../tui/table.zig");
 const registry = @import("../registry/root.zig");
@@ -96,5 +97,17 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         defaultAccountFetcher,
         account_api_enabled,
     );
+    if (shouldUseInteractiveList()) {
+        try cli.live.viewAccountsWithSortableTable(allocator, .{
+            .reg = &reg,
+            .usage_overrides = usage_state.usage_overrides,
+        });
+        return;
+    }
     try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+}
+
+fn shouldUseInteractiveList() bool {
+    return (std.Io.File.stdin().isTty(app_runtime.io()) catch false) and
+        (std.Io.File.stdout().isTty(app_runtime.io()) catch false);
 }

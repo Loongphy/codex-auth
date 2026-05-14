@@ -7,6 +7,7 @@ const terminal_color = @import("../terminal/color.zig");
 const row_data = @import("rows.zig");
 const render = @import("render.zig");
 const tui_mod = @import("tui.zig");
+const live_tui = @import("live_tui.zig");
 const style = @import("style.zig");
 const io = @import("io.zig");
 const nav = @import("picker_nav.zig");
@@ -28,6 +29,7 @@ const accountIdForSelectable = nav.accountIdForSelectable;
 const accountRowCount = nav.accountRowCount;
 const displayedIndexForSelectable = nav.displayedIndexForSelectable;
 const selectableIndexForDisplayedAccount = nav.selectableIndexForDisplayedAccount;
+const selectableIndexForAccountKey = nav.selectableIndexForAccountKey;
 const accountIdForDisplayedAccount = nav.accountIdForDisplayedAccount;
 const parsedDisplayedIndex = nav.parsedDisplayedIndex;
 const selectedDisplayIndexForRender = nav.selectedDisplayIndexForRender;
@@ -185,7 +187,7 @@ fn selectInteractiveFromIndices(
     var number_len: usize = 0;
     const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
-    const widths = rows.widths;
+    var sort_spec: ?row_data.SortSpec = null;
 
     while (true) {
         const selected_display_idx = selectedDisplayIndexForRender(
@@ -199,7 +201,7 @@ fn selectInteractiveFromIndices(
             reg,
             rows.items,
             idx_width,
-            widths,
+            rows.widths,
             selected_display_idx,
             use_color,
             "",
@@ -253,6 +255,7 @@ fn selectInteractiveFromIndices(
                     }
                 },
                 .redraw => continue,
+                .mouse_click => {},
                 .byte => |ch| {
                     if (isQuitKey(ch)) return null;
                     if (ch == 'k' and rows.selectable_row_indices.len != 0 and idx > 0) {
@@ -316,6 +319,23 @@ fn selectInteractiveFromIndices(
                         }
                     },
                     .quit => return null,
+                    .mouse_click => {
+                        if (escape.mouse_click) |click| {
+                            if (live_tui.switchHeaderSortFieldForClick(&rows, idx_width, 2, tui.terminalCols(), click)) |field| {
+                                try rebuildInteractiveSwitchRowsForSort(
+                                    allocator,
+                                    reg,
+                                    indices,
+                                    usage_overrides,
+                                    &rows,
+                                    &idx,
+                                    &sort_spec,
+                                    field,
+                                );
+                                number_len = 0;
+                            }
+                        }
+                    },
                     .keyboard_enhancement_supported, .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
@@ -390,7 +410,7 @@ fn selectInteractive(
     var number_len: usize = 0;
     const use_color = terminal_color.fileColorEnabled(tui.output);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
-    const widths = rows.widths;
+    var sort_spec: ?row_data.SortSpec = null;
 
     while (true) {
         const selected_display_idx = selectedDisplayIndexForRender(
@@ -404,7 +424,7 @@ fn selectInteractive(
             reg,
             rows.items,
             idx_width,
-            widths,
+            rows.widths,
             selected_display_idx,
             use_color,
             "",
@@ -458,6 +478,7 @@ fn selectInteractive(
                     }
                 },
                 .redraw => continue,
+                .mouse_click => {},
                 .byte => |ch| {
                     if (isQuitKey(ch)) return null;
                     if (ch == 'k' and rows.selectable_row_indices.len != 0 and idx > 0) {
@@ -521,6 +542,23 @@ fn selectInteractive(
                         }
                     },
                     .quit => return null,
+                    .mouse_click => {
+                        if (escape.mouse_click) |click| {
+                            if (live_tui.switchHeaderSortFieldForClick(&rows, idx_width, 2, tui.terminalCols(), click)) |field| {
+                                try rebuildInteractiveSwitchRowsForSort(
+                                    allocator,
+                                    reg,
+                                    null,
+                                    usage_overrides,
+                                    &rows,
+                                    &idx,
+                                    &sort_spec,
+                                    field,
+                                );
+                                number_len = 0;
+                            }
+                        }
+                    },
                     .keyboard_enhancement_supported, .ignore => {},
                 }
                 i += escape.buffered_bytes_consumed;
@@ -569,5 +607,39 @@ fn selectInteractive(
                 continue;
             }
         }
+    }
+}
+
+fn rebuildInteractiveSwitchRowsForSort(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    indices: ?[]const usize,
+    usage_overrides: ?[]const ?[]const u8,
+    rows: *row_data.SwitchRows,
+    idx: *usize,
+    sort_spec: *?row_data.SortSpec,
+    field: row_data.SortField,
+) !void {
+    const selected_key = if (rows.selectable_row_indices.len != 0)
+        try allocator.dupe(u8, accountIdForSelectable(rows, reg, idx.*))
+    else
+        null;
+    defer if (selected_key) |key| allocator.free(key);
+
+    sort_spec.* = live_tui.toggledSortSpec(sort_spec.*, field);
+    var next_rows = try row_data.buildSortableRowsWithUsageOverrides(allocator, reg, indices, usage_overrides, sort_spec.*);
+    errdefer next_rows.deinit(allocator);
+    try filterErroredRowsFromSelectableIndices(allocator, &next_rows);
+
+    rows.deinit(allocator);
+    rows.* = next_rows;
+
+    if (selected_key) |key| {
+        idx.* = selectableIndexForAccountKey(rows, reg, key) orelse 0;
+    } else {
+        idx.* = 0;
+    }
+    if (rows.selectable_row_indices.len != 0 and idx.* >= rows.selectable_row_indices.len) {
+        idx.* = rows.selectable_row_indices.len - 1;
     }
 }

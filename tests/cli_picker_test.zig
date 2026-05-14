@@ -55,6 +55,37 @@ test "Scenario: Given q quit input when checking switch picker helpers then both
     try std.testing.expect(!isQuitKey('j'));
 }
 
+test "Scenario: Given list header mouse clicks when mapping them then column sort fields are returned" {
+    const rows = cli.rows.SwitchRows{
+        .items = &[_]SwitchRow{},
+        .selectable_row_indices = &[_]usize{},
+        .widths = .{
+            .email = 10,
+            .plan = 4,
+            .rate_5h = 5,
+            .rate_week = 6,
+            .last = 8,
+        },
+    };
+    const idx_width: usize = 2;
+
+    try std.testing.expectEqual(cli.rows.SortField.account, live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 6, .row = 1 }).?);
+    try std.testing.expectEqual(cli.rows.SortField.plan, live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 18, .row = 1 }).?);
+    try std.testing.expectEqual(cli.rows.SortField.five_hour, live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 24, .row = 1 }).?);
+    try std.testing.expectEqual(cli.rows.SortField.weekly, live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 31, .row = 1 }).?);
+    try std.testing.expectEqual(cli.rows.SortField.last_activity, live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 39, .row = 1 }).?);
+    try std.testing.expect(live_tui.listHeaderSortFieldForClick(&rows, idx_width, null, .{ .col = 18, .row = 2 }) == null);
+    try std.testing.expectEqual(cli.rows.SortField.account, live_tui.switchHeaderSortFieldForClick(&rows, idx_width, 2, null, .{ .col = 6, .row = 2 }).?);
+    try std.testing.expect(live_tui.switchHeaderSortFieldForClick(&rows, idx_width, 2, null, .{ .col = 6, .row = 1 }) == null);
+    try std.testing.expectEqual(cli.rows.SortField.account, live_tui.removeHeaderSortFieldForClick(&rows, idx_width, 3, null, .{ .col = 10, .row = 3 }).?);
+    try std.testing.expectEqual(cli.rows.SortField.plan, live_tui.removeHeaderSortFieldForClick(&rows, idx_width, 3, null, .{ .col = 22, .row = 3 }).?);
+
+    const first = live_tui.toggledSortSpec(null, .plan);
+    try std.testing.expectEqual(cli.rows.SortDirection.asc, first.direction);
+    const second = live_tui.toggledSortSpec(first, .plan);
+    try std.testing.expectEqual(cli.rows.SortDirection.desc, second.direction);
+}
+
 fn makeTestRegistry() registry.Registry {
     return .{
         .schema_version = registry.current_schema_version,
@@ -1372,15 +1403,15 @@ test "Scenario: Given live screen status and footers with color when rendering t
 
 test "Scenario: Given Windows console labels when rendering unicode-prone output then ASCII fallbacks are used" {
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        "Keys: Up/Down or j/k, 1-9 type, click headers sort, Enter select, Esc or q quit\n",
         switchTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, click headers sort, Enter delete, Esc or q quit\n",
         removeTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, click headers sort, Esc or q quit\n",
         listTuiFooterText(true),
     );
     try std.testing.expectEqualStrings("[+]", importReportMarker(.imported, true));
@@ -1390,15 +1421,15 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
 
 test "Scenario: Given non-Windows console labels when rendering unicode-prone output then the richer glyphs remain" {
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        "Keys: ↑/↓ or j/k, 1-9 type, click headers sort, Enter select, Esc or q quit\n",
         switchTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, click headers sort, Enter delete, Esc or q quit\n",
         removeTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, click headers sort, Esc or q quit\n",
         listTuiFooterText(false),
     );
     try std.testing.expectEqualStrings("✓", importReportMarker(.imported, false));

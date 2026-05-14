@@ -54,6 +54,7 @@ pub fn runRemoveLiveActions(
 
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
+    var sort_spec: ?row_data.SortSpec = null;
     var viewport_start: usize = 0;
     var follow_selection = true;
     var needs_render = true;
@@ -82,7 +83,7 @@ pub fn runRemoveLiveActions(
         }
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            const rows = try rows_cache.ensure(allocator, borrowed);
+            const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
 
             const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
             try checked_flags_buf.resize(allocator, rows.selectable_row_indices.len);
@@ -135,14 +136,14 @@ pub fn runRemoveLiveActions(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    const rows = try rows_cache.ensure(allocator, borrowed);
+                    const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
                     const page_rows = live_tui.maxTableRows(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", action_message orelse ""),
                     );
                     const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
-                    for (key_buf[0..key_count]) |key| {
+                    key_loop: for (key_buf[0..key_count]) |key| {
                         const cursor_idx = try live_tui.resolveSelectedIndex(allocator, &cursor_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
@@ -248,6 +249,17 @@ pub fn runRemoveLiveActions(
                                 }
                             },
                             .redraw => needs_render = true,
+                            .mouse_click => |click| {
+                                const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+                                if (live_tui.removeHeaderSortFieldForClick(rows, idx_width, 2, tui.terminalCols(), click)) |field| {
+                                    sort_spec = live_tui.toggledSortSpec(sort_spec, field);
+                                    viewport_start = 0;
+                                    follow_selection = true;
+                                    rows_cache.invalidate(allocator);
+                                    needs_render = true;
+                                    break :key_loop;
+                                }
+                            },
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {

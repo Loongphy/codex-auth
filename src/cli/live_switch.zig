@@ -53,6 +53,7 @@ pub fn runSwitchLiveActions(
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
     var auto_switch_state = live_tui.LiveAutoSwitchState.init(controller.auto_switch);
+    var sort_spec: ?row_data.SortSpec = null;
     var viewport_start: usize = 0;
     var follow_selection = true;
     var needs_render = true;
@@ -93,7 +94,7 @@ pub fn runSwitchLiveActions(
 
         if (auto_switch_state.takePending()) {
             const borrowed = current_display.borrowed();
-            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+            const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
             if (try maybeAutoSwitchTargetKeyAlloc(allocator, borrowed, rows)) |target_key| {
                 defer allocator.free(target_key);
                 const outcome = controller.apply_selection(controller.refresh.context, allocator, borrowed, target_key) catch |err| {
@@ -122,7 +123,7 @@ pub fn runSwitchLiveActions(
 
         if (needs_render or now_second != last_render_second) {
             const borrowed = current_display.borrowed();
-            const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+            const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
             const total_accounts = accountRowCount(rows.items);
             const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
             const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
@@ -168,7 +169,7 @@ pub fn runSwitchLiveActions(
             .ready => |key_count| {
                 if (key_count != 0) {
                     const borrowed = current_display.borrowed();
-                    const rows = try rows_cache.ensureSelectable(allocator, borrowed);
+                    const rows = try rows_cache.ensureSortable(allocator, borrowed, sort_spec);
                     const total_accounts = accountRowCount(rows.items);
                     const page_rows = live_tui.maxTableRows(
                         tui.terminalRows(),
@@ -176,7 +177,7 @@ pub fn runSwitchLiveActions(
                     );
                     const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
-                    for (key_buf[0..key_count]) |key| {
+                    key_loop: for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
                         switch (key) {
                             .move_up => {
@@ -284,6 +285,17 @@ pub fn runSwitchLiveActions(
                                 }
                             },
                             .redraw => needs_render = true,
+                            .mouse_click => |click| {
+                                const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
+                                if (live_tui.switchHeaderSortFieldForClick(rows, idx_width, 2, tui.terminalCols(), click)) |field| {
+                                    sort_spec = live_tui.toggledSortSpec(sort_spec, field);
+                                    viewport_start = 0;
+                                    follow_selection = true;
+                                    rows_cache.invalidate(allocator);
+                                    needs_render = true;
+                                    break :key_loop;
+                                }
+                            },
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {

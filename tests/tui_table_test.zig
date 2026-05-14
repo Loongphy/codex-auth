@@ -235,3 +235,31 @@ test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
     try std.testing.expect(std.mem.indexOf(u8, output, "user@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "API_KEY") != null);
 }
+
+test "buildListRowsWithUsageOverrides sorts account rows for live list clicks" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "bravo@example.com", "", .free);
+    try appendTestAccount(gpa, &reg, "user-2::acc-2", "alpha@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-3::acc-3", "charlie@example.com", "", .plus);
+
+    var account_rows = try codex_auth.cli.rows.buildListRowsWithUsageOverrides(gpa, &reg, null, .{
+        .field = .account,
+        .direction = .asc,
+    });
+    defer account_rows.deinit(gpa);
+    try std.testing.expectEqualStrings("alpha@example.com", account_rows.items[0].account);
+    try std.testing.expectEqualStrings("bravo@example.com", account_rows.items[1].account);
+    try std.testing.expectEqualStrings("charlie@example.com", account_rows.items[2].account);
+
+    var plan_rows = try codex_auth.cli.rows.buildListRowsWithUsageOverrides(gpa, &reg, null, .{
+        .field = .plan,
+        .direction = .asc,
+    });
+    defer plan_rows.deinit(gpa);
+    try std.testing.expectEqualStrings("Business", plan_rows.items[0].plan);
+    try std.testing.expectEqualStrings("Free", plan_rows.items[1].plan);
+    try std.testing.expectEqualStrings("Plus", plan_rows.items[2].plan);
+}

@@ -48,6 +48,24 @@ pub const SwitchRows = struct {
     }
 };
 
+pub const SortField = enum {
+    account,
+    plan,
+    five_hour,
+    weekly,
+    last_activity,
+};
+
+pub const SortDirection = enum {
+    asc,
+    desc,
+};
+
+pub const SortSpec = struct {
+    field: SortField,
+    direction: SortDirection,
+};
+
 pub fn filterErroredRowsFromSelectableIndices(allocator: std.mem.Allocator, rows: *SwitchRows) !void {
     var selectable_count: usize = 0;
     for (rows.selectable_row_indices) |row_idx| {
@@ -107,7 +125,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolveDisplayPlan(&rec)) |p| registry.planLabel(p) else "-";
+            const plan = displayPlan(&rec);
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
@@ -155,6 +173,108 @@ pub fn buildSwitchRowsWithUsageOverrides(
     };
 }
 
+pub fn buildListRowsWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    sort_spec: ?SortSpec,
+) !SwitchRows {
+    return buildSortableRowsWithUsageOverrides(allocator, reg, null, usage_overrides, sort_spec);
+}
+
+pub fn buildSortableRowsWithUsageOverrides(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    maybe_indices: ?[]const usize,
+    usage_overrides: ?[]const ?[]const u8,
+    sort_spec: ?SortSpec,
+) !SwitchRows {
+    const spec = sort_spec orelse {
+        if (maybe_indices) |indices| {
+            return buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, usage_overrides);
+        }
+        return buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
+    };
+
+    const source_len = if (maybe_indices) |indices| indices.len else reg.accounts.items.len;
+    const indices = try allocator.alloc(usize, source_len);
+    defer allocator.free(indices);
+    if (maybe_indices) |source_indices| {
+        @memcpy(indices, source_indices);
+    } else {
+        for (indices, 0..) |*slot, idx| slot.* = idx;
+    }
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    std.sort.insertion(usize, indices, SortContext{
+        .reg = reg,
+        .usage_overrides = usage_overrides,
+        .spec = spec,
+        .now = now,
+    }, sortedAccountLessThan);
+
+    var rows = try allocator.alloc(SwitchRow, indices.len);
+    var initialized_rows: usize = 0;
+    errdefer {
+        for (rows[0..initialized_rows]) |*row| row.deinit(allocator);
+        allocator.free(rows);
+    }
+
+    var selectable = try allocator.alloc(usize, indices.len);
+    errdefer allocator.free(selectable);
+
+    var widths = SwitchWidths{
+        .email = "EMAIL".len,
+        .plan = "PLAN".len,
+        .rate_5h = "5H".len,
+        .rate_week = "WEEKLY".len,
+        .last = "LAST".len,
+    };
+
+    for (indices, 0..) |account_idx, i| {
+        const rec = reg.accounts.items[account_idx];
+        const plan = displayPlan(&rec);
+        const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+        const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+        const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+        const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
+        errdefer allocator.free(rate_5h_str);
+        const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
+        errdefer allocator.free(rate_week_str);
+        const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
+        errdefer allocator.free(last);
+        const account = try sortedAccountCellAlloc(allocator, reg, account_idx);
+        errdefer allocator.free(account);
+
+        rows[i] = .{
+            .account_index = account_idx,
+            .account = account,
+            .plan = plan,
+            .rate_5h = rate_5h_str,
+            .rate_week = rate_week_str,
+            .last = last,
+            .depth = 0,
+            .is_active = isActive(reg, account_idx),
+            .has_error = usage_override != null,
+            .is_header = false,
+        };
+        initialized_rows += 1;
+        selectable[i] = i;
+        widths.email = @max(widths.email, account.len);
+        widths.plan = @max(widths.plan, plan.len);
+        widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
+        widths.rate_week = @max(widths.rate_week, rate_week_str.len);
+        widths.last = @max(widths.last, last.len);
+    }
+
+    if (widths.email > 32) widths.email = 32;
+    return .{
+        .items = rows,
+        .selectable_row_indices = selectable,
+        .widths = widths,
+    };
+}
+
 fn buildSwitchRowsFromIndices(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -183,7 +303,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolveDisplayPlan(&rec)) |p| registry.planLabel(p) else "-";
+            const plan = displayPlan(&rec);
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
@@ -353,4 +473,146 @@ pub fn indexWidth(count: usize) usize {
         width += 1;
     }
     return width;
+}
+
+const SortContext = struct {
+    reg: *registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    spec: SortSpec,
+    now: i64,
+};
+
+fn sortedAccountLessThan(ctx: SortContext, lhs: usize, rhs: usize) bool {
+    const order = sortedAccountOrder(ctx, lhs, rhs);
+    return order == .lt;
+}
+
+fn sortedAccountOrder(ctx: SortContext, lhs: usize, rhs: usize) std.math.Order {
+    const order = switch (ctx.spec.field) {
+        .account => accountOrder(ctx.reg, lhs, rhs, ctx.spec.direction),
+        .plan => planOrder(ctx.reg, lhs, rhs, ctx.spec.direction),
+        .five_hour => rateOrder(ctx.reg, ctx.usage_overrides, lhs, rhs, 300, true, ctx.now, ctx.spec.direction),
+        .weekly => rateOrder(ctx.reg, ctx.usage_overrides, lhs, rhs, 10080, false, ctx.now, ctx.spec.direction),
+        .last_activity => optionalI64Order(
+            ctx.reg.accounts.items[lhs].last_usage_at,
+            ctx.reg.accounts.items[rhs].last_usage_at,
+            ctx.spec.direction,
+        ),
+    };
+    if (order != .eq) return order;
+    return accountOrder(ctx.reg, lhs, rhs, .asc);
+}
+
+fn accountOrder(reg: *const registry.Registry, lhs: usize, rhs: usize, direction: SortDirection) std.math.Order {
+    const a = &reg.accounts.items[lhs];
+    const b = &reg.accounts.items[rhs];
+    const email_order = maybeReverseOrder(std.mem.order(u8, a.email, b.email), direction);
+    if (email_order != .eq) return email_order;
+
+    const a_label = stableAccountLabel(a);
+    const b_label = stableAccountLabel(b);
+    const label_order = maybeReverseOrder(std.mem.order(u8, a_label, b_label), direction);
+    if (label_order != .eq) return label_order;
+
+    return maybeReverseOrder(std.mem.order(u8, a.account_key, b.account_key), direction);
+}
+
+fn planOrder(reg: *const registry.Registry, lhs: usize, rhs: usize, direction: SortDirection) std.math.Order {
+    const a = &reg.accounts.items[lhs];
+    const b = &reg.accounts.items[rhs];
+    return maybeReverseOrder(std.mem.order(u8, displayPlan(a), displayPlan(b)), direction);
+}
+
+fn rateOrder(
+    reg: *const registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    lhs: usize,
+    rhs: usize,
+    minutes: i64,
+    fallback_primary: bool,
+    now: i64,
+    direction: SortDirection,
+) std.math.Order {
+    return optionalI64Order(
+        rateSortValue(reg, usage_overrides, lhs, minutes, fallback_primary, now),
+        rateSortValue(reg, usage_overrides, rhs, minutes, fallback_primary, now),
+        direction,
+    );
+}
+
+fn rateSortValue(
+    reg: *const registry.Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    account_idx: usize,
+    minutes: i64,
+    fallback_primary: bool,
+    now: i64,
+) ?i64 {
+    if (usageOverrideForAccount(usage_overrides, account_idx) != null) return null;
+    const window = resolveRateWindow(reg.accounts.items[account_idx].last_usage, minutes, fallback_primary) orelse return null;
+    const reset_at = window.resets_at orelse return null;
+    if (now >= reset_at) return 100;
+    return remainingPercent(window.used_percent);
+}
+
+fn optionalI64Order(lhs: ?i64, rhs: ?i64, direction: SortDirection) std.math.Order {
+    if (lhs == null and rhs == null) return .eq;
+    if (lhs == null) return .gt;
+    if (rhs == null) return .lt;
+    return maybeReverseOrder(intOrder(i64, lhs.?, rhs.?), direction);
+}
+
+fn intOrder(comptime T: type, lhs: T, rhs: T) std.math.Order {
+    if (lhs < rhs) return .lt;
+    if (lhs > rhs) return .gt;
+    return .eq;
+}
+
+fn maybeReverseOrder(order: std.math.Order, direction: SortDirection) std.math.Order {
+    if (direction == .asc) return order;
+    return switch (order) {
+        .lt => .gt,
+        .gt => .lt,
+        .eq => .eq,
+    };
+}
+
+fn sortedAccountCellAlloc(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    account_idx: usize,
+) ![]u8 {
+    const rec = &reg.accounts.items[account_idx];
+    if (sameEmailAccountCount(reg, rec.email) <= 1) return allocator.dupe(u8, rec.email);
+
+    const fallback = displayPlan(rec);
+    const label = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, fallback);
+    defer allocator.free(label);
+    return std.fmt.allocPrint(allocator, "{s} ({s})", .{ rec.email, label });
+}
+
+fn sameEmailAccountCount(reg: *const registry.Registry, email: []const u8) usize {
+    var count: usize = 0;
+    for (reg.accounts.items) |rec| {
+        if (std.mem.eql(u8, rec.email, email)) count += 1;
+    }
+    return count;
+}
+
+fn stableAccountLabel(rec: *const registry.AccountRecord) []const u8 {
+    if (rec.alias.len != 0) return rec.alias;
+    if (rec.account_name) |account_name| {
+        if (account_name.len != 0) return account_name;
+    }
+    return displayPlan(rec);
+}
+
+fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
+    return if (registry.resolveDisplayPlan(rec)) |plan| registry.planLabel(plan) else "-";
+}
+
+fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
+    const active = reg.active_account_key orelse return false;
+    return std.mem.eql(u8, active, reg.accounts.items[account_idx].account_key);
 }

@@ -78,6 +78,22 @@ test "Scenario: Given long SGR mouse wheel escape suffix when reading it then th
     try std.testing.expectEqual(@as(usize, "[<65;120;40M".len), result.buffered_bytes_consumed);
 }
 
+test "Scenario: Given SGR mouse click escape suffix when classifying it then click coordinates are preserved" {
+    switch (classifyTuiEscapeSuffix("[<0;12;1M")) {
+        .mouse_click => |click| {
+            try std.testing.expectEqual(@as(usize, 12), click.col);
+            try std.testing.expectEqual(@as(usize, 1), click.row);
+        },
+        else => return error.TestUnexpectedResult,
+    }
+
+    const result = try readTuiEscapeAction(std.Io.File.stdin(), "[<0;12;1M", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.mouse_click, result.action);
+    try std.testing.expect(result.mouse_click != null);
+    try std.testing.expectEqual(@as(usize, 12), result.mouse_click.?.col);
+    try std.testing.expectEqual(@as(usize, 1), result.mouse_click.?.row);
+}
+
 test "Scenario: Given unrelated tty escape suffixes when classifying them then they are ignored instead of acting like quit" {
     try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("x"));
     try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[200~"));
@@ -93,15 +109,15 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
     try writeTuiExitTo(&aw.writer);
 
     try std.testing.expectEqualStrings(
-        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?u\x1b[>7u" ++
+        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h\x1b[?u\x1b[>7u" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l",
+            "\x1b[<1u\x1b[?1006l\x1b[?1000l\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007h") != null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007l") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1000h") == null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1006h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1000h") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1006h") != null);
 }
 
 test "Scenario: Given shared TUI frame redraw when writing it then it clears only the alternate screen frame instead of appending full screens" {
