@@ -969,44 +969,17 @@ fn expandTildePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn cachedCodextCliPath(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) !?[]u8 {
-    const platform_name = codextPlatformCacheName(platform);
-    const root_path = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
-    defer allocator.free(root_path);
-
-    var root = std.Io.Dir.cwd().openDir(app_runtime.io(), root_path, .{ .iterate = true }) catch |err| switch (err) {
-        error.FileNotFound => return null,
-        else => return err,
-    };
-    defer root.close(app_runtime.io());
-
-    var best: ?[]u8 = null;
-    var best_tag: ?[]u8 = null;
-    var it = root.iterate();
-    while (try it.next(app_runtime.io())) |entry| {
-        if (entry.kind != .directory) continue;
-        const candidate = try findCachedCodextExecutable(allocator, root_path, entry.name, platform_name, platform) orelse continue;
-        if (fileExists(candidate)) {
-            if (best_tag == null or std.mem.order(u8, entry.name, best_tag.?) == .gt) {
-                if (best) |old| allocator.free(old);
-                if (best_tag) |old| allocator.free(old);
-                best = candidate;
-                best_tag = try allocator.dupe(u8, entry.name);
-            } else {
-                allocator.free(candidate);
-            }
-        } else {
-            allocator.free(candidate);
-        }
-    }
-    if (best_tag) |tag| allocator.free(tag);
-    return best;
+    const candidate = try managedCodextExecutablePath(allocator, home, platform);
+    if (fileExists(candidate)) return candidate;
+    allocator.free(candidate);
+    return null;
 }
 
 fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) ![]u8 {
     const release = try fetchLatestCodextRelease(allocator);
     defer release.deinit(allocator);
 
-    const cache_root = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, release.tag });
+    const cache_root = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
     defer allocator.free(cache_root);
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), cache_root);
 
@@ -1022,7 +995,7 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
         try downloadAndInstallCodextAsset(allocator, cache_root, platform, asset);
     }
 
-    const installed = try std.fs.path.join(allocator, &.{ cache_root, codextPlatformCacheName(platform), codextExecutableName(platform) });
+    const installed = try managedCodextExecutablePath(allocator, home, platform);
     if (!fileExists(installed)) {
         allocator.free(installed);
         return error.CodextReleaseInstallFailed;
@@ -1030,20 +1003,10 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
     return installed;
 }
 
-fn findCachedCodextExecutable(
-    allocator: std.mem.Allocator,
-    root_path: []const u8,
-    tag: []const u8,
-    platform_name: []const u8,
-    platform: types.AppPlatform,
-) !?[]u8 {
-    const primary = try std.fs.path.join(allocator, &.{ root_path, tag, platform_name, codextExecutableName(platform) });
-    if (fileExists(primary)) return primary;
-    allocator.free(primary);
-    const legacy = try std.fs.path.join(allocator, &.{ root_path, tag, platform_name, codextReleaseExecutableName(platform) });
-    if (fileExists(legacy)) return legacy;
-    allocator.free(legacy);
-    return null;
+fn managedCodextExecutablePath(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) ![]u8 {
+    const name = try managedCodextExecutableName(allocator, platform);
+    defer allocator.free(name);
+    return try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, name });
 }
 
 const CodextAsset = struct {
@@ -1140,27 +1103,30 @@ fn downloadAndInstallCodextAsset(
     platform: types.AppPlatform,
     asset: CodextAsset,
 ) !void {
-    const platform_dir = try std.fs.path.join(allocator, &.{ cache_root, codextPlatformCacheName(platform) });
-    defer allocator.free(platform_dir);
-    if (isDirectory(platform_dir)) try std.Io.Dir.cwd().deleteTree(app_runtime.io(), platform_dir);
-    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), platform_dir);
+    const extract_dir_name = try std.fmt.allocPrint(allocator, ".extract-{s}", .{codextPlatformCacheName(platform)});
+    defer allocator.free(extract_dir_name);
+    const extract_dir = try std.fs.path.join(allocator, &.{ cache_root, extract_dir_name });
+    defer allocator.free(extract_dir);
+    if (isDirectory(extract_dir)) try std.Io.Dir.cwd().deleteTree(app_runtime.io(), extract_dir);
+    defer std.Io.Dir.cwd().deleteTree(app_runtime.io(), extract_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), extract_dir);
 
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
-    const archive_path = try std.fs.path.join(allocator, &.{ platform_dir, archive_name });
+    const archive_path = try std.fs.path.join(allocator, &.{ extract_dir, archive_name });
     defer allocator.free(archive_path);
     try runChecked(allocator, &[_][]const u8{ curlExecutable(), "-L", "--fail", "--silent", "--show-error", "-o", archive_path, asset.url }, 120000);
     if (platform == .win) {
         const archive_quoted = try psSingleQuoteAlloc(allocator, archive_path);
         defer allocator.free(archive_quoted);
-        const dest_quoted = try psSingleQuoteAlloc(allocator, platform_dir);
+        const dest_quoted = try psSingleQuoteAlloc(allocator, extract_dir);
         defer allocator.free(dest_quoted);
         const script = try std.fmt.allocPrint(allocator, "Expand-Archive -LiteralPath {s} -DestinationPath {s} -Force", .{ archive_quoted, dest_quoted });
         defer allocator.free(script);
         try runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 120000);
     } else {
-        try runChecked(allocator, &[_][]const u8{ tarExecutable(), "-xzf", archive_path, "-C", platform_dir }, 120000);
+        try runChecked(allocator, &[_][]const u8{ tarExecutable(), "-xzf", archive_path, "-C", extract_dir }, 120000);
     }
-    try normalizeCodextExecutableName(allocator, platform_dir, platform);
+    try installManagedCodextExecutable(allocator, cache_root, extract_dir, platform);
 }
 
 fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8, timeout_ms: u64) !void {
@@ -1208,14 +1174,34 @@ fn codextReleaseExecutableName(platform: types.AppPlatform) []const u8 {
     };
 }
 
-fn normalizeCodextExecutableName(allocator: std.mem.Allocator, platform_dir: []const u8, platform: types.AppPlatform) !void {
-    const target = try std.fs.path.join(allocator, &.{ platform_dir, codextExecutableName(platform) });
-    defer allocator.free(target);
-    if (fileExists(target)) return;
-    const source = try std.fs.path.join(allocator, &.{ platform_dir, codextReleaseExecutableName(platform) });
+fn managedCodextExecutableName(allocator: std.mem.Allocator, platform: types.AppPlatform) ![]u8 {
+    return if (platform == .win)
+        try std.fmt.allocPrint(allocator, "codex-{s}.exe", .{codextPlatformCacheName(platform)})
+    else
+        try std.fmt.allocPrint(allocator, "codex-{s}", .{codextPlatformCacheName(platform)});
+}
+
+fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []const u8, extract_dir: []const u8, platform: types.AppPlatform) !void {
+    const source = try extractedCodextExecutablePath(allocator, extract_dir, platform);
     defer allocator.free(source);
-    if (!fileExists(source)) return;
+    const target_name = try managedCodextExecutableName(allocator, platform);
+    defer allocator.free(target_name);
+    const target = try std.fs.path.join(allocator, &.{ cache_root, target_name });
+    defer allocator.free(target);
+    if (fileExists(target)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), target);
     try std.Io.Dir.renameAbsolute(source, target, app_runtime.io());
+}
+
+fn extractedCodextExecutablePath(allocator: std.mem.Allocator, extract_dir: []const u8, platform: types.AppPlatform) ![]u8 {
+    const primary = try std.fs.path.join(allocator, &.{ extract_dir, codextExecutableName(platform) });
+    if (fileExists(primary)) return primary;
+    allocator.free(primary);
+
+    const release = try std.fs.path.join(allocator, &.{ extract_dir, codextReleaseExecutableName(platform) });
+    if (fileExists(release)) return release;
+    allocator.free(release);
+
+    return error.CodextReleaseInstallFailed;
 }
 
 fn writeAppError(message: []const u8) !void {

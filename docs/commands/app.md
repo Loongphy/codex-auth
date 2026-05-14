@@ -48,7 +48,7 @@ version still matches the patch.
 Default downloaded CLIs are cached under:
 
 ```text
-$CODEX_HOME/accounts/codext-cli/<release-tag>/<platform>/codex
+$CODEX_HOME/accounts/codext-cli/codex-<platform>
 ```
 
 On Windows, the default download prepares both the Windows-native and WSL Linux
@@ -72,6 +72,10 @@ On macOS, `app patch` sets the current `launchctl` GUI-session environment and
 installs `~/Library/LaunchAgents/com.codex-auth.app-env.plist` so the variable is
 restored at login. The LaunchAgent also points at a generated guarded shim.
 `app unpatch` unloads and removes that LaunchAgent.
+
+This is only needed for persistent GUI launches from Finder, Dock, Spotlight, or
+login-restored sessions. One-shot `codex-auth app` launches do not need the
+LaunchAgent; they pass `CODEX_CLI_PATH` directly to the launched process.
 
 The guarded shim is version-bound:
 
