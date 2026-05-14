@@ -1,6 +1,6 @@
 const std = @import("std");
-const auto = @import("../auto/root.zig");
 const registry = @import("../registry/root.zig");
+const sessions = @import("../session.zig");
 const usage_api = @import("../api/usage.zig");
 
 const foreground_usage_refresh_concurrency: usize = 5;
@@ -32,6 +32,10 @@ const ForegroundUsageWorkerResult = struct {
         }
     }
 };
+
+fn skipsChatGptUsage(rec: *const registry.AccountRecord) bool {
+    return rec.auth_mode != null and rec.auth_mode.? == .apikey;
+}
 
 pub const ForegroundUsageOutcome = struct {
     attempted: bool = false,
@@ -118,12 +122,29 @@ pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled(
     reg: *registry.Registry,
     usage_api_enabled: bool,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicy(
+    return refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly(
         allocator,
         codex_home,
         reg,
         usage_api_enabled,
         false,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_api_enabled: bool,
+    active_only: bool,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicyAndActiveOnly(
+        allocator,
+        codex_home,
+        reg,
+        usage_api_enabled,
+        false,
+        active_only,
     );
 }
 
@@ -134,7 +155,25 @@ pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchF
     usage_api_enabled: bool,
     batch_fetch_failures_are_fatal: bool,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabled(
+    return refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicyAndActiveOnly(
+        allocator,
+        codex_home,
+        reg,
+        usage_api_enabled,
+        batch_fetch_failures_are_fatal,
+        false,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicyAndActiveOnly(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
+    active_only: bool,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndActiveOnly(
         allocator,
         codex_home,
         reg,
@@ -143,6 +182,7 @@ pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchF
         initForegroundUsagePool,
         usage_api_enabled,
         batch_fetch_failures_are_fatal,
+        active_only,
     );
 }
 
@@ -175,7 +215,31 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     usage_api_enabled: bool,
     batch_fetch_failures_are_fatal: bool,
 ) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersist(
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndActiveOnly(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        batch_fetcher,
+        pool_init,
+        usage_api_enabled,
+        batch_fetch_failures_are_fatal,
+        false,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndActiveOnly(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    batch_fetcher: ?UsageBatchFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
+    active_only: bool,
+) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
         allocator,
         codex_home,
         reg,
@@ -185,6 +249,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         usage_api_enabled,
         batch_fetch_failures_are_fatal,
         true,
+        active_only,
     );
 }
 
@@ -199,18 +264,46 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     batch_fetch_failures_are_fatal: bool,
     persist_registry: bool,
 ) !ForegroundUsageRefreshState {
+    return refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+        allocator,
+        codex_home,
+        reg,
+        usage_fetcher,
+        batch_fetcher,
+        pool_init,
+        usage_api_enabled,
+        batch_fetch_failures_are_fatal,
+        persist_registry,
+        false,
+    );
+}
+
+pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    usage_fetcher: UsageFetchDetailedFn,
+    batch_fetcher: ?UsageBatchFetchDetailedFn,
+    pool_init: ForegroundUsagePoolInitFn,
+    usage_api_enabled: bool,
+    batch_fetch_failures_are_fatal: bool,
+    persist_registry: bool,
+    active_only: bool,
+) !ForegroundUsageRefreshState {
     var state = try initForegroundUsageRefreshState(allocator, reg.accounts.items.len);
     errdefer state.deinit(allocator);
 
     if (!usage_api_enabled) {
         state.local_only_mode = true;
-        if (try auto.refreshActiveUsage(allocator, codex_home, reg)) {
+        if (try refreshActiveUsageFromLocalSessions(allocator, codex_home, reg)) {
             if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
         }
         return state;
     }
 
     if (reg.accounts.items.len == 0) return state;
+    const active_account_key = if (active_only) reg.active_account_key else null;
+    if (active_only and active_account_key == null) return state;
 
     const worker_results = try allocator.alloc(ForegroundUsageWorkerResult, reg.accounts.items.len);
     defer {
@@ -224,22 +317,36 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         defer auth_path_arena_state.deinit();
         const auth_path_arena = auth_path_arena_state.allocator();
 
-        const auth_paths = try auth_path_arena.alloc([]const u8, reg.accounts.items.len);
+        var fetch_account_indices = std.ArrayList(usize).empty;
+        defer fetch_account_indices.deinit(auth_path_arena);
+
         for (reg.accounts.items, 0..) |account, idx| {
-            auth_paths[idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+            if (active_only) {
+                const key = active_account_key.?;
+                if (!std.mem.eql(u8, account.account_key, key)) continue;
+            }
+            if (skipsChatGptUsage(&account)) continue;
+            try fetch_account_indices.append(auth_path_arena, idx);
+        }
+        if (fetch_account_indices.items.len == 0) break :batch_fetch;
+
+        const auth_paths = try auth_path_arena.alloc([]const u8, fetch_account_indices.items.len);
+        for (fetch_account_indices.items, 0..) |account_idx, fetch_idx| {
+            const account = &reg.accounts.items[account_idx];
+            auth_paths[fetch_idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
         }
 
         const batch_results = fetch_batch(
             allocator,
             auth_paths,
-            @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+            @min(fetch_account_indices.items.len, foreground_usage_refresh_concurrency),
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 if (batch_fetch_failures_are_fatal) return err;
                 const error_name = @errorName(err);
-                for (worker_results, 0..) |*worker_result, idx| {
-                    _ = idx;
+                for (fetch_account_indices.items) |account_idx| {
+                    const worker_result = &worker_results[account_idx];
                     worker_result.* = .{ .error_name = error_name };
                 }
                 break :batch_fetch;
@@ -250,7 +357,8 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             allocator.free(batch_results);
         }
 
-        for (batch_results, 0..) |*batch_result, idx| {
+        for (batch_results, 0..) |*batch_result, fetch_idx| {
+            const idx = fetch_account_indices.items[fetch_idx];
             worker_results[idx] = .{
                 .status_code = batch_result.status_code,
                 .error_code = batch_result.error_code,
@@ -261,11 +369,12 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             batch_result.snapshot = null;
         }
     } else {
-        var use_concurrent_usage_refresh = reg.accounts.items.len > 1;
+        const refresh_job_count: usize = if (active_only) 1 else reg.accounts.items.len;
+        var use_concurrent_usage_refresh = refresh_job_count > 1;
         if (use_concurrent_usage_refresh) {
             pool_init(
                 allocator,
-                @min(reg.accounts.items.len, foreground_usage_refresh_concurrency),
+                @min(refresh_job_count, foreground_usage_refresh_concurrency),
             ) catch |err| switch (err) {
                 error.OutOfMemory => return err,
                 else => use_concurrent_usage_refresh = false,
@@ -279,14 +388,20 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 reg,
                 usage_fetcher,
                 worker_results,
+                active_account_key,
+                active_only,
             );
         } else {
-            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results);
+            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, active_account_key, active_only);
         }
     }
 
     var registry_changed = false;
     for (worker_results, 0..) |*worker_result, idx| {
+        if (active_only) {
+            const key = active_account_key.?;
+            if (!std.mem.eql(u8, reg.accounts.items[idx].account_key, key)) continue;
+        }
         const outcome = &state.outcomes[idx];
         outcome.* = .{
             .attempted = true,
@@ -325,6 +440,43 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     return state;
 }
 
+fn refreshActiveUsageFromLocalSessions(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+) !bool {
+    const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    if (latest_usage == null) return false;
+
+    var latest = latest_usage.?;
+    var snapshot_consumed = false;
+    defer {
+        allocator.free(latest.path);
+        if (!snapshot_consumed) {
+            registry.freeRateLimitSnapshot(allocator, &latest.snapshot);
+        }
+    }
+
+    const account_key = reg.active_account_key orelse return false;
+    const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
+    if (latest.event_timestamp_ms < activated_at_ms) return false;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
+
+    const signature: registry.RolloutSignature = .{
+        .path = latest.path,
+        .event_timestamp_ms = latest.event_timestamp_ms,
+    };
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return false;
+
+    registry.updateUsage(allocator, reg, account_key, latest.snapshot);
+    snapshot_consumed = true;
+    try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest.path, latest.event_timestamp_ms);
+    return true;
+}
+
 pub fn initForegroundUsagePool(
     allocator: std.mem.Allocator,
     n_jobs: usize,
@@ -339,12 +491,18 @@ const ForegroundUsageWorkerQueue = struct {
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
+    active_account_key: ?[]const u8,
+    active_only: bool,
     next_index: std.atomic.Value(usize) = .init(0),
 
     fn run(self: *ForegroundUsageWorkerQueue) void {
         while (true) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.reg.accounts.items.len) return;
+            if (self.active_only) {
+                const key = self.active_account_key.?;
+                if (!std.mem.eql(u8, self.reg.accounts.items[idx].account_key, key)) continue;
+            }
 
             foregroundUsageRefreshWorker(
                 self.allocator,
@@ -364,10 +522,12 @@ fn runForegroundUsageRefreshWorkersConcurrently(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
+    active_account_key: ?[]const u8,
+    active_only: bool,
 ) !void {
-    const worker_count = @min(reg.accounts.items.len, foreground_usage_refresh_concurrency);
+    const worker_count = @min(if (active_only) 1 else reg.accounts.items.len, foreground_usage_refresh_concurrency);
     if (worker_count <= 1) {
-        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results);
+        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, active_account_key, active_only);
         return;
     }
 
@@ -377,6 +537,8 @@ fn runForegroundUsageRefreshWorkersConcurrently(
         .reg = reg,
         .usage_fetcher = usage_fetcher,
         .results = results,
+        .active_account_key = active_account_key,
+        .active_only = active_only,
     };
 
     const helper_count = worker_count - 1;
@@ -405,8 +567,14 @@ fn runForegroundUsageRefreshWorkersSerially(
     reg: *registry.Registry,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
+    active_account_key: ?[]const u8,
+    active_only: bool,
 ) void {
-    for (reg.accounts.items, 0..) |_, idx| {
+    for (reg.accounts.items, 0..) |account, idx| {
+        if (active_only) {
+            const key = active_account_key.?;
+            if (!std.mem.eql(u8, account.account_key, key)) continue;
+        }
         foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
     }
 }
@@ -419,6 +587,11 @@ fn foregroundUsageRefreshWorker(
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
 ) void {
+    if (skipsChatGptUsage(&reg.accounts.items[account_idx])) {
+        results[account_idx] = .{};
+        return;
+    }
+
     var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

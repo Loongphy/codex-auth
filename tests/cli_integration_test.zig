@@ -210,12 +210,101 @@ fn writeFailingFakeNode(dir: fs.Dir) !void {
     }
 }
 
+fn builtFakeNodePathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
+    const exe_name = if (builtin.os.tag == .windows) "fake-node.exe" else "fake-node";
+    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
+    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
+}
+
+fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
+    _ = project_root; // Only used on Windows via builtFakeNodePathAlloc.
+    try dir.makePath("fake-node-bin");
+    const me_body_b64 = "eyJpZCI6InVzZXJfYXBpX2UyZSIsImVtYWlsIjoiYXBpa2V5LWZsb3dAZXhhbXBsZS5jb20iLCJuYW1lIjoiQVBJIEZsb3cifQ==";
+    const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
+
+    if (builtin.os.tag == .windows) {
+        // On Windows, the .cmd fake node can't receive multi-line script args.
+        // The compiled fake-node.exe is used instead via CODEX_AUTH_NODE_EXECUTABLE.
+        // Just write the response files; the caller handles the env var.
+        try dir.writeFile(.{ .sub_path = "fake-node-bin/batch_body_b64.txt", .data = batch_body_b64 });
+        try dir.writeFile(.{ .sub_path = "fake-node-bin/me_body_b64.txt", .data = me_body_b64 });
+        return;
+    }
+
+    // On Linux/macOS, use a shell script. This avoids the game of copying the compiled
+    // fake-node binary and ensures the test runs fast.
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "#!/bin/sh\n" ++
+            "if [ \"$1\" = \"--version\" ]; then\n" ++
+            "  echo v22.0.0\n" ++
+            "  exit 0\n" ++
+            "fi\n" ++
+            "payload=$(cat)\n" ++
+            "if [ -n \"$payload\" ]; then\n" ++
+            "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
+            "  exit 0\n" ++
+            "fi\n" ++
+            "printf '%s\\n200\\nok\\n' '{s}'\n",
+        .{ batch_body_b64, me_body_b64 },
+    );
+    defer allocator.free(script);
+
+    const sub_path = fakeNodeCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
     return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
+}
+
+fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    fake_node_response_dir: []const u8,
+    args: []const []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_FAKE_NODE_RESPONSE_DIR", fake_node_response_dir);
+
+    // On Windows, point to the compiled fake-node.exe via a relative path so
+    // the access check uses cwd().access() which works in the test runner.
+    if (builtin.os.tag == .windows) {
+        try env_map.put("CODEX_AUTH_NODE_EXECUTABLE", "zig-out\\bin\\fake-node.exe");
+    }
+
+    return try runCapture(allocator, project_root, &env_map, argv.items);
 }
 
 fn runCliWithIsolatedHome(
@@ -238,7 +327,6 @@ fn runCliWithIsolatedHome(
     try env_map.put("USERPROFILE", home_root);
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -264,7 +352,6 @@ fn runCliWithIsolatedHomeAndCodexHome(
     try env_map.put("USERPROFILE", home_root);
     try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -292,7 +379,6 @@ fn runCliWithIsolatedHomeAndCodexHomeAndPath(
     try env_map.put("CODEX_HOME", codex_home);
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -319,7 +405,6 @@ fn runCliWithIsolatedHomeAndPath(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -347,7 +432,6 @@ fn runCliWithIsolatedHomeAndPathAndStdin(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     var child = std.process.spawn(fs.io(), .{
         .argv = argv.items,
@@ -415,7 +499,6 @@ fn runCliWithIsolatedHomeAndStdin(
     try env_map.put("USERPROFILE", home_root);
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
 
     var child = std.process.spawn(fs.io(), .{
         .argv = argv.items,
@@ -476,6 +559,19 @@ fn expectFailure(result: std.process.RunResult) !void {
     }
 }
 
+fn logRunResultIfFailed(label: []const u8, result: std.process.RunResult) void {
+    switch (result.term) {
+        .exited => |code| if (code == 0) return,
+        else => {},
+    }
+    std.log.err("{s} failed with term {any}\nstdout:\n{s}\nstderr:\n{s}", .{
+        label,
+        result.term,
+        result.stdout,
+        result.stderr,
+    });
+}
+
 fn authJsonPathAlloc(allocator: std.mem.Allocator, home_root: []const u8) ![]u8 {
     return fs.path.join(allocator, &[_][]const u8{ home_root, ".codex", "auth.json" });
 }
@@ -522,22 +618,6 @@ fn seedRegistryWithAccounts(
     const active_key = try fixtures.accountKeyForEmailAlloc(allocator, active_email);
     reg.active_account_key = active_key;
     reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
-    try registry.saveRegistry(allocator, codex_home, &reg);
-}
-
-fn setRegistryApiConfig(
-    allocator: std.mem.Allocator,
-    home_root: []const u8,
-    usage_enabled: bool,
-    account_enabled: bool,
-) !void {
-    const codex_home = try codexHomeAlloc(allocator, home_root);
-    defer allocator.free(codex_home);
-
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
-    reg.api.usage = usage_enabled;
-    reg.api.account = account_enabled;
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
@@ -986,6 +1066,144 @@ test "Scenario: Given repeated single-file import when running import then first
     try std.testing.expectEqualStrings("", second.stderr);
 }
 
+test "Scenario: Given API key import when listing with api refresh then stale snapshots do not render MissingAuth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+    try writeApiKeyFlowFakeNode(gpa, tmp.dir, project_root);
+
+    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
+    defer gpa.free(fake_node_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    defer gpa.free(path_override);
+
+    const api_key = "sk-e2e-api-key-flow";
+    try tmp.dir.writeFile(.{
+        .sub_path = "imports/api-key.json",
+        .data = "{\"OPENAI_API_KEY\":\"sk-e2e-api-key-flow\"}",
+    });
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "api-key.json" });
+    defer gpa.free(import_path);
+
+    const import_result = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        fake_node_dir,
+        &[_][]const u8{ "import", import_path },
+    );
+    defer gpa.free(import_result.stdout);
+    defer gpa.free(import_result.stderr);
+
+    logRunResultIfFailed("api key import", import_result);
+    try expectSuccess(import_result);
+    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "imported") != null);
+    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "api-key") != null);
+    try std.testing.expectEqualStrings("", import_result.stderr);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expectEqual(registry.AuthMode.apikey, loaded.accounts.items[0].auth_mode.?);
+    try std.testing.expectEqualStrings("apikey-flow@example.com", loaded.accounts.items[0].email);
+    const api_account_key = try gpa.dupe(u8, loaded.accounts.items[0].account_key);
+    defer gpa.free(api_account_key);
+
+    const api_snapshot_path = try registry.accountAuthPath(gpa, codex_home, api_account_key);
+    defer gpa.free(api_snapshot_path);
+    const api_snapshot = try fixtures.readFileAlloc(gpa, api_snapshot_path);
+    defer gpa.free(api_snapshot);
+    try std.testing.expect(std.mem.indexOf(u8, api_snapshot, api_key) != null);
+
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const registry_data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(registry_data);
+    try std.testing.expect(std.mem.indexOf(u8, registry_data, api_key) == null);
+
+    registry.updateUsage(gpa, &loaded, api_account_key, makeUsageSnapshot(88, 66));
+    const api_idx = registry.findAccountIndexByAccountKey(&loaded, api_account_key) orelse return error.TestExpectedEqual;
+    loaded.accounts.items[api_idx].last_usage_at = 1;
+
+    const chatgpt_email = "chatgpt-flow@example.com";
+    try fixtures.appendAccount(gpa, &loaded, chatgpt_email, "chatgpt", .plus);
+    const chatgpt_key = try fixtures.accountKeyForEmailAlloc(gpa, chatgpt_email);
+    defer gpa.free(chatgpt_key);
+    const chatgpt_snapshot_path = try registry.accountAuthPath(gpa, codex_home, chatgpt_key);
+    defer gpa.free(chatgpt_snapshot_path);
+    const chatgpt_auth = try fixtures.authJsonWithEmailPlan(gpa, chatgpt_email, "plus");
+    defer gpa.free(chatgpt_auth);
+    try registry.ensureAccountsDir(gpa, codex_home);
+    try fs.cwd().writeFile(.{ .sub_path = chatgpt_snapshot_path, .data = chatgpt_auth });
+    try registry.saveRegistry(gpa, codex_home, &loaded);
+
+    const first_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        fake_node_dir,
+        &[_][]const u8{ "list", "--api" },
+    );
+    defer gpa.free(first_list.stdout);
+    defer gpa.free(first_list.stderr);
+
+    logRunResultIfFailed("api key list before stale snapshot", first_list);
+    try expectSuccess(first_list);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "MissingAuth") == null);
+    try std.testing.expectEqualStrings("", first_list.stderr);
+
+    var refreshed = try registry.loadRegistry(gpa, codex_home);
+    defer refreshed.deinit(gpa);
+    const refreshed_api_idx = registry.findAccountIndexByAccountKey(&refreshed, api_account_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 88), refreshed.accounts.items[refreshed_api_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 66), refreshed.accounts.items[refreshed_api_idx].last_usage.?.secondary.?.used_percent);
+    const chatgpt_idx = registry.findAccountIndexByAccountKey(&refreshed, chatgpt_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 12), refreshed.accounts.items[chatgpt_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 34), refreshed.accounts.items[chatgpt_idx].last_usage.?.secondary.?.used_percent);
+
+    try fs.cwd().writeFile(.{ .sub_path = api_snapshot_path, .data = "{}" });
+
+    const second_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        fake_node_dir,
+        &[_][]const u8{ "list", "--api" },
+    );
+    defer gpa.free(second_list.stdout);
+    defer gpa.free(second_list.stderr);
+
+    logRunResultIfFailed("api key list after stale snapshot", second_list);
+    try expectSuccess(second_list);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "MissingAuth") == null);
+    try std.testing.expectEqualStrings("", second_list.stderr);
+
+    var refreshed_again = try registry.loadRegistry(gpa, codex_home);
+    defer refreshed_again.deinit(gpa);
+    const refreshed_again_api_idx = registry.findAccountIndexByAccountKey(&refreshed_again, api_account_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(f64, 88), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.primary.?.used_percent);
+    try std.testing.expectEqual(@as(f64, 66), refreshed_again.accounts.items[refreshed_again_api_idx].last_usage.?.secondary.?.used_percent);
+}
+
 test "Scenario: Given single-file import missing email when running import then it exits non-zero after reporting the skipped file" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1400,7 +1618,7 @@ test "Scenario: Given cpa file import when running import cpa then it stores a s
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].alias, "personal"));
 }
 
-test "Scenario: Given default api usage when rendering help then the api enable risk note stays in stdout" {
+test "Scenario: Given default api usage when rendering help then skip-api note stays in stdout" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1418,9 +1636,9 @@ test "Scenario: Given default api usage when rendering help then the api enable 
 
     try expectSuccess(result);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "codex-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API: ON (api)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Account API: ON") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Account API:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "API-backed refresh is the default") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -1608,7 +1826,7 @@ test "Scenario: Given switch query with no matches when running switch then it e
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
 }
 
-test "Scenario: Given list with api override when api config is disabled then it still requires api refresh executables" {
+test "Scenario: Given list default mode when running list then it requires api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1623,8 +1841,6 @@ test "Scenario: Given list with api override when api config is disabled then it
     try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
         .{ .email = "alpha@example.com", .alias = "alpha" },
     });
-    try setRegistryApiConfig(gpa, home_root, false, false);
-
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
@@ -1634,7 +1850,7 @@ test "Scenario: Given list with api override when api config is disabled then it
         project_root,
         home_root,
         empty_path,
-        &[_][]const u8{ "list", "--api" },
+        &[_][]const u8{"list"},
     );
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
@@ -2163,7 +2379,7 @@ test "Scenario: Given remove without api flags when running remove then it requi
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 }
 
-test "Scenario: Given remove without selectors and api disabled in config when running remove then it does not require api refresh executables" {
+test "Scenario: Given remove without selectors in default mode when running remove then it requires api refresh executables" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2179,11 +2395,6 @@ test "Scenario: Given remove without selectors and api disabled in config when r
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
-    try setRegistryApiConfig(gpa, home_root, false, false);
-
-    const codex_home = try codexHomeAlloc(gpa, home_root);
-    defer gpa.free(codex_home);
-
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
@@ -2199,14 +2410,9 @@ test "Scenario: Given remove without selectors and api disabled in config when r
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, "alpha@example.com"));
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
 }
 
 test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
@@ -3091,30 +3297,7 @@ test "Scenario: Given parseable auth without email for the active account when r
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
 }
 
-test "Scenario: Given default api usage when rendering status then no warning is printed" {
-    const gpa = std.testing.allocator;
-    const project_root = try projectRootAlloc(gpa);
-    defer gpa.free(project_root);
-    try buildCliBinary(gpa, project_root);
-
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(home_root);
-
-    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"status"});
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-
-    try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "auto-switch: OFF") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "usage: api") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "account: api") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
-}
-
-test "Scenario: Given config live interval when running command then registry and status show the interval" {
+test "Scenario: Given config live interval when running command then registry stores the interval" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -3139,11 +3322,12 @@ test "Scenario: Given config live interval when running command then registry an
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(u16, 45), loaded.live.interval_seconds);
 
-    const status_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"status"});
-    defer gpa.free(status_result.stdout);
-    defer gpa.free(status_result.stderr);
-    try expectSuccess(status_result);
-    try std.testing.expect(std.mem.indexOf(u8, status_result.stdout, "live refresh: 45s") != null);
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    const data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(data);
+    try std.testing.expect(std.mem.indexOf(u8, data, "\"interval_seconds\": 45") != null);
+    try std.testing.expect(std.mem.indexOf(u8, data, "\"live\"") == null);
 }
 
 test "Scenario: Given default api usage when listing accounts then no warning is printed" {

@@ -71,9 +71,7 @@ function checkPackageMetadata() {
     }
     if (pkg.os === "win32") {
       requireEqual(`${pkg.id}.binaryName`, pkg.binaryName, "codex-auth.exe");
-      if (!pkg.binaryFiles.includes("codex-auth.exe") || !pkg.binaryFiles.includes("codex-auth-auto.exe")) {
-        fail(`${pkg.id}: Windows packages must include codex-auth.exe and codex-auth-auto.exe`);
-      }
+      requireEqual(`${pkg.id}.binaryFiles`, pkg.binaryFiles.join(","), "codex-auth.exe");
     } else {
       requireEqual(`${pkg.id}.binaryName`, pkg.binaryName, "codex-auth");
       requireEqual(`${pkg.id}.binaryFiles`, pkg.binaryFiles.join(","), "codex-auth");

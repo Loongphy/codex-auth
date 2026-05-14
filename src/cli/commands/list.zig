@@ -15,6 +15,11 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             opts.live = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--active")) {
+            if (opts.active_only) return common.usageErrorResult(allocator, .list, "duplicate `--active` for `list`.", .{});
+            opts.active_only = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--api")) {
             switch (opts.api_mode) {
                 .default => opts.api_mode = .force_api,

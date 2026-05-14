@@ -1,20 +1,19 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
+const me_api = @import("../api/me.zig");
 const account_api = @import("../api/account.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
 const account_ops = @import("account_ops.zig");
 const parse = @import("parse.zig");
 const import_mod = @import("import.zig");
+const export_mod = @import("export.zig");
 const storage = @import("storage.zig");
 pub const PlanType = common.PlanType;
 pub const AuthMode = common.AuthMode;
 pub const current_schema_version = common.current_schema_version;
 pub const min_supported_schema_version = common.min_supported_schema_version;
-pub const default_auto_switch_threshold_5h_percent = common.default_auto_switch_threshold_5h_percent;
-pub const default_auto_switch_threshold_weekly_percent = common.default_auto_switch_threshold_weekly_percent;
-pub const account_name_refresh_lock_file_name = common.account_name_refresh_lock_file_name;
 pub const private_file_permissions = common.private_file_permissions;
 pub const private_dir_permissions = common.private_dir_permissions;
 pub const getEnvMap = common.getEnvMap;
@@ -26,9 +25,7 @@ pub const RateLimitWindow = common.RateLimitWindow;
 pub const CreditsSnapshot = common.CreditsSnapshot;
 pub const RateLimitSnapshot = common.RateLimitSnapshot;
 pub const RolloutSignature = common.RolloutSignature;
-pub const AutoSwitchConfig = common.AutoSwitchConfig;
 pub const ApiConfig = common.ApiConfig;
-pub const ApiConfigParseResult = common.ApiConfigParseResult;
 pub const default_live_refresh_interval_seconds = common.default_live_refresh_interval_seconds;
 pub const min_live_refresh_interval_seconds = common.min_live_refresh_interval_seconds;
 pub const max_live_refresh_interval_seconds = common.max_live_refresh_interval_seconds;
@@ -38,7 +35,6 @@ pub const resolvePlan = common.resolvePlan;
 pub const resolveDisplayPlan = common.resolveDisplayPlan;
 pub const planLabel = common.planLabel;
 pub const Registry = common.Registry;
-pub const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
 pub const defaultApiConfig = common.defaultApiConfig;
 pub const defaultLiveConfig = common.defaultLiveConfig;
 pub const freeAccountRecord = common.freeAccountRecord;
@@ -116,6 +112,10 @@ const importAccountsSnapshotDirectory = import_mod.importAccountsSnapshotDirecto
 const sortAccountsByEmail = import_mod.sortAccountsByEmail;
 const syncCurrentAuthBestEffort = import_mod.syncCurrentAuthBestEffort;
 
+pub const ExportSummary = export_mod.ExportSummary;
+pub const defaultExportDirectory = export_mod.defaultExportDirectory;
+pub const exportAccounts = export_mod.exportAccounts;
+
 pub const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 pub const setActiveAccountKey = account_ops.setActiveAccountKey;
 pub const updateUsage = account_ops.updateUsage;
@@ -134,6 +134,9 @@ pub const applyAccountNamesForUser = account_ops.applyAccountNamesForUser;
 pub const activateAccountByKey = account_ops.activateAccountByKey;
 pub const replaceActiveAuthWithAccountByKey = account_ops.replaceActiveAuthWithAccountByKey;
 pub const accountFromAuth = account_ops.accountFromAuth;
+pub const accountFromApiKeyMe = account_ops.accountFromApiKeyMe;
+pub const apiKeyAccountKeyAlloc = account_ops.apiKeyAccountKeyAlloc;
+pub const apiKeyAccountNameAlloc = account_ops.apiKeyAccountNameAlloc;
 pub const upsertAccount = account_ops.upsertAccount;
 const syncActiveAccountFromAuthWithImporter = account_ops.syncActiveAccountFromAuthWithImporter;
 
@@ -155,6 +158,31 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
 
     const info = try @import("../auth/auth.zig").parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
+    if (info.auth_mode == .apikey) {
+        const api_key = info.openai_api_key orelse return false;
+        var me = me_api.fetchMeForApiKey(allocator, api_key) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                std.log.warn("auth.json API key import skipped: {s}", .{@errorName(err)});
+                return false;
+            },
+        };
+        defer me.deinit(allocator);
+
+        const record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+        defer allocator.free(record_key);
+
+        const dest = try accountAuthPath(allocator, codex_home, record_key);
+        defer allocator.free(dest);
+
+        try ensureAccountsDir(allocator, codex_home);
+        try copyManagedFile(auth_path, dest);
+
+        const record = try accountFromApiKeyMe(allocator, "", &info, &me);
+        try upsertAccount(allocator, reg, record);
+        try setActiveAccountKey(allocator, reg, record_key);
+        return true;
+    }
     _ = info.email orelse {
         std.log.warn("auth.json missing email; cannot import", .{});
         return false;

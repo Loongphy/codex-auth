@@ -1,6 +1,7 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const account_api = @import("../api/account.zig");
+const me_api = @import("../api/me.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
 
@@ -25,6 +26,20 @@ const fileEqualsBytes = clean.fileEqualsBytes;
 const backupDir = clean.backupDir;
 const backupAuthIfChanged = clean.backupAuthIfChanged;
 const resolveStrictAccountAuthPath = clean.resolveStrictAccountAuthPath;
+
+pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, api_key: []const u8) ![]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    return std.fmt.allocPrint(allocator, "apikey::{s}::{s}", .{ user_id, hex[0..] });
+}
+
+pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8) ![]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
+}
 
 pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
@@ -90,6 +105,10 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
     };
     defer info.deinit(allocator);
 
+    if (info.auth_mode == .apikey) {
+        return try syncActiveApiKeyAccountFromAuth(allocator, codex_home, reg, auth_path, auth_bytes, &info);
+    }
+
     const email = info.email orelse {
         std.log.warn("auth.json missing email; skipping sync", .{});
         return false;
@@ -139,6 +158,87 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
         changed = true;
     }
     reg.accounts.items[idx].auth_mode = info.auth_mode;
+
+    const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
+    defer allocator.free(dest);
+    if (!(try fileEqualsBytes(allocator, dest, auth_bytes))) {
+        try copyManagedFile(auth_path, dest);
+        changed = true;
+    } else {
+        try hardenSensitiveFile(dest);
+    }
+
+    try setActiveAccountKey(allocator, reg, rec_account_key);
+    return changed;
+}
+
+fn syncActiveApiKeyAccountFromAuth(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_path: []const u8,
+    auth_bytes: []const u8,
+    info: *const @import("../auth/auth.zig").AuthInfo,
+) !bool {
+    const api_key = info.openai_api_key orelse {
+        std.log.warn("auth.json missing OPENAI_API_KEY; skipping sync", .{});
+        return false;
+    };
+    var me = me_api.fetchMeForApiKey(allocator, api_key) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            std.log.warn("auth.json API key sync skipped: {s}", .{@errorName(err)});
+            return false;
+        },
+    };
+    defer me.deinit(allocator);
+
+    const record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+    defer allocator.free(record_key);
+
+    const matched_index = findAccountIndexByAccountKey(reg, record_key);
+    if (matched_index == null) {
+        const dest = try accountAuthPath(allocator, codex_home, record_key);
+        defer allocator.free(dest);
+
+        try ensureAccountsDir(allocator, codex_home);
+        try copyManagedFile(auth_path, dest);
+
+        var record = try accountFromApiKeyMe(allocator, "", info, &me);
+        var record_owned = true;
+        errdefer if (record_owned) freeAccountRecord(allocator, &record);
+        try upsertAccount(allocator, reg, record);
+        record_owned = false;
+        try setActiveAccountKey(allocator, reg, record_key);
+        return true;
+    }
+
+    const idx = matched_index.?;
+    const rec_account_key = reg.accounts.items[idx].account_key;
+    var changed = false;
+    if (reg.active_account_key) |k| {
+        if (!std.mem.eql(u8, k, rec_account_key)) changed = true;
+    } else {
+        changed = true;
+    }
+
+    if (!std.mem.eql(u8, reg.accounts.items[idx].email, me.email)) {
+        const new_email = try allocator.dupe(u8, me.email);
+        allocator.free(reg.accounts.items[idx].email);
+        reg.accounts.items[idx].email = new_email;
+        changed = true;
+    }
+    {
+        const account_name = try apiKeyAccountNameAlloc(allocator, api_key);
+        if (try replaceOptionalStringAlloc(allocator, &reg.accounts.items[idx].account_name, account_name)) {
+            changed = true;
+        }
+        allocator.free(account_name);
+    }
+    if (reg.accounts.items[idx].auth_mode != .apikey) {
+        reg.accounts.items[idx].auth_mode = .apikey;
+        changed = true;
+    }
 
     const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
     defer allocator.free(dest);
@@ -433,6 +533,43 @@ pub fn accountFromAuth(
         .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
+        .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    };
+}
+
+pub fn accountFromApiKeyMe(
+    allocator: std.mem.Allocator,
+    alias: []const u8,
+    info: *const @import("../auth/auth.zig").AuthInfo,
+    me: *const me_api.MeResult,
+) !AccountRecord {
+    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    const owned_record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+    errdefer allocator.free(owned_record_key);
+    const owned_user_id = try allocator.dupe(u8, me.user_id);
+    errdefer allocator.free(owned_user_id);
+    const owned_email = try allocator.dupe(u8, me.email);
+    errdefer allocator.free(owned_email);
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
+    const owned_account_name = try apiKeyAccountNameAlloc(allocator, api_key);
+    errdefer allocator.free(owned_account_name);
+    const owned_chatgpt_account_id = try allocator.dupe(u8, "");
+    errdefer allocator.free(owned_chatgpt_account_id);
+
+    return AccountRecord{
+        .account_key = owned_record_key,
+        .chatgpt_account_id = owned_chatgpt_account_id,
+        .chatgpt_user_id = owned_user_id,
+        .email = owned_email,
+        .alias = owned_alias,
+        .account_name = owned_account_name,
+        .plan = null,
+        .auth_mode = .apikey,
         .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,

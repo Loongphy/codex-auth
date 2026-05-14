@@ -37,7 +37,6 @@ fn makeRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -63,6 +62,29 @@ fn appendAccount(
         .account_name = null,
         .plan = plan,
         .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = null,
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
+fn appendApiKeyAccount(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    email: []const u8,
+) !void {
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, account_key),
+        .chatgpt_account_id = try allocator.dupe(u8, ""),
+        .chatgpt_user_id = try allocator.dupe(u8, "user_api"),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, ""),
+        .account_name = null,
+        .plan = null,
+        .auth_mode = .apikey,
         .created_at = 1,
         .last_used_at = null,
         .last_usage = null,
@@ -263,8 +285,7 @@ fn mockAccountNameFetcherWithRegistryMutation(
         const codex_home = mutate_registry_codex_home orelse return error.TestExpectedEqual;
         var reg = try registry.loadRegistry(allocator, codex_home);
         defer reg.deinit(allocator);
-        reg.api.usage = false;
-        reg.api.account = false;
+        reg.live.interval_seconds = 45;
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
 
@@ -315,21 +336,6 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     var matches = try main_mod.findMatchingAccounts(gpa, &reg, "67fe2bbb");
     defer matches.deinit(gpa);
     try std.testing.expect(matches.items.len == 0);
-}
-
-test "Scenario: Given foreground commands when checking reconcile policy then config commands self-heal services but status does not" {
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .list = .{} }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .action = .enable } } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .auto_switch = .{ .configure = .{
-        .threshold_5h_percent = 12,
-        .threshold_weekly_percent = null,
-    } } } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .api = .enable } }));
-    try std.testing.expect(main_mod.shouldReconcileManagedService(.{ .config = .{ .live = .{ .interval_seconds = 30 } } }));
-    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .help = .top_level }));
-    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .status = {} }));
-    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .version = {} }));
-    try std.testing.expect(!main_mod.shouldReconcileManagedService(.{ .daemon = .{ .mode = .once } }));
 }
 
 test "Scenario: Given foreground usage refresh targets when checking refresh policy then list, switch, and remove refresh" {
@@ -493,6 +499,160 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(?registry.PlanType, .team), reg.accounts.items[0].last_usage.?.plan_type);
     try std.testing.expectEqual(@as(f64, 18), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
+}
+
+test "Scenario: Given active-only foreground usage refresh then only the active account is requested" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    const TestUsageFetcher = struct {
+        var requested: usize = 0;
+
+        fn snapshot(plan: registry.PlanType, used_5h: f64, used_weekly: f64) registry.RateLimitSnapshot {
+            return .{
+                .primary = .{
+                    .used_percent = used_5h,
+                    .window_minutes = 300,
+                    .resets_at = 1773491460,
+                },
+                .secondary = .{
+                    .used_percent = used_weekly,
+                    .window_minutes = 10080,
+                    .resets_at = 1773749620,
+                },
+                .credits = null,
+                .plan_type = plan,
+            };
+        }
+
+        fn fetch(allocator: std.mem.Allocator, auth_paths: []const []const u8, max_concurrency: usize) ![]usage_api.BatchUsageFetchResult {
+            _ = max_concurrency;
+            requested += auth_paths.len;
+            const results = try allocator.alloc(usage_api.BatchUsageFetchResult, auth_paths.len);
+            for (results) |*result| {
+                result.* = .{
+                    .snapshot = snapshot(.team, 18, 40),
+                    .status_code = 200,
+                };
+            }
+            return results;
+        }
+    };
+
+    TestUsageFetcher.requested = 0;
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try registry.setActiveAccountKey(gpa, &reg, secondary_record_key);
+
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
+    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, secondary_account_id);
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        TestUsageFetcher.fetch,
+        main_mod.initForegroundUsagePool,
+        true,
+        false,
+        false,
+        true,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), TestUsageFetcher.requested);
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expect(!state.outcomes[0].attempted);
+    try std.testing.expect(state.outcomes[1].attempted);
+    try std.testing.expect(reg.accounts.items[0].last_usage == null);
+    try std.testing.expect(reg.accounts.items[1].last_usage != null);
+}
+
+test "Scenario: Given API key auth when refreshing foreground usage then overrides stay empty and rows remain placeholder-driven" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    const account_key = "apikey::user_api::7f3c1d9a2b4e8c2042ce";
+    try appendApiKeyAccount(gpa, &reg, account_key, "user@example.com");
+
+    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(auth_path);
+    try fs.cwd().writeFile(.{
+        .sub_path = auth_path,
+        .data =
+        \\{
+        \\  "auth_mode": "apikey",
+        \\  "OPENAI_API_KEY": "sk-test"
+        \\}
+        ,
+    });
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expect(!state.local_only_mode);
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.updated);
+    try std.testing.expectEqual(@as(usize, 0), state.failed);
+    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expect(state.usage_overrides[0] == null);
+    try std.testing.expect(!state.outcomes[0].missing_auth);
+    try std.testing.expect(state.outcomes[0].unchanged);
+}
+
+test "Scenario: Given API key registry record with stale snapshot when refreshing foreground usage then MissingAuth is not shown" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    const account_key = "apikey::user_api::7f3c1d9a2b4e8c2042ce";
+    try appendApiKeyAccount(gpa, &reg, account_key, "user@example.com");
+
+    const auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(auth_path);
+    try fs.cwd().writeFile(.{
+        .sub_path = auth_path,
+        .data = "{}",
+    });
+
+    var state = try main_mod.refreshForegroundUsageForDisplay(gpa, codex_home, &reg);
+    defer state.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.failed);
+    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expect(state.usage_overrides[0] == null);
+    try std.testing.expect(!state.outcomes[0].missing_auth);
+    try std.testing.expect(state.outcomes[0].unchanged);
 }
 
 test "Scenario: Given more than five foreground usage jobs when refreshing usage then pool init is capped at five workers" {
@@ -840,35 +1000,6 @@ test "Scenario: Given grouped team accounts with account api disabled when refre
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
-test "Scenario: Given grouped team accounts with account api disabled when checking switch background refresh then it is skipped" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-    reg.api.account = false;
-
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
-
-    try std.testing.expect(!main_mod.shouldScheduleBackgroundAccountNameRefresh(&reg));
-}
-
-test "Scenario: Given only another user has missing grouped team names when checking background refresh then it is still scheduled" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Backup Workspace");
-    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER-A", "other@example.com", "", .team);
-    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER-B", "other@example.com", "", .team);
-    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
-
-    try std.testing.expect(main_mod.shouldScheduleBackgroundAccountNameRefresh(&reg));
-}
-
 test "Scenario: Given login with missing account names when refreshing metadata then it issues at most one request" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
@@ -911,135 +1042,6 @@ test "Scenario: Given switched account with missing account names when refreshin
     try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[0].account_name.?, "Primary Workspace"));
     try std.testing.expect(std.mem.eql(u8, reg.accounts.items[1].account_name.?, "Backup Workspace"));
-}
-
-test "Scenario: Given api disabled while background account-name refresh is in flight when it finishes then the latest api config is preserved" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
-    try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
-
-    resetMockAccountNameFetcher();
-    mutate_registry_during_account_fetch = true;
-    mutate_registry_codex_home = codex_home;
-    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcherWithRegistryMutation);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
-    try std.testing.expect(!loaded.api.account);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(loaded.accounts.items[0].account_name == null);
-    try std.testing.expect(loaded.accounts.items[1].account_name == null);
-}
-
-test "Scenario: Given grouped stored snapshots without active auth when running background account-name refresh then it updates the missing names" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
-
-    resetMockAccountNameFetcher();
-    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
-}
-
-test "Scenario: Given grouped stored snapshots with multiple tokens when running background account-name refresh then it prefers the newest last_refresh" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeAccountSnapshotWithIdsAndLastRefresh(
-        gpa,
-        codex_home,
-        "user@example.com",
-        "team",
-        shared_user_id,
-        primary_account_id,
-        "stale-token",
-        "2026-03-20T00:00:00Z",
-    );
-    try writeAccountSnapshotWithIdsAndLastRefresh(
-        gpa,
-        codex_home,
-        "user@example.com",
-        "team",
-        shared_user_id,
-        secondary_account_id,
-        "fresh-token",
-        "2026-03-21T00:00:00Z",
-    );
-
-    resetMockAccountNameFetcher();
-    expected_mock_account_name_fetch_account_id = secondary_account_id;
-    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcherRequiringFreshToken);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
-}
-
-test "Scenario: Given grouped team names with only a stored plus snapshot for the same user when running background account-name refresh then it updates the team records" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ primary_account_id, "same-user@example.com", "", .team);
-    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ secondary_account_id, "same-user@example.com", "", .team);
-    reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
-    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id, "same-user@example.com", "", .plus);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeAccountSnapshotWithIds(gpa, codex_home, "same-user@example.com", "plus", shared_user_id, tertiary_account_id);
-
-    resetMockAccountNameFetcher();
-    try main_mod.runBackgroundAccountNameRefresh(gpa, codex_home, mockAccountNameFetcher);
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 1), mock_account_name_fetch_count);
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].account_name.?, "Primary Workspace"));
-    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[1].account_name.?, "Backup Workspace"));
-    try std.testing.expect(loaded.accounts.items[2].account_name == null);
 }
 
 test "Scenario: Given single-file import with missing account names when refreshing metadata then it issues at most one request" {
@@ -1290,35 +1292,4 @@ test "Scenario: Given no remaining accounts when reconciling after remove then a
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
     try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
-}
-
-test "Scenario: Given newer registry schema when loading help config then default help settings are used" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-    try tmp.dir.writeFile(.{
-        .sub_path = "accounts/registry.json",
-        .data =
-        \\{
-        \\  "schema_version": 999,
-        \\  "auto_switch": {
-        \\    "enabled": true,
-        \\    "threshold_5h_percent": 1,
-        \\    "threshold_weekly_percent": 1
-        \\  },
-        \\  "api": {
-        \\    "usage": true
-        \\  },
-        \\  "accounts": []
-        \\}
-        ,
-    });
-
-    const help_cfg = main_mod.loadHelpConfig(gpa, codex_home);
-    try std.testing.expectEqual(registry.defaultAutoSwitchConfig(), help_cfg.auto_switch);
-    try std.testing.expectEqual(registry.defaultApiConfig(), help_cfg.api);
 }

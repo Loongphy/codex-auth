@@ -75,6 +75,51 @@ const node_request_script =
     \\}
 ;
 
+const node_bearer_request_script =
+    \\const endpoint = process.argv[1];
+    \\const accessToken = process.argv[2];
+    \\const timeoutMs = Number(process.argv[3]);
+    \\const userAgent = process.argv[4];
+    \\const encode = (value) => Buffer.from(value ?? "", "utf8").toString("base64");
+    \\const emit = (body, status, outcome) => {
+    \\  process.stdout.write(encode(body));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(String(status));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(outcome);
+    \\};
+    \\const emitAndExit = (body, status, outcome) => {
+    \\  process.stdout.write(encode(body));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(String(status));
+    \\  process.stdout.write("\n");
+    \\  process.stdout.write(outcome, () => process.exit(0));
+    \\};
+    \\const nodeMajor = Number(process.versions?.node?.split(".")[0] ?? 0);
+    \\if (!Number.isInteger(nodeMajor) || nodeMajor < 22 || typeof fetch !== "function" || typeof AbortSignal?.timeout !== "function") {
+    \\  emitAndExit("Node.js 22+ is required.", 0, "node-too-old");
+    \\} else {
+    \\  void (async () => {
+    \\    try {
+    \\      const response = await fetch(endpoint, {
+    \\        method: "GET",
+    \\        headers: {
+    \\          "Authorization": "Bearer " + accessToken,
+    \\          "User-Agent": userAgent,
+    \\        },
+    \\        signal: AbortSignal.timeout(timeoutMs),
+    \\      });
+    \\      emit(await response.text(), response.status, "ok");
+    \\    } catch (error) {
+    \\      const isTimeout = error?.name === "TimeoutError" || error?.name === "AbortError";
+    \\      emitAndExit(error?.message ?? "", 0, isTimeout ? "timeout" : "error");
+    \\    }
+    \\  })().catch((error) => {
+    \\    emitAndExit(error?.message ?? "", 0, "error");
+    \\  });
+    \\}
+;
+
 const node_batch_request_script =
     \\const readStdin = () => new Promise((resolve, reject) => {
     \\  let data = "";
@@ -167,6 +212,14 @@ pub fn runGetJsonCommand(
     return runNodeGetJsonCommand(allocator, endpoint, access_token, account_id);
 }
 
+pub fn runBearerGetJsonCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    access_token: []const u8,
+) !HttpResult {
+    return runNodeBearerGetJsonCommand(allocator, endpoint, access_token);
+}
+
 pub fn runGetJsonBatchCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
@@ -187,6 +240,71 @@ pub fn resolveNodeExecutableAlloc(allocator: std.mem.Allocator) ![]u8 {
 
 pub fn resolveNodeExecutableForDebugAlloc(allocator: std.mem.Allocator) ![]u8 {
     return resolveNodeExecutableForLaunchAlloc(allocator);
+}
+
+fn runNodeBearerGetJsonCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    access_token: []const u8,
+) !HttpResult {
+    const node_executable = try resolveNodeExecutableForLaunchAlloc(allocator);
+    defer allocator.free(node_executable);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+
+    const node_env_proxy_supported = if (needsNodeEnvProxySupportCheck(&env_map))
+        detectNodeEnvProxySupport(allocator, node_executable)
+    else
+        false;
+    try maybeEnableNodeEnvProxy(allocator, &env_map, node_env_proxy_supported);
+
+    const result = runChildCapture(allocator, &.{
+        node_executable,
+        "-e",
+        node_bearer_request_script,
+        endpoint,
+        access_token,
+        request_timeout_ms,
+        browser_user_agent,
+    }, child_process_timeout_ms_value, &env_map) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => {
+            logNodeRequirement();
+            return error.NodeJsRequired;
+        },
+        else => return err,
+    };
+    defer result.deinit(allocator);
+
+    if (result.timed_out) return error.NodeProcessTimedOut;
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.RequestFailed,
+        else => return error.RequestFailed,
+    }
+
+    const parsed = parseNodeHttpOutput(allocator, result.stdout) orelse return error.CommandFailed;
+
+    switch (parsed.outcome) {
+        .ok => return .{
+            .body = parsed.body,
+            .status_code = parsed.status_code,
+        },
+        .timeout => {
+            allocator.free(parsed.body);
+            return error.TimedOut;
+        },
+        .failed => {
+            allocator.free(parsed.body);
+            return error.RequestFailed;
+        },
+        .node_too_old => {
+            allocator.free(parsed.body);
+            logNodeRequirement();
+            return error.NodeJsRequired;
+        },
+    }
 }
 
 fn runNodeGetJsonCommand(

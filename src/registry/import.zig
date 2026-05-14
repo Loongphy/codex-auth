@@ -1,18 +1,15 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const auth = @import("../auth/auth.zig");
+const me_api = @import("../api/me.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
 const parse = @import("parse.zig");
 const account_ops = @import("account_ops.zig");
 
 const PlanType = common.PlanType;
-const AutoSwitchConfig = common.AutoSwitchConfig;
-const ApiConfig = common.ApiConfig;
 const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
-const defaultAutoSwitchConfig = common.defaultAutoSwitchConfig;
-const defaultApiConfig = common.defaultApiConfig;
 const freeAccountRecord = common.freeAccountRecord;
 const normalizeEmailAlloc = common.normalizeEmailAlloc;
 const activeAuthPath = common.activeAuthPath;
@@ -29,12 +26,11 @@ const getNonEmptyEnvVarOwned = common.getNonEmptyEnvVarOwned;
 const registryPath = common.registryPath;
 const backupAuthIfChanged = clean.backupAuthIfChanged;
 const backupDir = clean.backupDir;
-const parseAutoSwitch = parse.parseAutoSwitch;
-const parseApiConfig = parse.parseApiConfig;
 const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 const setActiveAccountKey = account_ops.setActiveAccountKey;
 const activateAccountByKey = account_ops.activateAccountByKey;
 const accountFromAuth = account_ops.accountFromAuth;
+const accountFromApiKeyMe = account_ops.accountFromApiKeyMe;
 const upsertAccount = account_ops.upsertAccount;
 
 fn defaultRegistry() Registry {
@@ -42,8 +38,7 @@ fn defaultRegistry() Registry {
         .schema_version = common.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = defaultAutoSwitchConfig(),
-        .api = defaultApiConfig(),
+        .api = common.defaultApiConfig(),
         .accounts = std.ArrayList(AccountRecord).empty,
     };
 }
@@ -82,8 +77,6 @@ pub fn purgeRegistryFromImportSourceWithSaver(
     const carry_forward = try loadPurgeCarryForwardConfig(allocator, codex_home);
 
     var reg = defaultRegistry();
-    reg.auto_switch = carry_forward.auto_switch;
-    reg.api = carry_forward.api;
     reg.live = carry_forward.live;
     defer reg.deinit(allocator);
 
@@ -240,6 +233,10 @@ fn importConvertedAuthInfo(
     info: *const @import("../auth/auth.zig").AuthInfo,
     auth_data: []const u8,
 ) !ImportOutcome {
+    if (info.auth_mode == .apikey) {
+        return try importApiKeyAuthData(allocator, codex_home, reg, explicit_alias, info, auth_data);
+    }
+
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
@@ -277,6 +274,10 @@ fn importAuthInfo(
     explicit_alias: ?[]const u8,
     info: *const @import("../auth/auth.zig").AuthInfo,
 ) !ImportOutcome {
+    if (info.auth_mode == .apikey) {
+        return try importApiKeyAuthFile(allocator, codex_home, reg, auth_file, explicit_alias, info);
+    }
+
     _ = info.email orelse return error.MissingEmail;
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
@@ -290,6 +291,62 @@ fn importAuthInfo(
     try copyManagedFile(auth_file, dest);
 
     const record = try accountFromAuth(allocator, alias, info);
+    try upsertAccount(allocator, reg, record);
+    return if (existed) .updated else .imported;
+}
+
+fn importApiKeyAuthData(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    explicit_alias: ?[]const u8,
+    info: *const @import("../auth/auth.zig").AuthInfo,
+    auth_data: []const u8,
+) !ImportOutcome {
+    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    var me = try me_api.fetchMeForApiKey(allocator, api_key);
+    defer me.deinit(allocator);
+
+    const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+    defer allocator.free(record_key);
+    const alias = explicit_alias orelse "";
+    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(dest);
+
+    try ensureAccountsDir(allocator, codex_home);
+    try writeFile(dest, auth_data);
+
+    const record = try accountFromApiKeyMe(allocator, alias, info, &me);
+    try upsertAccount(allocator, reg, record);
+    return if (existed) .updated else .imported;
+}
+
+fn importApiKeyAuthFile(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_file: []const u8,
+    explicit_alias: ?[]const u8,
+    info: *const @import("../auth/auth.zig").AuthInfo,
+) !ImportOutcome {
+    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    var me = try me_api.fetchMeForApiKey(allocator, api_key);
+    defer me.deinit(allocator);
+
+    const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+    defer allocator.free(record_key);
+    const alias = explicit_alias orelse "";
+    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(dest);
+
+    try ensureAccountsDir(allocator, codex_home);
+    try copyManagedFile(auth_file, dest);
+
+    const record = try accountFromApiKeyMe(allocator, alias, info, &me);
     try upsertAccount(allocator, reg, record);
     return if (existed) .updated else .imported;
 }
@@ -407,6 +464,9 @@ fn syncCurrentAuthBestEffort(
 
     const info = @import("../auth/auth.zig").parseAuthInfo(allocator, auth_path) catch return null;
     defer info.deinit(allocator);
+    if (info.auth_mode == .apikey) {
+        return try syncCurrentApiKeyAuthBestEffort(allocator, codex_home, reg, auth_path, &info);
+    }
     _ = info.email orelse return null;
     const record_key = info.record_key orelse return null;
 
@@ -441,6 +501,46 @@ fn syncCurrentAuthBestEffort(
         reg.accounts.items[idx].auth_mode = info.auth_mode;
     } else {
         var record = try accountFromAuth(allocator, "", &info);
+        errdefer freeAccountRecord(allocator, &record);
+        try upsertAccount(allocator, reg, record);
+    }
+
+    try setActiveAccountKey(allocator, reg, record_key);
+    return if (existing_idx != null) .updated else .imported;
+}
+
+fn syncCurrentApiKeyAuthBestEffort(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_path: []const u8,
+    info: *const @import("../auth/auth.zig").AuthInfo,
+) !?ImportOutcome {
+    const api_key = info.openai_api_key orelse return null;
+    var me = me_api.fetchMeForApiKey(allocator, api_key) catch return null;
+    defer me.deinit(allocator);
+
+    const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
+    defer allocator.free(record_key);
+    const existing_idx = findAccountIndexByAccountKey(reg, record_key);
+
+    const dest = try accountAuthPath(allocator, codex_home, record_key);
+    defer allocator.free(dest);
+    try ensureAccountsDir(allocator, codex_home);
+    try copyManagedFile(auth_path, dest);
+
+    if (existing_idx) |idx| {
+        if (!std.mem.eql(u8, reg.accounts.items[idx].email, me.email)) {
+            const new_email = try allocator.dupe(u8, me.email);
+            allocator.free(reg.accounts.items[idx].email);
+            reg.accounts.items[idx].email = new_email;
+        }
+        const account_name = try account_ops.apiKeyAccountNameAlloc(allocator, api_key);
+        defer allocator.free(account_name);
+        _ = try common.replaceOptionalStringAlloc(allocator, &reg.accounts.items[idx].account_name, account_name);
+        reg.accounts.items[idx].auth_mode = .apikey;
+    } else {
+        var record = try accountFromApiKeyMe(allocator, "", info, &me);
         errdefer freeAccountRecord(allocator, &record);
         try upsertAccount(allocator, reg, record);
     }

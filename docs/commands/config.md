@@ -3,31 +3,18 @@
 ## Usage
 
 ```shell
-codex-auth config auto enable
-codex-auth config auto disable
-codex-auth config auto --5h <percent> [--weekly <percent>]
-codex-auth config api enable
-codex-auth config api disable
+codex-auth config live --interval <seconds>
 ```
 
-## Auto-Switch Config
+## Live Refresh Config
 
-`config auto enable` installs or reconciles the managed background watcher.
+`config live --interval <seconds>` sets the live TUI refresh interval.
 
-- Linux/WSL uses a persistent `systemd --user` service.
-- macOS uses a `LaunchAgent`.
-- Windows uses a scheduled task that starts the long-running helper at logon and restarts it after failures.
+- Allowed range: `5` to `3600`.
+- Stored in `registry.json` as top-level `interval_seconds`.
 
-`config auto disable` removes the managed watcher.
+## API Refresh
 
-Threshold flags update the stored background auto-switch thresholds. Auto-switch behavior and platform integration details live in [docs/auto-switch.md](../auto-switch.md).
-
-## API Refresh Config
-
-`config api enable` enables remote usage and account-name refresh by default.
-
-`config api disable` switches default foreground behavior to local-only mode.
-
-Changing `config api` updates `registry.json` immediately. Per-command `--api` and `--skip-api` can override the stored mode for a single foreground command.
+API-backed refresh is the default for supported foreground paths. Use per-command `--skip-api` to run a foreground command with local data only. Older `registry.json` files may contain an `api` object; current builds ignore it and omit it on the next registry save.
 
 API behavior and endpoint details live in [docs/api.md](../api.md).

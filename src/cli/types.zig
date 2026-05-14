@@ -7,6 +7,7 @@ pub const ApiMode = enum {
 pub const ListOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
+    active_only: bool = false,
 };
 pub const LoginOptions = struct {
     device_auth: bool = false,
@@ -17,6 +18,11 @@ pub const ImportOptions = struct {
     alias: ?[]u8,
     purge: bool,
     source: ImportSource,
+};
+pub const ExportFormat = enum { standard, cpa };
+pub const ExportOptions = struct {
+    dest_path: ?[]u8,
+    format: ExportFormat,
 };
 pub const SwitchOptions = struct {
     query: ?[]u8,
@@ -29,27 +35,14 @@ pub const RemoveOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
 };
-pub const CleanOptions = struct {};
-pub const AutoAction = enum { enable, disable };
-pub const AutoThresholdOptions = struct {
-    threshold_5h_percent: ?u8,
-    threshold_weekly_percent: ?u8,
+pub const CleanTarget = enum { accounts, background };
+pub const CleanOptions = struct {
+    target: CleanTarget = .accounts,
 };
-pub const AutoOptions = union(enum) {
-    action: AutoAction,
-    configure: AutoThresholdOptions,
-};
-pub const ApiAction = enum { enable, disable };
 pub const LiveOptions = struct {
     interval_seconds: u16,
 };
-pub const ConfigOptions = union(enum) {
-    auto_switch: AutoOptions,
-    api: ApiAction,
-    live: LiveOptions,
-};
-pub const DaemonMode = enum { watch, once };
-pub const DaemonOptions = struct { mode: DaemonMode };
+pub const ConfigOptions = union(enum) { live: LiveOptions };
 pub const AppAction = enum { launch, status, patch, unpatch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {
@@ -65,14 +58,13 @@ pub const AppOptions = struct {
 pub const HelpTopic = enum {
     top_level,
     list,
-    status,
     login,
     import_auth,
+    export_auth,
     switch_account,
     remove_account,
     clean,
     config,
-    daemon,
     app,
 };
 
@@ -80,12 +72,11 @@ pub const Command = union(enum) {
     list: ListOptions,
     login: LoginOptions,
     import_auth: ImportOptions,
+    export_auth: ExportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
     clean: CleanOptions,
     config: ConfigOptions,
-    status: void,
-    daemon: DaemonOptions,
     app: AppOptions,
     version: void,
     help: HelpTopic,

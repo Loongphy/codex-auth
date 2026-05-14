@@ -59,14 +59,13 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 | Command | Description |
 |---------|-------------|
-| [`codex-auth list [--live] [--api\|--skip-api]`](./docs/commands/list.md) | List stored accounts and usage state |
+| [`codex-auth list [--live] [--active] [--api\|--skip-api]`](./docs/commands/list.md) | List stored accounts and usage state |
 | [`codex-auth login [--device-auth]`](./docs/commands/login.md) | Run `codex login`, then add the current account |
 | [`codex-auth switch [--live] [--api\|--skip-api]`](./docs/commands/switch.md) | Switch the active account interactively |
 | [`codex-auth switch <query>`](./docs/commands/switch.md) | Switch directly by row number or account selector |
 | [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
 | [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
-| [`codex-auth status`](./docs/commands/status.md) | Show auto-switch, service, and usage status |
 
 ### Import and Maintenance
 
@@ -75,6 +74,8 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth import <path> [--alias <alias>]`](./docs/commands/import.md) | Import a single auth file or batch import a folder |
 | [`codex-auth import --cpa [<path>]`](./docs/commands/import.md) | Import CLIProxyAPI token JSON |
 | [`codex-auth import --purge [<path>]`](./docs/commands/import.md) | Rebuild `registry.json` from auth files |
+| [`codex-auth export [<dir>]`](./docs/commands/export.md) | Export stored account auth files |
+| [`codex-auth export --cpa [<dir>]`](./docs/commands/export.md) | Export CLIProxyAPI token JSON |
 | [`codex-auth clean`](./docs/commands/clean.md) | Delete managed backup and stale account files |
 
 ### Codex App Launching
@@ -90,43 +91,39 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 | Command | Description |
 |---------|-------------|
-| [`codex-auth config auto enable\|disable`](./docs/commands/config.md) | Enable or disable background auto-switching |
-| [`codex-auth config auto --5h <percent> [--weekly <percent>]`](./docs/commands/config.md) | Configure background auto-switch thresholds |
-| [`codex-auth config api enable\|disable`](./docs/commands/config.md) | Enable or disable default API-backed refresh |
+| [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
 
 ## Quick Examples
 
 ```shell
 codex-auth list
+codex-auth list --active
 codex-auth switch
 codex-auth switch 02
 codex-auth remove work
 codex-auth import /path/to/auth.json --alias personal
-codex-auth config api disable
-codex-auth status
+codex-auth list --skip-api
 ```
 
 ## Q&A
 
 ### Why is my usage limit not refreshing?
 
-If `codex-auth` is using local-only usage refresh, it reads the newest `~/.codex/sessions/**/rollout-*.jsonl` file. Recent Codex builds often write `token_count` events with `rate_limits: null`. The local files may still contain older usable usage limit data, but in practice they can lag by several hours, so local-only refresh may show a usage limit snapshot from hours ago instead of your latest state.
+API-backed refresh is the default. When you pass `--skip-api`, `codex-auth` reads the newest `~/.codex/sessions/**/rollout-*.jsonl` file instead. Recent Codex builds often write `token_count` events with `rate_limits: null`. The local files may still contain older usable usage limit data, but in practice they can lag by several hours, so local-only refresh may show a usage limit snapshot from hours ago instead of your latest state.
 
 - Upstream Codex issue: [openai/codex#14880](https://github.com/openai/codex/issues/14880)
 
-You can switch usage limit refresh to the usage API with:
+Run the API-backed default with:
 
 ```shell
-codex-auth config api enable
+codex-auth list
 ```
 
-Then confirm the current mode with:
+Run one local-only command with:
 
 ```shell
-codex-auth status
+codex-auth list --skip-api
 ```
-
-`status` should show `usage: api`.
 
 Verify with:
 
@@ -141,8 +138,8 @@ This project is provided as-is and use is at your own risk.
 **Usage Data Refresh Source:**
 `codex-auth` supports two sources for refreshing account usage/usage limit information:
 
-1. **API (default):** When `config api enable` is on, the tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and team name refresh. npm installs already satisfy the runtime requirement.
-2. **Local-only:** When `config api disable` is on, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips team name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
+1. **API (default):** The tool makes direct HTTPS requests to OpenAI's endpoints using your account's access token. This enables both usage refresh and team name refresh. npm installs already satisfy the runtime requirement.
+2. **Local-only:** With per-command `--skip-api`, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips team name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
 
 **API Call Declaration:**
-By enabling API(`codex-auth config api enable`), this tool will send your ChatGPT access token to OpenAI's servers, including `https://chatgpt.com/backend-api/wham/usage` for usage limit and `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27` for team name. This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.
+By using the default API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers, including `https://chatgpt.com/backend-api/wham/usage` for usage limit and `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27` for team name. This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.

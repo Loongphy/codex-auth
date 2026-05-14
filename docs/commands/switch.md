@@ -25,21 +25,6 @@ codex-auth switch <query>
 - A successful switch patches the current display immediately.
 - In-flight refresh results are discarded after a manual switch.
 - Existing usage overlays stay visible until the next scheduled refresh.
-- The foreground auto-switch loop is enabled automatically in live mode.
-
-## Foreground Auto Switch
-
-`codex-auth switch --live` includes an auto-switch loop in the live picker.
-The loop runs once on the initial live display and then runs again after later
-live refreshes.
-
-It switches away from the active account when the current live display shows:
-
-- `0%` remaining on the 5h window,
-- `0%` remaining on the weekly window, or
-- a numeric non-`200` usage API status overlay.
-
-Candidate rows follow the live picker rules. Rows that already show `0%` on 5h or weekly are skipped.
 
 ## Query Switch
 

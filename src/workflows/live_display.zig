@@ -241,8 +241,8 @@ pub fn cloneRegistryAlloc(allocator: std.mem.Allocator, reg: *const registry.Reg
         .schema_version = reg.schema_version,
         .active_account_key = active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
-        .auto_switch = reg.auto_switch,
         .api = reg.api,
+        .live = reg.live,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
     errdefer cloned.deinit(allocator);
@@ -337,8 +337,8 @@ pub fn buildRemoveLiveActionDisplay(
         .schema_version = current_display.reg.schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = current_display.reg.auto_switch,
         .api = current_display.reg.api,
+        .live = current_display.reg.live,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
     errdefer reg.deinit(allocator);

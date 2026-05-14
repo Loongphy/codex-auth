@@ -2,7 +2,6 @@ const std = @import("std");
 const codex_auth = @import("codex_auth");
 
 const account_api = codex_auth.api.account;
-const account_name_refresh = codex_auth.auth.account;
 const app_runtime = codex_auth.core.runtime;
 const cli = codex_auth.cli;
 const fixtures = @import("support/fixtures.zig");
@@ -23,51 +22,12 @@ const loadStoredSwitchSelectionDisplayWithRefreshError = main_mod.loadStoredSwit
 const mergeSwitchLiveRefreshIntoLatest = main_mod.mergeSwitchLiveRefreshIntoLatest;
 const nowMilliseconds = main_mod.nowMilliseconds;
 const removeLiveRuntimeApplySelection = main_mod.removeLiveRuntimeApplySelection;
-const runBackgroundAccountNameRefreshWithLockAcquirer = main_mod.runBackgroundAccountNameRefreshWithLockAcquirer;
 const switch_live_default_refresh_interval_ms = main_mod.switch_live_default_refresh_interval_ms;
 const switchLiveRuntimeApplySelection = main_mod.switchLiveRuntimeApplySelection;
 const findAccountIndexByAccountKeyConst = main_mod.findAccountIndexByAccountKeyConst;
 const nowSeconds = main_mod.nowSeconds;
 const mapSwitchUsageOverridesToLatest = main_mod.mapSwitchUsageOverridesToLatest;
 const replaceOptionalOwnedString = main_mod.replaceOptionalOwnedString;
-
-test "background account-name refresh returns early when another refresh holds the lock" {
-    const TestState = struct {
-        var fetch_count: usize = 0;
-
-        fn lockUnavailable(_: std.mem.Allocator, _: []const u8) !?account_name_refresh.BackgroundRefreshLock {
-            return null;
-        }
-
-        fn unexpectedFetcher(
-            allocator: std.mem.Allocator,
-            access_token: []const u8,
-            account_id: []const u8,
-        ) !account_api.FetchResult {
-            _ = allocator;
-            _ = access_token;
-            _ = account_id;
-            fetch_count += 1;
-            return error.TestUnexpectedFetch;
-        }
-    };
-
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    TestState.fetch_count = 0;
-    try runBackgroundAccountNameRefreshWithLockAcquirer(
-        gpa,
-        codex_home,
-        TestState.unexpectedFetcher,
-        TestState.lockUnavailable,
-    );
-    try std.testing.expectEqual(@as(usize, 0), TestState.fetch_count);
-}
 
 test "handled cli errors include missing node" {
     try std.testing.expect(isHandledCliError(error.NodeJsRequired));
@@ -76,15 +36,13 @@ test "handled cli errors include missing node" {
 fn saveLivePolicyTestRegistry(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
-    api_config: registry.ApiConfig,
     live_config: registry.LiveConfig,
 ) !void {
     var reg: registry.Registry = .{
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
-        .api = api_config,
+        .api = registry.defaultApiConfig(),
         .live = live_config,
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -160,7 +118,7 @@ test "live refresh interval uses the shared live config cadence" {
     try std.testing.expectEqual(@as(i64, 60_000), switch_live_default_refresh_interval_ms);
 }
 
-test "initial live selection display uses stored api defaults for list, switch, and remove" {
+test "initial live selection display uses api defaults for list, switch, and remove" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -168,34 +126,11 @@ test "initial live selection display uses stored api defaults for list, switch, 
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
             .usage_api_enabled = true,
-            .account_api_enabled = true,
-            .interval_ms = switch_live_default_refresh_interval_ms,
-            .label = "api",
-        });
-    }
-}
-
-test "initial live selection display preserves mixed stored api defaults for list, switch, and remove" {
-    const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
-
-    try saveLivePolicyTestRegistry(gpa, codex_home, .{
-        .usage = false,
-        .account = true,
-    }, registry.defaultLiveConfig());
-
-    inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
-        try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .default, .{
-            .usage_api_enabled = false,
             .account_api_enabled = true,
             .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "api",
@@ -211,10 +146,7 @@ test "initial live selection display honors explicit api mode overrides for list
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, .{
-        .usage = false,
-        .account = false,
-    }, registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .force_api, .{
@@ -225,7 +157,7 @@ test "initial live selection display honors explicit api mode overrides for list
         });
     }
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), registry.defaultLiveConfig());
+    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultLiveConfig());
 
     inline for ([_]ForegroundUsageRefreshTarget{ .list, .switch_account, .remove_account }) |target| {
         try expectInitialLiveSelectionPolicy(gpa, codex_home, target, .skip_api, .{
@@ -245,7 +177,7 @@ test "initial live selection display uses configured live refresh interval for a
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
 
-    try saveLivePolicyTestRegistry(gpa, codex_home, registry.defaultApiConfig(), .{ .interval_seconds = 45 });
+    try saveLivePolicyTestRegistry(gpa, codex_home, .{ .interval_seconds = 45 });
     try expectInitialLiveSelectionPolicy(gpa, codex_home, .list, .default, .{
         .usage_api_enabled = true,
         .account_api_enabled = true,
@@ -268,7 +200,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -279,7 +210,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -291,7 +221,6 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -348,7 +277,6 @@ test "switch live action patches the current display after switching" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -453,7 +381,6 @@ test "switch live action does not wait for an in-flight refresh" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -531,7 +458,6 @@ test "remove live action patches the current display after deleting the active a
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -651,7 +577,6 @@ test "remove live action does not wait for an in-flight refresh" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -760,7 +685,6 @@ test "live fallback display preserves the refresh error name" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -801,7 +725,6 @@ test "buildStatusLine releases mutex on allocation failure" {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };

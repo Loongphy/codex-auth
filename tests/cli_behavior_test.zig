@@ -13,7 +13,6 @@ fn makeRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -243,6 +242,43 @@ test "Scenario: Given import cpa with purge when parsing then usage error is ret
     try expectUsageError(result, .import_auth, "`--purge`");
 }
 
+test "Scenario: Given export directory when parsing then export options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "/tmp/codex-backup" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .export_auth => |opts| {
+                try std.testing.expect(opts.dest_path != null);
+                try std.testing.expectEqualStrings("/tmp/codex-backup", opts.dest_path.?);
+                try std.testing.expectEqual(cli.types.ExportFormat.standard, opts.format);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given export cpa without directory when parsing then cpa mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "export", "--cpa" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .export_auth => |opts| {
+                try std.testing.expect(opts.dest_path == null);
+                try std.testing.expectEqual(cli.types.ExportFormat.cpa, opts.format);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given import unknown short purge flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "import", "-P", "/tmp/auth.json" };
@@ -279,6 +315,21 @@ test "Scenario: Given list with skip-api flag when parsing then local-only displ
     switch (result) {
         .command => |cmd| switch (cmd) {
             .list => |opts| try std.testing.expectEqual(cli.types.ApiMode.skip_api, opts.api_mode),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given list with active flag when parsing then active-only refresh mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--active" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| try std.testing.expect(opts.active_only),
             else => return error.TestExpectedEqual,
         },
         else => return error.TestExpectedEqual,
@@ -370,50 +421,15 @@ test "Scenario: Given help when rendering then login and command help notes are 
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
-    var auto_cfg = registry.defaultAutoSwitchConfig();
-    var api_cfg = registry.defaultApiConfig();
-    auto_cfg.enabled = true;
-    auto_cfg.threshold_5h_percent = 12;
-    auto_cfg.threshold_weekly_percent = 8;
-    api_cfg.usage = true;
-    api_cfg.account = true;
 
-    try cli.help.writeHelp(&aw.writer, false, &auto_cfg, &api_cfg);
+    try cli.help.writeHelp(&aw.writer, false);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage API: ON (api)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Account API: ON") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Auto Switch: ON (5h<12%, weekly<8%)\nUsage API: ON (api)\nAccount API: ON\n\nCommands:\n  --help, -h") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "help <command>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--version, -V") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--api|--skip-api]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "login [--device-auth]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "import <path> [--alias <alias>]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "import --cpa [<path>] [--alias <alias>]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "import --alias <alias>\n") == null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Run `codex-auth <command> --help` for command-specific usage details.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "`config api enable` may trigger OpenAI account restrictions or suspension in some environments.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "login") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "clean") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Commands:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "switch <alias|email|display-number|query>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove [--live] [--api|--skip-api]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove <alias|email|display-number|query>...") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "remove --all") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Delete backup and stale files under accounts/") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "status") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "config") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto disable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto --5h <percent> [--weekly <percent>]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto --weekly <percent>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "api enable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "api disable") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "live --interval <seconds>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "daemon --watch|--once") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto ...") == null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "migrate") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
 }
 
 test "Scenario: Given simple command help when rendering then examples are omitted" {
@@ -426,8 +442,9 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--active     Refresh only the active account before rendering.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
 }
@@ -492,27 +509,18 @@ test "Scenario: Given remove command help when rendering then options explain li
     try std.testing.expect(std.mem.indexOf(u8, help, "Remove one or more matching accounts.") != null);
 }
 
-test "Scenario: Given config and daemon help when rendering then special modes are explained" {
+test "Scenario: Given config help when rendering then live mode is explained" {
     const gpa = std.testing.allocator;
     var config_aw: std.Io.Writer.Allocating = .init(gpa);
     defer config_aw.deinit();
-    var daemon_aw: std.Io.Writer.Allocating = .init(gpa);
-    defer daemon_aw.deinit();
 
     try cli.help.writeCommandHelp(&config_aw.writer, false, .config);
-    try cli.help.writeCommandHelp(&daemon_aw.writer, false, .daemon);
 
     const config_help = config_aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto enable       Enable background auto-switching.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "--5h <percent>    Set the 5-hour usage threshold from 1 to 100.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "--weekly <percent>\n                    Set the weekly usage threshold from 1 to 100.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 60") != null);
-
-    const daemon_help = daemon_aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, daemon_help, "--watch   Run continuously and switch accounts when thresholds are reached.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, daemon_help, "--once    Run one auto-switch check, then exit.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto") == null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -577,199 +585,6 @@ test "Scenario: Given single-file skipped import report when rendering then summ
     try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
 }
 
-test "Scenario: Given status when parsing then status command is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "status" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .status => {},
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config auto 5h threshold when parsing then threshold configuration is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--5h", "12" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .auto_switch => |auto_opts| switch (auto_opts) {
-                    .configure => |cfg| {
-                        try std.testing.expect(cfg.threshold_5h_percent != null);
-                        try std.testing.expect(cfg.threshold_5h_percent.? == 12);
-                        try std.testing.expect(cfg.threshold_weekly_percent == null);
-                    },
-                    else => return error.TestExpectedEqual,
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config auto thresholds together when parsing then both window thresholds are preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--5h", "12", "--weekly", "8" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .auto_switch => |auto_opts| switch (auto_opts) {
-                    .configure => |cfg| {
-                        try std.testing.expect(cfg.threshold_5h_percent != null);
-                        try std.testing.expect(cfg.threshold_5h_percent.? == 12);
-                        try std.testing.expect(cfg.threshold_weekly_percent != null);
-                        try std.testing.expect(cfg.threshold_weekly_percent.? == 8);
-                    },
-                    else => return error.TestExpectedEqual,
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config auto enable when parsing then auto action is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "enable" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .auto_switch => |auto_opts| switch (auto_opts) {
-                    .action => |action| try std.testing.expectEqual(cli.types.AutoAction.enable, action),
-                    else => return error.TestExpectedEqual,
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config api enable when parsing then api action is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "api", "enable" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .api => |action| try std.testing.expectEqual(cli.types.ApiAction.enable, action),
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config api disable when parsing then api disable action is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "api", "disable" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .api => |action| try std.testing.expectEqual(cli.types.ApiAction.disable, action),
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given config auto action mixed with threshold flags when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "enable", "--5h", "12" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .config, "cannot mix actions");
-}
-
-test "Scenario: Given config auto threshold percent out of range when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--weekly", "0" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .config, "`--weekly` must be an integer from 1 to 100.");
-}
-
-test "Scenario: Given config auto repeated threshold flag when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--5h", "12", "--5h", "15" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .config, "duplicate `--5h`");
-}
-
-test "Scenario: Given config auto threshold without value when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--weekly" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .config, "missing value for `--weekly`");
-}
-
-test "Scenario: Given config auto threshold command without flags when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .config, "requires an action or threshold flags");
-}
-
-test "Scenario: Given config auto threshold with weekly only when parsing then single-window config is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "config", "auto", "--weekly", "9" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .config => |opts| switch (opts) {
-                .auto_switch => |auto_opts| switch (auto_opts) {
-                    .configure => |cfg| {
-                        try std.testing.expect(cfg.threshold_5h_percent == null);
-                        try std.testing.expect(cfg.threshold_weekly_percent != null);
-                        try std.testing.expect(cfg.threshold_weekly_percent.? == 9);
-                    },
-                    else => return error.TestExpectedEqual,
-                },
-                else => return error.TestExpectedEqual,
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
 test "Scenario: Given removed top-level auto command when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "auto", "enable" };
@@ -779,13 +594,13 @@ test "Scenario: Given removed top-level auto command when parsing then usage err
     try expectUsageError(result, .top_level, "unknown command `auto`");
 }
 
-test "Scenario: Given config api unknown action when parsing then usage error is returned" {
+test "Scenario: Given removed config api section when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "api", "status" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .config, "unknown action `status`");
+    try expectUsageError(result, .config, "unknown config section `api`");
 }
 
 test "Scenario: Given config live interval when parsing then interval is preserved" {
@@ -798,7 +613,6 @@ test "Scenario: Given config live interval when parsing then interval is preserv
         .command => |cmd| switch (cmd) {
             .config => |opts| switch (opts) {
                 .live => |live_opts| try std.testing.expectEqual(@as(u16, 30), live_opts.interval_seconds),
-                else => return error.TestExpectedEqual,
             },
             else => return error.TestExpectedEqual,
         },
@@ -822,15 +636,6 @@ test "Scenario: Given config live unknown flag when parsing then usage error is 
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .config, "unknown flag `--refresh` for `config live`.");
-}
-
-test "Scenario: Given status with extra args when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "status", "extra" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .status, "unexpected argument");
 }
 
 test "Scenario: Given migrate when parsing then usage error is returned" {
@@ -857,30 +662,15 @@ test "Scenario: Given clean when parsing then clean command is preserved" {
     }
 }
 
-test "Scenario: Given daemon watch when parsing then daemon command is preserved" {
+test "Scenario: Given clean background when parsing then background target is preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "daemon", "--watch" };
+    const args = [_][:0]const u8{ "codex-auth", "clean", "background" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
     switch (result) {
         .command => |cmd| switch (cmd) {
-            .daemon => |opts| try std.testing.expectEqual(cli.types.DaemonMode.watch, opts.mode),
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given daemon once when parsing then one-shot daemon command is preserved" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "daemon", "--once" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .daemon => |opts| try std.testing.expectEqual(cli.types.DaemonMode.once, opts.mode),
+            .clean => |opts| try std.testing.expectEqual(cli.types.CleanTarget.background, opts.target),
             else => return error.TestExpectedEqual,
         },
         else => return error.TestExpectedEqual,

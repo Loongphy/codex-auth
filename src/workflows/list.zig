@@ -6,16 +6,13 @@ const account_names = @import("account_names.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const usage_refresh = @import("usage.zig");
-const workflow_env = @import("env.zig");
 
-const isAccountNameRefreshOnlyMode = workflow_env.isAccountNameRefreshOnlyMode;
-const runBackgroundAccountNameRefresh = account_names.runBackgroundAccountNameRefresh;
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const maybeRefreshForegroundAccountNamesWithAccountApiEnabled = account_names.maybeRefreshForegroundAccountNamesWithAccountApiEnabled;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
 const ensureForegroundNodeAvailableWithApiEnabled = preflight.ensureForegroundNodeAvailableWithApiEnabled;
-const refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled = usage_refresh.refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled;
+const refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly = usage_refresh.refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly;
 const loadInitialLiveSelectionDisplay = live_flow.loadInitialLiveSelectionDisplay;
 const SwitchLiveRuntime = live_flow.SwitchLiveRuntime;
 const switchLiveRuntimeMaybeStartRefresh = live_flow.switchLiveRuntimeMaybeStartRefresh;
@@ -23,8 +20,6 @@ const switchLiveRuntimeMaybeTakeUpdatedDisplay = live_flow.switchLiveRuntimeMayb
 const switchLiveRuntimeBuildStatusLine = live_flow.switchLiveRuntimeBuildStatusLine;
 
 pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !void {
-    if (isAccountNameRefreshOnlyMode()) return try runBackgroundAccountNameRefresh(allocator, codex_home, defaultAccountFetcher);
-
     if (opts.live) {
         try ensureLiveTty(.list);
         const live_allocator = std.heap.smp_allocator;
@@ -74,7 +69,7 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
     }
 
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
-    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode);
+    const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode) and !opts.active_only;
 
     try ensureForegroundNodeAvailableWithApiEnabled(
         allocator,
@@ -85,11 +80,12 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         account_api_enabled,
     );
 
-    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabled(
+    var usage_state = try refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly(
         allocator,
         codex_home,
         &reg,
         usage_api_enabled,
+        opts.active_only,
     );
     defer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(

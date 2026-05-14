@@ -88,7 +88,6 @@ fn makeEmptyRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -288,8 +287,6 @@ test "registry save/load" {
     const active_account_key = try accountKeyForEmailAlloc(gpa, "a@b.com");
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
-    reg.auto_switch.threshold_5h_percent = 12;
-    reg.auto_switch.threshold_weekly_percent = 8;
     reg.api.usage = true;
     try registry.setAccountLastLocalRollout(gpa, &reg.accounts.items[0], "/tmp/sessions/run-1/rollout-a.jsonl", 1735689600000);
 
@@ -299,13 +296,11 @@ test "registry save/load" {
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items.len == 1);
-    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == 12);
-    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == 8);
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
@@ -520,7 +515,7 @@ test "applyAccountNamesForUser updates same-user records across personal and tea
     try std.testing.expectEqualStrings("Unrelated Workspace", reg.accounts.items[2].account_name.?);
 }
 
-test "registry save/load round-trips api.account false" {
+test "registry save omits api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -540,89 +535,16 @@ test "registry save/load round-trips api.account false" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
-}
-
-test "registry load defaults missing auto threshold fields" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-    try tmp.dir.writeFile(.{
-        .sub_path = "accounts/registry.json",
-        .data =
-        \\{
-        \\  "schema_version": 3,
-        \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true
-        \\  },
-        \\  "accounts": []
-        \\}
-        ,
-    });
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expect(loaded.auto_switch.enabled);
-    try std.testing.expect(loaded.auto_switch.threshold_5h_percent == registry.default_auto_switch_threshold_5h_percent);
-    try std.testing.expect(loaded.auto_switch.threshold_weekly_percent == registry.default_auto_switch_threshold_weekly_percent);
-    try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.api.account);
-    try std.testing.expect(loaded.active_account_activated_at_ms == null);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
-test "registry load migrates old auto thresholds to default one percent" {
-    const gpa = std.testing.allocator;
-    var tmp = fs.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
-    defer gpa.free(codex_home);
-    try tmp.dir.makePath("accounts");
-    try tmp.dir.writeFile(.{
-        .sub_path = "accounts/registry.json",
-        .data =
-        \\{
-        \\  "schema_version": 3,
-        \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true,
-        \\    "threshold_5h_percent": 12,
-        \\    "threshold_weekly_percent": 8
-        \\  },
-        \\  "accounts": []
-        \\}
-        ,
-    });
-
-    var loaded = try registry.loadRegistry(gpa, codex_home);
-    defer loaded.deinit(gpa);
-    try std.testing.expect(loaded.auto_switch.enabled);
-    try std.testing.expectEqual(registry.current_schema_version, loaded.schema_version);
-    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_5h_percent);
-    try std.testing.expectEqual(@as(u8, 1), loaded.auto_switch.threshold_weekly_percent);
-
-    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
-    defer gpa.free(registry_path);
-    const saved = try fixtures.readFileAlloc(gpa, registry_path);
-    defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"schema_version\": 4") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_5h_percent\": 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"threshold_weekly_percent\": 1") != null);
-}
-
-test "registry load backfills missing api.account from api.usage and rewrites file" {
+test "registry load ignores legacy api.usage and rewrites file without api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -646,18 +568,17 @@ test "registry load backfills missing api.account from api.usage and rewrites fi
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
-test "registry load backfills missing api.usage from api.account and rewrites file" {
+test "registry load ignores legacy api.account and rewrites file without api config" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -681,15 +602,14 @@ test "registry load backfills missing api.usage from api.account and rewrites fi
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expect(!loaded.api.usage);
-    try std.testing.expect(!loaded.api.account);
+    try std.testing.expect(loaded.api.usage);
+    try std.testing.expect(loaded.api.account);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"usage\": false") != null);
-    try std.testing.expect(std.mem.indexOf(u8, saved, "\"account\": false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
 }
 
 test "legacy schema registry with legacy rollout attribution rewrites to normalized current schema" {
@@ -756,9 +676,6 @@ test "legacy current-layout registry version field rewrites to schema_version" {
         \\{
         \\  "version": 3,
         \\  "active_account_key": null,
-        \\  "auto_switch": {
-        \\    "enabled": true
-        \\  },
         \\  "accounts": []
         \\}
         ,
@@ -773,6 +690,8 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"interval_seconds\": 60") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"live\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
 }
 
@@ -1271,7 +1190,6 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try tmp.dir.writeFile(.{ .sub_path = "accounts/auth.json.bak.3", .data = "a3" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.1", .data = "r1" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/registry.json.bak.2", .data = "r2" });
-    try tmp.dir.writeFile(.{ .sub_path = "accounts/" ++ registry.account_name_refresh_lock_file_name, .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = keep_rel_path, .data = "keep" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .data = "legacy" });
     try tmp.dir.writeFile(.{ .sub_path = "accounts/notes.txt", .data = "junk" });
@@ -1291,8 +1209,6 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     try std.testing.expect(try countBackups(accounts, "registry.json") == 0);
     var kept = try tmp.dir.openFile(keep_rel_path, .{});
     kept.close();
-    var refresh_lock = try tmp.dir.openFile("accounts/" ++ registry.account_name_refresh_lock_file_name, .{});
-    refresh_lock.close();
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/bGVnYWN5QGV4YW1wbGUuY29t.auth.json", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/notes.txt", .{}));
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/tmpdir/old.txt", .{}));
@@ -1648,4 +1564,86 @@ test "import cpa path with directory imports multiple json files and skips bad f
     try std.testing.expect(report.skipped == 2);
     try std.testing.expect(report.total_files == 4);
     try std.testing.expectEqual(@as(usize, 2), reg.accounts.items.len);
+}
+
+test "export accounts writes standard auth snapshots to explicit directory" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "export-standard@example.com", "plus");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer import_report.deinit(gpa);
+
+    const export_dir = try fs.path.join(gpa, &[_][]const u8{ codex_home, "exports" });
+    defer gpa.free(export_dir);
+    var summary = try registry.exportAccounts(gpa, codex_home, &reg, export_dir, .standard);
+    defer summary.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 1), summary.exported);
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "export-standard@example.com");
+    defer gpa.free(account_key);
+    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
+    defer gpa.free(snapshot_name);
+    const exported_path = try fs.path.join(gpa, &[_][]const u8{ export_dir, snapshot_name });
+    defer gpa.free(exported_path);
+    const exported = try fixtures.readFileAlloc(gpa, exported_path);
+    defer gpa.free(exported);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\": {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-standard@example.com\"") != null);
+}
+
+test "export accounts writes cpa token files to default backup directory" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "export-cpa@example.com", "pro");
+    defer gpa.free(cpa_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/source.json", .data = cpa_json });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "source.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    var import_report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer import_report.deinit(gpa);
+
+    var summary = try registry.exportAccounts(gpa, codex_home, &reg, null, .cpa);
+    defer summary.deinit(gpa);
+
+    const default_dir = try registry.defaultExportDirectory(gpa, codex_home);
+    defer gpa.free(default_dir);
+    try std.testing.expectEqualStrings(default_dir, summary.dest_path);
+    try std.testing.expectEqual(@as(usize, 1), summary.exported);
+
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "export-cpa@example.com");
+    defer gpa.free(account_key);
+    const snapshot_name = try registry.accountSnapshotFileName(gpa, account_key);
+    defer gpa.free(snapshot_name);
+    const cpa_name = try std.mem.concat(gpa, u8, &[_][]const u8{ snapshot_name[0 .. snapshot_name.len - ".auth.json".len], ".json" });
+    defer gpa.free(cpa_name);
+    const exported_path = try fs.path.join(gpa, &[_][]const u8{ default_dir, cpa_name });
+    defer gpa.free(exported_path);
+    const exported = try fixtures.readFileAlloc(gpa, exported_path);
+    defer gpa.free(exported);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, exported, "\"tokens\"") == null);
 }

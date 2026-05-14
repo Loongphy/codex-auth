@@ -6,7 +6,6 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 
 - Command behavior: [docs/commands/README.md](./commands/README.md)
 - API refresh and endpoint rules: [docs/api.md](./api.md)
-- Background auto-switching: [docs/auto-switch.md](./auto-switch.md)
 - File permissions: [docs/permissions.md](./permissions.md)
 - Schema migration: [docs/schema-migration.md](./schema-migration.md)
 - Test organization: [docs/tests.md](./tests.md)
@@ -25,6 +24,7 @@ Managed files:
 - `<codex_home>/auth.json`
 - `<codex_home>/accounts/registry.json`
 - `<codex_home>/accounts/<account file key>.auth.json`
+- `<codex_home>/accounts/backup/`
 - `<codex_home>/accounts/auth.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/accounts/registry.json.bak.YYYYMMDD-hhmmss[.N]`
 - `<codex_home>/sessions/...`
@@ -32,7 +32,6 @@ Managed files:
 ## Registry Compatibility
 
 - `registry.json.schema_version` is the on-disk migration gate.
-- `schema_version = 4` is the current layout with record-keyed snapshots, active-account activation timestamps, per-account local rollout dedupe, and default auto-switch thresholds reset to `1`.
 - `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
 - Current-layout files that still use the top-level `version = 3` key are rewritten to `schema_version = 4`.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
@@ -45,24 +44,40 @@ See [docs/schema-migration.md](./schema-migration.md) for versioning policy and 
 
 `codex-auth` separates the user identity from the ChatGPT workspace/account context.
 
-- `tokens.account_id` is stored as `chatgpt_account_id` and is used for API calls.
+For ChatGPT OAuth auth:
+
+- `chatgpt_account_id` stores the ChatGPT account context used by local matching and ChatGPT API headers.
+- Account context selection is ordered:
+  1. use non-empty `tokens.account_id`
+  2. otherwise use non-empty JWT `https://api.openai.com/auth.chatgpt_account_id`
+  3. otherwise use JWT `https://api.openai.com/auth.organizations[].id`
+- `organizations[].id` is only a fallback for auth files that omit the legacy account id fields. When it is used, `chatgpt_account_id` is an `org-...` workspace identifier rather than the legacy UUID account id.
+- Organization fallback chooses the organization with `is_default = true`; if none exists, it uses the first organization with a non-empty `id`.
 - `chatgpt_user_id` is read from JWT auth claims, falling back to `user_id`.
-- The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`.
+- The local unique key is `record_key = chatgpt_user_id + "::" + chatgpt_account_id`; the second segment may be either a legacy account id or the organization fallback id.
 - `account_key` stores this local `record_key`.
 - Snapshot filenames are derived from `record_key`; filename-unsafe values are base64url-encoded.
 - Email is normalized to lowercase and used for display/grouping, not identity.
+
+For OpenAI API-key auth:
+
+- `OPENAI_API_KEY` is read from `auth.json`.
+- The key is verified with `GET https://api.openai.com/v1/me`.
+- `email` from `/v1/me` is normalized to lowercase and used for display/grouping.
+- The local unique key is `account_key = "apikey::" + me.id + "::" + sha256(OPENAI_API_KEY)`.
+- The raw API key is stored only in the managed auth snapshot, never in `registry.json`, snapshot filenames, or display labels.
+- API-key rows use a local `API key <fingerprint>` account label so multiple keys under the same email remain distinguishable.
 
 ## Auth Parsing
 
 If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwise, ChatGPT auth requires:
 
 - `tokens.access_token`
-- `tokens.account_id`
 - `tokens.id_token`
-- JWT `https://api.openai.com/auth.chatgpt_account_id`
+- a ChatGPT account context from `tokens.account_id`, JWT `https://api.openai.com/auth.chatgpt_account_id`, or JWT `https://api.openai.com/auth.organizations[].id`
 - JWT user identity from `chatgpt_user_id` or `user_id`
 
-If account identity fields are missing or mismatched, import/login fails. Existing-registry foreground and background sync skip unsyncable auth files and continue with registry state already on disk.
+If required identity fields are missing or mismatched, import/login fails. Existing-registry foreground sync skips unsyncable auth files and continues with registry state already on disk.
 
 ## Active Auth Sync
 
@@ -101,7 +116,6 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Rate limits map `window_minutes = 300` to 5h and `window_minutes = 10080` to weekly.
 - Past reset timestamps render as `100%`.
 
-API-backed refresh details live in [docs/api.md](./api.md). Background watcher refresh details live in [docs/auto-switch.md](./auto-switch.md).
 
 ## Display Model
 

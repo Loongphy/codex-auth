@@ -25,6 +25,7 @@ fn colorEnabled() bool {
 }
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
     if (registry.resolveDisplayPlan(rec)) |p| return registry.planLabel(p);
     return missing;
 }
@@ -86,7 +87,7 @@ pub fn writeAccountsTableWithUsageOverrides(
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H USAGE", "WEEKLY USAGE", "LAST ACTIVITY" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -130,10 +131,9 @@ pub fn writeAccountsTableWithUsageOverrides(
     defer std.heap.page_allocator.free(h0);
     const h1 = try truncateAlloc(headers[1], widths[1]);
     defer std.heap.page_allocator.free(h1);
-    const header_5h = if (widths[2] >= "5H USAGE".len) "5H USAGE" else "5H";
-    const h2 = try truncateAlloc(header_5h, widths[2]);
+    const h2 = try truncateAlloc(headers[2], widths[2]);
     defer std.heap.page_allocator.free(h2);
-    const header_week = if (widths[3] >= "WEEKLY USAGE".len) "WEEKLY USAGE" else if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
+    const header_week = if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
     const h3 = try truncateAlloc(header_week, widths[3]);
     defer std.heap.page_allocator.free(h3);
     const header_last = if (widths[4] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";

@@ -4,6 +4,7 @@
 
 ```shell
 codex-auth list
+codex-auth list --active
 codex-auth list --live
 codex-auth list --api
 codex-auth list --skip-api
@@ -15,12 +16,13 @@ codex-auth list --skip-api
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Shows `ACCOUNT`, `PLAN`, `5H USAGE`, `WEEKLY USAGE`, and `LAST ACTIVITY`.
+- Shows `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, and `LAST ACTIVITY`.
 
 ## Refresh Modes
 
-- Default mode honors the stored `config api` setting.
-- `--api` forces foreground usage and account-name API refresh.
+- Default mode performs foreground usage and account-name API refresh.
+- `--active` refreshes usage only for the active account before rendering and skips account-name API refresh. Other rows use stored registry snapshots.
+- `--api` is accepted as an explicit equivalent to default mode.
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
 

@@ -8,12 +8,12 @@ const registry = codex_auth.registry;
 const isQuitInput = cli.picker.isQuitInput;
 const isQuitKey = cli.picker.isQuitKey;
 const activeSelectableIndex = cli.picker.activeSelectableIndex;
+const maybeAutoSwitchTargetKeyAlloc = cli.picker.maybeAutoSwitchTargetKeyAlloc;
 const accountRowCount = cli.picker.accountRowCount;
 const displayedIndexForSelectable = cli.picker.displayedIndexForSelectable;
 const selectableIndexForAccountKey = cli.picker.selectableIndexForAccountKey;
 const accountIdForSelectable = cli.picker.accountIdForSelectable;
 const filterErroredRowsFromSelectableIndices = cli.rows.filterErroredRowsFromSelectableIndices;
-const maybeAutoSwitchTargetKeyAlloc = cli.picker.maybeAutoSwitchTargetKeyAlloc;
 const renderSwitchScreen = cli.render.renderSwitchScreen;
 const renderRemoveScreen = cli.render.renderRemoveScreen;
 const renderListScreenViewport = cli.render.renderListScreenViewport;
@@ -60,7 +60,6 @@ fn makeTestRegistry() registry.Registry {
         .schema_version = registry.current_schema_version,
         .active_account_key = null,
         .active_account_activated_at_ms = null,
-        .auto_switch = registry.defaultAutoSwitchConfig(),
         .api = registry.defaultApiConfig(),
         .accounts = std.ArrayList(registry.AccountRecord).empty,
     };
@@ -615,24 +614,6 @@ test "Scenario: Given queued live list scroll keys before rendering then viewpor
     try std.testing.expectEqual(@as(usize, 45), viewport_start);
 }
 
-test "Scenario: Given live auto switch state when starting then the initial display triggers auto-switch once" {
-    var enabled = live_tui.LiveAutoSwitchState.init(true);
-    try std.testing.expect(enabled.takePending());
-    try std.testing.expect(!enabled.takePending());
-
-    enabled.noteRefreshedDisplay();
-    try std.testing.expect(enabled.takePending());
-    try std.testing.expect(!enabled.takePending());
-
-    enabled.noteRefreshedDisplay();
-    enabled.noteActionDisplay();
-    try std.testing.expect(!enabled.takePending());
-
-    var disabled = live_tui.LiveAutoSwitchState.init(false);
-    disabled.noteRefreshedDisplay();
-    try std.testing.expect(!disabled.takePending());
-}
-
 test "Scenario: Given a long selectable live list when paging then selection can reach the first and final accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -938,7 +919,22 @@ test "Scenario: Given live switch navigation shortcuts when an account is unavai
     try std.testing.expectEqualStrings("user-1::acc-1", selected_account_key.?);
 }
 
-test "Scenario: Given active usage at threshold when picking a live auto-switch target then nearest 5h reset wins" {
+test "Scenario: Given live auto switch state when starting then the initial display triggers auto-switch once" {
+    var enabled = live_tui.LiveAutoSwitchState.init(true);
+    try std.testing.expect(enabled.takePending());
+    try std.testing.expect(!enabled.takePending());
+    enabled.noteRefreshedDisplay();
+    try std.testing.expect(enabled.takePending());
+    enabled.noteActionDisplay();
+    try std.testing.expect(!enabled.takePending());
+
+    var disabled = live_tui.LiveAutoSwitchState.init(false);
+    try std.testing.expect(!disabled.takePending());
+    disabled.noteRefreshedDisplay();
+    try std.testing.expect(!disabled.takePending());
+}
+
+test "Scenario: Given active usage at zero when picking a live auto-switch target then healthy candidate wins" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -946,12 +942,12 @@ test "Scenario: Given active usage at threshold when picking a live auto-switch 
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
 
     try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup-a@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-3", "backup-b@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "exhausted@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-3", "healthy@example.com", "", .team);
     reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
-    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 99, 10, 3600, 7 * 24 * 3600);
-    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 5, 5, 30 * 60, 60 * 60);
-    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 50, 50, 5 * 60 + 1, 2 * 60 * 60);
+    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 100, 20, 3600, 7 * 24 * 3600);
+    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 100, 10, 30 * 60, 6 * 60 * 60);
+    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 50, 50, 30 * 60, 30 * 60);
 
     var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
     defer rows.deinit(gpa);
@@ -967,7 +963,7 @@ test "Scenario: Given active usage at threshold when picking a live auto-switch 
     try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
 }
 
-test "Scenario: Given equal 5h resets when picking a live auto-switch target then nearest weekly reset wins" {
+test "Scenario: Given active usage above zero when picking a live auto-switch target then no target is chosen" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -975,67 +971,10 @@ test "Scenario: Given equal 5h resets when picking a live auto-switch target the
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
 
     try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup-a@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-3", "backup-b@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "healthy@example.com", "", .team);
     reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
-    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 99, 10, 3600, 7 * 24 * 3600);
-    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 10, 10, 30 * 60, 6 * 60 * 60);
-    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 90, 90, 30 * 60, 30 * 60);
-
-    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
-    defer rows.deinit(gpa);
-    try filterErroredRowsFromSelectableIndices(gpa, &rows);
-
-    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
-        .reg = &reg,
-        .usage_overrides = null,
-    }, &rows);
-    defer if (target_key) |value| gpa.free(value);
-
-    try std.testing.expect(target_key != null);
-    try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
-}
-
-test "Scenario: Given an active api status error when picking an auto-switch target then a healthy candidate is chosen" {
-    const gpa = std.testing.allocator;
-    var reg = makeTestRegistry();
-    defer reg.deinit(gpa);
-
-    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup@example.com", "", .team);
-    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
-    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 20, 20);
-    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 10, 10);
-
-    const usage_overrides = [_]?[]const u8{ "403", null };
-    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, &usage_overrides);
-    defer rows.deinit(gpa);
-    try filterErroredRowsFromSelectableIndices(gpa, &rows);
-
-    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
-        .reg = &reg,
-        .usage_overrides = &usage_overrides,
-    }, &rows);
-    defer if (target_key) |value| gpa.free(value);
-
-    try std.testing.expect(target_key != null);
-    try std.testing.expectEqualStrings("user-1::acc-2", target_key.?);
-}
-
-test "Scenario: Given only exhausted candidates when picking an auto-switch target then no target is returned" {
-    const gpa = std.testing.allocator;
-    var reg = makeTestRegistry();
-    defer reg.deinit(gpa);
-
-    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
-    try appendTestAccount(gpa, &reg, "user-1::acc-2", "backup@example.com", "", .team);
-    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
-    reg.accounts.items[0].last_usage = testUsageSnapshot(now, 100, 10);
-    reg.accounts.items[1].last_usage = testUsageSnapshot(now, 100, 100);
+    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 99, 20, 3600, 7 * 24 * 3600);
+    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 50, 50, 30 * 60, 30 * 60);
 
     var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
     defer rows.deinit(gpa);

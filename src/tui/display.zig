@@ -145,6 +145,7 @@ fn planSortRank(plan: ?registry.PlanType) u8 {
 }
 
 fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
     return if (registry.resolveDisplayPlan(rec)) |plan| registry.planLabel(plan) else "-";
 }
 
@@ -195,6 +196,18 @@ pub fn buildPreferredAccountLabelAlloc(
     const alias = if (rec.alias.len != 0) rec.alias else null;
     const account_name = normalizedAccountName(rec);
 
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) {
+        const api_key_label = try apiKeyLabelFromAccountKeyAlloc(allocator, rec.account_key);
+        defer if (api_key_label) |value| allocator.free(value);
+
+        if (alias != null and api_key_label != null) {
+            return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, api_key_label.? });
+        }
+        if (alias != null) return allocator.dupe(u8, alias.?);
+        if (api_key_label != null) return allocator.dupe(u8, api_key_label.?);
+        if (account_name != null) return allocator.dupe(u8, account_name.?);
+        return allocator.dupe(u8, fallback);
+    }
     if (alias != null and account_name != null) {
         return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, account_name.? });
     }
@@ -207,4 +220,16 @@ fn normalizedAccountName(rec: *const registry.AccountRecord) ?[]const u8 {
     const account_name = rec.account_name orelse return null;
     if (account_name.len == 0) return null;
     return account_name;
+}
+
+fn apiKeyLabelFromAccountKeyAlloc(allocator: std.mem.Allocator, account_key: []const u8) !?[]u8 {
+    if (!std.mem.startsWith(u8, account_key, "apikey::")) return null;
+    const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return null;
+    const fingerprint = account_key[sep + 2 ..];
+    if (fingerprint.len < 9) return null;
+    const label = try std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{
+        fingerprint[0..5],
+        fingerprint[fingerprint.len - 4 ..],
+    });
+    return label;
 }

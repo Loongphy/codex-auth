@@ -39,46 +39,37 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 
 ## Usage Refresh Rules
 
-- `api.usage = true`: foreground refresh uses the usage API.
-- `api.usage = false`: foreground refresh reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- when `api.usage = true`, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
+- foreground refresh uses the usage API by default.
+- `--skip-api` reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
+- by default, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
 - when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
-- when `api.usage = false`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
-- `list` and interactive `switch` follow the same foreground usage mode by default: they honor the stored `api.usage` setting unless the command line overrides it
-- `list --api` and interactive `switch --api` force foreground usage refresh for that command even when `api.usage = false`
+- with `--skip-api`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
+- `list` and interactive `switch` use the API-backed path by default; `--api` is accepted as an explicit equivalent
 - `list --skip-api` and interactive `switch --skip-api` disable the foreground usage API path for that command
-- in `switch --live`, the initial live display and later refreshed displays trigger a foreground auto-switch when the active account shows `0%` on the 5h window, `0%` on the weekly window, or a numeric non-`200` usage API status overlay for the active row
 - `switch --live` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
-- with `--skip-api` or `api.usage = false`, `list` and `switch --live` can still refresh only the active account from local rollout data; non-active `switch` rows and non-active foreground auto-switch candidates still come from stored registry data
 - single-shot `switch --skip-api` skips the pre-render refresh round entirely and shows the stored registry picker directly
 - `switch <query>` always resolves selectors locally from stored data and does not accept `--live`, `--api`, or `--skip-api`
 - interactive `remove`, including `remove --live`, always stays local-only and never makes foreground usage API requests
 - `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--live`
 - single-shot `switch` does not perform another foreground usage refresh after the new account is activated
 - in `switch --live`, a successful selection patches the current picker state in memory instead of rebuilding it from disk; the active account and `Switched to ...` message both come from the persisted registry state after the local switch succeeds, while the current display keeps its existing usage/account overlays, including any overlay already shown on the newly active row, until the next scheduled live refresh reapplies fresh data asynchronously
-- in `switch --live`, a successful manual selection immediately re-runs the foreground auto-switch check on that patched current display instead of waiting for the next scheduled refresh; if the newly active row still shows `0%` or a numeric non-`200` usage overlay in the current display, the auto-switch loop may switch away again right away
 - in `remove --live`, a successful delete also patches the current picker state in memory; removed rows disappear immediately, surviving overlays stay in place until the next scheduled refresh, and the surviving active account plus the `Removed ...` summary come from the persisted registry state after removal succeeds
-- the auto-switch daemon refreshes the current active account usage during each cycle when `auto_switch.enabled = true`
-- the auto-switch daemon may also refresh a small number of non-active candidate accounts from stored snapshots so it can score switch candidates
-- the daemon usage paths are cooldown-limited; see [docs/auto-switch.md](./auto-switch.md) for the broader runtime loop
 
 ## Account Name Refresh Rules
 
-- `api.account = true` is required.
+- Account-name refresh uses the account API by default.
 - A usable ChatGPT auth context with both `access_token` and `chatgpt_account_id` is required. If either value is missing, refresh is skipped before any request is sent.
+- `chatgpt_account_id` is the stored ChatGPT account context. It normally comes from `tokens.account_id` or JWT `chatgpt_account_id`; for phone-login auth files that omit both legacy fields, it can be an `org-...` organization id selected from JWT `organizations[]`.
+- Organization fallback prefers `is_default = true`; if no default organization is present, it uses the first non-empty organization id.
 - `login` refreshes immediately after the new active auth is ready.
 - Single-file `import` refreshes immediately for the imported auth context.
-- `list` and interactive `switch` follow the same foreground account-name refresh mode by default: they honor the stored `api.account` setting unless the command line overrides it.
-- `list --api` and interactive `switch --api` force synchronous `accounts/check` refresh for that command even when `api.account = false`; `list --skip-api` and interactive `switch --skip-api` skip it and use stored metadata only.
+- `list` and interactive `switch` refresh account names by default; `--api` is accepted as an explicit equivalent.
+- `list --skip-api` and interactive `switch --skip-api` skip account-name refresh and use stored metadata only.
 - `switch <query>` always stays local-only and does not accept `--live`, `--api`, or `--skip-api`.
 - `remove <query>` and `remove --all` always stay local-only and do not accept `--live`.
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.
-- the auto-switch daemon still uses a grouped-scope scan during each cycle when `auto_switch.enabled = true`.
-- daemon refreshes load the request auth context from stored account snapshots under `accounts/` and do not depend on the current `auth.json` belonging to the scope being refreshed.
-- when multiple stored ChatGPT snapshots exist for one grouped scope, daemon refreshes pick the snapshot with the newest `last_refresh`.
 - stored snapshots without a usable `access_token` or `chatgpt_account_id` are skipped.
-- daemon refreshes do not backfill missing `plan` or `auth_mode` from stored snapshots before deciding whether a grouped Team scope qualifies.
 
 At most one `accounts/check` request is attempted per grouped user scope in a given refresh pass.
 Request failures and unparseable responses are non-fatal and leave stored `account_name` values unchanged.
@@ -89,13 +80,12 @@ Grouped account-name refresh always operates on one `chatgpt_user_id` scope at a
 
 - `login` and single-file `import` start from the just-parsed auth info
 - `list` and interactive `switch` start from the current active auth info when foreground refresh is enabled
-- the auto-switch daemon scans registry-backed grouped scopes and refreshes each qualifying scope independently
 
 That scope includes:
 
 - all records with the same `chatgpt_user_id`
 
-`chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those workspaces can include personal and Team records under the same email.
+`chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those values can be legacy account ids or organization fallback ids.
 
 This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it belongs to the same `chatgpt_user_id` as Team records.
 
@@ -143,5 +133,3 @@ Then:
 
 - `Team #1` is filled with `Prod Workspace`
 - `Team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
-
-The same grouped-scope rule also applies to synchronous `list` / interactive `switch` refreshes and to the auto-switch daemon.

@@ -6,11 +6,87 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
 
 jobs:
+  verify-main-ci:
+    name: Verify Main CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify latest full CI on main
+        uses: actions/github-script@v9
+        env:
+          CURRENT_TAG: ${{ github.ref_name }}
+          CURRENT_SHA: ${{ github.sha }}
+        with:
+          script: |
+            const releaseOnlyCommitPattern = /^chore: release v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentSha = process.env.CURRENT_SHA;
+
+            const currentCommit = await github.rest.repos.getCommit({
+              owner,
+              repo,
+              ref: currentSha,
+            });
+
+            const currentSubject = (currentCommit.data.commit.message ?? "").split("\n")[0].trim();
+            const isReleaseOnlyCommit = releaseOnlyCommitPattern.test(currentSubject);
+
+            let expectedSha = currentSha;
+            if (isReleaseOnlyCommit) {
+              const parent = currentCommit.data.parents?.[0]?.sha;
+              if (!parent) {
+                core.setFailed(`Release-only tag commit ${currentSha} has no parent commit to validate.`);
+                return;
+              }
+              expectedSha = parent;
+            }
+
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner,
+              repo,
+              workflow_id: "ci.yml",
+              branch: "main",
+              event: "push",
+              status: "completed",
+              per_page: 100,
+            });
+
+            const fullRuns = runs.filter((run) => {
+              const subject = (run.head_commit?.message ?? "").split("\n")[0].trim();
+              return !releaseOnlyCommitPattern.test(subject);
+            });
+
+            const latestFullRun = fullRuns[0];
+            if (!latestFullRun) {
+              core.setFailed("No completed full CI run found on main.");
+              return;
+            }
+
+            if (latestFullRun.conclusion !== "success") {
+              core.setFailed(
+                `Latest full CI on main did not succeed: run ${latestFullRun.html_url} concluded '${latestFullRun.conclusion}'.`,
+              );
+              return;
+            }
+
+            if (latestFullRun.head_sha !== expectedSha) {
+              core.setFailed(
+                `Latest full CI on main validated ${latestFullRun.head_sha}, but release requires ${expectedSha}. Run: ${latestFullRun.html_url}`,
+              );
+              return;
+            }
+
+            core.info(
+              `Release gate passed: latest full main CI succeeded for ${expectedSha} via ${latestFullRun.html_url}`,
+            );
+
   build-test:
     name: Build & Test (${{ matrix.os }})
+    needs: verify-main-ci
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,15 +103,23 @@ jobs:
           version: 0.16.0
 
       - name: Zig test
+        if: ${{ matrix.os != 'windows-latest' }}
         run: |
           zig version
           zig build test
+
+      - name: Zig test (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          zig version
+          zig build test -j1
 
       - name: Build native binary
         run: zig build -Doptimize=ReleaseSafe
 
   release-assets:
     name: Build Release Assets (${{ matrix.id }})
+    needs: verify-main-ci
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -95,9 +179,6 @@ jobs:
         run: |
           mkdir -p "artifacts/${{ matrix.id }}/binary"
           cp "zig-out/bin/${{ matrix.binary_name }}" "artifacts/${{ matrix.id }}/binary/${{ matrix.binary_name }}"
-          if [[ "${{ matrix.id }}" == win32-* ]]; then
-            cp "zig-out/bin/codex-auth-auto.exe" "artifacts/${{ matrix.id }}/binary/codex-auth-auto.exe"
-          fi
           if [[ "${{ matrix.archive_name }}" == *.zip ]]; then
             (
               cd "artifacts/${{ matrix.id }}/binary"
