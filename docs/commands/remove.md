@@ -16,6 +16,7 @@ codex-auth remove --all
 - The default picker stays local-only so deletion is not blocked by refresh work.
 - `--api` attempts a best-effort foreground refresh for picker display.
 - `--skip-api` explicitly forbids remote refresh.
+- Click a table header to sort by that column; click the same header again to reverse the direction.
 - `q` quits without deleting accounts.
 
 ## Live Remove
@@ -25,6 +26,7 @@ codex-auth remove --all
 - Removed rows disappear from the current display immediately.
 - Existing row overlays stay in place until the next scheduled refresh.
 - The active account shown after deletion comes from the persisted registry state.
+- Click a table header to sort by that column; click the same header again to reverse the direction.
 
 ## Query Remove
 

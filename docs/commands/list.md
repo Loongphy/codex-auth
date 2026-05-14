@@ -25,6 +25,7 @@ codex-auth list --skip-api
 - `--api` is accepted as an explicit equivalent to default mode.
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
+- In a TTY, plain `list` opens a sortable table without scheduled live refresh. Without a TTY, it prints a static table.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
 
@@ -34,4 +35,6 @@ When local-only refresh is active, only the active account can be updated from l
 - Usage cells show remaining percent and reset time when that data is known.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
+- In the interactive table, click a table header to sort by that column; click the same header again to reverse the direction.
+- When the interactive table exits, it prints the final visible table, preserving the current sort order.
 - Shared table layout policy is documented in [docs/table-layout.md](../table-layout.md).

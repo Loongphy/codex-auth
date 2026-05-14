@@ -6,9 +6,8 @@ before expanding long labels.
 
 This applies to `switch`, `remove`, `list`, and `list --live` because they all
 render through the shared table code in `src/cli/table_layout.zig` and are
-called by the renderers in `src/cli/render.zig`. The
-width-priority rules only matter when a viewport width is known, which is
-typically the live case.
+called by the renderers in `src/cli/render.zig`. The width-priority rules only
+matter when a viewport width is known, which is typically the live case.
 
 ## Column Width Priority
 

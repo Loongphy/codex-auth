@@ -14,6 +14,7 @@ codex-auth switch <query>
 
 - The picker uses the same account ordering as `list`.
 - `q` quits without switching.
+- Click a table header to sort by that column; click the same header again to reverse the direction.
 - `--api` forces foreground remote refresh before rendering.
 - `--skip-api` renders from stored data and local-only active-account refresh where available.
 
@@ -25,6 +26,7 @@ codex-auth switch <query>
 - A successful switch patches the current display immediately.
 - In-flight refresh results are discarded after a manual switch.
 - Existing usage overlays stay visible until the next scheduled refresh.
+- Click a table header to sort by that column; click the same header again to reverse the direction.
 
 ## Query Switch
 
