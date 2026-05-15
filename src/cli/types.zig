@@ -35,6 +35,17 @@ pub const RemoveOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
 };
+pub const AliasSetOptions = struct {
+    selector: []u8,
+    alias: []u8,
+};
+pub const AliasClearOptions = struct {
+    selector: []u8,
+};
+pub const AliasOptions = union(enum) {
+    set: AliasSetOptions,
+    clear: AliasClearOptions,
+};
 pub const CleanTarget = enum { accounts, background };
 pub const CleanOptions = struct {
     target: CleanTarget = .accounts,
@@ -51,6 +62,7 @@ pub const HelpTopic = enum {
     export_auth,
     switch_account,
     remove_account,
+    alias,
     clean,
     config,
 };
@@ -62,6 +74,7 @@ pub const Command = union(enum) {
     export_auth: ExportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
+    alias: AliasOptions,
     clean: CleanOptions,
     config: ConfigOptions,
     version: void,

@@ -138,6 +138,18 @@ pub fn printSwitchAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn printAliasAccountNotFoundError(query: []const u8) !void {
+    var buffer: [768]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = style.stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" no alias target matches '{s}'.\n", .{query});
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Alias targets accept one account: alias, email, display number, or partial query.\n");
+    try out.flush();
+}
+
 pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
     if (queries.len == 0) return;
     if (queries.len == 1) {
@@ -193,6 +205,64 @@ pub fn printRemoveRequiresTtyError() !void {
     try out.writeAll(" interactive remove requires a TTY.\n");
     try writeHintPrefixTo(out, use_color);
     try out.writeAll(" Use `codex-auth remove <alias|email|display-number|query>...` or `codex-auth remove --all` instead.\n");
+    try out.flush();
+}
+
+pub fn printAliasRequiresTtyError() !void {
+    var buffer: [512]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = style.stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" multiple alias targets require a TTY.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Narrow the selector or use a displayed row number.\n");
+    try out.flush();
+}
+
+pub fn printInvalidAliasError(reason: []const u8) !void {
+    var buffer: [768]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = style.stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" invalid alias: {s}\n", .{reason});
+    try out.flush();
+}
+
+pub fn printDuplicateAliasError(alias_value: []const u8, email: []const u8) !void {
+    var buffer: [768]u8 = undefined;
+    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
+    const out = &writer.interface;
+    const use_color = style.stderrColorEnabled();
+    try writeErrorPrefixTo(out, use_color);
+    try out.print(" alias '{s}' is already used by {s}.\n", .{ alias_value, email });
+    try out.flush();
+}
+
+pub fn printAliasSet(rec: *const registry.AccountRecord, old_alias: []const u8) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    if (old_alias.len == 0) {
+        try out.print("Set alias for {s}: {s}\n", .{ rec.email, rec.alias });
+    } else if (std.mem.eql(u8, old_alias, rec.alias)) {
+        try out.print("Alias already set for {s}: {s}\n", .{ rec.email, rec.alias });
+    } else {
+        try out.print("Updated alias for {s}: {s} -> {s}\n", .{ rec.email, old_alias, rec.alias });
+    }
+    try out.flush();
+}
+
+pub fn printAliasCleared(rec: *const registry.AccountRecord, old_alias: []const u8) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    if (old_alias.len == 0) {
+        try out.print("Alias already empty for {s}.\n", .{rec.email});
+    } else {
+        try out.print("Cleared alias for {s}: {s}\n", .{ rec.email, old_alias });
+    }
     try out.flush();
 }
 

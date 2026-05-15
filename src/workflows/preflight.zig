@@ -20,6 +20,9 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.TuiOutputUnavailable or
         err == error.NodeJsRequired or
         err == error.SwitchSelectionRequiresTty or
+        err == error.AliasSelectionRequiresTty or
+        err == error.InvalidAlias or
+        err == error.DuplicateAlias or
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput;

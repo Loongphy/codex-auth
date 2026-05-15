@@ -1710,6 +1710,129 @@ test "Scenario: Given switch query with a direct local match when running switch
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
 }
 
+test "Scenario: Given alias set with a direct local match when running alias then registry alias is updated" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", "work" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Updated alias for backup@example.com: backup -> work\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const idx = registry.findAccountIndexByAccountKey(&loaded, backup_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("work", loaded.accounts.items[idx].alias);
+}
+
+test "Scenario: Given alias clear with display number when running alias then registry alias is removed" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "clear", "02" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Cleared alias for backup@example.com: backup\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const idx = registry.findAccountIndexByAccountKey(&loaded, backup_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("", loaded.accounts.items[idx].alias);
+}
+
+test "Scenario: Given alias set with duplicate alias when running alias then it fails without changing registry" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", "ACTIVE" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "alias 'ACTIVE' is already used by active@example.com.") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const idx = registry.findAccountIndexByAccountKey(&loaded, backup_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("backup", loaded.accounts.items[idx].alias);
+}
+
 test "Scenario: Given switch query with multiple matches when running switch then it asks for one account and switches only that account" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

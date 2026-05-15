@@ -22,6 +22,7 @@ const import_workflow = @import("import.zig");
 const export_workflow = @import("export.zig");
 const switch_workflow = @import("switch.zig");
 const remove_workflow = @import("remove.zig");
+const alias_workflow = @import("alias.zig");
 const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
 const usage_refresh = @import("usage.zig");
@@ -144,6 +145,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .export_auth => |opts| try export_workflow.handleExport(allocator, codex_home.?, opts),
         .switch_account => |opts| try switch_workflow.handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
+        .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
     }
 }

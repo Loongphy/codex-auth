@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../types.zig");
 const common = @import("common.zig");
 
+const alias = @import("alias.zig");
 const clean = @import("clean.zig");
 const config = @import("config.zig");
 const export_auth = @import("export.zig");
@@ -43,6 +44,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
     if (std.mem.eql(u8, cmd, "export")) return export_auth.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "switch")) return switch_account.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "remove")) return remove.parse(allocator, args[2..]);
+    if (std.mem.eql(u8, cmd, "alias")) return alias.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "clean")) return clean.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "config")) return config.parse(allocator, args[2..]);
 
@@ -70,6 +72,13 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
             common.freeOwnedStringList(allocator, opts.selectors);
             allocator.free(opts.selectors);
         },
+        .alias => |opts| switch (opts) {
+            .set => |set_opts| {
+                allocator.free(set_opts.selector);
+                allocator.free(set_opts.alias);
+            },
+            .clear => |clear_opts| allocator.free(clear_opts.selector),
+        },
         else => {},
     }
     cmd.* = undefined;
@@ -95,6 +104,7 @@ fn helpTopicForName(name: []const u8) ?types.HelpTopic {
     if (std.mem.eql(u8, name, "export")) return .export_auth;
     if (std.mem.eql(u8, name, "switch")) return .switch_account;
     if (std.mem.eql(u8, name, "remove")) return .remove_account;
+    if (std.mem.eql(u8, name, "alias")) return .alias;
     if (std.mem.eql(u8, name, "clean")) return .clean;
     if (std.mem.eql(u8, name, "config")) return .config;
     return null;
