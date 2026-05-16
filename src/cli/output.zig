@@ -301,12 +301,7 @@ pub fn buildRemoveLabels(
 
         const label = if (row.depth == 0 or current_header == null) blk: {
             const rec = &reg.accounts.items[row.account_index.?];
-            const preferred = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
-            defer allocator.free(preferred);
-            if (std.mem.eql(u8, preferred, rec.email)) {
-                break :blk try allocator.dupe(u8, rec.email);
-            }
-            break :blk try std.fmt.allocPrint(allocator, "{s} / {s}", .{ rec.email, preferred });
+            break :blk try display_rows.buildAccountIdentityLabelAlloc(allocator, rec);
         } else try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
         try labels.append(allocator, label);
     }
@@ -374,7 +369,7 @@ pub fn printSwitchedAccount(
     account_key: []const u8,
 ) !void {
     const label = if (registry.findAccountIndexByAccountKey(reg, account_key)) |idx|
-        try display_rows.buildPreferredAccountLabelAlloc(allocator, &reg.accounts.items[idx], reg.accounts.items[idx].email)
+        try display_rows.buildAccountIdentityLabelAlloc(allocator, &reg.accounts.items[idx])
     else
         try allocator.dupe(u8, account_key);
     defer allocator.free(label);

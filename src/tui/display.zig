@@ -155,18 +155,7 @@ fn isActive(reg: *const registry.Registry, account_idx: usize) bool {
 }
 
 fn singletonAccountCellAlloc(allocator: std.mem.Allocator, rec: *const registry.AccountRecord) ![]u8 {
-    const alias = if (rec.alias.len != 0) rec.alias else null;
-    const account_name = normalizedAccountName(rec);
-    const preferred = if (alias != null and account_name != null)
-        try std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, account_name.? })
-    else if (alias != null)
-        try allocator.dupe(u8, alias.?)
-    else if (account_name != null)
-        try allocator.dupe(u8, account_name.?)
-    else
-        return allocator.dupe(u8, rec.email);
-    defer allocator.free(preferred);
-    return std.fmt.allocPrint(allocator, "{s} / {s}", .{ preferred, rec.email });
+    return buildAccountIdentityLabelAlloc(allocator, rec);
 }
 
 fn groupedAccountCellAlloc(
@@ -225,6 +214,25 @@ pub fn buildPreferredAccountLabelAlloc(
     if (alias != null) return allocator.dupe(u8, alias.?);
     if (account_name != null) return allocator.dupe(u8, account_name.?);
     return allocator.dupe(u8, fallback);
+}
+
+pub fn buildAccountIdentityLabelAlloc(
+    allocator: std.mem.Allocator,
+    rec: *const registry.AccountRecord,
+) ![]u8 {
+    const alias = if (rec.alias.len != 0) rec.alias else null;
+    const account_name = normalizedAccountName(rec);
+
+    if (alias != null and account_name != null) {
+        return std.fmt.allocPrint(allocator, "{s} ({s}, {s})", .{ alias.?, account_name.?, rec.email });
+    }
+    if (alias != null) {
+        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, rec.email });
+    }
+    if (account_name != null) {
+        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ account_name.?, rec.email });
+    }
+    return allocator.dupe(u8, rec.email);
 }
 
 fn normalizedAccountName(rec: *const registry.AccountRecord) ?[]const u8 {
