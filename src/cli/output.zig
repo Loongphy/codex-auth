@@ -301,15 +301,12 @@ pub fn buildRemoveLabels(
 
         const label = if (row.depth == 0 or current_header == null) blk: {
             const rec = &reg.accounts.items[row.account_index.?];
-            if (std.mem.eql(u8, row.account_cell, rec.email)) {
-                const preferred = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
-                defer allocator.free(preferred);
-                if (std.mem.eql(u8, preferred, rec.email)) {
-                    break :blk try allocator.dupe(u8, row.account_cell);
-                }
-                break :blk try std.fmt.allocPrint(allocator, "{s} / {s}", .{ rec.email, preferred });
+            const preferred = try display_rows.buildPreferredAccountLabelAlloc(allocator, rec, rec.email);
+            defer allocator.free(preferred);
+            if (std.mem.eql(u8, preferred, rec.email)) {
+                break :blk try allocator.dupe(u8, rec.email);
             }
-            break :blk try std.fmt.allocPrint(allocator, "{s} / {s}", .{ rec.email, row.account_cell });
+            break :blk try std.fmt.allocPrint(allocator, "{s} / {s}", .{ rec.email, preferred });
         } else try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
         try labels.append(allocator, label);
     }
