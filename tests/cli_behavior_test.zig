@@ -1068,8 +1068,8 @@ test "Scenario: Given singleton aliases from different emails when building remo
     }
 
     try std.testing.expectEqual(@as(usize, 2), labels.items.len);
-    try std.testing.expectEqualStrings("work (alpha@example.com)", labels.items[0]);
-    try std.testing.expectEqualStrings("work (beta@example.com)", labels.items[1]);
+    try std.testing.expectEqualStrings("work(alpha@example.com)", labels.items[0]);
+    try std.testing.expectEqualStrings("work(beta@example.com)", labels.items[1]);
 }
 
 test "Scenario: Given singleton account names from different emails when building remove labels then each label keeps email context" {
@@ -1090,8 +1090,8 @@ test "Scenario: Given singleton account names from different emails when buildin
     }
 
     try std.testing.expectEqual(@as(usize, 2), labels.items.len);
-    try std.testing.expectEqualStrings("Workspace (alpha@example.com)", labels.items[0]);
-    try std.testing.expectEqualStrings("Workspace (beta@example.com)", labels.items[1]);
+    try std.testing.expectEqualStrings("Workspace(alpha@example.com)", labels.items[0]);
+    try std.testing.expectEqualStrings("Workspace(beta@example.com)", labels.items[1]);
 }
 
 test "Scenario: Given selector environment when deciding switch or remove UI then only non-tty streams use the numbered selector" {

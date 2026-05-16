@@ -1697,7 +1697,7 @@ test "Scenario: Given switch query with a direct local match when running switch
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expectEqualStrings("Switched to backup (backup@example.com)\n", result.stdout);
+    try std.testing.expectEqualStrings("Switched to backup(backup@example.com)\n", result.stdout);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -1894,7 +1894,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "alpha@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "solo@example.com") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to team-b (beta@example.com)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to team-b(beta@example.com)") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -2193,7 +2193,7 @@ test "Scenario: Given switch with skip-api when running interactively then it do
 
     try expectSuccess(result);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to backup (backup@example.com)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to backup(backup@example.com)") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -2954,8 +2954,8 @@ test "Scenario: Given remove query with multiple matches in non-tty mode when ru
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- team-a (alpha@example.com)\n" ++
-            "- team-b (beta@example.com)\n" ++
+            "- team-a(alpha@example.com)\n" ++
+            "- team-b(beta@example.com)\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,
@@ -2994,8 +2994,8 @@ test "Scenario: Given remove fuzzy selector with multiple matches when running r
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- ops-east (east@example.com)\n" ++
-            "- ops-west (west@example.com)\n" ++
+            "- ops-east(east@example.com)\n" ++
+            "- ops-west(west@example.com)\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,

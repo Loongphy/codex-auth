@@ -201,7 +201,7 @@ pub fn buildPreferredAccountLabelAlloc(
         defer if (api_key_label) |value| allocator.free(value);
 
         if (alias != null and api_key_label != null) {
-            return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, api_key_label.? });
+            return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, api_key_label.? });
         }
         if (alias != null) return allocator.dupe(u8, alias.?);
         if (api_key_label != null) return allocator.dupe(u8, api_key_label.?);
@@ -209,7 +209,7 @@ pub fn buildPreferredAccountLabelAlloc(
         return allocator.dupe(u8, fallback);
     }
     if (alias != null and account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, account_name.? });
+        return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, account_name.? });
     }
     if (alias != null) return allocator.dupe(u8, alias.?);
     if (account_name != null) return allocator.dupe(u8, account_name.?);
@@ -224,13 +224,13 @@ pub fn buildAccountIdentityLabelAlloc(
     const account_name = normalizedAccountName(rec);
 
     if (alias != null and account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s} ({s}, {s})", .{ alias.?, account_name.?, rec.email });
+        return std.fmt.allocPrint(allocator, "{s}({s}, {s})", .{ alias.?, account_name.?, rec.email });
     }
     if (alias != null) {
-        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ alias.?, rec.email });
+        return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, rec.email });
     }
     if (account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s} ({s})", .{ account_name.?, rec.email });
+        return std.fmt.allocPrint(allocator, "{s}({s})", .{ account_name.?, rec.email });
     }
     return allocator.dupe(u8, rec.email);
 }
