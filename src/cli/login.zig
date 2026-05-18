@@ -1,8 +1,8 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
+const io_util = @import("../core/io_util.zig");
 const types = @import("types.zig");
 const output = @import("output.zig");
-const style = @import("style.zig");
 
 pub fn codexLoginArgs(opts: types.LoginOptions) []const []const u8 {
     return if (opts.device_auth)
@@ -22,10 +22,10 @@ fn ensureCodexLoginSucceeded(term: std.process.Child.Term) !void {
 }
 
 fn writeCodexLoginLaunchFailureHint(err_name: []const u8) !void {
-    var buffer: [512]u8 = undefined;
-    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
-    const out = &writer.interface;
-    try output.writeCodexLoginLaunchFailureHintTo(out, err_name, style.stderrColorEnabled());
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    try output.writeCodexLoginLaunchFailureHintTo(out, err_name, stderr.color_enabled);
     try out.flush();
 }
 

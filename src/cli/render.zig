@@ -8,6 +8,7 @@ const tui_mod = @import("tui.zig");
 pub const SwitchWidths = row_data.SwitchWidths;
 pub const indexWidth = row_data.indexWidth;
 pub const LiveListViewport = table_layout.LiveListViewport;
+pub const StyledWriter = style.StyledWriter;
 const SwitchRow = row_data.SwitchRow;
 const writeTuiPromptLine = tui_mod.writeTuiPromptLine;
 const writeSwitchTuiFooterBounded = tui_mod.writeSwitchTuiFooterBounded;
@@ -32,14 +33,14 @@ pub fn renderSwitchScreen(
     action_line: []const u8,
     number_input: []const u8,
 ) !void {
+    var writer = style.StyledWriter.init(out, use_color);
     try renderSwitchScreenViewport(
-        out,
+        &writer,
         reg,
         rows,
         idx_width,
         widths,
         selected,
-        use_color,
         status_line,
         action_line,
         number_input,
@@ -48,26 +49,25 @@ pub fn renderSwitchScreen(
 }
 
 pub fn renderSwitchScreenViewport(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     selected: ?usize,
-    use_color: bool,
     status_line: []const u8,
     action_line: []const u8,
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(out, "Select account to activate:", number_input);
-    try renderSwitchListViewport(out, reg, rows, idx_width, widths, selected, use_color, viewport);
+    try writeTuiPromptLine(writer.out, "Select account to activate:", number_input);
+    try renderSwitchListViewport(writer, reg, rows, idx_width, widths, selected, viewport);
     if (status_line.len != 0) {
-        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
+        try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
     }
-    try writeSwitchTuiFooterBounded(out, use_color, viewport.max_cols);
+    try writeSwitchTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
     if (action_line.len != 0) {
-        try writeStyledTuiLineBounded(out, if (use_color) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
+        try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
 }
 
@@ -80,33 +80,32 @@ pub fn renderListScreen(
     use_color: bool,
     status_line: []const u8,
 ) !void {
+    var writer = style.StyledWriter.init(out, use_color);
     try renderListScreenViewport(
-        out,
+        &writer,
         reg,
         rows,
         idx_width,
         widths,
-        use_color,
         status_line,
         .{},
     );
 }
 
 pub fn renderListScreenViewport(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
-    use_color: bool,
     status_line: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try renderSwitchListViewport(out, reg, rows, idx_width, widths, null, use_color, viewport);
+    try renderSwitchListViewport(writer, reg, rows, idx_width, widths, null, viewport);
     if (status_line.len != 0) {
-        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
+        try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
     }
-    try writeListTuiFooterBounded(out, use_color, viewport.max_cols);
+    try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
 }
 
 pub fn renderRemoveScreen(
@@ -122,15 +121,15 @@ pub fn renderRemoveScreen(
     action_line: []const u8,
     number_input: []const u8,
 ) !void {
+    var writer = style.StyledWriter.init(out, use_color);
     try renderRemoveScreenViewport(
-        out,
+        &writer,
         reg,
         rows,
         idx_width,
         widths,
         cursor,
         checked,
-        use_color,
         status_line,
         action_line,
         number_input,
@@ -139,62 +138,59 @@ pub fn renderRemoveScreen(
 }
 
 pub fn renderRemoveScreenViewport(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     cursor: ?usize,
     checked: []const bool,
-    use_color: bool,
     status_line: []const u8,
     action_line: []const u8,
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(out, "Select accounts to delete:", number_input);
-    try renderRemoveListViewport(out, reg, rows, idx_width, widths, cursor, checked, use_color, viewport);
+    try writeTuiPromptLine(writer.out, "Select accounts to delete:", number_input);
+    try renderRemoveListViewport(writer, reg, rows, idx_width, widths, cursor, checked, viewport);
     if (status_line.len != 0) {
-        try writeLiveStatusLine(out, status_line, use_color, viewport.max_cols);
+        try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
     }
-    try writeRemoveTuiFooterBounded(out, use_color, viewport.max_cols);
+    try writeRemoveTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
     if (action_line.len != 0) {
-        try writeStyledTuiLineBounded(out, if (use_color) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
+        try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
 }
 
 pub fn renderSwitchList(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     cursor: ?usize,
-    use_color: bool,
 ) !void {
-    try renderSwitchListViewport(out, reg, rows, idx_width, widths, cursor, use_color, .{});
+    try renderSwitchListViewport(writer, reg, rows, idx_width, widths, cursor, .{});
 }
 
 pub fn renderSwitchListViewport(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     cursor: ?usize,
-    use_color: bool,
     viewport: LiveListViewport,
 ) !void {
     _ = reg;
     const prefix_width = 2 + idx_width + 1;
     const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
-    try table.writeHeader(out, use_color);
+    try table.writeHeader(writer);
 
     const visible = visibleRowRange(rows.len, viewport);
     var displayed_counter = dataRowCount(rows[0..visible.start]);
     for (rows[visible.start..visible.end]) |row| {
         if (row.is_header) {
-            try table.writeGroupRow(out, row.account, use_color);
+            try table.writeGroupRow(writer, row.account);
             continue;
         }
 
@@ -208,50 +204,48 @@ pub fn renderSwitchListViewport(
             idx_width,
         );
         try table.writeDataRow(
-            out,
+            writer,
             prefix,
             liveAccountCells(row),
-            if (use_color) switchRowStyle(row, is_cursor, is_active) else "",
+            switchRowStyle(row, is_cursor, is_active),
         );
         displayed_counter += 1;
     }
 }
 
 pub fn renderRemoveList(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     cursor: ?usize,
     checked: []const bool,
-    use_color: bool,
 ) !void {
-    try renderRemoveListViewport(out, reg, rows, idx_width, widths, cursor, checked, use_color, .{});
+    try renderRemoveListViewport(writer, reg, rows, idx_width, widths, cursor, checked, .{});
 }
 
 pub fn renderRemoveListViewport(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     reg: *registry.Registry,
     rows: []const SwitchRow,
     idx_width: usize,
     widths: SwitchWidths,
     cursor: ?usize,
     checked: []const bool,
-    use_color: bool,
     viewport: LiveListViewport,
 ) !void {
     _ = reg;
     const checkbox_width: usize = 3;
     const prefix_width = 2 + checkbox_width + 1 + idx_width + 1;
     const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
-    try table.writeHeader(out, use_color);
+    try table.writeHeader(writer);
 
     const visible = visibleRowRange(rows.len, viewport);
     var selectable_counter = dataRowCount(rows[0..visible.start]);
     for (rows[visible.start..visible.end]) |row| {
         if (row.is_header) {
-            try table.writeGroupRow(out, row.account, use_color);
+            try table.writeGroupRow(writer, row.account);
             continue;
         }
 
@@ -267,10 +261,10 @@ pub fn renderRemoveListViewport(
             idx_width,
         );
         try table.writeDataRow(
-            out,
+            writer,
             prefix,
             liveAccountCells(row),
-            if (use_color) removeRowStyle(row, is_cursor, is_checked, is_active) else "",
+            removeRowStyle(row, is_cursor, is_checked, is_active),
         );
         selectable_counter += 1;
     }

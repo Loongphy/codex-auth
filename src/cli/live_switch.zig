@@ -3,6 +3,7 @@ const terminal_color = @import("../terminal/color.zig");
 const selection = @import("selection.zig");
 const row_data = @import("rows.zig");
 const render = @import("render.zig");
+const style = @import("style.zig");
 const picker = @import("picker.zig");
 const tui_mod = @import("tui.zig");
 const live_tui = @import("live_tui.zig");
@@ -140,14 +141,14 @@ pub fn runSwitchLiveActions(
             bounded_viewport.max_cols = tui.terminalCols();
 
             frame.clearRetainingCapacity();
+            var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
             renderSwitchScreenViewport(
-                &frame.writer,
+                &styled_frame,
                 borrowed.reg,
                 rows.items,
                 @max(@as(usize, 2), indexWidth(total_accounts)),
                 rows.widths,
                 selected_display_idx,
-                use_color,
                 status_line,
                 action_message orelse "",
                 number_buf[0..number_len],

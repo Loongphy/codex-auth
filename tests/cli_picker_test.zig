@@ -16,15 +16,9 @@ const accountIdForSelectable = cli.picker.accountIdForSelectable;
 const filterErroredRowsFromSelectableIndices = cli.rows.filterErroredRowsFromSelectableIndices;
 const renderSwitchScreen = cli.render.renderSwitchScreen;
 const renderRemoveScreen = cli.render.renderRemoveScreen;
-const renderListScreenViewport = cli.render.renderListScreenViewport;
-const renderSwitchScreenViewport = cli.render.renderSwitchScreenViewport;
-const renderSwitchList = cli.render.renderSwitchList;
-const renderRemoveList = cli.render.renderRemoveList;
-const renderSwitchListViewport = cli.render.renderSwitchListViewport;
-const renderRemoveListViewport = cli.render.renderRemoveListViewport;
-const renderRemoveScreenViewport = cli.render.renderRemoveScreenViewport;
 const liveViewportStartForDisplayIndex = cli.render.liveViewportStartForDisplayIndex;
 const SwitchWidths = cli.render.SwitchWidths;
+const StyledWriter = cli.render.StyledWriter;
 const buildSwitchRows = cli.rows.buildSwitchRows;
 const buildSwitchRowsWithUsageOverrides = cli.rows.buildSwitchRowsWithUsageOverrides;
 const SwitchRow = cli.rows.SwitchRow;
@@ -43,6 +37,111 @@ const ansi = struct {
     const green = "\x1b[32m";
     const cyan = "\x1b[36m";
 };
+
+fn renderListScreenViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    use_color: bool,
+    status_line: []const u8,
+    viewport: LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderListScreenViewport(&styled, reg, rows, idx_width, widths, status_line, viewport);
+}
+
+fn renderSwitchScreenViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    selected: ?usize,
+    use_color: bool,
+    status_line: []const u8,
+    action_line: []const u8,
+    number_input: []const u8,
+    viewport: LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderSwitchScreenViewport(&styled, reg, rows, idx_width, widths, selected, status_line, action_line, number_input, viewport);
+}
+
+fn renderRemoveScreenViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    cursor: ?usize,
+    checked: []const bool,
+    use_color: bool,
+    status_line: []const u8,
+    action_line: []const u8,
+    number_input: []const u8,
+    viewport: LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderRemoveScreenViewport(&styled, reg, rows, idx_width, widths, cursor, checked, status_line, action_line, number_input, viewport);
+}
+
+fn renderSwitchList(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    cursor: ?usize,
+    use_color: bool,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderSwitchList(&styled, reg, rows, idx_width, widths, cursor);
+}
+
+fn renderSwitchListViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    cursor: ?usize,
+    use_color: bool,
+    viewport: LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderSwitchListViewport(&styled, reg, rows, idx_width, widths, cursor, viewport);
+}
+
+fn renderRemoveList(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    cursor: ?usize,
+    checked: []const bool,
+    use_color: bool,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderRemoveList(&styled, reg, rows, idx_width, widths, cursor, checked);
+}
+
+fn renderRemoveListViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    cursor: ?usize,
+    checked: []const bool,
+    use_color: bool,
+    viewport: LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderRemoveListViewport(&styled, reg, rows, idx_width, widths, cursor, checked, viewport);
+}
 
 test "Scenario: Given q quit input when checking switch picker helpers then both line and key shortcuts cancel selection" {
     try std.testing.expect(isQuitInput("q"));

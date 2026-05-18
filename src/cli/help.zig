@@ -10,7 +10,7 @@ pub fn printHelp() !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    const use_color = style.stdoutColorEnabled();
+    const use_color = stdout.color_enabled;
     try writeHelp(out, use_color);
     try out.flush();
 }
@@ -89,7 +89,7 @@ pub fn printCommandHelp(topic: HelpTopic) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeCommandHelp(out, style.stdoutColorEnabled(), topic);
+    try writeCommandHelp(out, stdout.color_enabled, topic);
     try out.flush();
 }
 

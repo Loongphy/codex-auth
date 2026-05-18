@@ -4,8 +4,22 @@ const codex_auth = @import("codex_auth");
 const cli = codex_auth.cli;
 const registry = codex_auth.registry;
 
-const renderListScreenViewport = cli.render.renderListScreenViewport;
 const SwitchRow = cli.rows.SwitchRow;
+const StyledWriter = cli.render.StyledWriter;
+
+fn renderListScreenViewport(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: cli.render.SwitchWidths,
+    use_color: bool,
+    status_line: []const u8,
+    viewport: cli.render.LiveListViewport,
+) !void {
+    var styled = StyledWriter.init(out, use_color);
+    try cli.render.renderListScreenViewport(&styled, reg, rows, idx_width, widths, status_line, viewport);
+}
 
 fn makeTestRegistry() registry.Registry {
     return .{
