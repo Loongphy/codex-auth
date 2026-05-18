@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   release-assets:
@@ -104,3 +105,45 @@ jobs:
           ./dist/npm/codex-auth-darwin-arm64
           ./dist/npm/codex-auth-win32-x64
           ./dist/npm/codex-auth-win32-arm64
+
+      - name: Normalize preview comment command
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const comment = comments
+              .reverse()
+              .find(({ body, user }) =>
+                user?.type === "Bot" &&
+                body?.includes("pkg.pr.new") &&
+                body?.includes("npx https://pkg.pr.new/")
+              );
+
+            if (!comment) {
+              core.info("No pkg.pr.new comment needs normalization.");
+              return;
+            }
+
+            const body = comment.body.replaceAll(
+              "npx https://pkg.pr.new/",
+              "npx -y https://pkg.pr.new/",
+            );
+
+            if (body === comment.body) {
+              core.info("pkg.pr.new comment is already normalized.");
+              return;
+            }
+
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: comment.id,
+              body,
+            });
