@@ -9,6 +9,8 @@ const types = @import("../cli/types.zig");
 const codex_cli_path_env = "CODEX_CLI_PATH";
 const codex_home_env = "CODEX_HOME";
 const app_path_env = "CODEX_AUTH_APP_PATH";
+const codex_app_package_name = "OpenAI.Codex";
+const codex_app_bundle_id = "com.openai.codex";
 const wsl_agent_mode_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_cache_dir_name = "codext-cli";
@@ -34,22 +36,23 @@ const ResolvedPlatform = struct {
 };
 
 pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, opts: types.AppOptions) !void {
-    const effective_home = opts.home orelse resolved_codex_home;
+    const effective_home = opts.codex_home orelse resolved_codex_home;
     const effective_platform = try resolvePlatform(allocator, effective_home, opts.platform);
-    if ((opts.action == .launch or opts.action == .patch) and !opts.dry_run) try validateAppPlatform(effective_platform.value);
+    if (opts.action == .launch or opts.action == .patch) try validateAppPlatform(effective_platform.value);
     const effective_app_path = try resolveAppPath(allocator, opts);
     defer effective_app_path.deinit(allocator);
-    const allow_download = (opts.action == .launch or opts.action == .patch) and !opts.dry_run;
-    const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, allow_download);
+    const allow_download = opts.action == .launch or opts.action == .patch;
+    const quiet_download = opts.action == .launch;
+    const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, allow_download, quiet_download);
     defer effective_cli_path.deinit(allocator);
-    const persistent_cli_path = if (opts.action == .status or opts.dry_run) try readPersistentCliPath(allocator) else null;
+    const persistent_cli_path = if (opts.action == .status) try readPersistentCliPath(allocator) else null;
     defer if (persistent_cli_path) |path| allocator.free(path);
 
     switch (opts.action) {
-        .status => try printStatus(effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
-        .launch => try launchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
-        .patch => try patchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
-        .unpatch => try unpatchApp(allocator, effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform, opts),
+        .status => try printStatus(effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform),
+        .launch => try launchApp(allocator, effective_app_path, effective_cli_path, effective_home, effective_platform, opts.inherit_stdio),
+        .patch => try patchApp(allocator, effective_app_path, effective_cli_path, effective_home, effective_platform),
+        .unpatch => try unpatchApp(allocator),
     }
 }
 
@@ -75,12 +78,13 @@ fn resolveCliPath(
     platform: ?types.AppPlatform,
     opts: types.AppOptions,
     allow_download: bool,
+    quiet_download: bool,
 ) !ResolvedValue {
-    if (opts.cli_path) |path| return .{ .value = path, .source = .explicit };
+    if (opts.codex_cli_path) |path| return .{ .value = path, .source = .explicit };
 
     const target_platform = platform orelse nativeDefaultPlatform();
     if (allow_download) {
-        const path = try downloadDefaultCodextCli(allocator, home, target_platform);
+        const path = try downloadDefaultCodextCli(allocator, home, target_platform, quiet_download);
         return .{ .value = path, .source = .downloaded, .owned = true };
     }
     if (try cachedCodextCliPath(allocator, home, target_platform)) |path| return .{ .value = path, .source = .cached, .owned = true };
@@ -136,7 +140,6 @@ fn printStatus(
     persistent_cli_path: ?[]const u8,
     home: []const u8,
     platform: ResolvedPlatform,
-    opts: types.AppOptions,
 ) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -147,8 +150,6 @@ fn printStatus(
     try out.print("  CODEX_CLI_PATH: {s} ({s})\n", .{ cli_path.value orelse "(not cached)", valueSourceName(cli_path.source) });
     try out.print("  persistent CODEX_CLI_PATH: {s}\n", .{persistent_cli_path orelse "(not set)"});
     try out.print("  platform: {s} ({s})\n", .{ appPlatformName(platform.value), valueSourceName(platform.source) });
-    try out.print("  dry run: {s}\n", .{if (opts.dry_run) "yes" else "no"});
-    try out.print("  wait: {s}\n", .{if (opts.wait) "yes" else "no"});
     try out.flush();
 }
 
@@ -156,49 +157,46 @@ fn launchApp(
     allocator: std.mem.Allocator,
     app_path: ResolvedValue,
     cli_path: ResolvedValue,
-    persistent_cli_path: ?[]const u8,
     home: []const u8,
     platform: ResolvedPlatform,
-    opts: types.AppOptions,
+    inherit_stdio: bool,
 ) !void {
     const target = app_path.value orelse {
         try writeAppError("app launch could not find the installed Codex app. Pass `--app-path <path>` or set CODEX_AUTH_APP_PATH.\n");
         return error.AppPathRequired;
     };
-    if (opts.dry_run) {
-        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
-        return;
-    }
     try validateAppPlatform(platform.value);
     try applyAppPlatform(allocator, home, platform.value);
 
+    if (inherit_stdio) {
+        return launchExecutableWithStdio(allocator, target, cli_path.value, home);
+    }
+
     if (builtin.os.tag == .windows) {
-        return launchWindowsViaPowerShell(allocator, target, cli_path.value, home, opts);
+        return launchWindowsViaPowerShell(allocator, target, app_path.source, cli_path.value, home);
     }
     if (looksLikeWindowsPath(target) or looksLikeWslWindowsMountPath(target)) {
         try writeAppError("windows app launch must run from the Windows codex-auth executable.\n");
         return error.WindowsAppLaunchRequiresWindows;
     }
-    return launchNative(allocator, target, cli_path.value, home, opts);
+    if (builtin.os.tag == .macos) {
+        return launchMac(allocator, target, app_path.source, cli_path.value, home);
+    }
+    try writeAppError("app launch is supported only from the Windows or macOS codex-auth executable.\n");
+    return error.UnsupportedPlatform;
 }
 
 fn patchApp(
     allocator: std.mem.Allocator,
     app_path: ResolvedValue,
     cli_path: ResolvedValue,
-    persistent_cli_path: ?[]const u8,
     home: []const u8,
     platform: ResolvedPlatform,
-    opts: types.AppOptions,
 ) !void {
-    if (opts.dry_run) {
-        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
-        return;
-    }
     try validateAppPlatform(platform.value);
     try applyAppPlatform(allocator, home, platform.value);
     const target_cli = cli_path.value orelse {
-        try writeAppError("app patch could not resolve CODEX_CLI_PATH. Pass `--cli-path <path>` or allow the default Loongphy codext download.\n");
+        try writeAppError("app patch could not resolve CODEX_CLI_PATH. Pass `--codex-cli-path <path>` or allow the default Loongphy codext download.\n");
         return error.CliPathRequired;
     };
     const target_app = app_path.value orelse {
@@ -215,19 +213,7 @@ fn patchApp(
     try writeAppOutput("guarded target CLI={s}\n", .{target_cli});
 }
 
-fn unpatchApp(
-    allocator: std.mem.Allocator,
-    app_path: ResolvedValue,
-    cli_path: ResolvedValue,
-    persistent_cli_path: ?[]const u8,
-    home: []const u8,
-    platform: ResolvedPlatform,
-    opts: types.AppOptions,
-) !void {
-    if (opts.dry_run) {
-        try printStatus(app_path, cli_path, persistent_cli_path, home, platform, opts);
-        return;
-    }
+fn unpatchApp(allocator: std.mem.Allocator) !void {
     try clearPersistentCliPath(allocator);
     try writeAppOutput("persistent CODEX_CLI_PATH cleared\n", .{});
 }
@@ -357,12 +343,11 @@ fn looksLikeWslWindowsMountPath(path: []const u8) bool {
     return std.mem.startsWith(u8, path, "/mnt/") and path.len >= "/mnt/c/".len and path[6] == '/';
 }
 
-fn launchNative(
+fn launchExecutableWithStdio(
     allocator: std.mem.Allocator,
     app_path: []const u8,
     cli_path: ?[]const u8,
     home: []const u8,
-    opts: types.AppOptions,
 ) !void {
     const launch_path = try resolveLaunchPath(allocator, app_path);
     defer allocator.free(launch_path);
@@ -370,25 +355,58 @@ fn launchNative(
     var env_map = try registry.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put(codex_home_env, home);
-    if (cli_path) |path| {
-        try env_map.put(codex_cli_path_env, path);
+    if (cli_path) |path| try env_map.put(codex_cli_path_env, path);
+
+    var child = try std.process.spawn(app_runtime.io(), .{
+        .argv = &[_][]const u8{launch_path},
+        .environ_map = &env_map,
+        .stdin = .ignore,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    _ = try child.wait(app_runtime.io());
+}
+
+fn launchMac(
+    allocator: std.mem.Allocator,
+    app_path: []const u8,
+    app_source: ValueSource,
+    cli_path: ?[]const u8,
+    home: []const u8,
+) !void {
+    if (!isDirectory(app_path) and std.mem.indexOf(u8, app_path, ".app") == null) {
+        try writeAppError("macOS app launch requires an app bundle path such as `/Applications/Codex.app`.\n");
+        return error.AppPathRequired;
     }
+
+    const home_env = try std.fmt.allocPrint(allocator, "{s}={s}", .{ codex_home_env, home });
+    defer allocator.free(home_env);
+    const cli_env = if (cli_path) |path| try std.fmt.allocPrint(allocator, "{s}={s}", .{ codex_cli_path_env, path }) else null;
+    defer if (cli_env) |value| allocator.free(value);
 
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(allocator);
-    try argv.append(allocator, launch_path);
-    try argv.appendSlice(allocator, opts.extra_args);
-
+    try argv.append(allocator, "/usr/bin/open");
+    try argv.appendSlice(allocator, &[_][]const u8{ "--env", home_env });
+    if (cli_env) |value| try argv.appendSlice(allocator, &[_][]const u8{ "--env", value });
+    try argv.appendSlice(allocator, &[_][]const u8{
+        "--stdout",
+        "/dev/null",
+        "--stderr",
+        "/dev/null",
+    });
+    if (app_source == .detected) {
+        try argv.appendSlice(allocator, &[_][]const u8{ "-b", codex_app_bundle_id });
+    } else {
+        try argv.append(allocator, app_path);
+    }
     var child = try std.process.spawn(app_runtime.io(), .{
         .argv = argv.items,
-        .environ_map = &env_map,
         .stdin = .ignore,
-        .stdout = if (opts.wait) .inherit else .ignore,
-        .stderr = if (opts.wait) .inherit else .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
     });
-    if (opts.wait) {
-        _ = try child.wait(app_runtime.io());
-    }
+    _ = try child.wait(app_runtime.io());
 }
 
 fn resolveLaunchPath(allocator: std.mem.Allocator, app_path: []const u8) ![]u8 {
@@ -947,10 +965,12 @@ fn detectInstalledAppPath(allocator: std.mem.Allocator) !?[]u8 {
 }
 
 fn detectWindowsInstalledAppPath(allocator: std.mem.Allocator) !?[]u8 {
+    const package_quoted = try psSingleQuoteAlloc(allocator, codex_app_package_name);
+    defer allocator.free(package_quoted);
     const script = try std.fmt.allocPrint(
         allocator,
-        "$ErrorActionPreference='SilentlyContinue'; $pkg=Get-AppxPackage -Name 'OpenAI.Codex' | Sort-Object Version -Descending | Select-Object -First 1; if ($pkg) {{ foreach ($rel in @('app\\Codex.exe','Codex.exe')) {{ $p=Join-Path $pkg.InstallLocation $rel; if (Test-Path -LiteralPath $p -PathType Leaf) {{ [Console]::Out.Write($p); exit 0 }} }} }}",
-        .{},
+        "$ErrorActionPreference='SilentlyContinue'; $pkg=Get-AppxPackage -Name {s} | Sort-Object Version -Descending | Select-Object -First 1; if ($pkg) {{ [Console]::Out.Write($pkg.InstallLocation) }}",
+        .{package_quoted},
     );
     defer allocator.free(script);
     var result = try http_child.runChildCapture(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 7000, null);
@@ -987,7 +1007,7 @@ fn cachedCodextCliPath(allocator: std.mem.Allocator, home: []const u8, platform:
     return null;
 }
 
-fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) ![]u8 {
+fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform, quiet: bool) ![]u8 {
     const release = try fetchLatestCodextRelease(allocator);
     defer release.deinit(allocator);
 
@@ -998,11 +1018,11 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
     if (builtin.os.tag == .windows) {
         const win_asset = release.assetFor(.win) orelse return error.CodextReleaseAssetNotFound;
         const wsl_asset = release.assetFor(.wsl) orelse return error.CodextReleaseAssetNotFound;
-        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .win, win_asset);
-        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .wsl, wsl_asset);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .win, win_asset, quiet);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, .wsl, wsl_asset, quiet);
     } else {
         const asset = release.assetFor(platform) orelse return error.CodextReleaseAssetNotFound;
-        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, platform, asset);
+        try ensureCodextAssetInstalled(allocator, cache_root, release.tag, platform, asset, quiet);
     }
 
     const installed = try managedCodextExecutablePath(allocator, home, platform);
@@ -1025,9 +1045,10 @@ fn ensureCodextAssetInstalled(
     tag: []const u8,
     platform: types.AppPlatform,
     asset: CodextAsset,
+    quiet: bool,
 ) !void {
     if (try managedCodextAssetIsCurrent(allocator, cache_root, tag, platform, asset)) return;
-    try writeAppInfo("downloading from {s}\n", .{asset.url});
+    if (!quiet) try writeAppInfo("downloading from {s}\n", .{asset.url});
     try downloadAndInstallCodextAsset(allocator, cache_root, tag, platform, asset);
 }
 
@@ -1309,11 +1330,13 @@ fn writeAppOutput(comptime format: []const u8, args: anytype) !void {
 fn launchWindowsViaPowerShell(
     allocator: std.mem.Allocator,
     app_path: []const u8,
+    app_source: ValueSource,
     cli_path: ?[]const u8,
     home: []const u8,
-    opts: types.AppOptions,
 ) !void {
-    if (opts.extra_args.len != 0) return error.WindowsPassthroughArgsUnsupported;
+    if (app_source == .detected) {
+        return launchWindowsDetectedPackageViaPowerShell(allocator, cli_path, home);
+    }
 
     const app_quoted = try psSingleQuoteAlloc(allocator, app_path);
     defer allocator.free(app_quoted);
@@ -1330,16 +1353,52 @@ fn launchWindowsViaPowerShell(
 
     const script = try std.fmt.allocPrint(
         allocator,
-        "$ErrorActionPreference='Stop'; $p={s}; if (Test-Path -LiteralPath $p -PathType Container) {{ $c=@('Codex.exe','codex.exe','app\\Codex.exe','app\\codex.exe'); foreach ($n in $c) {{ $x=Join-Path $p $n; if (Test-Path -LiteralPath $x -PathType Leaf) {{ $p=$x; break }} }} }}; Start-Process -FilePath $p -Environment @{{ CODEX_HOME={s}{s} }}{s}",
-        .{ app_quoted, home_quoted, cli_part, if (opts.wait) " -Wait" else "" },
+        "$ErrorActionPreference='Stop'; $p={s}; if (Test-Path -LiteralPath $p -PathType Container) {{ $c=@('Codex.exe','codex.exe','app\\Codex.exe','app\\codex.exe'); foreach ($n in $c) {{ $x=Join-Path $p $n; if (Test-Path -LiteralPath $x -PathType Leaf) {{ $p=$x; break }} }} }}; Start-Process -FilePath $p -Environment @{{ CODEX_HOME={s}{s} }}",
+        .{ app_quoted, home_quoted, cli_part },
     );
     defer allocator.free(script);
 
     var child = try std.process.spawn(app_runtime.io(), .{
         .argv = &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script },
         .stdin = .ignore,
-        .stdout = if (opts.wait) .inherit else .ignore,
-        .stderr = if (opts.wait) .inherit else .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
+    _ = try child.wait(app_runtime.io());
+}
+
+fn launchWindowsDetectedPackageViaPowerShell(
+    allocator: std.mem.Allocator,
+    cli_path: ?[]const u8,
+    home: []const u8,
+) !void {
+    const package_quoted = try psSingleQuoteAlloc(allocator, codex_app_package_name);
+    defer allocator.free(package_quoted);
+    const home_quoted = try psSingleQuoteAlloc(allocator, home);
+    defer allocator.free(home_quoted);
+    const cli_quoted = if (cli_path) |path| try psSingleQuoteAlloc(allocator, path) else null;
+    defer if (cli_quoted) |path| allocator.free(path);
+
+    const cli_part = if (cli_quoted) |path|
+        try std.fmt.allocPrint(allocator, "; $env:CODEX_CLI_PATH={s}", .{path})
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(cli_part);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "$ErrorActionPreference='Stop'; $pkg=Get-AppxPackage -Name {s} | Sort-Object Version -Descending | Select-Object -First 1; if (-not $pkg) {{ throw 'OpenAI.Codex package not found' }}; $appId=(Get-AppxPackageManifest $pkg).Package.Applications.Application | Select-Object -First 1 -ExpandProperty Id; $aumid=\"$($pkg.PackageFamilyName)!$appId\"; $env:CODEX_HOME={s}{s}; Start-Process -FilePath \"shell:AppsFolder\\$aumid\"",
+        .{ package_quoted, home_quoted, cli_part },
+    );
+    defer allocator.free(script);
+
+    var child = try std.process.spawn(app_runtime.io(), .{
+        .argv = &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
     });
     _ = try child.wait(app_runtime.io());
 }

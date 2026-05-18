@@ -48,12 +48,10 @@ pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {
     action: AppAction,
     app_path: ?[]const u8 = null,
-    cli_path: ?[]const u8 = null,
-    home: ?[]const u8 = null,
+    codex_cli_path: ?[]const u8 = null,
+    codex_home: ?[]const u8 = null,
     platform: ?AppPlatform = null,
-    dry_run: bool = false,
-    wait: bool = false,
-    extra_args: []const []const u8 = &.{},
+    inherit_stdio: bool = false,
 };
 pub const HelpTopic = enum {
     top_level,

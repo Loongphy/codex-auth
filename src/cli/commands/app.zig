@@ -22,10 +22,7 @@ fn parseOptions(
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = std.mem.sliceTo(args[i], 0);
-        if (std.mem.eql(u8, arg, "--")) {
-            opts.extra_args = @ptrCast(args[i + 1 ..]);
-            break;
-        }
+        if (std.mem.eql(u8, arg, "--")) return common.usageErrorResult(allocator, .app, "`app` does not accept passthrough arguments.", .{});
         if (common.isHelpFlag(arg)) return .{ .command = .{ .help = .app } };
         if (std.mem.eql(u8, arg, "--app-path")) {
             if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--app-path`.", .{});
@@ -34,18 +31,18 @@ fn parseOptions(
             opts.app_path = std.mem.sliceTo(args[i], 0);
             continue;
         }
-        if (std.mem.eql(u8, arg, "--cli-path")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--cli-path`.", .{});
-            if (opts.cli_path != null) return common.usageErrorResult(allocator, .app, "duplicate `--cli-path` for `app`.", .{});
+        if (std.mem.eql(u8, arg, "--codex-cli-path")) {
+            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-cli-path`.", .{});
+            if (opts.codex_cli_path != null) return common.usageErrorResult(allocator, .app, "duplicate `--codex-cli-path` for `app`.", .{});
             i += 1;
-            opts.cli_path = std.mem.sliceTo(args[i], 0);
+            opts.codex_cli_path = std.mem.sliceTo(args[i], 0);
             continue;
         }
-        if (std.mem.eql(u8, arg, "--home")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--home`.", .{});
-            if (opts.home != null) return common.usageErrorResult(allocator, .app, "duplicate `--home` for `app`.", .{});
+        if (std.mem.eql(u8, arg, "--codex-home")) {
+            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-home`.", .{});
+            if (opts.codex_home != null) return common.usageErrorResult(allocator, .app, "duplicate `--codex-home` for `app`.", .{});
             i += 1;
-            opts.home = std.mem.sliceTo(args[i], 0);
+            opts.codex_home = std.mem.sliceTo(args[i], 0);
             continue;
         }
         if (std.mem.eql(u8, arg, "--platform")) {
@@ -64,14 +61,9 @@ fn parseOptions(
             }
             continue;
         }
-        if (std.mem.eql(u8, arg, "--dry-run")) {
-            if (opts.dry_run) return common.usageErrorResult(allocator, .app, "duplicate `--dry-run` for `app`.", .{});
-            opts.dry_run = true;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--wait")) {
-            if (opts.wait) return common.usageErrorResult(allocator, .app, "duplicate `--wait` for `app`.", .{});
-            opts.wait = true;
+        if (std.mem.eql(u8, arg, "--std")) {
+            if (opts.inherit_stdio) return common.usageErrorResult(allocator, .app, "duplicate `--std` for `app`.", .{});
+            opts.inherit_stdio = true;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "-")) {
@@ -80,8 +72,5 @@ fn parseOptions(
         return common.usageErrorResult(allocator, .app, "unexpected argument `{s}` for `app`.", .{arg});
     }
 
-    if (opts.extra_args.len != 0 and action != .launch) {
-        return common.usageErrorResult(allocator, .app, "`app {s}` does not accept passthrough arguments.", .{@tagName(action)});
-    }
     return .{ .command = .{ .app = opts } };
 }

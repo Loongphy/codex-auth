@@ -3,9 +3,9 @@
 ## Usage
 
 ```shell
-codex-auth app [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]
-codex-auth app status [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]
-codex-auth app patch [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]
+codex-auth app [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]
+codex-auth app status [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]
+codex-auth app patch [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]
 codex-auth app unpatch
 ```
 
@@ -19,21 +19,19 @@ installs a persistent CLI override for normal app launches.
 - `codex-auth app patch` writes a user-level persistent `CODEX_CLI_PATH` patch. After Codex App is fully restarted, normal launches from the Start menu, Finder, or Dock go through a generated guarded shim without running `codex-auth app` each time.
 - `codex-auth app unpatch` removes the persistent `CODEX_CLI_PATH` patch.
 - `--app-path <path>` points to the App executable or an installed package/app directory.
-- `--cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, `app` and `app patch` fetch the latest Loongphy codext release metadata, compare it with the managed cached CLI version, download only when the cached version differs or is missing, and use that file; they do not reuse an existing `CODEX_CLI_PATH` from the current shell. `app status` only reports the current cache and does not download.
-- `--home <path>` is injected as `CODEX_HOME` for `app` launches. For `app patch`, it selects the accounts cache and the Windows platform-state file that are prepared before persisting `CODEX_CLI_PATH`; it does not persist `CODEX_HOME`.
+- `--codex-cli-path <path>` is injected as `CODEX_CLI_PATH` for this launch or used as the guarded target for `app patch`. If it is omitted, `app` and `app patch` fetch the latest Loongphy codext release metadata, compare it with the managed cached CLI version, download only when the cached version differs or is missing, and use that file; they do not reuse an existing `CODEX_CLI_PATH` from the current shell. `app status` only reports the current cache and does not download.
+- `--codex-home <path>` is injected as `CODEX_HOME` for `app` launches. For `app patch`, it selects the accounts cache and the Windows platform-state file that are prepared before persisting `CODEX_CLI_PATH`; it does not persist `CODEX_HOME`.
 - `--platform win|wsl|mac` selects the app runtime platform:
   - `win` writes the Windows global setting so the app runs the agent natively.
   - `wsl` writes the Windows global setting so the app runs the agent inside WSL.
   - `mac` launches the macOS app directly and does not use the Windows WSL setting.
-- `--dry-run` prints the effective launch environment without starting the app.
-- `--wait` waits for the launched process to exit and keeps its stdout/stderr attached. Without `--wait`, `app` starts the GUI app quietly and detaches from terminal output.
-- `-- <args>` passes remaining arguments to the app executable on non-Windows platforms.
+- `--std` starts the app executable directly with stdout/stderr attached to the current terminal. Use it for debugging app logs; normal launches stay quiet and use the platform GUI launcher.
 
 If `--app-path` is omitted, `CODEX_AUTH_APP_PATH` is used when set; otherwise
 the official installed app is auto-detected. On Windows this uses AppX package
-lookup for `OpenAI.Codex` and resolves the package executable. On macOS it
-checks `/Applications/Codex.app` and `~/Applications/Codex.app`; the latter is
-the standard per-user Applications folder.
+lookup for `OpenAI.Codex`. On macOS it checks `/Applications/Codex.app` and
+`~/Applications/Codex.app`; the latter is the standard per-user Applications
+folder.
 
 If `--platform` is omitted, Windows reads `$CODEX_HOME/.codex-global-state.json`
 and uses `wsl` when `runCodexInWindowsSubsystemForLinux` is `true`; otherwise it
@@ -41,7 +39,7 @@ uses `win`. macOS defaults to `mac`.
 
 `app patch` uses the same platform resolution and writes the same Windows
 setting before persisting `CODEX_CLI_PATH`, so the selected backend keeps using
-the matching native Windows or Linux codext binary while the installed app
+the matching native Windows or WSL Linux codext binary while the installed app
 version still matches the patch.
 
 Default downloaded CLIs are cached directly under:
@@ -56,9 +54,12 @@ Loongphy codext assets for the current CPU architecture, such as `win32-x64`
 and `linux-x64`. On macOS, it downloads only the matching macOS asset, such as
 `darwin-x64` or `darwin-arm64`.
 
-Windows App launching is handled by the Windows `codex-auth.exe` build. Use a
-Windows app path such as `C:\Program Files\WindowsApps\...\app\Codex.exe` for
-`--app-path`. The WSL build does not patch or launch Windows App packages.
+Windows App launching is handled by the Windows `codex-auth.exe` build. For the
+auto-detected app, launch resolves the package AUMID and opens
+`shell:AppsFolder\<AUMID>`. Use a Windows app path such as
+`C:\Program Files\WindowsApps\...\app\Codex.exe` for `--app-path` only when an
+explicit override is needed. The WSL build does not patch or launch Windows App
+packages.
 
 On Windows, `app patch` writes the user environment variable with
 `[Environment]::SetEnvironmentVariable(..., 'User')` and broadcasts an
@@ -97,17 +98,20 @@ official `CODEX_CLI_PATH` hook instead of editing the app package. That avoids
 MSIX/AppX package-integrity and install-directory permission problems on
 Windows while still making normal app launches use the replacement CLI.
 
-For Windows-native App launches, `--cli-path` must point to something the Windows
+For Windows-native App launches, `--codex-cli-path` must point to something the Windows
 App process can spawn. A WSL command name such as `codex-custom` is not a
 Windows executable path.
 
-For macOS App launches, `--app-path` may point to `/Applications/Codex.app` or
-the app executable inside `Contents/MacOS`. The packaged macOS app normally uses
-`Contents/Resources/codex` directly as its bundled CLI; setting `--cli-path`
-injects `CODEX_CLI_PATH` and takes precedence over that bundled resource.
+For macOS App launches, the auto-detected app is opened with bundle identifier
+`com.openai.codex`. `--app-path` may point to `/Applications/Codex.app` or the
+app bundle path. Bundle paths are opened with `open`; direct executable paths
+are not supported for app launch. The packaged macOS app normally uses
+`Contents/Resources/codex` directly as its bundled CLI; setting
+`--codex-cli-path` injects `CODEX_CLI_PATH` and takes precedence over that
+bundled resource.
 
 The Electron app currently appends `--analytics-default-enabled` when it starts
 `app-server`. The `CODEX_CLI_PATH` override changes which binary is executed but
-does not remove that argument. To suppress it at launch time, point `--cli-path`
+does not remove that argument. To suppress it at launch time, point `--codex-cli-path`
 at a wrapper/shim that filters that argument before execing the real codext
 binary; `app patch` will still wrap that path in its own version guard.

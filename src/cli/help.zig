@@ -218,9 +218,9 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
         .app => {
-            try out.writeAll("  codex-auth app [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
-            try out.writeAll("  codex-auth app status [--app-path <path>] [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
-            try out.writeAll("  codex-auth app patch [--cli-path <path>] [--home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app status [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app patch [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
             try out.writeAll("  codex-auth app unpatch\n");
         },
     }
@@ -289,13 +289,13 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .app => {
             try out.writeAll("  --app-path <path>  Official Codex App executable or install directory.\n");
-            try out.writeAll("  --cli-path <path>  Value injected or persisted as CODEX_CLI_PATH. Defaults to latest managed Loongphy codext.\n");
-            try out.writeAll("  --home <path>      Value injected as CODEX_HOME for this launch.\n");
+            try out.writeAll("  --codex-cli-path <path>\n");
+            try out.writeAll("                     Value injected or persisted as CODEX_CLI_PATH. Defaults to latest managed Loongphy codext.\n");
+            try out.writeAll("  --codex-home <path>\n");
+            try out.writeAll("                     Value injected as CODEX_HOME for this launch.\n");
             try out.writeAll("  --platform win|wsl|mac\n");
             try out.writeAll("                     Preselect the app platform. Defaults to the current app setting on Windows and mac on macOS.\n");
-            try out.writeAll("  --dry-run          Print the effective launch environment without starting the app.\n");
-            try out.writeAll("  --wait             Wait for the launched app process to exit.\n");
-            try out.writeAll("  -- <args>          Pass additional arguments to the app executable.\n");
+            try out.writeAll("  --std              Run the app executable with stdout/stderr attached to this terminal.\n");
         },
         else => {},
     }
@@ -367,7 +367,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth app --platform win\n");
             try out.writeAll("  codex-auth app patch --platform wsl\n");
             try out.writeAll("  codex-auth app unpatch\n");
-            try out.writeAll("  codex-auth app status --app-path /Applications/Codex.app --cli-path /usr/local/bin/codext\n");
+            try out.writeAll("  codex-auth app status --app-path /Applications/Codex.app --codex-cli-path /usr/local/bin/codext\n");
         },
     }
 }

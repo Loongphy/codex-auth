@@ -75,22 +75,20 @@ fn expectArgv(actual: []const []const u8, expected: []const []const u8) !void {
     }
 }
 
-test "Scenario: Given app launch overrides when parsing then paths and passthrough args are preserved" {
+test "Scenario: Given app launch overrides when parsing then paths are preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{
         "codex-auth",
         "app",
         "--app-path",
         "C:\\Program Files\\WindowsApps\\OpenAI.Codex",
-        "--cli-path",
+        "--codex-cli-path",
         "codex-custom",
-        "--home",
+        "--codex-home",
         "/mnt/c/Users/Loong/.codext",
         "--platform",
         "win",
-        "--dry-run",
-        "--",
-        "--trace",
+        "--std",
     };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
@@ -100,12 +98,10 @@ test "Scenario: Given app launch overrides when parsing then paths and passthrou
             .app => |opts| {
                 try std.testing.expectEqual(cli.types.AppAction.launch, opts.action);
                 try std.testing.expectEqualStrings("C:\\Program Files\\WindowsApps\\OpenAI.Codex", opts.app_path.?);
-                try std.testing.expectEqualStrings("codex-custom", opts.cli_path.?);
-                try std.testing.expectEqualStrings("/mnt/c/Users/Loong/.codext", opts.home.?);
+                try std.testing.expectEqualStrings("codex-custom", opts.codex_cli_path.?);
+                try std.testing.expectEqualStrings("/mnt/c/Users/Loong/.codext", opts.codex_home.?);
                 try std.testing.expectEqual(cli.types.AppPlatform.win, opts.platform.?);
-                try std.testing.expect(opts.dry_run);
-                try std.testing.expect(!opts.wait);
-                try expectArgv(opts.extra_args, &[_][]const u8{"--trace"});
+                try std.testing.expect(opts.inherit_stdio);
             },
             else => return error.TestExpectedEqual,
         },
@@ -113,13 +109,13 @@ test "Scenario: Given app launch overrides when parsing then paths and passthrou
     }
 }
 
-test "Scenario: Given app status with passthrough args when parsing then usage error is returned" {
+test "Scenario: Given app passthrough args when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "app", "status", "--", "--trace" };
+    const args = [_][:0]const u8{ "codex-auth", "app", "--", "--trace" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .app, "`app status` does not accept passthrough arguments.");
+    try expectUsageError(result, .app, "`app` does not accept passthrough arguments.");
 }
 
 test "Scenario: Given removed app launch subcommand when parsing then usage error is returned" {
@@ -133,7 +129,7 @@ test "Scenario: Given removed app launch subcommand when parsing then usage erro
 
 test "Scenario: Given app patch when parsing then patch action is preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "app", "patch", "--platform", "wsl", "--dry-run" };
+    const args = [_][:0]const u8{ "codex-auth", "app", "patch", "--platform", "wsl" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
@@ -142,7 +138,6 @@ test "Scenario: Given app patch when parsing then patch action is preserved" {
             .app => |opts| {
                 try std.testing.expectEqual(cli.types.AppAction.patch, opts.action);
                 try std.testing.expectEqual(cli.types.AppPlatform.wsl, opts.platform.?);
-                try std.testing.expect(opts.dry_run);
             },
             else => return error.TestExpectedEqual,
         },
