@@ -63,7 +63,7 @@ fn selectRemoveWithNumbers(
     if (reg.accounts.items.len == 0) return null;
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
-    const use_color = style.stdoutColorEnabled();
+    var styled_out = style.StyledWriter.init(out, stdout.color_enabled);
     const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
     const widths = rows.widths;
 
@@ -72,7 +72,7 @@ fn selectRemoveWithNumbers(
     @memset(checked, false);
 
     try out.writeAll("Select accounts to delete:\n\n");
-    try renderRemoveList(out, reg, rows.items, idx_width, widths, null, checked, use_color);
+    try renderRemoveList(&styled_out, reg, rows.items, idx_width, widths, null, checked);
     try out.writeAll("Enter account numbers (comma/space separated, empty to cancel): ");
     try out.flush();
 
@@ -153,7 +153,8 @@ fn selectRemoveInteractive(
         try tui.resetFrame();
         writeTuiPromptLine(out, "Select accounts to delete:", number_buf[0..number_len]) catch |err| return mapTuiOutputError(err);
         out.writeAll("\n") catch |err| return mapTuiOutputError(err);
-        renderRemoveList(out, reg, rows.items, idx_width, widths, idx, checked, use_color) catch |err| return mapTuiOutputError(err);
+        var styled_out = style.StyledWriter.init(out, use_color);
+        renderRemoveList(&styled_out, reg, rows.items, idx_width, widths, idx, checked) catch |err| return mapTuiOutputError(err);
         out.writeAll("\n") catch |err| return mapTuiOutputError(err);
         writeRemoveTuiFooter(out, use_color) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();

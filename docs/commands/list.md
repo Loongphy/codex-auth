@@ -30,7 +30,9 @@ When local-only refresh is active, only the active account can be updated from l
 
 ## Output Notes
 
-- Alias labels render before the email when an alias exists.
+- Singleton rows with aliases render as `alias(email)`.
+- Singleton rows with both alias and account name render as `alias(account name, email)`.
+- Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
 - Usage cells show remaining percent and reset time when that data is known.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.

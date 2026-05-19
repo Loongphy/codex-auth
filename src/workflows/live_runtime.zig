@@ -300,11 +300,7 @@ pub fn accountLabelForKeyAlloc(
     account_key: []const u8,
 ) ![]u8 {
     const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
-    return display_rows.buildPreferredAccountLabelAlloc(
-        allocator,
-        &reg.accounts.items[idx],
-        reg.accounts.items[idx].email,
-    );
+    return display_rows.buildAccountIdentityLabelAlloc(allocator, &reg.accounts.items[idx]);
 }
 
 pub fn buildRemoveSummaryMessageAlloc(allocator: std.mem.Allocator, labels: []const []const u8) ![]u8 {

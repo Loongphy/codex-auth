@@ -5,7 +5,6 @@ const display_rows = @import("display.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
 const rate_limit = @import("rate_limit.zig");
-const terminal_color = @import("../terminal/color.zig");
 const timefmt = @import("../time/relative.zig");
 
 const resolveRateWindow = rate_limit.resolveRateWindow;
@@ -19,10 +18,6 @@ const ansi = struct {
     const green = "\x1b[32m";
     const cyan = "\x1b[36m";
 };
-
-fn colorEnabled() bool {
-    return terminal_color.stdoutColorEnabled();
-}
 
 fn planDisplay(rec: *const registry.AccountRecord, missing: []const u8) []const u8 {
     if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
@@ -45,7 +40,7 @@ fn printAccountsTable(reg: *registry.Registry, usage_overrides: ?[]const ?[]cons
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeAccountsTableWithUsageOverrides(out, reg, colorEnabled(), usage_overrides);
+    try writeAccountsTableWithUsageOverrides(out, reg, stdout.color_enabled, usage_overrides);
     try out.flush();
 }
 

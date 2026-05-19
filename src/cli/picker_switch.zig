@@ -100,14 +100,14 @@ pub fn selectWithNumbers(
     try filterErroredRowsFromSelectableIndices(allocator, &rows);
     const total_accounts = accountRowCount(rows.items);
     if (total_accounts == 0) return null;
-    const use_color = style.stdoutColorEnabled();
+    var styled_out = style.StyledWriter.init(out, stdout.color_enabled);
     const active_idx = activeSelectableIndex(&rows);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
     const widths = rows.widths;
     const active_display_idx = if (active_idx) |idx| displayedIndexForSelectable(&rows, idx) else null;
 
     try out.writeAll("Select account to activate:\n\n");
-    try renderSwitchList(out, reg, rows.items, idx_width, widths, active_display_idx, use_color);
+    try renderSwitchList(&styled_out, reg, rows.items, idx_width, widths, active_display_idx);
     try out.writeAll("Select account number (or q to quit): ");
     try out.flush();
 
@@ -139,14 +139,14 @@ pub fn selectWithNumbersFromIndices(
     try filterErroredRowsFromSelectableIndices(allocator, &rows);
     const total_accounts = accountRowCount(rows.items);
     if (total_accounts == 0) return null;
-    const use_color = style.stdoutColorEnabled();
+    var styled_out = style.StyledWriter.init(out, stdout.color_enabled);
     const active_idx = activeSelectableIndex(&rows);
     const idx_width = @max(@as(usize, 2), indexWidth(total_accounts));
     const widths = rows.widths;
     const active_display_idx = if (active_idx) |idx| displayedIndexForSelectable(&rows, idx) else null;
 
     try out.writeAll("Select account to activate:\n\n");
-    try renderSwitchList(out, reg, rows.items, idx_width, widths, active_display_idx, use_color);
+    try renderSwitchList(&styled_out, reg, rows.items, idx_width, widths, active_display_idx);
     try out.writeAll("Select account number (or q to quit): ");
     try out.flush();
 

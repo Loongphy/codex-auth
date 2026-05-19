@@ -162,10 +162,10 @@ test "Scenario: Given same-email accounts filtered down to one row when building
     defer singleton_rows.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), singleton_rows.rows.len);
     try std.testing.expect(singleton_rows.rows[0].account_index != null);
-    try std.testing.expect(std.mem.eql(u8, singleton_rows.rows[0].account_cell, "user@example.com"));
+    try std.testing.expect(std.mem.eql(u8, singleton_rows.rows[0].account_cell, "work(Primary Workspace, user@example.com)"));
 }
 
-test "Scenario: Given singleton accounts with alias and account name combinations when building display rows then email labels are preserved" {
+test "Scenario: Given singleton accounts with alias and account name combinations when building display rows then preferred labels render before emails" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -181,13 +181,13 @@ test "Scenario: Given singleton accounts with alias and account name combination
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "alias-name@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "alias-only@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "work(Primary Workspace, alias-name@example.com)"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "backup(alias-only@example.com)"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "fallback@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "name-only@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Sandbox(name-only@example.com)"));
 }
 
-test "Scenario: Given mixed singleton and grouped accounts when building display rows then singleton rows keep email while grouped rows keep preferred labels" {
+test "Scenario: Given mixed singleton and grouped accounts when building display rows then singleton rows include preferred labels while grouped rows keep child labels" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -202,10 +202,10 @@ test "Scenario: Given mixed singleton and grouped accounts when building display
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
-    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo@example.com"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo(Solo Workspace, solo@example.com)"));
     try std.testing.expect(rows.rows[1].account_index == null);
     try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "user@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "work(Primary Workspace)"));
     try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
 }
 
@@ -225,10 +225,10 @@ test "Scenario: Given grouped accounts with account names when building display 
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
     try std.testing.expect(
-        (std.mem.eql(u8, rows.rows[1].account_cell, "work (Primary Workspace)") and
+        (std.mem.eql(u8, rows.rows[1].account_cell, "work(Primary Workspace)") and
             std.mem.eql(u8, rows.rows[2].account_cell, "Backup Workspace")) or
             (std.mem.eql(u8, rows.rows[1].account_cell, "Backup Workspace") and
-                std.mem.eql(u8, rows.rows[2].account_cell, "work (Primary Workspace)")),
+                std.mem.eql(u8, rows.rows[2].account_cell, "work(Primary Workspace)")),
     );
     try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
 }

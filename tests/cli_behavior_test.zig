@@ -423,6 +423,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
 }
@@ -502,6 +503,20 @@ test "Scenario: Given remove command help when rendering then options explain li
     try std.testing.expect(std.mem.indexOf(u8, help, "--api        Load usage and account data from APIs.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--all        Remove every stored account.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Remove one or more matching accounts.") != null);
+}
+
+test "Scenario: Given alias command help when rendering then set and clear examples are shown" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, false, .alias);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias set <alias|email|display-number|query> <alias>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias clear <alias|email|display-number|query>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias set 02 work") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "New aliases cannot be empty or only digits.") != null);
 }
 
 test "Scenario: Given config help when rendering then live mode is explained" {
@@ -631,6 +646,63 @@ test "Scenario: Given config live unknown flag when parsing then usage error is 
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .config, "unknown flag `--refresh` for `config live`.");
+}
+
+test "Scenario: Given alias set when parsing then selector and alias are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "alias", "set", "john@example.com", "work" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .alias => |opts| switch (opts) {
+                .set => |set_opts| {
+                    try std.testing.expectEqualStrings("john@example.com", set_opts.selector);
+                    try std.testing.expectEqualStrings("work", set_opts.alias);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given alias clear when parsing then selector is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "alias", "clear", "work" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .alias => |opts| switch (opts) {
+                .clear => |clear_opts| try std.testing.expectEqualStrings("work", clear_opts.selector),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given alias set missing value when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "alias", "set", "work" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .alias, "`alias set` requires a selector and alias.");
+}
+
+test "Scenario: Given alias unknown subcommand when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "alias", "rename", "work", "personal" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .alias, "unknown alias subcommand `rename`");
 }
 
 test "Scenario: Given migrate when parsing then usage error is returned" {
@@ -1081,8 +1153,8 @@ test "Scenario: Given singleton aliases from different emails when building remo
     }
 
     try std.testing.expectEqual(@as(usize, 2), labels.items.len);
-    try std.testing.expectEqualStrings("alpha@example.com / work", labels.items[0]);
-    try std.testing.expectEqualStrings("beta@example.com / work", labels.items[1]);
+    try std.testing.expectEqualStrings("work(alpha@example.com)", labels.items[0]);
+    try std.testing.expectEqualStrings("work(beta@example.com)", labels.items[1]);
 }
 
 test "Scenario: Given singleton account names from different emails when building remove labels then each label keeps email context" {
@@ -1103,8 +1175,8 @@ test "Scenario: Given singleton account names from different emails when buildin
     }
 
     try std.testing.expectEqual(@as(usize, 2), labels.items.len);
-    try std.testing.expectEqualStrings("alpha@example.com / Workspace", labels.items[0]);
-    try std.testing.expectEqualStrings("beta@example.com / Workspace", labels.items[1]);
+    try std.testing.expectEqualStrings("Workspace(alpha@example.com)", labels.items[0]);
+    try std.testing.expectEqualStrings("Workspace(beta@example.com)", labels.items[1]);
 }
 
 test "Scenario: Given selector environment when deciding switch or remove UI then only non-tty streams use the numbered selector" {

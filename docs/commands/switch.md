@@ -46,3 +46,4 @@ When switching succeeds:
 1. `auth.json` is backed up when its contents would change.
 2. The selected account snapshot is copied to `~/.codex/auth.json`.
 3. `active_account_key` is updated in `registry.json`.
+4. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.

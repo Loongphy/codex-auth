@@ -30,43 +30,43 @@ pub const LiveTable = struct {
     columns: [column_count]LiveTableColumn,
     prefix_width: usize,
 
-    pub fn writeHeader(self: *const LiveTable, out: *std.Io.Writer, use_color: bool) !void {
-        if (use_color) try out.writeAll(style.ansi.cyan);
-        try writeRepeat(out, ' ', self.prefix_width);
-        try self.writeCells(out, &.{
+    pub fn writeHeader(self: *const LiveTable, writer: *style.StyledWriter) !void {
+        try writer.writeStyle(style.ansi.cyan);
+        try writeRepeat(writer.out, ' ', self.prefix_width);
+        try self.writeCells(writer.out, &.{
             .{ .text = self.columns[0].header },
             .{ .text = self.columns[1].header },
             .{ .text = self.columns[2].header },
             .{ .text = self.columns[3].header },
             .{ .text = self.columns[4].header },
         });
-        if (use_color) try out.writeAll(style.ansi.reset);
-        try out.writeAll("\n");
+        try writer.reset();
+        try writer.writeAll("\n");
     }
 
-    pub fn writeGroupRow(self: *const LiveTable, out: *std.Io.Writer, account: []const u8, use_color: bool) !void {
-        if (use_color) try out.writeAll(style.ansi.dim);
-        try writeRepeat(out, ' ', self.prefix_width);
-        try writeAccountTruncatedPadded(out, account, self.columns[0].width);
-        if (use_color) try out.writeAll(style.ansi.reset);
-        try out.writeAll("\n");
+    pub fn writeGroupRow(self: *const LiveTable, writer: *style.StyledWriter, account: []const u8) !void {
+        try writer.writeStyle(style.ansi.dim);
+        try writeRepeat(writer.out, ' ', self.prefix_width);
+        try writeAccountTruncatedPadded(writer.out, account, self.columns[0].width);
+        try writer.reset();
+        try writer.writeAll("\n");
     }
 
     pub fn writeDataRow(
         self: *const LiveTable,
-        out: *std.Io.Writer,
+        writer: *style.StyledWriter,
         prefix: []const u8,
         cells: [column_count]Cell,
         ansi_style: []const u8,
     ) !void {
-        if (ansi_style.len != 0) try out.writeAll(ansi_style);
-        try out.writeAll(prefix);
+        try writer.writeStyle(ansi_style);
+        try writer.writeAll(prefix);
         if (prefix.len < self.prefix_width) {
-            try writeRepeat(out, ' ', self.prefix_width - prefix.len);
+            try writeRepeat(writer.out, ' ', self.prefix_width - prefix.len);
         }
-        try self.writeCells(out, &cells);
-        if (ansi_style.len != 0) try out.writeAll(style.ansi.reset);
-        try out.writeAll("\n");
+        try self.writeCells(writer.out, &cells);
+        if (ansi_style.len != 0) try writer.reset();
+        try writer.writeAll("\n");
     }
 
     fn writeCells(
