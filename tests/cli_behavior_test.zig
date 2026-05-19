@@ -127,6 +127,15 @@ test "Scenario: Given removed app launch subcommand when parsing then usage erro
     try expectUsageError(result, .app, "unexpected argument `launch` for `app`.");
 }
 
+test "Scenario: Given removed app status subcommand when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "app", "status" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .app, "unexpected argument `status` for `app`.");
+}
+
 test "Scenario: Given app patch when parsing then patch action is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "app", "patch", "--platform", "wsl" };

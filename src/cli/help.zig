@@ -58,7 +58,6 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "app", "Launch or version-bound patch Codex App CLI overrides");
-    try writeCommandDetail(out, use_color, "app status");
     try writeCommandDetail(out, use_color, "app patch");
     try writeCommandDetail(out, use_color, "app unpatch");
 
@@ -229,7 +228,6 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .app => {
             try out.writeAll("  codex-auth app [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
-            try out.writeAll("  codex-auth app status [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
             try out.writeAll("  codex-auth app patch [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
             try out.writeAll("  codex-auth app unpatch\n");
         },
@@ -390,7 +388,6 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth app --platform win\n");
             try out.writeAll("  codex-auth app patch --platform wsl\n");
             try out.writeAll("  codex-auth app unpatch\n");
-            try out.writeAll("  codex-auth app status --app-path /Applications/Codex.app --codex-cli-path /usr/local/bin/codext\n");
         },
     }
 }

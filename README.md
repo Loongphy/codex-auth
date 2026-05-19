@@ -83,7 +83,6 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth app [--app-path <path>] [--codex-cli-path <path>]`](./docs/commands/app.md) | Launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
-| [`codex-auth app status`](./docs/commands/app.md) | Show the effective Codex App launch environment |
 | [`codex-auth app patch`](./docs/commands/app.md) | Persist CODEX_CLI_PATH so normal Codex App launches use the managed CLI |
 | [`codex-auth app unpatch`](./docs/commands/app.md) | Remove the persistent CODEX_CLI_PATH patch |
 

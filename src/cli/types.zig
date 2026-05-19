@@ -54,7 +54,7 @@ pub const LiveOptions = struct {
     interval_seconds: u16,
 };
 pub const ConfigOptions = union(enum) { live: LiveOptions };
-pub const AppAction = enum { launch, status, patch, unpatch };
+pub const AppAction = enum { launch, patch, unpatch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {
     action: AppAction,

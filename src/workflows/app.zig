@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const app_runtime = @import("../core/runtime.zig");
-const io_util = @import("../core/io_util.zig");
 const http_child = @import("../api/http_child.zig");
 const registry = @import("../registry/root.zig");
 const types = @import("../cli/types.zig");
@@ -45,11 +44,8 @@ pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, 
     const quiet_download = opts.action == .launch;
     const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, allow_download, quiet_download);
     defer effective_cli_path.deinit(allocator);
-    const persistent_cli_path = if (opts.action == .status) try readPersistentCliPath(allocator) else null;
-    defer if (persistent_cli_path) |path| allocator.free(path);
 
     switch (opts.action) {
-        .status => try printStatus(effective_app_path, effective_cli_path, persistent_cli_path, effective_home, effective_platform),
         .launch => try launchApp(allocator, effective_app_path, effective_cli_path, effective_home, effective_platform, opts.inherit_stdio),
         .patch => try patchApp(allocator, effective_app_path, effective_cli_path, effective_home, effective_platform),
         .unpatch => try unpatchApp(allocator),
@@ -134,25 +130,6 @@ fn readWindowsWslBackendSetting(allocator: std.mem.Allocator, home: []const u8) 
     };
 }
 
-fn printStatus(
-    app_path: ResolvedValue,
-    cli_path: ResolvedValue,
-    persistent_cli_path: ?[]const u8,
-    home: []const u8,
-    platform: ResolvedPlatform,
-) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    try out.writeAll("Codex App launch environment\n");
-    try out.print("  app path: {s} ({s})\n", .{ app_path.value orelse "(not set)", valueSourceName(app_path.source) });
-    try out.print("  CODEX_HOME: {s}\n", .{home});
-    try out.print("  CODEX_CLI_PATH: {s} ({s})\n", .{ cli_path.value orelse "(not cached)", valueSourceName(cli_path.source) });
-    try out.print("  persistent CODEX_CLI_PATH: {s}\n", .{persistent_cli_path orelse "(not set)"});
-    try out.print("  platform: {s} ({s})\n", .{ appPlatformName(platform.value), valueSourceName(platform.source) });
-    try out.flush();
-}
-
 fn launchApp(
     allocator: std.mem.Allocator,
     app_path: ResolvedValue,
@@ -216,25 +193,6 @@ fn patchApp(
 fn unpatchApp(allocator: std.mem.Allocator) !void {
     try clearPersistentCliPath(allocator);
     try writeAppOutput("persistent CODEX_CLI_PATH cleared\n", .{});
-}
-
-fn appPlatformName(value: ?types.AppPlatform) []const u8 {
-    return switch (value orelse return "(not set)") {
-        .win => "win",
-        .wsl => "wsl",
-        .mac => "mac",
-    };
-}
-
-fn valueSourceName(value: ValueSource) []const u8 {
-    return switch (value) {
-        .explicit => "explicit",
-        .env => "env",
-        .detected => "detected",
-        .cached => "cached",
-        .downloaded => "downloaded",
-        .not_set => "not set",
-    };
 }
 
 fn validateAppPlatform(value: ?types.AppPlatform) !void {
@@ -765,48 +723,6 @@ fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
         if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return i;
     }
     return null;
-}
-
-fn readPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
-    return switch (builtin.os.tag) {
-        .windows => readWindowsPersistentCliPath(allocator),
-        .macos => readMacPersistentCliPath(allocator),
-        else => null,
-    };
-}
-
-fn readWindowsPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
-    var result = http_child.runChildCapture(
-        allocator,
-        &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", "[Console]::Out.Write([Environment]::GetEnvironmentVariable('CODEX_CLI_PATH','User'))" },
-        7000,
-        null,
-    ) catch return null;
-    defer result.deinit(allocator);
-    return switch (result.term) {
-        .exited => |code| if (code == 0) try dupTrimmedOrNull(allocator, result.stdout) else null,
-        else => null,
-    };
-}
-
-fn readMacPersistentCliPath(allocator: std.mem.Allocator) !?[]u8 {
-    var result = http_child.runChildCapture(
-        allocator,
-        &[_][]const u8{ "launchctl", "getenv", codex_cli_path_env },
-        7000,
-        null,
-    ) catch return null;
-    defer result.deinit(allocator);
-    return switch (result.term) {
-        .exited => |code| if (code == 0) try dupTrimmedOrNull(allocator, result.stdout) else null,
-        else => null,
-    };
-}
-
-fn dupTrimmedOrNull(allocator: std.mem.Allocator, value: []const u8) !?[]u8 {
-    const trimmed = std.mem.trim(u8, value, " \t\r\n");
-    if (trimmed.len == 0) return null;
-    return try allocator.dupe(u8, trimmed);
 }
 
 fn persistCliPath(allocator: std.mem.Allocator, cli_path: []const u8) !void {
