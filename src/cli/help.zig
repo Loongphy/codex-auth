@@ -57,9 +57,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
-    try writeCommandSummary(out, use_color, "app", "Launch or version-bound patch Codex App CLI overrides");
-    try writeCommandDetail(out, use_color, "app patch");
-    try writeCommandDetail(out, use_color, "app unpatch");
+    try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
 
     try out.writeAll("\n");
     if (use_color) try out.writeAll(style.ansi.cyan);
@@ -150,7 +148,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage live refresh configuration.",
-        .app => "Launch or persistently patch version-bound Codex App CLI overrides.",
+        .app => "Launch Codex App with CLI overrides.",
     };
 }
 
@@ -228,8 +226,6 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .app => {
             try out.writeAll("  codex-auth app [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
-            try out.writeAll("  codex-auth app patch [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
-            try out.writeAll("  codex-auth app unpatch\n");
         },
     }
 }
@@ -386,8 +382,6 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .app => {
             try out.writeAll("  codex-auth app\n");
             try out.writeAll("  codex-auth app --platform win\n");
-            try out.writeAll("  codex-auth app patch --platform wsl\n");
-            try out.writeAll("  codex-auth app unpatch\n");
         },
     }
 }

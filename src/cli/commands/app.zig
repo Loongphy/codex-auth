@@ -7,8 +7,6 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     const first = std.mem.sliceTo(args[0], 0);
     if (common.isHelpFlag(first)) return .{ .command = .{ .help = .app } };
 
-    if (std.mem.eql(u8, first, "patch")) return parseOptions(allocator, .patch, args[1..]);
-    if (std.mem.eql(u8, first, "unpatch")) return parseOptions(allocator, .unpatch, args[1..]);
     return parseOptions(allocator, .launch, args);
 }
 
