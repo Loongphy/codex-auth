@@ -141,9 +141,17 @@ jobs:
               return;
             }
 
-            await github.rest.issues.updateComment({
-              owner,
-              repo,
-              comment_id: comment.id,
-              body,
-            });
+            try {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+                body,
+              });
+            } catch (error) {
+              if (error.status === 403) {
+                core.warning("pkg.pr.new comment normalization skipped: GitHub token cannot update this bot comment.");
+                return;
+              }
+              throw error;
+            }

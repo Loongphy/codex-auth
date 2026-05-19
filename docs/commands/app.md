@@ -109,9 +109,3 @@ are not supported for app launch. The packaged macOS app normally uses
 `Contents/Resources/codex` directly as its bundled CLI; setting
 `--codex-cli-path` injects `CODEX_CLI_PATH` and takes precedence over that
 bundled resource.
-
-The Electron app currently appends `--analytics-default-enabled` when it starts
-`app-server`. The `CODEX_CLI_PATH` override changes which binary is executed but
-does not remove that argument. To suppress it at launch time, point `--codex-cli-path`
-at a wrapper/shim that filters that argument before execing the real codext
-binary; `app patch` will still wrap that path in its own version guard.
