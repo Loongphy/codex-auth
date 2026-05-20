@@ -96,20 +96,39 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
-| `codex-auth completion fish` | Print Fish shell completion script |
+| `codex-auth completion <bash|zsh|fish>` | Print a shell completion script |
 
-## Fish Completion
+## Shell Completion
+
+Generate completions with:
+
+```shell
+codex-auth completion bash
+codex-auth completion zsh
+codex-auth completion fish
+```
 
 Install Fish completions with:
 
 ```shell
 mkdir -p ~/.config/fish/completions
 codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish
-codex-auth completion fish > ~/.config/fish/completions/cx.fish
-source ~/.config/fish/completions/cx.fish
+source ~/.config/fish/completions/codex-auth.fish
 ```
 
-Writing `~/.config/fish/completions/cx.fish` replaces any older `cx` Fish completion on your system.
+Install Bash completions with:
+
+```shell
+mkdir -p ~/.local/share/bash-completion/completions
+codex-auth completion bash > ~/.local/share/bash-completion/completions/codex-auth
+```
+
+Install Zsh completions with:
+
+```shell
+mkdir -p ~/.zsh/completions
+codex-auth completion zsh > ~/.zsh/completions/_codex-auth
+```
 
 ## Quick Examples
 

@@ -11,8 +11,16 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     }
 
     const shell_name = std.mem.sliceTo(args[0], 0);
-    if (args.len == 1 and std.mem.eql(u8, shell_name, "fish")) {
-        return .{ .command = .{ .completion = .{ .shell = .fish } } };
+    if (args.len == 1) {
+        if (std.mem.eql(u8, shell_name, "bash")) {
+            return .{ .command = .{ .completion = .{ .shell = .bash } } };
+        }
+        if (std.mem.eql(u8, shell_name, "zsh")) {
+            return .{ .command = .{ .completion = .{ .shell = .zsh } } };
+        }
+        if (std.mem.eql(u8, shell_name, "fish")) {
+            return .{ .command = .{ .completion = .{ .shell = .fish } } };
+        }
     }
     if (std.mem.eql(u8, shell_name, "query")) {
         return parseQuery(allocator, args[1..]);

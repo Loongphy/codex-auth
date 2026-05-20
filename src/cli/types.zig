@@ -55,7 +55,11 @@ pub const CleanTarget = enum { accounts, background };
 pub const CleanOptions = struct {
     target: CleanTarget = .accounts,
 };
-pub const CompletionShell = enum { fish };
+pub const CompletionShell = enum {
+    bash,
+    zsh,
+    fish,
+};
 pub const CompletionQueryTarget = enum { switch_account };
 pub const CompletionOptions = union(enum) {
     shell: CompletionShell,

@@ -57,7 +57,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "alias clear <alias|email|display-number|query>");
     try writeCommandSummary(out, use_color, "clean", "Delete backup and stale files under accounts/");
     try writeCommandDetail(out, use_color, "clean background");
-    try writeCommandSummary(out, use_color, "completion fish", "Print Fish shell completion script");
+    try writeCommandSummary(out, use_color, "completion <bash|zsh|fish>", "Print a shell completion script");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
@@ -229,6 +229,8 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth clean background\n");
         },
         .completion => {
+            try out.writeAll("  codex-auth completion bash\n");
+            try out.writeAll("  codex-auth completion zsh\n");
             try out.writeAll("  codex-auth completion fish\n");
         },
         .config => {
@@ -307,7 +309,9 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("                    Remove one stored account alias without remote refresh.\n");
         },
         .completion => {
-            try out.writeAll("  fish   Print Fish shell completion commands to stdout.\n");
+            try out.writeAll("  bash   Print Bash completion commands to stdout.\n");
+            try out.writeAll("  zsh    Print Zsh completion commands to stdout.\n");
+            try out.writeAll("  fish   Print Fish completion commands to stdout.\n");
         },
         .config => {
             try out.writeAll("  live --interval <seconds>\n");
@@ -393,9 +397,10 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth clean background\n");
         },
         .completion => {
+            try out.writeAll("  codex-auth completion bash > ~/.local/share/bash-completion/completions/codex-auth\n");
+            try out.writeAll("  codex-auth completion zsh > ~/.zsh/completions/_codex-auth\n");
             try out.writeAll("  codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish\n");
-            try out.writeAll("  codex-auth completion fish > ~/.config/fish/completions/cx.fish\n");
-            try out.writeAll("  source ~/.config/fish/completions/cx.fish\n");
+            try out.writeAll("  source ~/.config/fish/completions/codex-auth.fish\n");
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval 60\n");
