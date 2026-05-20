@@ -301,7 +301,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .app => {
             try out.writeAll("  --app-path <path>  Official Codex App executable or install directory.\n");
             try out.writeAll("  --codex-cli-path <path>\n");
-            try out.writeAll("                     Value injected or persisted as CODEX_CLI_PATH. Defaults to latest managed Loongphy codext.\n");
+            try out.writeAll("                     Value injected or persisted as CODEX_CLI_PATH. Defaults to latest managed Loongphy/codext.\n");
             try out.writeAll("  --codex-home <path>\n");
             try out.writeAll("                     Value injected as CODEX_HOME for this launch.\n");
             try out.writeAll("  --platform win|wsl|mac\n");

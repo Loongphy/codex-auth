@@ -4,11 +4,19 @@ This guide covers user-facing terminal output, including shared output and comma
 
 # Text Roles
 
+User-facing output code should use the semantic roles in `src/cli/style.zig`
+instead of referencing raw ANSI colors directly. Keep raw ANSI constants as the
+low-level palette only; changing a role mapping should update all matching
+output without searching business workflows for individual color names.
+
 - **Header / table header:** Use ANSI `cyan`.
 - **Primary text:** Use the terminal's default foreground color.
 - **Secondary text:** Use ANSI `dim`.
 - **Footer / key hints:** Use ANSI `cyan`.
 - **Live refresh status line:** Use ANSI `cyan`.
+- **Status / in-progress action:** Use ANSI `cyan`.
+- **Configuration key:** Use ANSI `bold`.
+- **Warning / non-fatal status:** Use ANSI `cyan`.
 
 # Foreground Colors
 

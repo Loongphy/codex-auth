@@ -3473,3 +3473,180 @@ test "Scenario: Given default api usage when listing accounts then no warning is
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
+
+test "Scenario: Given explicit codex home when planning app launch then codex home source is explicit" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex");
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "app",
+        "--app-path",
+        "/bin/true",
+        "--codex-cli-path",
+        "/bin/true",
+        "--codex-home",
+        codex_home,
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+
+    const home_label_index = std.mem.indexOf(u8, result.stderr, "  Codex Home:") orelse return error.TestUnexpectedResult;
+    const home_tail = result.stderr[home_label_index..];
+    try std.testing.expect(std.mem.indexOf(u8, home_tail, "(explicit)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "via --codex-home") == null);
+}
+
+test "Scenario: Given inherited codex home when planning app launch then codex home is omitted" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex");
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, home_root, codex_home, &[_][]const u8{
+        "app",
+        "--app-path",
+        "/bin/true",
+        "--codex-cli-path",
+        "/bin/true",
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "  Codex Home:") == null);
+}
+
+test "Scenario: Given missing explicit app path when launching app then command fails before launch plan" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const missing_app_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "missing-app" });
+    defer gpa.free(missing_app_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "app",
+        "--app-path",
+        missing_app_path,
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --app-path: Path does not exist\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "        \"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_app_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+}
+
+test "Scenario: Given missing explicit codex CLI path when launching app then command fails before launch plan" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-app", .data = "" });
+    const app_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-app" });
+    defer gpa.free(app_path);
+    const missing_cli_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "missing-codex" });
+    defer gpa.free(missing_cli_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "app",
+        "--app-path",
+        app_path,
+        "--codex-cli-path",
+        missing_cli_path,
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "        \"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+}
+
+test "Scenario: Given multiple missing explicit app paths when launching app then every path error is printed before launch plan" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const missing_app_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "missing-app" });
+    defer gpa.free(missing_app_path);
+    const missing_cli_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "missing-codex" });
+    defer gpa.free(missing_cli_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
+        "app",
+        "--app-path",
+        missing_app_path,
+        "--codex-cli-path",
+        missing_cli_path,
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --app-path: Path does not exist\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_app_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+}

@@ -2,10 +2,20 @@ const std = @import("std");
 
 pub const ansi = struct {
     pub const reset = "\x1b[0m";
+    pub const bold = "\x1b[1m";
     pub const dim = "\x1b[2m";
     pub const red = "\x1b[31m";
     pub const green = "\x1b[32m";
     pub const cyan = "\x1b[36m";
+};
+
+pub const role = struct {
+    pub const key = ansi.bold;
+    pub const secondary = ansi.dim;
+    pub const status = ansi.cyan;
+    pub const success = ansi.green;
+    pub const warning = ansi.cyan;
+    pub const error_text = ansi.red;
 };
 
 pub const StyledWriter = struct {

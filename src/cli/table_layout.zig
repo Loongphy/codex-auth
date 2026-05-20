@@ -31,7 +31,7 @@ pub const LiveTable = struct {
     prefix_width: usize,
 
     pub fn writeHeader(self: *const LiveTable, writer: *style.StyledWriter) !void {
-        try writer.writeStyle(style.ansi.cyan);
+        try writer.writeStyle(style.role.status);
         try writeRepeat(writer.out, ' ', self.prefix_width);
         try self.writeCells(writer.out, &.{
             .{ .text = self.columns[0].header },
@@ -45,7 +45,7 @@ pub const LiveTable = struct {
     }
 
     pub fn writeGroupRow(self: *const LiveTable, writer: *style.StyledWriter, account: []const u8) !void {
-        try writer.writeStyle(style.ansi.dim);
+        try writer.writeStyle(style.role.secondary);
         try writeRepeat(writer.out, ' ', self.prefix_width);
         try writeAccountTruncatedPadded(writer.out, account, self.columns[0].width);
         try writer.reset();
