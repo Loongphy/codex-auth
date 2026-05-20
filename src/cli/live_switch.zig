@@ -182,31 +182,33 @@ pub fn runSwitchLiveActions(
                         switch (key) {
                             .move_up => {
                                 if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) {
-                                    number_len = 0;
                                     follow_selection = true;
                                 } else {
                                     live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
                                     follow_selection = false;
                                 }
+                                number_len = 0;
                                 needs_render = true;
                             },
                             .move_down => {
                                 if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) {
-                                    number_len = 0;
                                     follow_selection = true;
                                 } else {
                                     live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, wheel_rows);
                                     follow_selection = false;
                                 }
+                                number_len = 0;
                                 needs_render = true;
                             },
                             .keyboard_up => {
-                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
                             .keyboard_down => {
-                                if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
@@ -221,22 +223,26 @@ pub fn runSwitchLiveActions(
                                 needs_render = true;
                             },
                             .page_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, page_rows)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, page_rows);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
                             .page_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, page_rows)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, page_rows);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
                             .home => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .up);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
                             .end => {
-                                if (try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                _ = try live_tui.moveSelectedIndexToEdge(allocator, &selected_account_key, rows, borrowed.reg, .down);
+                                number_len = 0;
                                 follow_selection = true;
                                 needs_render = true;
                             },
@@ -288,13 +294,15 @@ pub fn runSwitchLiveActions(
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'k') {
-                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up)) number_len = 0;
+                                    _ = try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .up);
+                                    number_len = 0;
                                     follow_selection = true;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'j') {
-                                    if (try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down)) number_len = 0;
+                                    _ = try live_tui.moveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg, .down);
+                                    number_len = 0;
                                     follow_selection = true;
                                     needs_render = true;
                                     continue;

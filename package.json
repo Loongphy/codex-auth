@@ -13,7 +13,8 @@
     "url": "https://github.com/Loongphy/codex-auth/issues"
   },
   "bin": {
-    "codex-auth": "bin/codex-auth.js"
+    "codex-auth": "bin/codex-auth.js",
+    "cx": "bin/codex-auth.js"
   },
   "files": [
     "bin/",

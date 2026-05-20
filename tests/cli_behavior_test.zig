@@ -400,6 +400,39 @@ test "Scenario: Given command help selector when parsing then command-specific h
     try expectHelp(result, .list);
 }
 
+test "Scenario: Given completion fish when parsing then shell is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "completion", "fish" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .completion => |opts| try std.testing.expectEqual(cli.types.CompletionShell.fish, opts.shell),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given completion without shell when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "completion" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .completion, "requires a shell name");
+}
+
+test "Scenario: Given unknown completion shell when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "completion", "zsh" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .completion, "unknown completion shell `zsh`");
+}
+
 test "Scenario: Given help when rendering then login and command help notes are shown" {
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
@@ -412,6 +445,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "completion fish") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
 }
@@ -519,6 +553,58 @@ test "Scenario: Given config help when rendering then live mode is explained" {
     try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 60") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "auto") == null);
+}
+
+test "Scenario: Given completion help when rendering then fish install flow is explained" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.help.writeCommandHelp(&aw.writer, false, .completion);
+
+    const help = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth completion fish") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "fish   Print Fish shell completion commands to stdout.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "~/.config/fish/completions/codex-auth.fish") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "~/.config/fish/completions/cx.fish") != null);
+}
+
+test "Scenario: Given completion query switch when parsing then switch target is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "completion", "query", "switch" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .completion => |opts| switch (opts) {
+                .query => |target| try std.testing.expectEqual(cli.types.CompletionQueryTarget.switch_account, target),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given fish completion when rendering then commands and flags are included" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeCompletion(&aw.writer, .fish);
+
+    const script = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -e") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c cx -e") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_switch_queries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-a completion -d 'Generate shell completion scripts'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_using_command completion") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-a fish -d 'Generate Fish shell completions'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-l device-auth -d 'Run codex login with device auth'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c cx -n '__fish_codex_auth_using_command completion' -a fish") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_switch_queries codex-auth)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-l interval -r -d 'Set the live refresh interval in seconds'") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {

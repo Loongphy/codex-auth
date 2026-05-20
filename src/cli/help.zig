@@ -57,6 +57,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "alias clear <alias|email|display-number|query>");
     try writeCommandSummary(out, use_color, "clean", "Delete backup and stale files under accounts/");
     try writeCommandDetail(out, use_color, "clean background");
+    try writeCommandSummary(out, use_color, "completion fish", "Print Fish shell completion script");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
     try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
@@ -133,6 +134,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .remove_account => "remove",
         .alias => "alias",
         .clean => "clean",
+        .completion => "completion",
         .config => "config",
         .app => "app",
     };
@@ -149,6 +151,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
+        .completion => "Generate shell completion scripts.",
         .config => "Manage live refresh configuration.",
         .app => "Launch Codex App with CLI overrides.",
     };
@@ -156,14 +159,14 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .import_auth, .export_auth, .switch_account, .remove_account, .alias, .completion, .config, .app => true,
         else => false,
     };
 }
 
 fn commandHelpHasOptions(topic: HelpTopic) bool {
     return switch (topic) {
-        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .completion, .config, .app => true,
         else => false,
     };
 }
@@ -225,6 +228,9 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth clean\n");
             try out.writeAll("  codex-auth clean background\n");
         },
+        .completion => {
+            try out.writeAll("  codex-auth completion fish\n");
+        },
         .config => {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
@@ -245,6 +251,7 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .remove_account => "codex-auth remove --help",
         .alias => "codex-auth alias --help",
         .clean => "codex-auth clean --help",
+        .completion => "codex-auth completion --help",
         .config => "codex-auth config --help",
         .app => "codex-auth app --help",
     };
@@ -298,6 +305,9 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("                    Set one stored account alias without remote refresh.\n");
             try out.writeAll("  clear <selector>\n");
             try out.writeAll("                    Remove one stored account alias without remote refresh.\n");
+        },
+        .completion => {
+            try out.writeAll("  fish   Print Fish shell completion commands to stdout.\n");
         },
         .config => {
             try out.writeAll("  live --interval <seconds>\n");
@@ -381,6 +391,11 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .clean => {
             try out.writeAll("  codex-auth clean\n");
             try out.writeAll("  codex-auth clean background\n");
+        },
+        .completion => {
+            try out.writeAll("  codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish\n");
+            try out.writeAll("  codex-auth completion fish > ~/.config/fish/completions/cx.fish\n");
+            try out.writeAll("  source ~/.config/fish/completions/cx.fish\n");
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval 60\n");

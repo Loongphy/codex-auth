@@ -12,6 +12,10 @@ Install with npm:
 npm install -g @loongphy/codex-auth
 ```
 
+Installed command:
+
+- `codex-auth`
+
 You can also run it without a global install:
 
 ```shell
@@ -92,6 +96,20 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
+| `codex-auth completion fish` | Print Fish shell completion script |
+
+## Fish Completion
+
+Install Fish completions with:
+
+```shell
+mkdir -p ~/.config/fish/completions
+codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish
+codex-auth completion fish > ~/.config/fish/completions/cx.fish
+source ~/.config/fish/completions/cx.fish
+```
+
+Writing `~/.config/fish/completions/cx.fish` replaces any older `cx` Fish completion on your system.
 
 ## Quick Examples
 

@@ -65,6 +65,10 @@ function resolveBinary() {
     }
     return binaryPath;
   } catch (error) {
+    const localBinaryPath = resolveLocalBinary();
+    if (localBinaryPath) {
+      return localBinaryPath;
+    }
     console.error(
       `Missing platform package ${packageName}. Reinstall @loongphy/codex-auth on ${process.platform}/${process.arch}.`
     );
@@ -73,6 +77,15 @@ function resolveBinary() {
     }
     process.exit(1);
   }
+}
+
+function resolveLocalBinary() {
+  const binaryName = process.platform === "win32" ? "codex-auth.exe" : "codex-auth";
+  const localBinaryPath = path.join(__dirname, "..", "zig-out", "bin", binaryName);
+  if (fs.existsSync(localBinaryPath)) {
+    return localBinaryPath;
+  }
+  return null;
 }
 
 const binaryPath = resolveBinary();
