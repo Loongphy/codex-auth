@@ -779,6 +779,71 @@ test "Scenario: Given device auth login when running login then it forwards the 
     try std.testing.expectEqualStrings(fake_auth, active_auth);
 }
 
+test "Scenario: Given refreshed active auth before login when running login then old account snapshot is synced first" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex/accounts");
+    try tmp.dir.makePath("fake-bin");
+
+    const old_email = "old-active@example.com";
+    const stale_old_auth = try fixtures.authJsonWithEmailPlan(gpa, old_email, "plus");
+    defer gpa.free(stale_old_auth);
+    const fresh_old_auth = try std.mem.replaceOwned(u8, gpa, stale_old_auth, "access-old-active@example.com", "fresh-old-active-token");
+    defer gpa.free(fresh_old_auth);
+
+    const old_key = try fixtures.accountKeyForEmailAlloc(gpa, old_email);
+    defer gpa.free(old_key);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const old_snapshot_path = try registry.accountAuthPath(gpa, codex_home, old_key);
+    defer gpa.free(old_snapshot_path);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = fresh_old_auth });
+    try fs.cwd().writeFile(.{ .sub_path = old_snapshot_path, .data = stale_old_auth });
+
+    var reg = fixtures.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try fixtures.appendAccount(gpa, &reg, old_email, "old", .plus);
+    reg.active_account_key = try gpa.dupe(u8, old_key);
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const new_email = "new-login@example.com";
+    const new_auth = try fixtures.authJsonWithEmailPlan(gpa, new_email, "team");
+    defer gpa.free(new_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = new_auth });
+    try writeSuccessfulFakeCodex(tmp.dir);
+
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "login", "--device-auth" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+
+    const synced_old_snapshot = try fixtures.readFileAlloc(gpa, old_snapshot_path);
+    defer gpa.free(synced_old_snapshot);
+    try std.testing.expectEqualStrings(fresh_old_auth, synced_old_snapshot);
+}
+
 test "Scenario: Given CODEX_HOME override when running login then it stores auth state under the override root" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

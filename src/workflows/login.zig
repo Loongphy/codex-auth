@@ -9,15 +9,18 @@ const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogin;
 
 pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    if (reg.accounts.items.len > 0) {
+        _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg);
+    }
+
     try cli.login.runCodexLogin(opts);
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
-
-    var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
 
     if (info.auth_mode == .apikey) {
         const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
