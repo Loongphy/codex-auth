@@ -540,6 +540,79 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, expected_email));
 }
 
+test "Scenario: Given existing active auth when login succeeds then upstream login uses a temporary Codex home" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex");
+    try tmp.dir.makePath("fake-bin");
+
+    const existing_auth = try bdd.authJsonWithEmailPlan(gpa, "existing@example.com", "plus");
+    defer gpa.free(existing_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = existing_auth });
+
+    const expected_email = "new-login@example.com";
+    const fake_auth = try bdd.authJsonWithEmailPlan(gpa, expected_email, "pro");
+    defer gpa.free(fake_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = fake_auth });
+    try writeSuccessfulFakeCodex(tmp.dir);
+
+    const fake_bin_path = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "login", "--device-auth" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+    const active_auth = try bdd.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth);
+    try std.testing.expectEqualStrings(fake_auth, active_auth);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+    try std.testing.expect(loaded.active_account_key != null);
+
+    const expected_account_key = try bdd.accountKeyForEmailAlloc(gpa, expected_email);
+    defer gpa.free(expected_account_key);
+    try std.testing.expectEqualStrings(expected_account_key, loaded.active_account_key.?);
+
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, expected_account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_data = try bdd.readFileAlloc(gpa, snapshot_path);
+    defer gpa.free(snapshot_data);
+    try std.testing.expectEqualStrings(fake_auth, snapshot_data);
+
+    const existing_account_key = try bdd.accountKeyForEmailAlloc(gpa, "existing@example.com");
+    defer gpa.free(existing_account_key);
+    const existing_snapshot_path = try registry.accountAuthPath(gpa, codex_home, existing_account_key);
+    defer gpa.free(existing_snapshot_path);
+    const existing_snapshot_data = try bdd.readFileAlloc(gpa, existing_snapshot_path);
+    defer gpa.free(existing_snapshot_data);
+    try std.testing.expectEqualStrings(existing_auth, existing_snapshot_data);
+}
+
 test "Scenario: Given failed device auth login with existing auth json when running login then it forwards the flag and does not mutate the registry" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

@@ -1176,6 +1176,23 @@ pub fn runCodexLogin(opts: LoginOptions) !void {
     try ensureCodexLoginSucceeded(term);
 }
 
+pub fn runCodexLoginWithCodexHome(allocator: std.mem.Allocator, opts: LoginOptions, codex_home: []const u8) !void {
+    var env_map = try std.process.getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("CODEX_HOME", codex_home);
+
+    var child = std.process.Child.init(codexLoginArgs(opts), allocator);
+    child.env_map = &env_map;
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    const term = child.spawnAndWait() catch |err| {
+        writeCodexLoginLaunchFailureHint(@errorName(err), stderrColorEnabled()) catch {};
+        return err;
+    };
+    try ensureCodexLoginSucceeded(term);
+}
+
 pub fn selectAccount(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {
     return selectAccountWithUsageOverrides(allocator, reg, null);
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const account_api = @import("account_api.zig");
 const account_name_refresh = @import("account_name_refresh.zig");
 const cli = @import("cli.zig");
@@ -1530,8 +1531,16 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
-    try cli.runCodexLogin(opts);
-    const auth_path = try registry.activeAuthPath(allocator, codex_home);
+    const login_home = try createTempLoginCodexHome(allocator);
+    defer {
+        std.fs.cwd().deleteTree(login_home) catch |err| {
+            std.log.warn("failed to remove temporary Codex login home `{s}`: {s}", .{ login_home, @errorName(err) });
+        };
+        allocator.free(login_home);
+    }
+
+    try cli.runCodexLoginWithCodexHome(allocator, opts, login_home);
+    const auth_path = try registry.activeAuthPath(allocator, login_home);
     defer allocator.free(auth_path);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
@@ -1539,6 +1548,8 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
+
+    _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg);
 
     const email = info.email orelse return error.MissingEmail;
     _ = email;
@@ -1548,12 +1559,65 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 
     try registry.ensureAccountsDir(allocator, codex_home);
     try registry.copyFile(auth_path, dest);
+    const active_auth_path = try registry.activeAuthPath(allocator, codex_home);
+    defer allocator.free(active_auth_path);
+    try registry.copyFile(auth_path, active_auth_path);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
     try registry.setActiveAccountKey(allocator, &reg, record_key);
     _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
+    const base = try tempBasePathAlloc(allocator);
+    defer allocator.free(base);
+    var counter: usize = 0;
+    while (counter < 100) : (counter += 1) {
+        const path = try std.fmt.allocPrint(
+            allocator,
+            "{s}{c}codex-auth-login-{d}-{d}",
+            .{ base, std.fs.path.sep, std.time.nanoTimestamp(), counter },
+        );
+        std.fs.cwd().makePath(path) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(path);
+                continue;
+            },
+            else => {
+                allocator.free(path);
+                return err;
+            },
+        };
+        return path;
+    }
+    return error.PathAlreadyExists;
+}
+
+fn tempBasePathAlloc(allocator: std.mem.Allocator) ![]u8 {
+    if (builtin.os.tag == .windows) {
+        if (try getNonEmptyEnvVarOwned(allocator, "TEMP")) |path| return path;
+        if (try getNonEmptyEnvVarOwned(allocator, "TMP")) |path| return path;
+        if (try getNonEmptyEnvVarOwned(allocator, "TMPDIR")) |path| return path;
+        return allocator.dupe(u8, "C:\\Temp");
+    }
+    if (try getNonEmptyEnvVarOwned(allocator, "TMPDIR")) |path| return path;
+    if (try getNonEmptyEnvVarOwned(allocator, "TMP")) |path| return path;
+    if (try getNonEmptyEnvVarOwned(allocator, "TEMP")) |path| return path;
+    return allocator.dupe(u8, "/tmp");
+}
+
+fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
+    const value = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return err,
+    };
+    if (value.len == 0) {
+        allocator.free(value);
+        return null;
+    }
+    return value;
 }
 
 fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ImportOptions) !void {
