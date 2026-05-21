@@ -26,10 +26,9 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput or
-        err == error.AppPathValidationFailed or
-        err == error.AppPathRequired or
-        err == error.AppPathNotFound or
-        err == error.AppPathNotAccessible or
+        err == error.AppLaunchConfigValidationFailed or
+        err == error.AppIdRequired or
+        err == error.AppIdNotFound or
         err == error.AppExecutableNotFound or
         err == error.CodexCliPathNotFound or
         err == error.CodexCliPathNotAccessible or

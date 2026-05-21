@@ -75,13 +75,13 @@ fn expectArgv(actual: []const []const u8, expected: []const []const u8) !void {
     }
 }
 
-test "Scenario: Given app launch overrides when parsing then paths are preserved" {
+test "Scenario: Given app launch overrides when parsing then IDs and paths are preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{
         "codex-auth",
         "app",
-        "--app-path",
-        "C:\\Program Files\\WindowsApps\\OpenAI.Codex",
+        "--app-id",
+        "OpenAI.Codex",
         "--codex-cli-path",
         "codex-custom",
         "--codex-home",
@@ -97,7 +97,7 @@ test "Scenario: Given app launch overrides when parsing then paths are preserved
         .command => |cmd| switch (cmd) {
             .app => |opts| {
                 try std.testing.expectEqual(cli.types.AppAction.launch, opts.action);
-                try std.testing.expectEqualStrings("C:\\Program Files\\WindowsApps\\OpenAI.Codex", opts.app_path.?);
+                try std.testing.expectEqualStrings("OpenAI.Codex", opts.app_id.?);
                 try std.testing.expectEqualStrings("codex-custom", opts.codex_cli_path.?);
                 try std.testing.expectEqualStrings("/mnt/c/Users/Loong/.codext", opts.codex_home.?);
                 try std.testing.expectEqual(cli.types.AppPlatform.win, opts.platform.?);

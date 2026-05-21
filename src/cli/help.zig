@@ -225,7 +225,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
         },
         .app => {
-            try out.writeAll("  codex-auth app [--app-path <path>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
+            try out.writeAll("  codex-auth app [--app-id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
         },
     }
 }
@@ -299,14 +299,14 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("                    Set the live TUI refresh interval from 5 to 3600 seconds.\n");
         },
         .app => {
-            try out.writeAll("  --app-path <path>  Official Codex App executable or install directory.\n");
+            try out.writeAll("  --app-id <id>      Windows package/AUMID or macOS bundle identifier.\n");
             try out.writeAll("  --codex-cli-path <path>\n");
             try out.writeAll("                     Value injected or persisted as CODEX_CLI_PATH. Defaults to latest managed Loongphy/codext.\n");
             try out.writeAll("  --codex-home <path>\n");
             try out.writeAll("                     Value injected as CODEX_HOME for this launch.\n");
             try out.writeAll("  --platform win|wsl|mac\n");
             try out.writeAll("                     Preselect the app platform. Defaults to the current app setting on Windows and mac on macOS.\n");
-            try out.writeAll("  --std              Run the app executable with stdout/stderr attached to this terminal.\n");
+            try out.writeAll("  --std              Resolve the app package executable, then attach stdout/stderr to this terminal.\n");
         },
         else => {},
     }

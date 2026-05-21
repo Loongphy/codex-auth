@@ -52,7 +52,7 @@ OK Downloaded Codext CLI for WSL (v0.3.0)
 - Environment Configuration ------------------------------------------------
   Platform: WSL (auto-detected)
   Codex Home: C:\Users\Loong\.codext (explicit)
-  App Path: C:\Program Files\WindowsApps\OpenAI.Codext_...\app (explicit)
+  App ID: Loongphy.Codext (explicit)
   CLI Path: C:\Users\Loong\.codext\accounts\codext-cli\codex-linux-x64 (downloaded)
 ----------------------------------------------------------------------------
 Launching Codex App...

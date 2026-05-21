@@ -58,7 +58,7 @@ pub const AppAction = enum { launch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {
     action: AppAction,
-    app_path: ?[]const u8 = null,
+    app_id: ?[]const u8 = null,
     codex_cli_path: ?[]const u8 = null,
     codex_home: ?[]const u8 = null,
     platform: ?AppPlatform = null,
