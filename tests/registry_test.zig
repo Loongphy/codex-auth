@@ -1383,6 +1383,35 @@ test "import auth path with json array imports each top-level item" {
     try std.testing.expect(reg.accounts.items.len == 2);
 }
 
+test "import auth path with malformed single file reports skipped" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+    try tmp.dir.writeFile(.{ .sub_path = "imports/bad.json", .data = "{not-json}" });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "bad.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var summary = try registry.importAuthPath(gpa, codex_home, &reg, import_path, null);
+    defer summary.deinit(gpa);
+
+    try std.testing.expect(summary.render_kind == .single_file);
+    try std.testing.expect(summary.imported == 0);
+    try std.testing.expect(summary.updated == 0);
+    try std.testing.expect(summary.skipped == 1);
+    try std.testing.expect(summary.failure != null);
+    try std.testing.expectEqual(error.SyntaxError, summary.failure.?);
+    try std.testing.expectEqualStrings("bad.json", summary.events.items[0].label);
+    try std.testing.expectEqualStrings("MalformedJson", summary.events.items[0].reason.?);
+}
+
 test "import auth path with directory imports multiple json files and skips bad files" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

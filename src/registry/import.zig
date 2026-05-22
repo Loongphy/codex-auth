@@ -185,39 +185,11 @@ pub fn importAuthPath(
     const data = try readImportFileAlloc(allocator, auth_path);
     defer allocator.free(data);
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
-    defer parsed.deinit();
-
-    switch (parsed.value) {
-        .array => |items| {
-            if (explicit_alias != null and items.items.len != 1) {
-                std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
-            }
-            const label = try importDisplayLabel(allocator, auth_path);
-            defer allocator.free(label);
-            for (items.items) |item| {
-                const item_data = try jsonValueDataAlloc(allocator, item);
-                defer allocator.free(item_data);
-                const info = @import("../auth/auth.zig").parseAuthInfoData(allocator, item_data) catch |err| {
-                    if (!isImportValidationError(err)) return err;
-                    try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
-                    continue;
-                };
-                defer info.deinit(allocator);
-                const item_alias = if (items.items.len == 1) explicit_alias else null;
-                const outcome = importConvertedAuthInfo(allocator, codex_home, reg, item_alias, &info, item_data) catch |err| {
-                    if (!isImportValidationError(err)) return err;
-                    try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
-                    continue;
-                };
-                try report.addEvent(allocator, label, outcome, null);
-            }
-            return report;
-        },
-        else => {},
+    if (firstNonWhitespace(data) == '[') {
+        return try importAuthArrayData(allocator, codex_home, reg, auth_path, explicit_alias, data, &report);
     }
 
-    const outcome = importAuthFile(allocator, codex_home, reg, auth_path, explicit_alias) catch |err| {
+    const outcome = importAuthData(allocator, codex_home, reg, data, explicit_alias) catch |err| {
         if (!isImportValidationError(err)) return err;
         const label = try importDisplayLabel(allocator, auth_path);
         defer allocator.free(label);
@@ -232,10 +204,60 @@ pub fn importAuthPath(
     return report;
 }
 
+fn firstNonWhitespace(data: []const u8) ?u8 {
+    for (data) |ch| {
+        if (!std.ascii.isWhitespace(ch)) return ch;
+    }
+    return null;
+}
+
 fn readImportFileAlloc(allocator: std.mem.Allocator, auth_file: []const u8) ![]u8 {
     var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), auth_file, .{});
     defer file.close(app_runtime.io());
     return try readFileAlloc(file, allocator, 10 * 1024 * 1024);
+}
+
+fn importAuthArrayData(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_path: []const u8,
+    explicit_alias: ?[]const u8,
+    data: []const u8,
+    report: *ImportReport,
+) !ImportReport {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch |err| {
+        if (!isImportValidationError(err)) return err;
+        const label = try importDisplayLabel(allocator, auth_path);
+        defer allocator.free(label);
+        try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+        report.failure = err;
+        return report.*;
+    };
+    defer parsed.deinit();
+
+    const items = switch (parsed.value) {
+        .array => |items| items,
+        else => unreachable,
+    };
+    if (explicit_alias != null and items.items.len != 1) {
+        std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
+    }
+
+    const label = try importDisplayLabel(allocator, auth_path);
+    defer allocator.free(label);
+    for (items.items) |item| {
+        const item_data = try jsonValueDataAlloc(allocator, item);
+        defer allocator.free(item_data);
+        const item_alias = if (items.items.len == 1) explicit_alias else null;
+        const outcome = importAuthData(allocator, codex_home, reg, item_data, item_alias) catch |err| {
+            if (!isImportValidationError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            continue;
+        };
+        try report.addEvent(allocator, label, outcome, null);
+    }
+    return report.*;
 }
 
 fn jsonValueDataAlloc(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
@@ -312,6 +334,18 @@ fn importAuthFile(
     const info = try @import("../auth/auth.zig").parseAuthInfo(allocator, auth_file);
     defer info.deinit(allocator);
     return try importAuthInfo(allocator, codex_home, reg, auth_file, explicit_alias, &info);
+}
+
+fn importAuthData(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    auth_data: []const u8,
+    explicit_alias: ?[]const u8,
+) !ImportOutcome {
+    const info = try @import("../auth/auth.zig").parseAuthInfoData(allocator, auth_data);
+    defer info.deinit(allocator);
+    return try importConvertedAuthInfo(allocator, codex_home, reg, explicit_alias, &info, auth_data);
 }
 
 fn importAuthInfo(
