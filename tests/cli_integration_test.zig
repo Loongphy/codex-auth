@@ -31,14 +31,6 @@ const SeedAccount = struct {
 const future_primary_reset_at: i64 = 4_102_444_800;
 const future_secondary_reset_at: i64 = 4_103_049_600;
 
-fn expectedImportMarker(outcome: registry.ImportOutcome) []const u8 {
-    return switch (outcome) {
-        .imported => if (builtin.os.tag == .windows) "[+]" else "✓",
-        .updated => if (builtin.os.tag == .windows) "[~]" else "✓",
-        .skipped => if (builtin.os.tag == .windows) "[x]" else "✗",
-    };
-}
-
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
     const project_root = getEnvVarOwned(allocator, cli_integration_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
@@ -1136,18 +1128,14 @@ test "Scenario: Given repeated single-file import when running import then first
     defer gpa.free(first.stdout);
     defer gpa.free(first.stderr);
     try expectSuccess(first);
-    const expected_first_stdout = try std.fmt.allocPrint(gpa, "  {s} imported  token_ryan.taylor.alpha@email.com\n", .{expectedImportMarker(.imported)});
-    defer gpa.free(expected_first_stdout);
-    try std.testing.expectEqualStrings(expected_first_stdout, first.stdout);
+    try std.testing.expectEqualStrings("  imported  token_ryan.taylor.alpha@email.com.json\n", first.stdout);
     try std.testing.expectEqualStrings("", first.stderr);
 
     const second = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", import_path });
     defer gpa.free(second.stdout);
     defer gpa.free(second.stderr);
     try expectSuccess(second);
-    const expected_second_stdout = try std.fmt.allocPrint(gpa, "  {s} updated   token_ryan.taylor.alpha@email.com\n", .{expectedImportMarker(.updated)});
-    defer gpa.free(expected_second_stdout);
-    try std.testing.expectEqualStrings(expected_second_stdout, second.stdout);
+    try std.testing.expectEqualStrings("  updated   token_ryan.taylor.alpha@email.com.json\n", second.stdout);
     try std.testing.expectEqualStrings("", second.stderr);
 }
 
@@ -1318,8 +1306,8 @@ test "Scenario: Given single-file import missing email when running import then 
     try std.testing.expectEqualStrings("Import Summary: 0 imported, 1 skipped\n", result.stdout);
     const expected_stderr = try std.fmt.allocPrint(
         gpa,
-        "  {s} skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
-        .{expectedImportMarker(.skipped)},
+        "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n",
+        .{},
     );
     defer gpa.free(expected_stderr);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, expected_stderr) != null);
@@ -1463,31 +1451,21 @@ test "Scenario: Given directory import with new updated and invalid files when r
     const expected_stdout = try std.fmt.allocPrint(
         gpa,
         "Scanning {s}...\n" ++
-            "  {s} updated   token_jane.smith.alpha@email.com\n" ++
-            "  {s} imported  token_john.doe.alpha@email.com\n" ++
-            "  {s} imported  token_mike.roe.alpha@email.com\n" ++
-            "  {s} imported  token_ryan.taylor.alpha@email.com\n" ++
+            "  updated   token_jane.smith.alpha@email.com.json\n" ++
+            "  imported  token_john.doe.alpha@email.com.json\n" ++
+            "  imported  token_mike.roe.alpha@email.com.json\n" ++
+            "  imported  token_ryan.taylor.alpha@email.com.json\n" ++
             "Import Summary: 3 imported, 1 updated, 3 skipped (total 7 files)\n",
-        .{
-            imports_path,
-            expectedImportMarker(.updated),
-            expectedImportMarker(.imported),
-            expectedImportMarker(.imported),
-            expectedImportMarker(.imported),
-        },
+        .{imports_path},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
     const expected_stderr = try std.fmt.allocPrint(
         gpa,
-        "  {s} skipped   token_alice.brown.alpha@email.com: MissingChatgptUserId\n" ++
-            "  {s} skipped   token_bob.wilson.alpha@email.com: MissingEmail\n" ++
-            "  {s} skipped   token_invalid: MalformedJson\n",
-        .{
-            expectedImportMarker(.skipped),
-            expectedImportMarker(.skipped),
-            expectedImportMarker(.skipped),
-        },
+        "  skipped   token_alice.brown.alpha@email.com.json: MissingChatgptUserId\n" ++
+            "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n" ++
+            "  skipped   token_invalid.json: MalformedJson\n",
+        .{},
     );
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
@@ -1522,13 +1500,13 @@ test "Scenario: Given directory import with an empty json file when running impo
     const expected_stdout = try std.fmt.allocPrint(
         gpa,
         "Scanning {s}...\n" ++
-            "  {s} imported  valid\n" ++
+            "  imported  valid.json\n" ++
             "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
-        .{ imports_path, expectedImportMarker(.imported) },
+        .{imports_path},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  {s} skipped   empty: MalformedJson\n", .{expectedImportMarker(.skipped)});
+    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   empty.json: MalformedJson\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 
@@ -1571,13 +1549,13 @@ test "Scenario: Given directory import with a broken symlink when running import
     const expected_stdout = try std.fmt.allocPrint(
         gpa,
         "Scanning {s}...\n" ++
-            "  {s} imported  valid\n" ++
+            "  imported  valid.json\n" ++
             "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
-        .{ imports_path, expectedImportMarker(.imported) },
+        .{imports_path},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  {s} skipped   broken: FileNotFound\n", .{expectedImportMarker(.skipped)});
+    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   broken.json: FileNotFound\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 
@@ -1620,14 +1598,14 @@ test "Scenario: Given cpa directory in default location when running import cpa 
     const expected_stdout = try std.fmt.allocPrint(
         gpa,
         "Scanning ~/.cli-proxy-api...\n" ++
-            "  {s} imported  first\n" ++
-            "  {s} imported  second\n" ++
+            "  imported  first.json\n" ++
+            "  imported  second.json\n" ++
             "Import Summary: 2 imported, 0 updated, 1 skipped (total 3 files)\n",
-        .{ expectedImportMarker(.imported), expectedImportMarker(.imported) },
+        .{},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  {s} skipped   no-refresh: MissingRefreshToken\n", .{expectedImportMarker(.skipped)});
+    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   no-refresh.json: MissingRefreshToken\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 
@@ -1682,9 +1660,7 @@ test "Scenario: Given cpa file import when running import cpa then it stores a s
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(gpa, "  {s} imported  cpa\n", .{expectedImportMarker(.imported)});
-    defer gpa.free(expected_stdout);
-    try std.testing.expectEqualStrings(expected_stdout, result.stdout);
+    try std.testing.expectEqualStrings("  imported  cpa.json\n", result.stdout);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);

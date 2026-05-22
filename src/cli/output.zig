@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
@@ -11,11 +10,10 @@ const io = @import("io.zig");
 
 const UsageError = types.UsageError;
 
-pub fn importReportMarker(outcome: registry.ImportOutcome, is_windows: bool) []const u8 {
+fn importReportStyle(outcome: registry.ImportOutcome) []const u8 {
     return switch (outcome) {
-        .imported => if (is_windows) "[+]" else "✓",
-        .updated => if (is_windows) "[~]" else "✓",
-        .skipped => if (is_windows) "[x]" else "✗",
+        .imported, .updated => style.ansi.green,
+        .skipped => style.ansi.red,
     };
 }
 
@@ -46,7 +44,7 @@ pub fn printImportReport(report: *const registry.ImportReport) !void {
     stdout.init();
     var stderr: io_util.Stderr = undefined;
     stderr.init();
-    try writeImportReport(stdout.out(), stderr.out(), report);
+    try writeImportReportWithColor(stdout.out(), stderr.out(), report, stdout.color_enabled, stderr.color_enabled);
 }
 
 pub fn writeImportReport(
@@ -54,7 +52,16 @@ pub fn writeImportReport(
     err_out: *std.Io.Writer,
     report: *const registry.ImportReport,
 ) !void {
-    const is_windows = builtin.os.tag == .windows;
+    try writeImportReportWithColor(out, err_out, report, false, false);
+}
+
+pub fn writeImportReportWithColor(
+    out: *std.Io.Writer,
+    err_out: *std.Io.Writer,
+    report: *const registry.ImportReport,
+    stdout_color: bool,
+    stderr_color: bool,
+) !void {
     if (report.render_kind == .scanned) {
         try out.print("Scanning {s}...\n", .{report.source_label.?});
         try out.flush();
@@ -63,15 +70,21 @@ pub fn writeImportReport(
     for (report.events.items) |event| {
         switch (event.outcome) {
             .imported => {
-                try out.print("  {s} imported  {s}\n", .{ importReportMarker(.imported, is_windows), event.label });
+                if (stdout_color) try out.writeAll(importReportStyle(.imported));
+                try out.print("  imported  {s}\n", .{event.label});
+                if (stdout_color) try out.writeAll(style.ansi.reset);
                 try out.flush();
             },
             .updated => {
-                try out.print("  {s} updated   {s}\n", .{ importReportMarker(.updated, is_windows), event.label });
+                if (stdout_color) try out.writeAll(importReportStyle(.updated));
+                try out.print("  updated   {s}\n", .{event.label});
+                if (stdout_color) try out.writeAll(style.ansi.reset);
                 try out.flush();
             },
             .skipped => {
-                try err_out.print("  {s} skipped   {s}: {s}\n", .{ importReportMarker(.skipped, is_windows), event.label, event.reason.? });
+                if (stderr_color) try err_out.writeAll(importReportStyle(.skipped));
+                try err_out.print("  skipped   {s}: {s}\n", .{ event.label, event.reason.? });
+                if (stderr_color) try err_out.writeAll(style.ansi.reset);
                 try err_out.flush();
             },
         }

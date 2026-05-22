@@ -5,12 +5,6 @@ const AccountRecord = common.AccountRecord;
 const Registry = common.Registry;
 
 pub fn importDisplayLabelFromName(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    if (std.mem.endsWith(u8, name, ".auth.json")) {
-        return allocator.dupe(u8, name[0 .. name.len - ".auth.json".len]);
-    }
-    if (std.mem.endsWith(u8, name, ".json")) {
-        return allocator.dupe(u8, name[0 .. name.len - ".json".len]);
-    }
     return allocator.dupe(u8, name);
 }
 

@@ -1,11 +1,12 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const cli = @import("codex_auth").cli;
 const registry = @import("codex_auth").registry;
 
 const ansi = struct {
     const reset = "\x1b[0m";
     const cyan = "\x1b[36m";
+    const green = "\x1b[32m";
+    const red = "\x1b[31m";
 };
 
 fn makeRegistry() registry.Registry {
@@ -152,14 +153,6 @@ test "Scenario: Given removed app unpatch subcommand when parsing then usage err
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .app, "unexpected argument `unpatch` for `app`.");
-}
-
-fn expectedImportMarker(outcome: registry.ImportOutcome) []const u8 {
-    return switch (outcome) {
-        .imported => if (builtin.os.tag == .windows) "[+]" else "✓",
-        .updated => if (builtin.os.tag == .windows) "[~]" else "✓",
-        .skipped => if (builtin.os.tag == .windows) "[x]" else "✗",
-    };
 }
 
 test "Scenario: Given import path and alias when parsing then import options are preserved" {
@@ -537,27 +530,27 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
     var report = registry.ImportReport.init(.scanned);
     defer report.deinit(gpa);
     report.source_label = try gpa.dupe(u8, "./tokens/");
-    try report.addEvent(gpa, "token_ryan.taylor.alpha@email.com", .imported, null);
-    try report.addEvent(gpa, "token_jane.smith.alpha@email.com", .updated, null);
-    try report.addEvent(gpa, "token_invalid", .skipped, "MalformedJson");
+    try report.addEvent(gpa, "token_ryan.taylor.alpha@email.com.json", .imported, null);
+    try report.addEvent(gpa, "token_jane.smith.alpha@email.com.json", .updated, null);
+    try report.addEvent(gpa, "token_invalid.json", .skipped, "MalformedJson");
 
     try cli.output.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
 
     const expected_stdout = try std.fmt.allocPrint(
         gpa,
         "Scanning ./tokens/...\n" ++
-            "  {s} imported  token_ryan.taylor.alpha@email.com\n" ++
-            "  {s} updated   token_jane.smith.alpha@email.com\n" ++
+            "  imported  token_ryan.taylor.alpha@email.com.json\n" ++
+            "  updated   token_jane.smith.alpha@email.com.json\n" ++
             "Import Summary: 1 imported, 1 updated, 1 skipped (total 3 files)\n",
-        .{ expectedImportMarker(.imported), expectedImportMarker(.updated) },
+        .{},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, stdout_aw.written());
 
     const expected_stderr = try std.fmt.allocPrint(
         gpa,
-        "  {s} skipped   token_invalid: MalformedJson\n",
-        .{expectedImportMarker(.skipped)},
+        "  skipped   token_invalid.json: MalformedJson\n",
+        .{},
     );
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
@@ -572,7 +565,7 @@ test "Scenario: Given single-file skipped import report when rendering then summ
 
     var report = registry.ImportReport.init(.single_file);
     defer report.deinit(gpa);
-    try report.addEvent(gpa, "token_bob.wilson.alpha@email.com", .skipped, "MissingEmail");
+    try report.addEvent(gpa, "token_bob.wilson.alpha@email.com.json", .skipped, "MissingEmail");
 
     try cli.output.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
 
@@ -582,11 +575,32 @@ test "Scenario: Given single-file skipped import report when rendering then summ
     );
     const expected_stderr = try std.fmt.allocPrint(
         gpa,
-        "  {s} skipped   token_bob.wilson.alpha@email.com: MissingEmail\n",
-        .{expectedImportMarker(.skipped)},
+        "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n",
+        .{},
     );
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
+}
+
+test "Scenario: Given color import report when rendering then success and errors use ANSI colors without markers" {
+    const gpa = std.testing.allocator;
+    var stdout_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stdout_aw.deinit();
+    var stderr_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr_aw.deinit();
+
+    var report = registry.ImportReport.init(.scanned);
+    defer report.deinit(gpa);
+    report.source_label = try gpa.dupe(u8, "./tokens/");
+    try report.addEvent(gpa, "token_carol.three@example.com.json", .updated, null);
+    try report.addEvent(gpa, "token_invalid.json", .skipped, "MalformedJson");
+
+    try cli.output.writeImportReportWithColor(&stdout_aw.writer, &stderr_aw.writer, &report, true, true);
+
+    try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), ansi.green ++ "  updated   token_carol.three@example.com.json") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), ansi.red ++ "  skipped   token_invalid.json: MalformedJson") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), "✓") == null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), "✗") == null);
 }
 
 test "Scenario: Given removed top-level auto command when parsing then usage error is returned" {

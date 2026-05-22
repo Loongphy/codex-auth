@@ -182,6 +182,41 @@ pub fn importAuthPath(
     var report = ImportReport.init(.single_file);
     errdefer report.deinit(allocator);
 
+    const data = try readImportFileAlloc(allocator, auth_path);
+    defer allocator.free(data);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
+    defer parsed.deinit();
+
+    switch (parsed.value) {
+        .array => |items| {
+            if (explicit_alias != null and items.items.len != 1) {
+                std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
+            }
+            const label = try importDisplayLabel(allocator, auth_path);
+            defer allocator.free(label);
+            for (items.items) |item| {
+                const item_data = try jsonValueDataAlloc(allocator, item);
+                defer allocator.free(item_data);
+                const info = @import("../auth/auth.zig").parseAuthInfoData(allocator, item_data) catch |err| {
+                    if (!isImportValidationError(err)) return err;
+                    try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+                    continue;
+                };
+                defer info.deinit(allocator);
+                const item_alias = if (items.items.len == 1) explicit_alias else null;
+                const outcome = importConvertedAuthInfo(allocator, codex_home, reg, item_alias, &info, item_data) catch |err| {
+                    if (!isImportValidationError(err)) return err;
+                    try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+                    continue;
+                };
+                try report.addEvent(allocator, label, outcome, null);
+            }
+            return report;
+        },
+        else => {},
+    }
+
     const outcome = importAuthFile(allocator, codex_home, reg, auth_path, explicit_alias) catch |err| {
         if (!isImportValidationError(err)) return err;
         const label = try importDisplayLabel(allocator, auth_path);
@@ -195,6 +230,19 @@ pub fn importAuthPath(
     defer allocator.free(label);
     try report.addEvent(allocator, label, outcome, null);
     return report;
+}
+
+fn readImportFileAlloc(allocator: std.mem.Allocator, auth_file: []const u8) ![]u8 {
+    var file = try std.Io.Dir.cwd().openFile(app_runtime.io(), auth_file, .{});
+    defer file.close(app_runtime.io());
+    return try readFileAlloc(file, allocator, 10 * 1024 * 1024);
+}
+
+fn jsonValueDataAlloc(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try std.json.Stringify.value(value, .{}, &out.writer);
+    return try out.toOwnedSlice();
 }
 
 fn defaultCpaImportPath(allocator: std.mem.Allocator) ![]u8 {

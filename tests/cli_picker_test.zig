@@ -27,7 +27,6 @@ const removeTuiFooterText = cli.tui.removeTuiFooterText;
 const listTuiFooterText = cli.tui.listTuiFooterText;
 const writeTuiFrameTo = cli.tui.writeTuiFrameTo;
 const TuiInputKey = cli.tui.TuiInputKey;
-const importReportMarker = cli.output.importReportMarker;
 const mapTuiOutputError = cli.tui.mapTuiOutputError;
 const indexWidth = cli.render.indexWidth;
 const LiveListViewport = cli.render.LiveListViewport;
@@ -1482,9 +1481,6 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(true),
     );
-    try std.testing.expectEqualStrings("[+]", importReportMarker(.imported, true));
-    try std.testing.expectEqualStrings("[~]", importReportMarker(.updated, true));
-    try std.testing.expectEqualStrings("[x]", importReportMarker(.skipped, true));
 }
 
 test "Scenario: Given non-Windows console labels when rendering unicode-prone output then the richer glyphs remain" {
@@ -1500,9 +1496,6 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
         listTuiFooterText(false),
     );
-    try std.testing.expectEqualStrings("✓", importReportMarker(.imported, false));
-    try std.testing.expectEqualStrings("✓", importReportMarker(.updated, false));
-    try std.testing.expectEqualStrings("✗", importReportMarker(.skipped, false));
 }
 
 test "Scenario: Given a live TUI write failure when mapping output errors then it becomes a handled TUI error" {
