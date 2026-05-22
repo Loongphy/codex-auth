@@ -21,9 +21,9 @@ fn parseOptions(
         const arg = std.mem.sliceTo(args[i], 0);
         if (std.mem.eql(u8, arg, "--")) return common.usageErrorResult(allocator, .app, "`app` does not accept passthrough arguments.", .{});
         if (common.isHelpFlag(arg)) return .{ .command = .{ .help = .app } };
-        if (std.mem.eql(u8, arg, "--app-id")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--app-id`.", .{});
-            if (opts.app_id != null) return common.usageErrorResult(allocator, .app, "duplicate `--app-id` for `app`.", .{});
+        if (std.mem.eql(u8, arg, "--id")) {
+            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--id`.", .{});
+            if (opts.app_id != null) return common.usageErrorResult(allocator, .app, "duplicate `--id` for `app`.", .{});
             i += 1;
             opts.app_id = std.mem.sliceTo(args[i], 0);
             continue;

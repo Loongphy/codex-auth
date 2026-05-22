@@ -82,7 +82,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 | Command | Description |
 |---------|-------------|
-| [`codex-auth app [--app-id <id>] [--codex-cli-path <path>]`](./docs/commands/app.md) | Launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
+| [`codex-auth app [--id <id>] [--codex-cli-path <path>]`](./docs/commands/app.md) | Launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
 
 ### Configuration
 

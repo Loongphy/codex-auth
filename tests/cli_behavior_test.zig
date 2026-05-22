@@ -80,7 +80,7 @@ test "Scenario: Given app launch overrides when parsing then IDs and paths are p
     const args = [_][:0]const u8{
         "codex-auth",
         "app",
-        "--app-id",
+        "--id",
         "OpenAI.Codex",
         "--codex-cli-path",
         "codex-custom",

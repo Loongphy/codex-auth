@@ -9,10 +9,11 @@ const cli_style = @import("../cli/style.zig");
 
 const codex_cli_path_env = "CODEX_CLI_PATH";
 const codex_home_env = "CODEX_HOME";
-const app_id_env = "CODEX_AUTH_APP_ID";
 const codex_app_package_name = "OpenAI.Codex";
 const codex_app_bundle_id = "com.openai.codex";
-const wsl_agent_mode_key = "runCodexInWindowsSubsystemForLinux";
+const codex_config_file_name = "config.toml";
+const desktop_section_name = "desktop";
+const wsl_desktop_setting_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_repo_url = "https://github.com/Loongphy/codext";
 const codext_cache_dir_name = "codext-cli";
@@ -41,7 +42,7 @@ const windows_app_id_resolver_script =
     "if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw \"App executable not found: $exe\" }; " ++
     "return [System.IO.Path]::GetFullPath($exe) }";
 
-const ValueSource = enum { explicit, env, detected, built_in, cached, downloaded, not_set };
+const ValueSource = enum { explicit, detected, built_in, cached, downloaded, not_set };
 const WindowsLaunchMode = enum { gui, stdio };
 
 const ResolvedValue = struct {
@@ -64,25 +65,24 @@ const CodextInstallResult = struct {
     source: ValueSource,
 };
 
-const PathValidationIssue = struct {
+const ValidationIssue = struct {
     option: []const u8,
     message: []const u8,
-    path: []const u8,
+    value: []const u8,
 };
 
 pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, opts: types.AppOptions) !void {
     const effective_home = opts.codex_home orelse resolved_codex_home;
     const effective_platform = try resolvePlatform(allocator, effective_home, opts.platform);
     try validateAppPlatform(effective_platform.value);
-    const effective_app_id = try resolveAppId(allocator, effective_platform.value, opts);
+    const effective_app_id = resolveAppId(effective_platform.value, opts);
     defer effective_app_id.deinit(allocator);
     try requireAppId(effective_app_id);
-    try validateConfiguredPaths(allocator, opts);
+    try validateConfiguredOptions(allocator, effective_platform.value, effective_app_id, opts);
     if (try isCodexAppRunning(allocator, effective_platform.value, effective_app_id)) {
         try writeAppAlreadyRunning();
         return;
     }
-    try requireResolvableAppId(allocator, effective_platform.value, effective_app_id);
     const effective_cli_path = try resolveCliPath(allocator, effective_home, effective_platform.value, opts, true, false);
     defer effective_cli_path.deinit(allocator);
     try writeAppLaunchPlan(allocator, opts.codex_home != null, effective_home, effective_platform, effective_app_id, effective_cli_path);
@@ -92,18 +92,8 @@ pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, 
     }
 }
 
-fn getOptionalEnv(allocator: std.mem.Allocator, name: []const u8) ?[]const u8 {
-    const value = registry.getEnvVarOwned(allocator, name) catch return null;
-    if (value.len == 0) {
-        allocator.free(value);
-        return null;
-    }
-    return value;
-}
-
-fn resolveAppId(allocator: std.mem.Allocator, platform: ?types.AppPlatform, opts: types.AppOptions) !ResolvedValue {
+fn resolveAppId(platform: ?types.AppPlatform, opts: types.AppOptions) ResolvedValue {
     if (opts.app_id) |app_id| return .{ .value = app_id, .source = .explicit };
-    if (getOptionalEnv(allocator, app_id_env)) |app_id| return .{ .value = app_id, .source = .env, .owned = true };
     if (defaultAppId(platform)) |app_id| return .{ .value = app_id, .source = .built_in };
     return .{ .value = null, .source = .not_set };
 }
@@ -145,28 +135,27 @@ fn resolvePlatform(allocator: std.mem.Allocator, home: []const u8, explicit: ?ty
     return .{ .value = null, .source = .not_set };
 }
 
-fn validateConfiguredPaths(allocator: std.mem.Allocator, opts: types.AppOptions) !void {
-    var issues = std.ArrayList(PathValidationIssue).empty;
+fn validateConfiguredOptions(
+    allocator: std.mem.Allocator,
+    platform: ?types.AppPlatform,
+    app_id: ResolvedValue,
+    opts: types.AppOptions,
+) !void {
+    var issues = std.ArrayList(ValidationIssue).empty;
     defer issues.deinit(allocator);
 
+    try appendConfiguredAppIdIssue(allocator, &issues, platform, app_id);
     if (opts.codex_cli_path) |path| try appendConfiguredCliPathIssue(allocator, &issues, path);
 
     if (issues.items.len == 0) return;
-    try writePathValidationIssues(issues.items);
+    try writeValidationIssues(issues.items);
     return error.AppLaunchConfigValidationFailed;
 }
 
 fn requireAppId(app_id: ResolvedValue) !void {
     if (app_id.value != null) return;
-    try writeAppError("app launch needs an app ID. Pass `--app-id <id>` or set CODEX_AUTH_APP_ID.\n");
+    try writeAppError("app launch needs an app ID. Pass `--id <id>`.\n");
     return error.AppIdRequired;
-}
-
-fn requireResolvableAppId(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: ResolvedValue) !void {
-    const value = app_id.value orelse return error.AppIdRequired;
-    if (try appIdCanResolve(allocator, platform, value)) return;
-    try writeAppError("app launch could not find the installed app for the configured app ID.\n");
-    return error.AppIdNotFound;
 }
 
 fn appIdCanResolve(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: []const u8) !bool {
@@ -177,37 +166,50 @@ fn appIdCanResolve(allocator: std.mem.Allocator, platform: ?types.AppPlatform, a
     };
 }
 
+fn appendConfiguredAppIdIssue(
+    allocator: std.mem.Allocator,
+    issues: *std.ArrayList(ValidationIssue),
+    platform: ?types.AppPlatform,
+    app_id: ResolvedValue,
+) !void {
+    const value = app_id.value orelse return;
+    if (try appIdCanResolve(allocator, platform, value)) return;
+
+    try issues.append(allocator, .{ .option = "--id", .message = "App ID does not exist", .value = value });
+}
+
 fn appendConfiguredCliPathIssue(
     allocator: std.mem.Allocator,
-    issues: *std.ArrayList(PathValidationIssue),
+    issues: *std.ArrayList(ValidationIssue),
     path: []const u8,
 ) !void {
     const kind = pathKind(path) catch |err| switch (err) {
         error.AccessDenied, error.PermissionDenied => {
-            try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path is not accessible", .path = path });
+            try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path is not accessible", .value = path });
             return;
         },
         else => return err,
     } orelse {
-        try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path does not exist", .path = path });
+        try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path does not exist", .value = path });
         return;
     };
     if (kind == .file or kind == .sym_link) return;
 
-    try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path is not a file", .path = path });
+    try issues.append(allocator, .{ .option = "--codex-cli-path", .message = "Path is not a file", .value = path });
 }
 
-fn writePathValidationIssues(issues: []const PathValidationIssue) !void {
+fn writeValidationIssues(issues: []const ValidationIssue) !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();
     var writer = cli_style.StyledWriter.init(stderr.out(), stderr.color_enabled);
 
-    for (issues) |issue| {
+    for (issues, 0..) |issue, index| {
+        if (index != 0) try writer.writeAll("\n");
         try writer.writeStyle(cli_style.role.error_text);
         try writer.print("ERROR: {s}: {s}\n", .{ issue.option, issue.message });
         try writer.reset();
         try writer.writeStyle(cli_style.role.secondary);
-        try writer.print("        \"{s}\"\n", .{issue.path});
+        try writer.print("        \"{s}\"\n", .{issue.value});
         try writer.reset();
     }
     try writer.flush();
@@ -255,7 +257,6 @@ fn writeAppLaunchPlan(
 fn valueSourceLabel(source: ValueSource) []const u8 {
     return switch (source) {
         .explicit => "explicit",
-        .env => "environment",
         .detected => "auto-detected",
         .built_in => "default",
         .cached => "",
@@ -434,10 +435,10 @@ fn nativeDefaultPlatform() types.AppPlatform {
 }
 
 fn readWindowsWslBackendSetting(allocator: std.mem.Allocator, home: []const u8) !bool {
-    const state_path = try std.fs.path.join(allocator, &.{ home, ".codex-global-state.json" });
-    defer allocator.free(state_path);
+    const config_path = try std.fs.path.join(allocator, &.{ home, codex_config_file_name });
+    defer allocator.free(config_path);
 
-    var file = std.Io.Dir.cwd().openFile(app_runtime.io(), state_path, .{}) catch |err| switch (err) {
+    var file = std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -445,18 +446,170 @@ fn readWindowsWslBackendSetting(allocator: std.mem.Allocator, home: []const u8) 
     const data = try registry.readFileAlloc(file, allocator, 1024 * 1024);
     defer allocator.free(data);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch return false;
-    defer parsed.deinit();
-    const object = switch (parsed.value) {
-        .object => |object| object,
-        else => return false,
-    };
-    const value = object.get(wsl_agent_mode_key) orelse return false;
-    return switch (value) {
-        .bool => |enabled| enabled,
-        else => false,
-    };
+    return readDesktopWslSettingFromToml(data) orelse false;
 }
+
+fn writeAppPlatformSetting(allocator: std.mem.Allocator, home: []const u8, value: ?types.AppPlatform) !void {
+    const platform = value orelse return;
+    const use_wsl = switch (platform) {
+        .win => false,
+        .wsl => true,
+        .mac => return,
+    };
+
+    const config_path = try std.fs.path.join(allocator, &.{ home, codex_config_file_name });
+    defer allocator.free(config_path);
+
+    if (std.fs.path.dirname(config_path)) |dir| {
+        try std.Io.Dir.cwd().createDirPath(app_runtime.io(), dir);
+    }
+
+    const data = blk: {
+        var file = std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => break :blk try allocator.dupe(u8, ""),
+            else => return err,
+        };
+        defer file.close(app_runtime.io());
+        break :blk try registry.readFileAlloc(file, allocator, 1024 * 1024);
+    };
+    defer allocator.free(data);
+
+    const updated = try updateDesktopWslSettingTomlAlloc(allocator, data, use_wsl);
+    defer allocator.free(updated);
+
+    var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), config_path, .{ .truncate = true });
+    defer file.close(app_runtime.io());
+    try file.writeStreamingAll(app_runtime.io(), updated);
+}
+
+const TomlLocation = struct {
+    desktop_section_start: ?usize = null,
+    desktop_section_end: ?usize = null,
+    setting_line_start: ?usize = null,
+    setting_line_end: ?usize = null,
+};
+
+fn readDesktopWslSettingFromToml(data: []const u8) ?bool {
+    var in_desktop_section = false;
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (tomlSectionName(line)) |section_name| {
+            in_desktop_section = std.mem.eql(u8, section_name, desktop_section_name);
+            continue;
+        }
+        if (!in_desktop_section) continue;
+        if (tomlBoolSettingValue(line, wsl_desktop_setting_key)) |enabled| return enabled;
+    }
+    return null;
+}
+
+fn updateDesktopWslSettingTomlAlloc(allocator: std.mem.Allocator, data: []const u8, use_wsl: bool) ![]u8 {
+    const location = findDesktopWslSettingLocation(data);
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    if (location.setting_line_start) |start| {
+        const end = location.setting_line_end.?;
+        try out.appendSlice(allocator, data[0..start]);
+        try appendDesktopWslSettingLine(allocator, &out, use_wsl);
+        try out.appendSlice(allocator, data[end..]);
+        return try out.toOwnedSlice(allocator);
+    }
+
+    if (location.desktop_section_end) |insert_at| {
+        try out.appendSlice(allocator, data[0..insert_at]);
+        if (insert_at > 0 and data[insert_at - 1] != '\n') try out.append(allocator, '\n');
+        try appendDesktopWslSettingLine(allocator, &out, use_wsl);
+        try out.appendSlice(allocator, data[insert_at..]);
+        return try out.toOwnedSlice(allocator);
+    }
+
+    try out.appendSlice(allocator, data);
+    if (data.len != 0) {
+        if (data[data.len - 1] == '\n') {
+            try out.append(allocator, '\n');
+        } else {
+            try out.appendSlice(allocator, "\n\n");
+        }
+    }
+    try out.appendSlice(allocator, "[" ++ desktop_section_name ++ "]\n");
+    try appendDesktopWslSettingLine(allocator, &out, use_wsl);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn findDesktopWslSettingLocation(data: []const u8) TomlLocation {
+    var location = TomlLocation{};
+    var in_desktop_section = false;
+    var offset: usize = 0;
+    while (offset < data.len) {
+        const line_start = offset;
+        const newline = std.mem.indexOfScalarPos(u8, data, offset, '\n') orelse data.len;
+        const line_end = if (newline < data.len) newline + 1 else newline;
+        const line = std.mem.trim(u8, data[line_start..newline], " \t\r");
+
+        if (tomlSectionName(line)) |section_name| {
+            if (in_desktop_section and location.desktop_section_end == null) {
+                location.desktop_section_end = line_start;
+            }
+            in_desktop_section = std.mem.eql(u8, section_name, desktop_section_name);
+            if (in_desktop_section) {
+                location.desktop_section_start = line_start;
+                location.desktop_section_end = data.len;
+            }
+        } else if (in_desktop_section and location.setting_line_start == null and tomlSettingLineHasKey(line, wsl_desktop_setting_key)) {
+            location.setting_line_start = line_start;
+            location.setting_line_end = line_end;
+        }
+
+        offset = line_end;
+    }
+    return location;
+}
+
+fn tomlSectionName(line: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, line, "[") or std.mem.startsWith(u8, line, "[[")) return null;
+    const close_offset = std.mem.indexOfScalar(u8, line[1..], ']') orelse return null;
+    const close_index = close_offset + 1;
+    const rest = std.mem.trim(u8, line[close_index + 1 ..], " \t\r");
+    if (rest.len != 0 and rest[0] != '#') return null;
+    return std.mem.trim(u8, line[1..close_index], " \t\r");
+}
+
+fn tomlSettingLineHasKey(line: []const u8, key: []const u8) bool {
+    if (line.len == 0 or line[0] == '#') return false;
+    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse return false;
+    const setting_key = std.mem.trim(u8, line[0..eq_index], " \t\r");
+    return std.mem.eql(u8, setting_key, key);
+}
+
+fn tomlBoolSettingValue(line: []const u8, key: []const u8) ?bool {
+    if (!tomlSettingLineHasKey(line, key)) return null;
+    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse return null;
+    var raw_value = std.mem.trim(u8, line[eq_index + 1 ..], " \t\r");
+    if (std.mem.indexOfScalar(u8, raw_value, '#')) |comment_index| {
+        raw_value = std.mem.trim(u8, raw_value[0..comment_index], " \t\r");
+    }
+    if (std.mem.eql(u8, raw_value, "true")) return true;
+    if (std.mem.eql(u8, raw_value, "false")) return false;
+    return null;
+}
+
+fn appendDesktopWslSettingLine(allocator: std.mem.Allocator, out: *std.ArrayList(u8), use_wsl: bool) !void {
+    try out.appendSlice(allocator, wsl_desktop_setting_key);
+    try out.appendSlice(allocator, " = ");
+    try out.appendSlice(allocator, if (use_wsl) "true\n" else "false\n");
+}
+
+pub const test_support = struct {
+    pub fn parseDesktopWslSetting(data: []const u8) ?bool {
+        return readDesktopWslSettingFromToml(data);
+    }
+
+    pub fn updateDesktopWslSettingAlloc(allocator: std.mem.Allocator, data: []const u8, use_wsl: bool) ![]u8 {
+        return updateDesktopWslSettingTomlAlloc(allocator, data, use_wsl);
+    }
+};
 
 fn launchApp(
     allocator: std.mem.Allocator,
@@ -467,11 +620,11 @@ fn launchApp(
     inherit_stdio: bool,
 ) !void {
     const target = app_id.value orelse {
-        try writeAppError("app launch needs an app ID. Pass `--app-id <id>` or set CODEX_AUTH_APP_ID.\n");
+        try writeAppError("app launch needs an app ID. Pass `--id <id>`.\n");
         return error.AppIdRequired;
     };
     try validateAppPlatform(platform.value);
-    try applyAppPlatform(allocator, home, platform.value);
+    if (platform.source == .explicit) try writeAppPlatformSetting(allocator, home, platform.value);
 
     if (builtin.os.tag == .windows) {
         try writeAppLaunching();
@@ -500,89 +653,6 @@ fn validateAppPlatform(value: ?types.AppPlatform) !void {
             try writeAppError("app with `--platform mac` must run from the macOS codex-auth executable.\n");
             return error.MacAppPlatformRequiresMacOS;
         },
-    }
-}
-
-fn applyAppPlatform(allocator: std.mem.Allocator, home: []const u8, value: ?types.AppPlatform) !void {
-    const platform = value orelse return;
-    const use_wsl = switch (platform) {
-        .win => false,
-        .wsl => true,
-        .mac => return,
-    };
-    const state_path = try std.fs.path.join(allocator, &.{ home, ".codex-global-state.json" });
-    defer allocator.free(state_path);
-
-    if (std.fs.path.dirname(state_path)) |dir| {
-        try std.Io.Dir.cwd().createDirPath(app_runtime.io(), dir);
-    }
-
-    var parsed: ?std.json.Parsed(std.json.Value) = null;
-    defer if (parsed) |*p| p.deinit();
-
-    var root: std.json.Value = blk: {
-        var file = std.Io.Dir.cwd().openFile(app_runtime.io(), state_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => break :blk .{ .object = .{} },
-            else => return err,
-        };
-        defer file.close(app_runtime.io());
-        const data = try registry.readFileAlloc(file, allocator, 1024 * 1024);
-        defer allocator.free(data);
-        parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch {
-            break :blk .{ .object = .{} };
-        };
-        break :blk switch (parsed.?.value) {
-            .object => try cloneJsonValue(allocator, parsed.?.value),
-            else => .{ .object = .{} },
-        };
-    };
-    defer deinitClonedJsonValue(allocator, &root);
-
-    switch (root) {
-        .object => |*obj| try obj.put(allocator, wsl_agent_mode_key, .{ .bool = use_wsl }),
-        else => unreachable,
-    }
-
-    var aw: std.Io.Writer.Allocating = .init(allocator);
-    defer aw.deinit();
-    try std.json.Stringify.value(root, .{ .whitespace = .indent_2 }, &aw.writer);
-
-    var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), state_path, .{ .truncate = true });
-    defer file.close(app_runtime.io());
-    try file.writeStreamingAll(app_runtime.io(), aw.written());
-}
-
-fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
-    return switch (value) {
-        .null, .bool, .integer, .float, .number_string, .string => value,
-        .array => |array| blk: {
-            var cloned = std.json.Array.init(allocator);
-            for (array.items) |item| {
-                try cloned.append(try cloneJsonValue(allocator, item));
-            }
-            break :blk .{ .array = cloned };
-        },
-        .object => |object| blk: {
-            var cloned: std.json.ObjectMap = .{};
-            for (object.keys(), object.values()) |key, item| {
-                try cloned.put(allocator, key, try cloneJsonValue(allocator, item));
-            }
-            break :blk .{ .object = cloned };
-        },
-    };
-}
-
-fn deinitClonedJsonValue(allocator: std.mem.Allocator, value: *std.json.Value) void {
-    switch (value.*) {
-        .array => |*array| {
-            for (array.items) |*item| deinitClonedJsonValue(allocator, item);
-            array.deinit();
-        },
-        .object => |*object| {
-            for (object.values()) |*item| deinitClonedJsonValue(allocator, item);
-            object.deinit(allocator);
-        },
-        else => {},
     }
 }
 
@@ -1160,16 +1230,7 @@ fn launchWindowsViaPowerShell(
         try allocator.dupe(u8, "");
     defer allocator.free(cli_part);
 
-    const launch_part = switch (mode) {
-        .gui => "$aumid=Resolve-CodexAppAumid $id; Start-Process -FilePath \"shell:AppsFolder\\$aumid\"",
-        .stdio => "$app=Resolve-CodexAppExecutable $id; $wd=Split-Path -Parent $app; Push-Location $wd; try { & $app; $code=$LASTEXITCODE } finally { Pop-Location }; if ($null -ne $code) { exit $code }",
-    };
-
-    const script = try std.fmt.allocPrint(
-        allocator,
-        "$ErrorActionPreference='Stop'; {s}; $id={s}; $env:CODEX_HOME={s}{s}; {s}",
-        .{ windows_app_id_resolver_script, app_quoted, home_quoted, cli_part, launch_part },
-    );
+    const script = try windowsLaunchScriptAlloc(allocator, app_quoted, home_quoted, cli_part, mode);
     defer allocator.free(script);
 
     var child = try std.process.spawn(app_runtime.io(), .{
@@ -1187,6 +1248,25 @@ fn launchWindowsViaPowerShell(
     return error.AppLaunchFailed;
 }
 
+fn windowsLaunchScriptAlloc(
+    allocator: std.mem.Allocator,
+    app_quoted: []const u8,
+    home_quoted: []const u8,
+    cli_part: []const u8,
+    mode: WindowsLaunchMode,
+) ![]u8 {
+    const launch_part = switch (mode) {
+        .gui => "$app=Resolve-CodexAppExecutable $id; $wd=Split-Path -Parent $app; Start-Process -FilePath $app -WorkingDirectory $wd",
+        .stdio => "$app=Resolve-CodexAppExecutable $id; $wd=Split-Path -Parent $app; Push-Location $wd; try { & $app; $code=$LASTEXITCODE } finally { Pop-Location }; if ($null -ne $code) { exit $code }",
+    };
+
+    return try std.fmt.allocPrint(
+        allocator,
+        "$ErrorActionPreference='Stop'; {s}; $id={s}; $env:CODEX_HOME={s}{s}; {s}",
+        .{ windows_app_id_resolver_script, app_quoted, home_quoted, cli_part, launch_part },
+    );
+}
+
 fn psSingleQuoteAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -1198,3 +1278,9 @@ fn psSingleQuoteAlloc(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
     try out.append(allocator, '\'');
     return try out.toOwnedSlice(allocator);
 }
+
+pub const test_support_windows_launch = struct {
+    pub fn guiScriptAlloc(allocator: std.mem.Allocator, app: []const u8, home: []const u8, cli: []const u8) ![]u8 {
+        return windowsLaunchScriptAlloc(allocator, app, home, cli, .gui);
+    }
+};

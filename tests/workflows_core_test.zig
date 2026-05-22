@@ -4,6 +4,7 @@ const fs = @import("codex_auth").core.compat_fs;
 const account_api = @import("codex_auth").api.account;
 const auth_mod = @import("codex_auth").auth.core;
 const display_rows = @import("codex_auth").tui.display;
+const app_workflow = @import("codex_auth").app_workflow;
 const main_mod = @import("codex_auth").workflows;
 const registry = @import("codex_auth").registry;
 const usage_api = @import("codex_auth").api.usage;
@@ -336,6 +337,92 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     var matches = try main_mod.findMatchingAccounts(gpa, &reg, "67fe2bbb");
     defer matches.deinit(gpa);
     try std.testing.expect(matches.items.len == 0);
+}
+
+test "Scenario: Given Codex desktop config when reading app platform then WSL setting comes from config toml" {
+    const config =
+        \\model = "gpt-5"
+        \\
+        \\[desktop]
+        \\ambient-suggestions-enabled = false
+        \\runCodexInWindowsSubsystemForLinux = true # user selected WSL
+        \\
+        \\[features]
+        \\js_repl = false
+        \\
+    ;
+
+    try std.testing.expectEqual(@as(?bool, true), app_workflow.test_support.parseDesktopWslSetting(config));
+}
+
+test "Scenario: Given Codex desktop config when writing app platform then existing WSL setting is replaced" {
+    const gpa = std.testing.allocator;
+    const config =
+        \\[desktop]
+        \\ambient-suggestions-enabled = false
+        \\runCodexInWindowsSubsystemForLinux = true # stale value
+        \\
+        \\[features]
+        \\js_repl = false
+        \\
+    ;
+    const expected =
+        \\[desktop]
+        \\ambient-suggestions-enabled = false
+        \\runCodexInWindowsSubsystemForLinux = false
+        \\
+        \\[features]
+        \\js_repl = false
+        \\
+    ;
+
+    const updated = try app_workflow.test_support.updateDesktopWslSettingAlloc(gpa, config, false);
+    defer gpa.free(updated);
+
+    try std.testing.expectEqualStrings(expected, updated);
+    try std.testing.expectEqual(@as(?bool, false), app_workflow.test_support.parseDesktopWslSetting(updated));
+}
+
+test "Scenario: Given Codex config without desktop section when writing app platform then desktop setting is appended" {
+    const gpa = std.testing.allocator;
+    const config =
+        \\model = "gpt-5"
+        \\
+        \\[features]
+        \\js_repl = false
+        \\
+    ;
+    const expected =
+        \\model = "gpt-5"
+        \\
+        \\[features]
+        \\js_repl = false
+        \\
+        \\[desktop]
+        \\runCodexInWindowsSubsystemForLinux = true
+        \\
+    ;
+
+    const updated = try app_workflow.test_support.updateDesktopWslSettingAlloc(gpa, config, true);
+    defer gpa.free(updated);
+
+    try std.testing.expectEqualStrings(expected, updated);
+    try std.testing.expectEqual(@as(?bool, true), app_workflow.test_support.parseDesktopWslSetting(updated));
+}
+
+test "Scenario: Given Windows GUI app launch when building script then environment is inherited by executable launch" {
+    const gpa = std.testing.allocator;
+    const script = try app_workflow.test_support_windows_launch.guiScriptAlloc(
+        gpa,
+        "'OpenAI.Codex'",
+        "'C:\\Users\\Loong\\.codext'",
+        "; $env:CODEX_CLI_PATH='codex-custom'",
+    );
+    defer gpa.free(script);
+
+    try std.testing.expect(std.mem.indexOf(u8, script, "$env:CODEX_HOME='C:\\Users\\Loong\\.codext'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Start-Process -FilePath $app -WorkingDirectory $wd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "shell:AppsFolder") == null);
 }
 
 test "Scenario: Given foreground usage refresh targets when checking refresh policy then list, switch, and remove refresh" {

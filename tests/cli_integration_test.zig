@@ -3493,7 +3493,7 @@ test "Scenario: Given explicit codex home when planning app launch then codex ho
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
         "app",
-        "--app-id",
+        "--id",
         "OpenAI.Codex",
         "--codex-cli-path",
         "/bin/true",
@@ -3531,7 +3531,7 @@ test "Scenario: Given inherited codex home when planning app launch then codex h
 
     const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, home_root, codex_home, &[_][]const u8{
         "app",
-        "--app-id",
+        "--id",
         "OpenAI.Codex",
         "--codex-cli-path",
         "/bin/true",
@@ -3563,7 +3563,7 @@ test "Scenario: Given missing explicit codex CLI path when launching app then co
 
     const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{
         "app",
-        "--app-id",
+        "--id",
         "OpenAI.Codex",
         "--codex-cli-path",
         missing_cli_path,
