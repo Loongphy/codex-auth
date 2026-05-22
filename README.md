@@ -27,12 +27,13 @@ npx @loongphy/codex-auth list
 - Codex App
 
 > [!IMPORTANT]
-> If you use want seamless automatic account switching without restarting, use the forked [`codext`](https://github.com/Loongphy/codext), an enhanced Codex CLI.
+> For **Codex CLI** and **Codex App** users, switch accounts, then restart the client for the new account to take effect.
+>
+> If you want seamless automatic account switching without restarting, use the forked [`codext`](https://github.com/Loongphy/codext), an enhanced Codex CLI.
 >
 > Install it with `npm i -g @loongphy/codext` and run `codext`.
 >
->
-> Codex App users can use `codex-auth app`, but not stable, see [Details](#codex-app).
+> Codex App users can use `codex-auth app`, but it is not stable. See [Details](#codex-app).
 
 Install the Codex CLI even if you mainly use the VS Code extension or the App, because it makes adding accounts easier:
 
