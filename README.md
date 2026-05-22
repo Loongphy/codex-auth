@@ -4,10 +4,19 @@
 
 `codex-auth` is a command-line tool for switching Codex accounts.
 
-> [!IMPORTANT]
-> For **Codex CLI** and **Codex App** users, switch accounts, then restart the client for the new account to take effect.
->
-> If you use the CLI and want seamless automatic account switching without restarting, use the forked [`codext`](https://github.com/Loongphy/codext), an enhanced Codex CLI. Install it with `npm i -g @loongphy/codext` and run `codext`.
+## Install
+
+Install with npm:
+
+```shell
+npm install -g @loongphy/codex-auth
+```
+
+You can also run it without a global install:
+
+```shell
+npx @loongphy/codex-auth list
+```
 
 ## Supported Platforms
 
@@ -17,39 +26,21 @@
 - VS Code extension
 - Codex App
 
-For the best experience, install the Codex CLI even if you mainly use the VS Code extension or the App, because it makes adding accounts easier:
+> [!IMPORTANT]
+> If you use want seamless automatic account switching without restarting, use the forked [`codext`](https://github.com/Loongphy/codext), an enhanced Codex CLI.
+>
+> Install it with `npm i -g @loongphy/codext` and run `codext`.
+>
+>
+> Codex App users can use `codex-auth app`, but not stable, see [Details](#codex-app).
+
+Install the Codex CLI even if you mainly use the VS Code extension or the App, because it makes adding accounts easier:
 
 ```shell
 npm install -g @openai/codex
 ```
 
-After that, you can use `codex login`, `codex login --device-auth`, `codex-auth login`, or `codex-auth login --device-auth` to sign in and add accounts more easily.
-
-## Install
-
-Install with npm:
-
-```shell
-npm install -g @loongphy/codex-auth
-```
-
-  You can also run it without a global install:
-
-```shell
-npx @loongphy/codex-auth list
-```
-
-  npm packages currently support Linux x64, Linux arm64, macOS x64, macOS arm64, Windows x64, and Windows arm64.
-
-### Uninstall
-
-#### npm
-
-Remove the npm package:
-
-```shell
-npm uninstall -g @loongphy/codex-auth
-```
+After that, you can use `codex-auth login`, or `codex-auth login --device-auth` to sign in and add accounts more easily.
 
 ## Commands
 
@@ -78,12 +69,6 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth export --cpa [<dir>]`](./docs/commands/export.md) | Export CLIProxyAPI token JSON |
 | [`codex-auth clean`](./docs/commands/clean.md) | Delete managed backup and stale account files |
 
-### Codex App Launching
-
-| Command | Description |
-|---------|-------------|
-| [`codex-auth app [--id <id>] [--codex-cli-path <path>]`](./docs/commands/app.md) | Launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
-
 ### Configuration
 
 | Command | Description |
@@ -100,6 +85,33 @@ codex-auth switch 02
 codex-auth remove work
 codex-auth import /path/to/auth.json --alias personal
 codex-auth list --skip-api
+```
+
+## Codex App
+
+> [!IMPORTANT]
+> The `app` command is **experimental** and may never become a stable feature.
+>
+> It is designed to enable seamless account switching without restarting the Codex App. By leveraging the `CODEX_CLI_PATH` environment variable, it dynamically injects our managed codext CLI to handle authentication on the fly.
+>
+> The `app` command is constrained by ongoing changes in the official Codex App and [Codex CLI](https://github.com/openai/codex). It may not always take effect and may also break your app.
+
+| Command | Description |
+|---------|-------------|
+| [`codex-auth app [--id <id>] [--codex-cli-path <path>]`](./docs/commands/app.md) | Experimental: launch Codex App with detected defaults, CODEX_HOME, CODEX_CLI_PATH, and platform overrides |
+
+Support seamless account switching including:
+
+- New Chat
+- Restoring or resuming an existing conversation
+- Continuing a previously completed, interrupted, or manually stopped conversation
+
+### Uninstall
+
+Remove the npm package:
+
+```shell
+npm uninstall -g @loongphy/codex-auth
 ```
 
 ## Q&A
