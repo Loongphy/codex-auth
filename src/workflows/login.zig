@@ -4,9 +4,17 @@ const registry = @import("../registry/root.zig");
 const auth = @import("../auth/auth.zig");
 const me_api = @import("../api/me.zig");
 const account_names = @import("account_names.zig");
+const app_runtime = @import("../core/runtime.zig");
 
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogin;
+
+fn loginScratchCodexHomeAlloc(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    const stamp = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+    const name = try std.fmt.allocPrint(allocator, "login-{d}", .{stamp});
+    defer allocator.free(name);
+    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", name });
+}
 
 pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
@@ -15,9 +23,18 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg);
     }
 
-    try cli.login.runCodexLogin(opts);
+    try registry.ensureAccountsDir(allocator, codex_home);
+    const login_codex_home = try loginScratchCodexHomeAlloc(allocator, codex_home);
+    defer allocator.free(login_codex_home);
+    defer std.Io.Dir.cwd().deleteTree(app_runtime.io(), login_codex_home) catch {};
+
+    try cli.login.runCodexLogin(opts, login_codex_home);
+    const login_auth_path = try registry.activeAuthPath(allocator, login_codex_home);
+    defer allocator.free(login_auth_path);
+
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
+    try registry.copyManagedFile(login_auth_path, auth_path);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);

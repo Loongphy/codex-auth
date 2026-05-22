@@ -167,6 +167,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
         if (builtin.os.tag == .windows)
             "@echo off\r\n" ++
                 ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
+                ">\"%HOME%\\fake-codex-home.txt\" echo %CODEX_HOME%\r\n" ++
                 "set \"CODEX_HOME_DIR=%CODEX_HOME%\"\r\n" ++
                 "if \"%CODEX_HOME_DIR%\"==\"\" set \"CODEX_HOME_DIR=%HOME%\\.codex\"\r\n" ++
                 "if not exist \"%CODEX_HOME_DIR%\" mkdir \"%CODEX_HOME_DIR%\"\r\n" ++
@@ -175,6 +176,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
         else
             "#!/bin/sh\n" ++
                 "printf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\n" ++
+                "printf '%s\\n' \"$CODEX_HOME\" > \"$HOME/fake-codex-home.txt\"\n" ++
                 "CODEX_HOME_DIR=\"${CODEX_HOME:-$HOME/.codex}\"\n" ++
                 "mkdir -p \"$CODEX_HOME_DIR\"\n" ++
                 "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME_DIR/auth.json\"\n" ++
@@ -756,6 +758,16 @@ test "Scenario: Given device auth login when running login then it forwards the 
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
+
+    const fake_codex_home_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-home.txt" });
+    defer gpa.free(fake_codex_home_path);
+    const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
+    defer gpa.free(fake_codex_home_data);
+    const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
+    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
+    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
+
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
@@ -888,6 +900,14 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     const custom_auth_path = try registry.activeAuthPath(gpa, custom_codex_home);
     defer gpa.free(custom_auth_path);
     try fs.cwd().access(custom_auth_path, .{});
+
+    const fake_codex_home_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-home.txt" });
+    defer gpa.free(fake_codex_home_path);
+    const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
+    defer gpa.free(fake_codex_home_data);
+    const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
+    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, custom_codex_home));
+    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
 
     const default_auth_path = try authJsonPathAlloc(gpa, home_root);
     defer gpa.free(default_auth_path);

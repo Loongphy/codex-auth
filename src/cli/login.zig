@@ -29,9 +29,14 @@ fn writeCodexLoginLaunchFailureHint(err_name: []const u8) !void {
     try out.flush();
 }
 
-pub fn runCodexLogin(opts: types.LoginOptions) !void {
+pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
+    var env_map = try app_runtime.currentEnviron().createMap(std.heap.page_allocator);
+    defer env_map.deinit();
+    try env_map.put("CODEX_HOME", codex_home);
+
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = codexLoginArgs(opts),
+        .environ_map = &env_map,
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,
