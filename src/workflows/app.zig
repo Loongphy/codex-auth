@@ -75,6 +75,7 @@ pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, 
     const effective_home = opts.codex_home orelse resolved_codex_home;
     const effective_platform = try resolvePlatform(allocator, effective_home, opts.platform);
     try validateAppPlatform(effective_platform.value);
+    try validateNativeAppLaunchHost(effective_platform.value);
     const effective_app_id = resolveAppId(effective_platform.value, opts);
     defer effective_app_id.deinit(allocator);
     try requireAppId(effective_app_id);
@@ -652,6 +653,17 @@ fn validateAppPlatform(value: ?types.AppPlatform) !void {
         .mac => if (builtin.os.tag != .macos) {
             try writeAppError("app with `--platform mac` must run from the macOS codex-auth executable.\n");
             return error.MacAppPlatformRequiresMacOS;
+        },
+    }
+}
+
+fn validateNativeAppLaunchHost(platform: ?types.AppPlatform) !void {
+    if (platform != null) return;
+    switch (builtin.os.tag) {
+        .windows, .macos => return,
+        else => {
+            try writeAppError("app launch is supported only from the Windows or macOS codex-auth executable.\n");
+            return error.UnsupportedPlatform;
         },
     }
 }

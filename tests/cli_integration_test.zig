@@ -3539,7 +3539,7 @@ test "Scenario: Given default api usage when listing accounts then no warning is
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
-test "Scenario: Given explicit codex home when planning app launch then codex home source is explicit" {
+test "Scenario: Given unsupported native host when launching app then command fails before launch plan" {
     if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
@@ -3560,8 +3560,6 @@ test "Scenario: Given explicit codex home when planning app launch then codex ho
         "app",
         "--id",
         "OpenAI.Codex",
-        "--codex-cli-path",
-        "/bin/true",
         "--codex-home",
         codex_home,
     });
@@ -3570,14 +3568,11 @@ test "Scenario: Given explicit codex home when planning app launch then codex ho
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-
-    const home_label_index = std.mem.indexOf(u8, result.stderr, "  Codex Home:") orelse return error.TestUnexpectedResult;
-    const home_tail = result.stderr[home_label_index..];
-    try std.testing.expect(std.mem.indexOf(u8, home_tail, "(explicit)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "via --codex-home") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
 }
 
-test "Scenario: Given inherited codex home when planning app launch then codex home is omitted" {
+test "Scenario: Given unsupported native host when launching app then managed CLI is not downloaded" {
     if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
@@ -3598,19 +3593,21 @@ test "Scenario: Given inherited codex home when planning app launch then codex h
         "app",
         "--id",
         "OpenAI.Codex",
-        "--codex-cli-path",
-        "/bin/true",
     });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "  Codex Home:") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+
+    var codex_home_dir = try tmp.dir.openDir(".codex", .{});
+    defer codex_home_dir.close();
+    try std.testing.expectError(error.FileNotFound, codex_home_dir.access("codext-cli", .{}));
 }
 
-test "Scenario: Given missing explicit codex CLI path when launching app then command fails before launch plan" {
+test "Scenario: Given unsupported native host with missing explicit codex CLI path then host rejection happens first" {
     if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
@@ -3638,8 +3635,8 @@ test "Scenario: Given missing explicit codex CLI path when launching app then co
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "        \"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") == null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
 }
