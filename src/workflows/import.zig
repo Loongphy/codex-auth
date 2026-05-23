@@ -12,7 +12,7 @@ pub fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         var report = try registry.purgeRegistryFromImportSource(allocator, codex_home, opts.auth_path, opts.alias);
         defer report.deinit(allocator);
         try cli.output.printImportReport(&report);
-        if (report.failure) |err| return err;
+        if (report.failure != null) return error.ImportFailed;
         return;
     }
 
@@ -39,5 +39,5 @@ pub fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
     try cli.output.printImportReport(&report);
-    if (report.failure) |err| return err;
+    if (report.failure != null) return error.ImportFailed;
 }

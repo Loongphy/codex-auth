@@ -26,6 +26,7 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.RemoveConfirmationUnavailable or
         err == error.RemoveSelectionRequiresTty or
         err == error.InvalidRemoveSelectionInput or
+        err == error.ImportFailed or
         err == error.AppLaunchConfigValidationFailed or
         err == error.AppIdRequired or
         err == error.AppIdNotFound or
