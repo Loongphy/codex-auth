@@ -28,9 +28,9 @@ pub fn fetchMeForApiKeyFromEndpoint(
     defer allocator.free(http_result.body);
 
     if (http_result.status_code) |status| {
-        if (status < 200 or status > 299) return error.OpenAiMeRequestFailed;
+        if (status < 200 or status > 299) return error.OpenAIMeRequestFailed;
     }
-    if (http_result.body.len == 0) return error.OpenAiMeRequestFailed;
+    if (http_result.body.len == 0) return error.OpenAIMeRequestFailed;
 
     return try parseMeResponse(allocator, http_result.body);
 }
@@ -41,12 +41,12 @@ pub fn parseMeResponse(allocator: std.mem.Allocator, body: []const u8) !MeResult
 
     const obj = switch (parsed.value) {
         .object => |value| value,
-        else => return error.InvalidOpenAiMeResponse,
+        else => return error.InvalidOpenAIMeResponse,
     };
 
     const id = nonEmptyStringField(obj, "id") orelse
         nonEmptyStringField(obj, "user_id") orelse
-        return error.MissingOpenAiUserId;
+        return error.MissingOpenAIUserId;
     const email = nonEmptyStringField(obj, "email") orelse return error.MissingEmail;
     const name = nonEmptyStringField(obj, "name");
 

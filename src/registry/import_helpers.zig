@@ -13,26 +13,26 @@ pub fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 
 }
 
 pub fn importReasonLabel(err: anyerror) []const u8 {
-    switch (err) {
+    return switch (err) {
         error.SyntaxError,
         error.UnexpectedEndOfInput,
-        => return "MalformedJson",
-        else => {},
-    }
-    return @errorName(err);
+        => "InvalidJSON",
+        error.StreamTooLong => "MaxFileSizeExceeded",
+        else => @errorName(err),
+    };
 }
 
 pub fn isImportValidationError(err: anyerror) bool {
     return switch (err) {
         error.SyntaxError,
         error.UnexpectedEndOfInput,
-        error.InvalidCpaFormat,
+        error.InvalidCPAFormat,
         error.MissingEmail,
         error.MissingChatgptUserId,
-        error.MissingOpenAiApiKey,
-        error.MissingOpenAiUserId,
-        error.InvalidOpenAiMeResponse,
-        error.OpenAiMeRequestFailed,
+        error.MissingOpenAIAPIKey,
+        error.MissingOpenAIUserId,
+        error.InvalidOpenAIMeResponse,
+        error.OpenAIMeRequestFailed,
         error.MissingAccountId,
         error.MissingRefreshToken,
         error.AccountIdMismatch,

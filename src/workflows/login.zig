@@ -40,7 +40,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     defer info.deinit(allocator);
 
     if (info.auth_mode == .apikey) {
-        const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+        const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
         var me = try me_api.fetchMeForApiKey(allocator, api_key);
         defer me.deinit(allocator);
 

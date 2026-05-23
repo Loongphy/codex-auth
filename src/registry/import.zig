@@ -51,10 +51,10 @@ pub const ImportRenderKind = import_types.ImportRenderKind;
 pub const ImportOutcome = import_types.ImportOutcome;
 pub const ImportEvent = import_types.ImportEvent;
 pub const ImportReport = import_types.ImportReport;
+pub const importReasonLabel = import_helpers.importReasonLabel;
 const loadPurgeCarryForwardConfig = import_carry.loadPurgeCarryForwardConfig;
 const importDisplayLabelFromName = import_helpers.importDisplayLabelFromName;
 const importDisplayLabel = import_helpers.importDisplayLabel;
-const importReasonLabel = import_helpers.importReasonLabel;
 const isImportValidationError = import_helpers.isImportValidationError;
 const isImportSourceFileError = import_helpers.isImportSourceFileError;
 const isImportSkippableBatchEntryError = import_helpers.isImportSkippableBatchEntryError;
@@ -186,7 +186,8 @@ pub fn importAuthPath(
     defer allocator.free(data);
 
     if (firstNonWhitespace(data) == '[') {
-        return try importAuthArrayData(allocator, codex_home, reg, auth_path, explicit_alias, data, &report);
+        try appendAuthArrayData(allocator, codex_home, reg, auth_path, explicit_alias, data, &report, true);
+        return report;
     }
 
     const outcome = importAuthData(allocator, codex_home, reg, data, explicit_alias) catch |err| {
@@ -217,7 +218,7 @@ fn readImportFileAlloc(allocator: std.mem.Allocator, auth_file: []const u8) ![]u
     return try readFileAlloc(file, allocator, 10 * 1024 * 1024);
 }
 
-fn importAuthArrayData(
+fn appendAuthArrayData(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *Registry,
@@ -225,14 +226,15 @@ fn importAuthArrayData(
     explicit_alias: ?[]const u8,
     data: []const u8,
     report: *ImportReport,
-) !ImportReport {
+    fail_report_on_malformed: bool,
+) !void {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch |err| {
         if (!isImportValidationError(err)) return err;
         const label = try importDisplayLabel(allocator, auth_path);
         defer allocator.free(label);
         try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
-        report.failure = err;
-        return report.*;
+        if (fail_report_on_malformed) report.failure = err;
+        return;
     };
     defer parsed.deinit();
 
@@ -243,21 +245,31 @@ fn importAuthArrayData(
     if (explicit_alias != null and items.items.len != 1) {
         std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
     }
+    if (items.items.len == 0) {
+        report.addScannedFile();
+        return;
+    }
 
     const label = try importDisplayLabel(allocator, auth_path);
     defer allocator.free(label);
-    for (items.items) |item| {
+    for (items.items, 1..) |item, item_index| {
         const item_data = try jsonValueDataAlloc(allocator, item);
         defer allocator.free(item_data);
         const item_alias = if (items.items.len == 1) explicit_alias else null;
-        const outcome = importAuthData(allocator, codex_home, reg, item_data, item_alias) catch |err| {
+        const info = @import("../auth/auth.zig").parseAuthInfoData(allocator, item_data) catch |err| {
             if (!isImportValidationError(err)) return err;
-            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            try report.addItemEvent(allocator, label, item_index, .skipped, importReasonLabel(err), null);
             continue;
         };
-        try report.addEvent(allocator, label, outcome, null);
+        defer info.deinit(allocator);
+        const detail = info.email;
+        const outcome = importConvertedAuthInfo(allocator, codex_home, reg, item_alias, &info, item_data) catch |err| {
+            if (!isImportValidationError(err)) return err;
+            try report.addItemEvent(allocator, label, item_index, .skipped, importReasonLabel(err), detail);
+            continue;
+        };
+        try report.addItemEvent(allocator, label, item_index, outcome, null, detail);
     }
-    return report.*;
 }
 
 fn jsonValueDataAlloc(allocator: std.mem.Allocator, value: std.json.Value) ![]u8 {
@@ -385,7 +397,7 @@ fn importApiKeyAuthData(
     info: *const @import("../auth/auth.zig").AuthInfo,
     auth_data: []const u8,
 ) !ImportOutcome {
-    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
     var me = try me_api.fetchMeForApiKey(allocator, api_key);
     defer me.deinit(allocator);
 
@@ -413,7 +425,7 @@ fn importApiKeyAuthFile(
     explicit_alias: ?[]const u8,
     info: *const @import("../auth/auth.zig").AuthInfo,
 ) !ImportOutcome {
-    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
     var me = try me_api.fetchMeForApiKey(allocator, api_key);
     defer me.deinit(allocator);
 
@@ -514,13 +526,26 @@ fn importAuthDirectory(
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
-        const info = @import("../auth/auth.zig").parseAuthInfo(allocator, file_path) catch |err| {
+
+        const data = readImportFileAlloc(allocator, file_path) catch |err| {
+            if (!isImportSkippableBatchEntryError(err)) return err;
+            try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
+            continue;
+        };
+        defer allocator.free(data);
+
+        if (firstNonWhitespace(data) == '[') {
+            try appendAuthArrayData(allocator, codex_home, reg, file_path, null, data, &report, false);
+            continue;
+        }
+
+        const info = @import("../auth/auth.zig").parseAuthInfoData(allocator, data) catch |err| {
             if (!isImportSkippableBatchEntryError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             continue;
         };
         defer info.deinit(allocator);
-        const outcome = importAuthInfo(allocator, codex_home, reg, file_path, null, &info) catch |err| {
+        const outcome = importConvertedAuthInfo(allocator, codex_home, reg, null, &info, data) catch |err| {
             if (!isImportValidationError(err)) return err;
             try report.addEvent(allocator, label, .skipped, importReasonLabel(err));
             continue;

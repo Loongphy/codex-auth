@@ -15,10 +15,13 @@ pub const ImportEvent = struct {
     label: []u8,
     outcome: ImportOutcome,
     reason: ?[]u8 = null,
+    item_index: ?usize = null,
+    detail: ?[]u8 = null,
 
     pub fn deinit(self: *ImportEvent, allocator: std.mem.Allocator) void {
         allocator.free(self.label);
         if (self.reason) |reason| allocator.free(reason);
+        if (self.detail) |detail| allocator.free(detail);
     }
 };
 
@@ -52,17 +55,49 @@ pub const ImportReport = struct {
         outcome: ImportOutcome,
         reason: ?[]const u8,
     ) !void {
+        try self.addEventDetail(allocator, label, outcome, reason, null, null);
+    }
+
+    pub fn addItemEvent(
+        self: *ImportReport,
+        allocator: std.mem.Allocator,
+        label: []const u8,
+        item_index: usize,
+        outcome: ImportOutcome,
+        reason: ?[]const u8,
+        detail: ?[]const u8,
+    ) !void {
+        try self.addEventDetail(allocator, label, outcome, reason, item_index, detail);
+    }
+
+    pub fn addScannedFile(self: *ImportReport) void {
+        self.total_files += 1;
+    }
+
+    fn addEventDetail(
+        self: *ImportReport,
+        allocator: std.mem.Allocator,
+        label: []const u8,
+        outcome: ImportOutcome,
+        reason: ?[]const u8,
+        item_index: ?usize,
+        detail: ?[]const u8,
+    ) !void {
         const owned_label = try allocator.dupe(u8, label);
         errdefer allocator.free(owned_label);
         const owned_reason = if (reason) |reason_text| try allocator.dupe(u8, reason_text) else null;
         errdefer if (owned_reason) |owned| allocator.free(owned);
+        const owned_detail = if (detail) |detail_text| try allocator.dupe(u8, detail_text) else null;
+        errdefer if (owned_detail) |owned| allocator.free(owned);
 
         try self.events.append(allocator, .{
             .label = owned_label,
             .outcome = outcome,
             .reason = owned_reason,
+            .item_index = item_index,
+            .detail = owned_detail,
         });
-        self.total_files += 1;
+        if (item_index == null or item_index.? == 1) self.total_files += 1;
         switch (outcome) {
             .imported => self.imported += 1,
             .updated => self.updated += 1,

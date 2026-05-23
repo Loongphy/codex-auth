@@ -1376,10 +1376,14 @@ test "import auth path with json array imports each top-level item" {
     try std.testing.expect(summary.imported == 2);
     try std.testing.expect(summary.updated == 0);
     try std.testing.expect(summary.skipped == 0);
-    try std.testing.expect(summary.total_files == 2);
+    try std.testing.expect(summary.total_files == 1);
     try std.testing.expectEqual(@as(usize, 2), summary.events.items.len);
     try std.testing.expectEqualStrings("token_array.json", summary.events.items[0].label);
     try std.testing.expectEqualStrings("token_array.json", summary.events.items[1].label);
+    try std.testing.expectEqual(@as(?usize, 1), summary.events.items[0].item_index);
+    try std.testing.expectEqual(@as(?usize, 2), summary.events.items[1].item_index);
+    try std.testing.expectEqualStrings("array-one@example.com", summary.events.items[0].detail.?);
+    try std.testing.expectEqualStrings("array-two@example.com", summary.events.items[1].detail.?);
     try std.testing.expect(reg.accounts.items.len == 2);
 }
 
@@ -1409,7 +1413,13 @@ test "import auth path with malformed single file reports skipped" {
     try std.testing.expect(summary.failure != null);
     try std.testing.expectEqual(error.SyntaxError, summary.failure.?);
     try std.testing.expectEqualStrings("bad.json", summary.events.items[0].label);
-    try std.testing.expectEqualStrings("MalformedJson", summary.events.items[0].reason.?);
+    try std.testing.expectEqualStrings("InvalidJSON", summary.events.items[0].reason.?);
+}
+
+test "import reason labels override only public names that differ from internal errors" {
+    try std.testing.expectEqualStrings("InvalidJSON", registry.importReasonLabel(error.SyntaxError));
+    try std.testing.expectEqualStrings("InvalidCPAFormat", registry.importReasonLabel(error.InvalidCPAFormat));
+    try std.testing.expectEqualStrings("MaxFileSizeExceeded", registry.importReasonLabel(error.StreamTooLong));
 }
 
 test "import auth path with directory imports multiple json files and skips bad files" {

@@ -1464,11 +1464,82 @@ test "Scenario: Given directory import with new updated and invalid files when r
         gpa,
         "  skipped   token_alice.brown.alpha@email.com.json: MissingChatgptUserId\n" ++
             "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n" ++
-            "  skipped   token_invalid.json: MalformedJson\n",
+            "  skipped   token_invalid.json: InvalidJSON\n",
         .{},
     );
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
+}
+
+test "Scenario: Given directory import with regular files and array files when running import then array items are grouped" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath("imports");
+
+    const another_auth = try fixtures.authJsonWithEmailPlan(gpa, "another@example.com", "plus");
+    defer gpa.free(another_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/another_token_file.json", .data = another_auth });
+
+    const one_auth = try fixtures.authJsonWithEmailPlan(gpa, "one@example.com", "team");
+    defer gpa.free(one_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/one_token_file.json", .data = one_auth });
+
+    try tmp.dir.writeFile(.{ .sub_path = "imports/token_malformed.json", .data = "{not-json}" });
+
+    const first_array_auth = try fixtures.authJsonWithEmailPlan(gpa, "erin.array@example.com", "plus");
+    defer gpa.free(first_array_auth);
+    const second_array_auth = try fixtures.authJsonWithEmailPlan(gpa, "frank.array@example.com", "team");
+    defer gpa.free(second_array_auth);
+    const array_auth = try std.fmt.allocPrint(gpa, "[{s},{s}]", .{ first_array_auth, second_array_auth });
+    defer gpa.free(array_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/tokens_array.json", .data = array_auth });
+
+    const mixed_valid_auth = try fixtures.authJsonWithEmailPlan(gpa, "grace.array@example.com", "pro");
+    defer gpa.free(mixed_valid_auth);
+    const mixed_invalid_auth = try fixtures.authJsonWithoutEmail(gpa);
+    defer gpa.free(mixed_invalid_auth);
+    const mixed_array_auth = try std.fmt.allocPrint(gpa, "[{s},{s}]", .{ mixed_valid_auth, mixed_invalid_auth });
+    defer gpa.free(mixed_array_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/tokens_array_mixed.json", .data = mixed_array_auth });
+
+    try tmp.dir.writeFile(.{ .sub_path = "imports/tokens_empty_array.json", .data = "[]" });
+
+    const imports_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports" });
+    defer gpa.free(imports_path);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "import", imports_path });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    const expected_stdout = try std.fmt.allocPrint(
+        gpa,
+        "Scanning {s}...\n" ++
+            "  imported  another_token_file.json\n" ++
+            "  imported  one_token_file.json\n" ++
+            "tokens_array.json:\n" ++
+            "  [1] imported  erin.array@example.com\n" ++
+            "  [2] imported  frank.array@example.com\n" ++
+            "tokens_array_mixed.json:\n" ++
+            "  [1] imported  grace.array@example.com\n" ++
+            "  [2] skipped   MissingEmail\n" ++
+            "Import Summary: 5 imported, 0 updated, 2 skipped (total 6 files)\n",
+        .{imports_path},
+    );
+    defer gpa.free(expected_stdout);
+    try std.testing.expectEqualStrings(expected_stdout, result.stdout);
+    try std.testing.expectEqualStrings(
+        "  skipped   token_malformed.json: InvalidJSON\n",
+        result.stderr,
+    );
 }
 
 test "Scenario: Given directory import with an empty json file when running import then it is skipped as malformed and valid imports still persist" {
@@ -1506,7 +1577,7 @@ test "Scenario: Given directory import with an empty json file when running impo
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   empty.json: MalformedJson\n", .{});
+    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   empty.json: InvalidJSON\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 

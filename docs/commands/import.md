@@ -42,5 +42,5 @@ Use `--purge` as a recovery tool when the registry index is out of sync with the
 
 - `stdout` receives scan lines, imported/updated rows, and summaries.
 - `stderr` receives skipped rows and warnings.
-- Parse failures render as `MalformedJson`.
+- Parse failures render as `InvalidJSON`.
 - Validation failures keep explicit names such as `MissingEmail` or `MissingChatgptUserId`.

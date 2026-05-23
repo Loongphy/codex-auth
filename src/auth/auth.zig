@@ -249,7 +249,7 @@ pub fn convertCpaAuthJson(allocator: std.mem.Allocator, data: []const u8) ![]u8 
 
     const obj = switch (parsed.value) {
         .object => |obj| obj,
-        else => return error.InvalidCpaFormat,
+        else => return error.InvalidCPAFormat,
     };
 
     const refresh_token = jsonStringField(obj, "refresh_token") orelse return error.MissingRefreshToken;

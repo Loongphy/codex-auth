@@ -547,7 +547,7 @@ pub fn accountFromApiKeyMe(
     info: *const @import("../auth/auth.zig").AuthInfo,
     me: *const me_api.MeResult,
 ) !AccountRecord {
-    const api_key = info.openai_api_key orelse return error.MissingOpenAiApiKey;
+    const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
     const owned_record_key = try apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
     errdefer allocator.free(owned_record_key);
     const owned_user_id = try allocator.dupe(u8, me.user_id);

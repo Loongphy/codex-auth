@@ -99,6 +99,7 @@ pub const ImportRenderKind = import_mod.ImportRenderKind;
 pub const ImportOutcome = import_mod.ImportOutcome;
 pub const ImportEvent = import_mod.ImportEvent;
 pub const ImportReport = import_mod.ImportReport;
+pub const importReasonLabel = import_mod.importReasonLabel;
 pub fn purgeRegistryFromImportSource(allocator: std.mem.Allocator, codex_home: []const u8, auth_path: ?[]const u8, alias: ?[]const u8) !ImportReport {
     return import_mod.purgeRegistryFromImportSourceWithSaver(allocator, codex_home, auth_path, alias, saveRegistry);
 }

@@ -17,6 +17,14 @@ fn importReportStyle(outcome: registry.ImportOutcome) []const u8 {
     };
 }
 
+fn importOutcomeLabel(outcome: registry.ImportOutcome) []const u8 {
+    return switch (outcome) {
+        .imported => "imported",
+        .updated => "updated",
+        .skipped => "skipped",
+    };
+}
+
 pub fn printUsageError(usage_err: *const UsageError) !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();
@@ -67,17 +75,43 @@ pub fn writeImportReportWithColor(
         try out.flush();
     }
 
+    var current_item_label: ?[]const u8 = null;
     for (report.events.items) |event| {
-        switch (event.outcome) {
-            .imported => {
-                if (stdout_color) try out.writeAll(importReportStyle(.imported));
-                try out.print("  imported  {s}\n", .{event.label});
+        if (event.item_index) |item_index| {
+            if (current_item_label == null or !std.mem.eql(u8, current_item_label.?, event.label)) {
+                if (stdout_color) try out.writeAll(style.ansi.cyan);
+                try out.print("{s}:\n", .{event.label});
                 if (stdout_color) try out.writeAll(style.ansi.reset);
                 try out.flush();
-            },
-            .updated => {
-                if (stdout_color) try out.writeAll(importReportStyle(.updated));
-                try out.print("  updated   {s}\n", .{event.label});
+                current_item_label = event.label;
+            }
+            // Array item reports stay on stdout as one contiguous human-readable
+            // block. Splitting skipped items to stderr can reorder the file
+            // header and item rows when callers merge the two streams.
+            const item_out = out;
+            const item_color = stdout_color;
+            if (item_color) try item_out.writeAll(importReportStyle(event.outcome));
+            try item_out.print("  [{d}] {s}", .{ item_index, importOutcomeLabel(event.outcome) });
+            if (event.outcome == .skipped) {
+                try item_out.print("   {s}", .{event.reason.?});
+            } else if (event.detail) |detail| {
+                try item_out.print("  {s}", .{detail});
+            }
+            try item_out.writeAll("\n");
+            if (item_color) try item_out.writeAll(style.ansi.reset);
+            try item_out.flush();
+            continue;
+        }
+
+        current_item_label = null;
+        switch (event.outcome) {
+            .imported, .updated => {
+                if (stdout_color) try out.writeAll(importReportStyle(event.outcome));
+                switch (event.outcome) {
+                    .imported => try out.print("  imported  {s}\n", .{event.label}),
+                    .updated => try out.print("  updated   {s}\n", .{event.label}),
+                    .skipped => unreachable,
+                }
                 if (stdout_color) try out.writeAll(style.ansi.reset);
                 try out.flush();
             },

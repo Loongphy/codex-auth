@@ -532,7 +532,7 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
     report.source_label = try gpa.dupe(u8, "./tokens/");
     try report.addEvent(gpa, "token_ryan.taylor.alpha@email.com.json", .imported, null);
     try report.addEvent(gpa, "token_jane.smith.alpha@email.com.json", .updated, null);
-    try report.addEvent(gpa, "token_invalid.json", .skipped, "MalformedJson");
+    try report.addEvent(gpa, "token_invalid.json", .skipped, "InvalidJSON");
 
     try cli.output.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
 
@@ -549,7 +549,7 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
 
     const expected_stderr = try std.fmt.allocPrint(
         gpa,
-        "  skipped   token_invalid.json: MalformedJson\n",
+        "  skipped   token_invalid.json: InvalidJSON\n",
         .{},
     );
     defer gpa.free(expected_stderr);
@@ -582,6 +582,36 @@ test "Scenario: Given single-file skipped import report when rendering then summ
     try std.testing.expectEqualStrings(expected_stderr, stderr_aw.written());
 }
 
+test "Scenario: Given array import report when rendering then items are grouped under the filename" {
+    const gpa = std.testing.allocator;
+    var stdout_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stdout_aw.deinit();
+    var stderr_aw: std.Io.Writer.Allocating = .init(gpa);
+    defer stderr_aw.deinit();
+
+    var report = registry.ImportReport.init(.scanned);
+    defer report.deinit(gpa);
+    report.source_label = try gpa.dupe(u8, "./tokens/");
+    try report.addEvent(gpa, "one_token_file.json", .imported, null);
+    try report.addItemEvent(gpa, "tokens_array.json", 1, .imported, null, "frank@example.com");
+    try report.addItemEvent(gpa, "tokens_array.json", 2, .skipped, "MissingEmail", null);
+    try report.addEvent(gpa, "another_token_file.json", .updated, null);
+
+    try cli.output.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
+
+    try std.testing.expectEqualStrings(
+        "Scanning ./tokens/...\n" ++
+            "  imported  one_token_file.json\n" ++
+            "tokens_array.json:\n" ++
+            "  [1] imported  frank@example.com\n" ++
+            "  [2] skipped   MissingEmail\n" ++
+            "  updated   another_token_file.json\n" ++
+            "Import Summary: 2 imported, 1 updated, 1 skipped (total 3 files)\n",
+        stdout_aw.written(),
+    );
+    try std.testing.expectEqualStrings("", stderr_aw.written());
+}
+
 test "Scenario: Given color import report when rendering then success and errors use ANSI colors without markers" {
     const gpa = std.testing.allocator;
     var stdout_aw: std.Io.Writer.Allocating = .init(gpa);
@@ -593,12 +623,12 @@ test "Scenario: Given color import report when rendering then success and errors
     defer report.deinit(gpa);
     report.source_label = try gpa.dupe(u8, "./tokens/");
     try report.addEvent(gpa, "token_carol.three@example.com.json", .updated, null);
-    try report.addEvent(gpa, "token_invalid.json", .skipped, "MalformedJson");
+    try report.addEvent(gpa, "token_invalid.json", .skipped, "InvalidJSON");
 
     try cli.output.writeImportReportWithColor(&stdout_aw.writer, &stderr_aw.writer, &report, true, true);
 
     try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), ansi.green ++ "  updated   token_carol.three@example.com.json") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), ansi.red ++ "  skipped   token_invalid.json: MalformedJson") != null);
+    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), ansi.red ++ "  skipped   token_invalid.json: InvalidJSON") != null);
     try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), "✓") == null);
     try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), "✗") == null);
 }
