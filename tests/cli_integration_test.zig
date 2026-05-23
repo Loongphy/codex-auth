@@ -441,8 +441,12 @@ fn runCliWithIsolatedHomeAndPathAndStdin(
     defer child.kill(fs.io());
 
     if (child.stdin) |stdin_pipe| {
-        try fs.wrapFile(stdin_pipe).writeAll(stdin_data);
-        fs.wrapFile(stdin_pipe).close();
+        const wrapped_stdin = fs.wrapFile(stdin_pipe);
+        wrapped_stdin.writeAll(stdin_data) catch |err| switch (err) {
+            error.BrokenPipe => {},
+            else => return err,
+        };
+        wrapped_stdin.close();
         child.stdin = null;
     }
 
@@ -508,8 +512,12 @@ fn runCliWithIsolatedHomeAndStdin(
     defer child.kill(fs.io());
 
     if (child.stdin) |stdin_pipe| {
-        try fs.wrapFile(stdin_pipe).writeAll(stdin_data);
-        fs.wrapFile(stdin_pipe).close();
+        const wrapped_stdin = fs.wrapFile(stdin_pipe);
+        wrapped_stdin.writeAll(stdin_data) catch |err| switch (err) {
+            error.BrokenPipe => {},
+            else => return err,
+        };
+        wrapped_stdin.close();
         child.stdin = null;
     }
 
