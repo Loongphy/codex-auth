@@ -243,7 +243,11 @@ fn appendAuthArrayData(
         else => unreachable,
     };
     if (explicit_alias != null and items.items.len != 1) {
-        std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
+        if (items.items.len == 0) {
+            std.log.warn("--alias is ignored when importing an empty JSON array: {s}", .{auth_path});
+        } else {
+            std.log.warn("--alias is ignored when importing a JSON array with multiple items: {s}", .{auth_path});
+        }
     }
     if (items.items.len == 0) {
         report.addScannedFile();
