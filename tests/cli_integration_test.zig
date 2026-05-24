@@ -183,6 +183,35 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     }
 }
 
+fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
+    const script =
+        if (builtin.os.tag == .windows)
+            "@echo off\r\n" ++
+                ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
+                ">\"%HOME%\\fake-codex-home.txt\" echo %CODEX_HOME%\r\n" ++
+                "set \"CODEX_HOME_DIR=%CODEX_HOME%\"\r\n" ++
+                "if \"%CODEX_HOME_DIR%\"==\"\" set \"CODEX_HOME_DIR=%HOME%\\.codex\"\r\n" ++
+                "if not exist \"%CODEX_HOME_DIR%\" exit /b 42\r\n" ++
+                "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME_DIR%\\auth.json\" >NUL\r\n" ++
+                "exit /b 0\r\n"
+        else
+            "#!/bin/sh\n" ++
+                "printf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\n" ++
+                "printf '%s\\n' \"$CODEX_HOME\" > \"$HOME/fake-codex-home.txt\"\n" ++
+                "CODEX_HOME_DIR=\"${CODEX_HOME:-$HOME/.codex}\"\n" ++
+                "[ -d \"$CODEX_HOME_DIR\" ] || exit 42\n" ++
+                "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME_DIR/auth.json\"\n" ++
+                "exit 0\n";
+    const sub_path = fakeCodexCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn fakeNodeCommandPath() []const u8 {
     return if (builtin.os.tag == .windows) "fake-node-bin/node.cmd" else "fake-node-bin/node";
 }
@@ -789,6 +818,61 @@ test "Scenario: Given device auth login when running login then it forwards the 
     const active_auth = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(active_auth);
     try std.testing.expectEqualStrings(fake_auth, active_auth);
+}
+
+test "Scenario: Given strict codex login when running login then scratch CODEX_HOME exists before launch" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try tmp.dir.makePath(".codex");
+    try tmp.dir.makePath("fake-bin");
+
+    const expected_email = "strict-login@example.com";
+    const fake_auth = try fixtures.authJsonWithEmailPlan(gpa, expected_email, "plus");
+    defer gpa.free(fake_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "fake-auth.json", .data = fake_auth });
+    try writeStrictExistingCodexHomeFakeCodex(tmp.dir);
+
+    const fake_bin_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-bin" });
+    defer gpa.free(fake_bin_path);
+    const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "login", "--device-auth" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const fake_codex_home_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-codex-home.txt" });
+    defer gpa.free(fake_codex_home_path);
+    const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
+    defer gpa.free(fake_codex_home_data);
+    const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
+    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
+    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
+    try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].email, expected_email));
 }
 
 test "Scenario: Given refreshed active auth before login when running login then old account snapshot is synced first" {

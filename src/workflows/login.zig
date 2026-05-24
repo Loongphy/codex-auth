@@ -26,6 +26,9 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     try registry.ensureAccountsDir(allocator, codex_home);
     const login_codex_home = try loginScratchCodexHomeAlloc(allocator, codex_home);
     defer allocator.free(login_codex_home);
+    // Current Codex rejects a CODEX_HOME override that does not exist yet.
+    // Create the isolated home before spawning `codex login`.
+    try registry.ensurePrivateDir(login_codex_home);
     defer std.Io.Dir.cwd().deleteTree(app_runtime.io(), login_codex_home) catch {};
 
     try cli.login.runCodexLogin(opts, login_codex_home);
