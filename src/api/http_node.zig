@@ -13,7 +13,7 @@ const BatchItemResult = types.BatchItemResult;
 const request_timeout_ms = types.request_timeout_ms;
 const request_timeout_ms_value = types.request_timeout_ms_value;
 const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
-const browser_user_agent = types.browser_user_agent;
+const user_agent = types.user_agent;
 const getEnvMap = env.getEnvMap;
 const resolveNodeExecutable = executable.resolveNodeExecutable;
 const resolveNodeExecutableForLaunchAlloc = executable.resolveNodeExecutableForLaunchAlloc;
@@ -266,7 +266,7 @@ fn runNodeBearerGetJsonCommand(
         endpoint,
         access_token,
         request_timeout_ms,
-        browser_user_agent,
+        user_agent,
     }, child_process_timeout_ms_value, &env_map) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.FileNotFound => {
@@ -334,7 +334,7 @@ fn runNodeGetJsonCommand(
         access_token,
         account_id,
         request_timeout_ms,
-        browser_user_agent,
+        user_agent,
     }, child_process_timeout_ms_value, &env_map) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.FileNotFound => {
@@ -411,7 +411,7 @@ fn runNodeGetJsonBatchCommand(
         .endpoint = endpoint,
         .timeout_ms = request_timeout_ms_value,
         .concurrency = @max(@as(usize, 1), max_concurrency),
-        .user_agent = browser_user_agent,
+        .user_agent = user_agent,
         .requests = requests,
     }, .{}, &payload_writer.writer);
 
