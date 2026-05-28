@@ -1,11 +1,12 @@
 const std = @import("std");
+const version = @import("../version.zig");
 
 pub const request_timeout_secs: []const u8 = "5";
 pub const request_timeout_ms: []const u8 = "5000";
 pub const request_timeout_ms_value: u64 = 5000;
 pub const child_process_timeout_ms: []const u8 = "7000";
 pub const child_process_timeout_ms_value: u64 = 7000;
-pub const browser_user_agent: []const u8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+pub const browser_user_agent: []const u8 = "codex-auth/" ++ version.app_version;
 pub const node_executable_env = "CODEX_AUTH_NODE_EXECUTABLE";
 pub const node_use_env_proxy_env = "NODE_USE_ENV_PROXY";
 pub const node_requirement_hint = "Node.js 22+ is required for ChatGPT API refresh. Install Node.js 22+ or use the npm package.";
