@@ -1,7 +1,7 @@
 const std = @import("std");
 const chatgpt_http = @import("http.zig");
 
-pub const default_account_endpoint = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+pub const default_account_endpoint = "https://chatgpt.com/backend-api/accounts";
 
 pub const AccountEntry = struct {
     account_id: []u8,
@@ -57,9 +57,9 @@ pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[
         .object => |obj| obj,
         else => return null,
     };
-    const accounts_value = root_obj.get("accounts") orelse return null;
-    const accounts_obj = switch (accounts_value) {
-        .object => |obj| obj,
+    const items_value = root_obj.get("items") orelse return null;
+    const items = switch (items_value) {
+        .array => |array| array.items,
         else => return null,
     };
 
@@ -69,19 +69,12 @@ pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[
         entries.deinit(allocator);
     }
 
-    var it = accounts_obj.iterator();
-    while (it.next()) |kv| {
-        if (std.mem.eql(u8, kv.key_ptr.*, "default")) continue;
-        const entry_obj = switch (kv.value_ptr.*) {
+    for (items) |item| {
+        const entry_obj = switch (item) {
             .object => |obj| obj,
             else => continue,
         };
-        const account_value = entry_obj.get("account") orelse continue;
-        const account_obj = switch (account_value) {
-            .object => |obj| obj,
-            else => continue,
-        };
-        const account_id_value = account_obj.get("account_id") orelse continue;
+        const account_id_value = entry_obj.get("id") orelse continue;
         const account_id = switch (account_id_value) {
             .string => |value| value,
             else => continue,
@@ -90,7 +83,7 @@ pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[
 
         const owned_account_id = try allocator.dupe(u8, account_id);
         errdefer allocator.free(owned_account_id);
-        const owned_account_name = try parseAccountNameAlloc(allocator, account_obj.get("name"));
+        const owned_account_name = try parseAccountNameAlloc(allocator, entry_obj.get("name"));
         errdefer if (owned_account_name) |name| allocator.free(name);
 
         try entries.append(allocator, .{

@@ -29,13 +29,13 @@ Built-in Node environment-proxy support for `fetch()` requires Node.js `22.21.0+
 ### Account Metadata Refresh
 
 - method: `GET`
-- URL: `https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27`
+- URL: `https://chatgpt.com/backend-api/accounts`
 - headers:
   - `Authorization: Bearer <tokens.access_token>`
   - `ChatGPT-Account-Id: <chatgpt_account_id>`
   - `User-Agent: codex-auth/<version>`
 
-The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` and `name: ""` are both normalized to `account_name = null`.
+The account metadata response is parsed from `items[].id` and `items[].name`. `name: null` and `name: ""` are both normalized to `account_name = null`.
 
 ## Usage Refresh Rules
 
@@ -71,7 +71,7 @@ The `accounts/check` response is parsed by `chatgpt_account_id`. `name: null` an
 - `list` and interactive `switch` load the request auth context from the current active `auth.json` when they do refresh.
 - stored snapshots without a usable `access_token` or `chatgpt_account_id` are skipped.
 
-At most one `accounts/check` request is attempted per grouped user scope in a given refresh pass.
+At most one account metadata request is attempted per grouped user scope in a given refresh pass.
 Request failures and unparseable responses are non-fatal and leave stored `account_name` values unchanged.
 
 ## Refresh Scope
@@ -89,7 +89,7 @@ That scope includes:
 
 This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it belongs to the same `chatgpt_user_id` as Team records.
 
-`accounts/check` is attempted only when:
+Account metadata refresh is attempted only when:
 
 - the scope contains more than one record
 - the scope contains at least one Team record
@@ -97,7 +97,7 @@ This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-na
 
 ## Apply Rules
 
-After a successful `accounts/check` response:
+After a successful account metadata response:
 
 - returned entries are matched by `chatgpt_account_id`
 - matched records overwrite the stored `account_name`, even when a Team record already had an older value
@@ -111,7 +111,7 @@ Example 1:
 - active record: `user@example.com / Team #1 / account_name = null`
 - same grouped scope: `user@example.com / Team #2 / account_name = null`
 
-Running `codex-auth list` should issue `accounts/check`. If the API returns:
+Running `codex-auth list` should issue an account metadata request. If the API returns:
 
 - `team-1 -> "Workspace Alpha"`
 - `team-2 -> "Workspace Beta"`
@@ -124,7 +124,7 @@ Example 2:
 - same grouped scope: `user@example.com / Team #1 / account_name = null`
 - same grouped scope: `user@example.com / Team #2 / account_name = "Old Workspace"`
 
-Running `codex-auth list` should still issue `accounts/check`, because the grouped scope still has missing Team names. If the API returns:
+Running `codex-auth list` should still issue an account metadata request, because the grouped scope still has missing Team names. If the API returns:
 
 - `team-1 -> "Prod Workspace"`
 - `team-2 -> "Sandbox Workspace"`

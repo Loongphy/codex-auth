@@ -15,25 +15,16 @@ fn freeEntries(allocator: std.mem.Allocator, entries: ?[]account_api.AccountEntr
     }
 }
 
-test "parse account names response ignores default and keeps one real account" {
+test "parse account names response keeps account items" {
     const gpa = std.testing.allocator;
     const body =
         \\{
-        \\  "accounts": {
-        \\    "default": {
-        \\      "account": {
-        \\        "account_id": "default-account",
-        \\        "name": "Default"
-        \\      }
-        \\    },
-        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
-        \\      "account": {
-        \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
-        \\        "name": "Primary Workspace"
-        \\      }
+        \\  "items": [
+        \\    {
+        \\      "id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "name": "Primary Workspace"
         \\    }
-        \\  },
-        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
+        \\  ]
         \\}
     ;
 
@@ -51,23 +42,15 @@ test "parse account names response keeps multiple non-default accounts" {
     const gpa = std.testing.allocator;
     const body =
         \\{
-        \\  "accounts": {
-        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
-        \\      "account": {
-        \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
-        \\        "name": "Primary Workspace"
-        \\      }
+        \\  "items": [
+        \\    {
+        \\      "id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "name": "Primary Workspace"
         \\    },
-        \\    "518a44d9-ba75-4bad-87e5-ae9377042960": {
-        \\      "account": {
-        \\        "account_id": "518a44d9-ba75-4bad-87e5-ae9377042960",
-        \\        "name": "Backup Workspace"
-        \\      }
+        \\    {
+        \\      "id": "518a44d9-ba75-4bad-87e5-ae9377042960",
+        \\      "name": "Backup Workspace"
         \\    }
-        \\  },
-        \\  "account_ordering": [
-        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
-        \\    "518a44d9-ba75-4bad-87e5-ae9377042960"
         \\  ]
         \\}
     ;
@@ -89,15 +72,12 @@ test "parse personal account response keeps null name as null" {
     const gpa = std.testing.allocator;
     const body =
         \\{
-        \\  "accounts": {
-        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
-        \\      "account": {
-        \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
-        \\        "name": null
-        \\      }
+        \\  "items": [
+        \\    {
+        \\      "id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "name": null
         \\    }
-        \\  },
-        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
+        \\  ]
         \\}
     ;
 
@@ -113,15 +93,12 @@ test "parse personal account response normalizes empty name to null" {
     const gpa = std.testing.allocator;
     const body =
         \\{
-        \\  "accounts": {
-        \\    "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf": {
-        \\      "account": {
-        \\        "account_id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
-        \\        "name": ""
-        \\      }
+        \\  "items": [
+        \\    {
+        \\      "id": "67fe2bbb-0de6-49a4-b2b3-d1df366d1faf",
+        \\      "name": ""
         \\    }
-        \\  },
-        \\  "account_ordering": ["67fe2bbb-0de6-49a4-b2b3-d1df366d1faf"]
+        \\  ]
         \\}
     ;
 
