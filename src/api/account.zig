@@ -62,6 +62,7 @@ pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[
         .array => |array| array.items,
         else => return null,
     };
+    if (items.len == 0) return null;
 
     var entries = std.ArrayList(AccountEntry).empty;
     errdefer {

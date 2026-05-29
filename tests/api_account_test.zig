@@ -110,6 +110,12 @@ test "parse personal account response normalizes empty name to null" {
     try std.testing.expect(entries.?[0].account_name == null);
 }
 
+test "parse account names response treats empty items as non-fatal failure" {
+    const gpa = std.testing.allocator;
+    const result = try account_api.parseAccountsResponse(gpa, "{\"items\":[]}");
+    try std.testing.expect(result == null);
+}
+
 test "parse account names response treats malformed html as non-fatal failure" {
     const gpa = std.testing.allocator;
     const result = try account_api.parseAccountsResponse(gpa, "<html>not json</html>");
