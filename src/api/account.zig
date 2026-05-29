@@ -93,6 +93,7 @@ pub fn parseAccountsResponse(allocator: std.mem.Allocator, body: []const u8) !?[
         });
     }
 
+    if (entries.items.len == 0) return null;
     return try entries.toOwnedSlice(allocator);
 }
 

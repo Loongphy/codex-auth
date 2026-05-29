@@ -116,6 +116,22 @@ test "parse account names response treats empty items as non-fatal failure" {
     try std.testing.expect(result == null);
 }
 
+test "parse account names response treats unusable items as non-fatal failure" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "items": [
+        \\    {"name": "Missing Id"},
+        \\    {"id": "", "name": "Empty Id"},
+        \\    {"id": 42, "name": "Wrong Id Type"}
+        \\  ]
+        \\}
+    ;
+
+    const result = try account_api.parseAccountsResponse(gpa, body);
+    try std.testing.expect(result == null);
+}
+
 test "parse account names response treats malformed html as non-fatal failure" {
     const gpa = std.testing.allocator;
     const result = try account_api.parseAccountsResponse(gpa, "<html>not json</html>");

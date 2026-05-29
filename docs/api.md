@@ -35,7 +35,7 @@ Built-in Node environment-proxy support for `fetch()` requires Node.js `22.21.0+
   - `ChatGPT-Account-Id: <chatgpt_account_id>`
   - `User-Agent: codex-auth/<version>`
 
-The account metadata response is parsed from `items[].id` and `items[].name`. `name: null` and `name: ""` are both normalized to `account_name = null`. An empty `items` array is treated as unusable and leaves stored `account_name` values unchanged.
+The account metadata response is parsed from `items[].id` and `items[].name`. `name: null` and `name: ""` are both normalized to `account_name = null`. An empty `items` array, or an `items` array with no usable `id`, is treated as unusable and leaves stored `account_name` values unchanged.
 
 ## Usage Refresh Rules
 
