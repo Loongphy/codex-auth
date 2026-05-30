@@ -238,7 +238,7 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     if (builtin.os.tag == .windows) {
         const built_fake_curl = try builtFakeCurlPathAlloc(allocator, project_root);
         defer allocator.free(built_fake_curl);
-        const fake_curl_data = try std.fs.cwd().readFileAlloc(allocator, built_fake_curl, 16 * 1024 * 1024);
+        const fake_curl_data = try fixtures.readFileAlloc(allocator, built_fake_curl);
         defer allocator.free(fake_curl_data);
         try dir.writeFile(.{ .sub_path = fakeCurlCommandPath(), .data = fake_curl_data });
         return;
