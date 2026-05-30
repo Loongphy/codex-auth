@@ -10,7 +10,6 @@ pub const request_timeout_ms_value = types.request_timeout_ms_value;
 pub const child_process_timeout_ms = types.child_process_timeout_ms;
 pub const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
 pub const user_agent = types.user_agent;
-pub const curl_executable_env = types.curl_executable_env;
 pub const curl_requirement_hint = types.curl_requirement_hint;
 pub const default_max_output_bytes = types.default_max_output_bytes;
 

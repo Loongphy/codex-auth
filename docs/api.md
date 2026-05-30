@@ -3,8 +3,7 @@
 This document is the single source of truth for outbound ChatGPT API refresh behavior in `codex-auth`.
 
 All API refresh requests are issued through `curl`.
-On Windows, `codex-auth` uses `C:\Windows\System32\curl.exe` by default. On other platforms, it resolves `curl` from `PATH`.
-Set `CODEX_AUTH_CURL_EXECUTABLE` to override the executable path.
+`codex-auth` resolves `curl` from `PATH`.
 
 `codex-auth` does not translate platform proxy settings. The curl child process inherits the parent process environment, and curl applies its own proxy environment variable handling.
 

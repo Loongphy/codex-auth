@@ -297,7 +297,6 @@ fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
     project_root: []const u8,
     home_root: []const u8,
     path_override: []const u8,
-    fake_curl_executable: []const u8,
     args: []const []const u8,
 ) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
@@ -315,7 +314,6 @@ fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_CURL_EXECUTABLE", fake_curl_executable);
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -1237,8 +1235,6 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
     defer gpa.free(fake_curl_dir);
-    const fake_curl_executable = try tmp.dir.realpathAlloc(gpa, fakeCurlCommandPath());
-    defer gpa.free(fake_curl_executable);
     const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
     defer gpa.free(path_override);
 
@@ -1255,7 +1251,6 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
         project_root,
         home_root,
         path_override,
-        fake_curl_executable,
         &[_][]const u8{ "import", import_path },
     );
     defer gpa.free(import_result.stdout);
@@ -1311,7 +1306,6 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
         project_root,
         home_root,
         path_override,
-        fake_curl_executable,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(first_list.stdout);
@@ -1341,7 +1335,6 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
         project_root,
         home_root,
         path_override,
-        fake_curl_executable,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(second_list.stdout);
