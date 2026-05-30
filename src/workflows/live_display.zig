@@ -13,7 +13,7 @@ const ForegroundUsageRefreshState = usage_refresh.ForegroundUsageRefreshState;
 const SwitchLoadedDisplay = live_types.SwitchLoadedDisplay;
 const SwitchLiveRefreshPolicy = live_types.SwitchLiveRefreshPolicy;
 const switchLiveRefreshPolicy = live_types.switchLiveRefreshPolicy;
-const ensureForegroundNodeAvailableWithApiEnabled = preflight.ensureForegroundNodeAvailableWithApiEnabled;
+const ensureForegroundCurlAvailableWithApiEnabled = preflight.ensureForegroundCurlAvailableWithApiEnabled;
 const refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersist = usage_refresh.refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersist;
 const initForegroundUsagePool = usage_refresh.initForegroundUsagePool;
 const maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist = account_names.maybeRefreshForegroundAccountNamesWithAccountApiEnabledAndPersist;
@@ -440,7 +440,7 @@ pub fn loadSwitchSelectionDisplay(
     _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &refreshed);
     const initial_policy = switchLiveRefreshPolicy(&refreshed, target, api_mode);
 
-    ensureForegroundNodeAvailableWithApiEnabled(
+    ensureForegroundCurlAvailableWithApiEnabled(
         allocator,
         codex_home,
         &refreshed,

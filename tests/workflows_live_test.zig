@@ -29,8 +29,8 @@ const nowSeconds = main_mod.nowSeconds;
 const mapSwitchUsageOverridesToLatest = main_mod.mapSwitchUsageOverridesToLatest;
 const replaceOptionalOwnedString = main_mod.replaceOptionalOwnedString;
 
-test "handled cli errors include missing node" {
-    try std.testing.expect(isHandledCliError(error.NodeJsRequired));
+test "handled cli errors include missing curl" {
+    try std.testing.expect(isHandledCliError(error.CurlRequired));
 }
 
 fn saveLivePolicyTestRegistry(
@@ -696,12 +696,12 @@ test "live fallback display preserves the refresh error name" {
         codex_home,
         .switch_account,
         .skip_api,
-        error.NodeJsRequired,
+        error.CurlRequired,
     );
     defer loaded.display.deinit(gpa);
     defer if (loaded.refresh_error_name) |name| gpa.free(name);
 
-    try std.testing.expectEqualStrings("NodeJsRequired", loaded.refresh_error_name.?);
+    try std.testing.expectEqualStrings("CurlRequired", loaded.refresh_error_name.?);
 }
 
 test "live tty preflight reports command-specific errors" {
@@ -742,7 +742,7 @@ test "buildStatusLine releases mutex on allocation failure" {
             .interval_ms = switch_live_default_refresh_interval_ms,
             .label = "local",
         },
-        try gpa.dupe(u8, "NodeJsRequired"),
+        try gpa.dupe(u8, "CurlRequired"),
     );
     defer runtime.deinit();
 

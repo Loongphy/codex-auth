@@ -12,6 +12,8 @@ pub const request_timeout_ms_value = types.request_timeout_ms_value;
 pub const child_process_timeout_ms = types.child_process_timeout_ms;
 pub const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
 pub const user_agent = types.user_agent;
+pub const curl_executable_env = types.curl_executable_env;
+pub const curl_requirement_hint = types.curl_requirement_hint;
 pub const node_executable_env = types.node_executable_env;
 pub const node_use_env_proxy_env = types.node_use_env_proxy_env;
 pub const node_requirement_hint = types.node_requirement_hint;
@@ -30,8 +32,10 @@ pub const runGetJsonCommand = node.runGetJsonCommand;
 pub const runBearerGetJsonCommand = node.runBearerGetJsonCommand;
 pub const runGetJsonBatchCommand = node.runGetJsonBatchCommand;
 pub const ensureNodeExecutableAvailable = node.ensureNodeExecutableAvailable;
+pub const ensureCurlExecutableAvailable = node.ensureCurlExecutableAvailable;
 pub const resolveNodeExecutableAlloc = node.resolveNodeExecutableAlloc;
 pub const resolveNodeExecutableForDebugAlloc = node.resolveNodeExecutableForDebugAlloc;
+pub const resolveCurlExecutableAlloc = node.resolveCurlExecutableAlloc;
 
 pub const runChildCapture = child.runChildCapture;
 pub const runChildCaptureWithOutputLimit = child.runChildCaptureWithOutputLimit;
@@ -40,6 +44,7 @@ pub const computeBatchChildTimeoutMs = child.computeBatchChildTimeoutMs;
 pub const computeBatchChildOutputLimitBytes = child.computeBatchChildOutputLimitBytes;
 
 pub const maybeEnableNodeEnvProxy = proxy.maybeEnableNodeEnvProxy;
+pub const maybeConfigureCurlProxy = proxy.maybeConfigureCurlProxy;
 pub const detectNodeEnvProxySupportWithTimeout = proxy.detectNodeEnvProxySupportWithTimeout;
 pub const parseNodeVersion = proxy.parseNodeVersion;
 pub const nodeVersionSupportsEnvProxy = proxy.nodeVersionSupportsEnvProxy;
@@ -47,6 +52,7 @@ pub const WindowsSystemProxy = proxy.WindowsSystemProxy;
 pub const deriveWindowsSystemProxyAlloc = proxy.deriveWindowsSystemProxyAlloc;
 
 pub const ensureExecutableAvailableAlloc = executable.ensureExecutableAvailableAlloc;
+pub const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
 pub const resolveExecutablePathEntryForLaunchAlloc = executable.resolveExecutablePathEntryForLaunchAlloc;
 
 pub const parseNodeHttpOutput = parse.parseNodeHttpOutput;

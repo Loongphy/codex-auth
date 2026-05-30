@@ -38,6 +38,14 @@ pub fn maybeEnableNodeEnvProxy(
     }
 }
 
+pub fn maybeConfigureCurlProxy(
+    allocator: std.mem.Allocator,
+    env_map: *std.process.Environ.Map,
+) !void {
+    try maybeMapAllProxy(env_map);
+    try maybeApplyWindowsSystemProxyFallback(allocator, env_map);
+}
+
 pub fn needsNodeEnvProxySupportCheck(env_map: *std.process.Environ.Map) bool {
     return builtin.os.tag == .windows or hasNodeProxyConfiguration(env_map) or hasAllProxyConfiguration(env_map);
 }

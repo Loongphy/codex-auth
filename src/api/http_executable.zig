@@ -6,7 +6,24 @@ const env = @import("http_env.zig");
 
 const node_executable_env = types.node_executable_env;
 const node_requirement_hint = types.node_requirement_hint;
+const curl_executable_env = types.curl_executable_env;
+const curl_requirement_hint = types.curl_requirement_hint;
 const getEnvVarOwned = env.getEnvVarOwned;
+
+pub fn resolveCurlExecutable(allocator: std.mem.Allocator) ![]u8 {
+    return getEnvVarOwned(allocator, curl_executable_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, defaultCurlExecutable()),
+        else => return err,
+    };
+}
+
+pub fn resolveCurlExecutableForLaunchAlloc(allocator: std.mem.Allocator) ![]u8 {
+    const curl_executable = try resolveCurlExecutable(allocator);
+    defer allocator.free(curl_executable);
+    if (try resolveExecutableForLaunchAlloc(allocator, curl_executable)) |resolved| return resolved;
+    logCurlRequirement();
+    return error.CurlRequired;
+}
 
 pub fn resolveNodeExecutable(allocator: std.mem.Allocator) ![]u8 {
     return getEnvVarOwned(allocator, node_executable_env) catch |err| switch (err) {
@@ -96,4 +113,12 @@ fn accessPath(path: []const u8) bool {
 
 pub fn logNodeRequirement() void {
     std.log.warn("{s}", .{node_requirement_hint});
+}
+
+pub fn logCurlRequirement() void {
+    std.log.warn("{s}", .{curl_requirement_hint});
+}
+
+fn defaultCurlExecutable() []const u8 {
+    return if (builtin.os.tag == .windows) "C:\\Windows\\System32\\curl.exe" else "curl";
 }

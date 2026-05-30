@@ -2,18 +2,16 @@
 
 This document is the single source of truth for outbound ChatGPT API refresh behavior in `codex-auth`.
 
-All API refresh requests are issued through `Node.js fetch`.
-When `codex-auth` is launched from the npm package, the wrapper passes its current Node executable to the Zig binary.
-Legacy standalone binary installs must have Node.js 22+ available on `PATH` for API-backed refresh to work.
-Built-in Node environment-proxy support for `fetch()` requires Node.js `22.21.0+` or `24.0.0+`.
+All API refresh requests are issued through `curl`.
+On Windows, `codex-auth` uses `C:\Windows\System32\curl.exe` by default. On other platforms, it resolves `curl` from `PATH`.
+Set `CODEX_AUTH_CURL_EXECUTABLE` to override the executable path.
 
-`codex-auth` configures proxy support for the fetch child process in this order:
+`codex-auth` configures proxy support for the curl child process in this order:
 
 1. inherit explicit `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values from the parent process
 2. map `ALL_PROXY` into `HTTP_PROXY` and `HTTPS_PROXY` when the direct variables are absent
-3. on Windows only, when no proxy environment variables are present and the detected Node runtime supports env-proxy for `fetch()` (`22.21.0+` or `24.0.0+`), read `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` and map HTTP/HTTPS/SOCKS `ProxyServer` entries into `HTTP_PROXY` / `HTTPS_PROXY`
+3. on Windows only, when no proxy environment variables are present, read `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` and map HTTP/HTTPS/SOCKS `ProxyServer` entries into `HTTP_PROXY` / `HTTPS_PROXY`
 4. on Windows only, map explicit `ProxyOverride` entries into `NO_PROXY`; the WinINet-only `<local>` shorthand is not translated
-5. when proxy variables are configured and the detected Node runtime supports env-proxy for `fetch()`, set `NODE_USE_ENV_PROXY=1` for the Node child process automatically
 
 ## Endpoints
 
@@ -41,7 +39,7 @@ The account metadata response is parsed from `items[].id` and `items[].name`. `n
 
 - foreground refresh uses the usage API by default.
 - `--skip-api` reads only the newest local `~/.codex/sessions/**/rollout-*.jsonl`.
-- by default, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/` with a maximum concurrency of `3`
+- by default, `list` and interactive `switch` refresh all stored accounts before rendering, using stored auth snapshots under `accounts/`
 - when one of those per-account foreground usage requests returns a non-`200` HTTP status, the corresponding `list` / `switch` row shows that response status in both usage columns until a later successful refresh replaces it
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - with `--skip-api`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts

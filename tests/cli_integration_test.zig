@@ -212,18 +212,18 @@ fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
     }
 }
 
-fn fakeNodeCommandPath() []const u8 {
-    return if (builtin.os.tag == .windows) "fake-node-bin/node.cmd" else "fake-node-bin/node";
+fn fakeCurlCommandPath() []const u8 {
+    return if (builtin.os.tag == .windows) "fake-curl-bin/curl.cmd" else "fake-curl-bin/curl";
 }
 
-fn writeFailingFakeNode(dir: fs.Dir) !void {
-    try dir.makePath("fake-node-bin");
+fn writeFailingFakeCurl(dir: fs.Dir) !void {
+    try dir.makePath("fake-curl-bin");
     var script_buf: [160]u8 = undefined;
     const script = if (builtin.os.tag == .windows)
-        try std.fmt.bufPrint(&script_buf, "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo v22.0.0\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n", .{})
+        try std.fmt.bufPrint(&script_buf, "@echo off\r\nexit /b 1\r\n", .{})
     else
-        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo v22.0.0\n  exit 0\nfi\nexit 1\n", .{});
-    const sub_path = fakeNodeCommandPath();
+        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nexit 1\n", .{});
+    const sub_path = fakeCurlCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
     if (builtin.os.tag != .windows) {
@@ -244,41 +244,48 @@ fn builtFakeNodePathAlloc(allocator: std.mem.Allocator, project_root: []const u8
     return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
-fn writeApiKeyFlowFakeNode(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
-    _ = project_root; // Only used on Windows via builtFakeNodePathAlloc.
-    try dir.makePath("fake-node-bin");
-    const me_body_b64 = "eyJpZCI6InVzZXJfYXBpX2UyZSIsImVtYWlsIjoiYXBpa2V5LWZsb3dAZXhhbXBsZS5jb20iLCJuYW1lIjoiQVBJIEZsb3cifQ==";
-    const batch_body_b64 = "W3siYm9keSI6ImV5SndiR0Z1WDNSNWNHVWlPaUp3YkhWeklpd2ljbUYwWlY5c2FXMXBkQ0k2ZXlKd2NtbHRZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPakV5TENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZNVGd3TURBc0luSmxjMlYwWDJGMElqbzBNVEF5TkRRME9EQXdmU3dpYzJWamIyNWtZWEo1WDNkcGJtUnZkeUk2ZXlKMWMyVmtYM0JsY21ObGJuUWlPak0wTENKc2FXMXBkRjkzYVc1a2IzZGZjMlZqYjI1a2N5STZOakEwT0RBd0xDSnlaWE5sZEY5aGRDSTZOREV3TXpBME9UWXdNSDE5ZlE9PSIsInN0YXR1cyI6MjAwLCJvdXRjb21lIjoib2sifV0=";
+fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
+    _ = project_root;
+    try dir.makePath("fake-curl-bin");
+    const me_body = "{\"id\":\"user_api_e2e\",\"email\":\"apikey-flow@example.com\",\"name\":\"API Flow\"}";
+    const usage_body = "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":12,\"limit_window_seconds\":18000,\"reset_at\":4102444800},\"secondary_window\":{\"used_percent\":34,\"limit_window_seconds\":604800,\"reset_at\":4103049600}}}";
 
-    if (builtin.os.tag == .windows) {
-        // On Windows, the .cmd fake node can't receive multi-line script args.
-        // The compiled fake-node.exe is used instead via CODEX_AUTH_NODE_EXECUTABLE.
-        // Just write the response files; the caller handles the env var.
-        try dir.writeFile(.{ .sub_path = "fake-node-bin/batch_body_b64.txt", .data = batch_body_b64 });
-        try dir.writeFile(.{ .sub_path = "fake-node-bin/me_body_b64.txt", .data = me_body_b64 });
-        return;
-    }
-
-    // On Linux/macOS, use a shell script. This avoids the game of copying the compiled
-    // fake-node binary and ensures the test runs fast.
-    const script = try std.fmt.allocPrint(
-        allocator,
-        "#!/bin/sh\n" ++
-            "if [ \"$1\" = \"--version\" ]; then\n" ++
-            "  echo v22.0.0\n" ++
-            "  exit 0\n" ++
-            "fi\n" ++
-            "payload=$(cat)\n" ++
-            "if [ -n \"$payload\" ]; then\n" ++
-            "  printf '%s\\n200\\nok\\n' '{s}'\n" ++
-            "  exit 0\n" ++
-            "fi\n" ++
-            "printf '%s\\n200\\nok\\n' '{s}'\n",
-        .{ batch_body_b64, me_body_b64 },
-    );
+    const script = if (builtin.os.tag == .windows)
+        try std.fmt.allocPrint(
+            allocator,
+            "@echo off\r\n" ++
+                "set last=\r\n" ++
+                ":loop\r\n" ++
+                "if \"%~1\"==\"\" goto done\r\n" ++
+                "set last=%~1\r\n" ++
+                "shift\r\n" ++
+                "goto loop\r\n" ++
+                ":done\r\n" ++
+                "echo %last%| findstr /C:\"/v1/me\" >nul\r\n" ++
+                "if %errorlevel%==0 (\r\n" ++
+                "  echo {s}\r\n" ++
+                "  echo 200\r\n" ++
+                "  exit /b 0\r\n" ++
+                ")\r\n" ++
+                "echo {s}\r\n" ++
+                "echo 200\r\n",
+            .{ me_body, usage_body },
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            "#!/bin/sh\n" ++
+                "last=\"\"\n" ++
+                "for arg do last=\"$arg\"; done\n" ++
+                "case \"$last\" in\n" ++
+                "  */v1/me*) printf '%s\\n200' '{s}' ;;\n" ++
+                "  *) printf '%s\\n200' '{s}' ;;\n" ++
+                "esac\n",
+            .{ me_body, usage_body },
+        );
     defer allocator.free(script);
 
-    const sub_path = fakeNodeCommandPath();
+    const sub_path = fakeCurlCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
     if (builtin.os.tag != .windows) {
@@ -296,12 +303,12 @@ fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 
     return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
 }
 
-fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
+fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
     allocator: std.mem.Allocator,
     project_root: []const u8,
     home_root: []const u8,
     path_override: []const u8,
-    fake_node_response_dir: []const u8,
+    fake_curl_executable: []const u8,
     args: []const []const u8,
 ) !std.process.RunResult {
     const exe_path = try builtCliPathAlloc(allocator, project_root);
@@ -319,13 +326,7 @@ fn runCliWithIsolatedHomeAndPathAndApiKeyNode(
     _ = env_map.swapRemove("CODEX_HOME");
     try env_map.put("PATH", path_override);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_FAKE_NODE_RESPONSE_DIR", fake_node_response_dir);
-
-    // On Windows, point to the compiled fake-node.exe via a relative path so
-    // the access check uses cwd().access() which works in the test runner.
-    if (builtin.os.tag == .windows) {
-        try env_map.put("CODEX_AUTH_NODE_EXECUTABLE", "zig-out\\bin\\fake-node.exe");
-    }
+    try env_map.put("CODEX_AUTH_CURL_EXECUTABLE", fake_curl_executable);
 
     return try runCapture(allocator, project_root, &env_map, argv.items);
 }
@@ -1070,10 +1071,10 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex");
-    try writeFailingFakeNode(tmp.dir);
-    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
-    defer gpa.free(fake_node_dir);
-    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    try writeFailingFakeCurl(tmp.dir);
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
     defer gpa.free(path_override);
 
     const email = "fresh@example.com";
@@ -1126,10 +1127,10 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex/accounts");
-    try writeFailingFakeNode(tmp.dir);
-    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
-    defer gpa.free(fake_node_dir);
-    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    try writeFailingFakeCurl(tmp.dir);
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
     defer gpa.free(path_override);
 
     const email = "legacy@example.com";
@@ -1243,11 +1244,13 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath("imports");
-    try writeApiKeyFlowFakeNode(gpa, tmp.dir, project_root);
+    try writeApiKeyFlowFakeCurl(gpa, tmp.dir, project_root);
 
-    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
-    defer gpa.free(fake_node_dir);
-    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const fake_curl_executable = try tmp.dir.realpathAlloc(gpa, fakeCurlCommandPath());
+    defer gpa.free(fake_curl_executable);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
     defer gpa.free(path_override);
 
     const api_key = "sk-e2e-api-key-flow";
@@ -1258,12 +1261,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     const import_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "imports", "api-key.json" });
     defer gpa.free(import_path);
 
-    const import_result = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+    const import_result = try runCliWithIsolatedHomeAndPathAndApiKeyCurl(
         gpa,
         project_root,
         home_root,
         path_override,
-        fake_node_dir,
+        fake_curl_executable,
         &[_][]const u8{ "import", import_path },
     );
     defer gpa.free(import_result.stdout);
@@ -1314,12 +1317,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     try fs.cwd().writeFile(.{ .sub_path = chatgpt_snapshot_path, .data = chatgpt_auth });
     try registry.saveRegistry(gpa, codex_home, &loaded);
 
-    const first_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+    const first_list = try runCliWithIsolatedHomeAndPathAndApiKeyCurl(
         gpa,
         project_root,
         home_root,
         path_override,
-        fake_node_dir,
+        fake_curl_executable,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(first_list.stdout);
@@ -1344,12 +1347,12 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     try fs.cwd().writeFile(.{ .sub_path = api_snapshot_path, .data = "{}" });
 
-    const second_list = try runCliWithIsolatedHomeAndPathAndApiKeyNode(
+    const second_list = try runCliWithIsolatedHomeAndPathAndApiKeyCurl(
         gpa,
         project_root,
         home_root,
         path_override,
-        fake_node_dir,
+        fake_curl_executable,
         &[_][]const u8{ "list", "--api" },
     );
     defer gpa.free(second_list.stdout);
@@ -2203,7 +2206,7 @@ test "Scenario: Given list default mode when running list then it requires api r
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given list with skip-api when running list then it does not require api refresh executables" {
@@ -2349,7 +2352,7 @@ test "Scenario: Given switch without api flags when running interactively then i
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
@@ -2686,7 +2689,7 @@ test "Scenario: Given interactive remove with api flag when running remove then 
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove without api flags when running remove then it requires api refresh executables by default" {
@@ -2723,7 +2726,7 @@ test "Scenario: Given remove without api flags when running remove then it requi
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove without selectors in default mode when running remove then it requires api refresh executables" {
@@ -2759,7 +2762,7 @@ test "Scenario: Given remove without selectors in default mode when running remo
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Node.js 22+") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
@@ -2986,10 +2989,10 @@ test "Scenario: Given auth json already points at another registry account when 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
-    try writeFailingFakeNode(tmp.dir);
-    const fake_node_dir = try tmp.dir.realpathAlloc(gpa, "fake-node-bin");
-    defer gpa.free(fake_node_dir);
-    const path_override = try prependPathEntryAlloc(gpa, fake_node_dir);
+    try writeFailingFakeCurl(tmp.dir);
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
     defer gpa.free(path_override);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);

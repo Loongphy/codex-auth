@@ -11,7 +11,7 @@ const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const maybeRefreshForegroundAccountNamesWithAccountApiEnabled = account_names.maybeRefreshForegroundAccountNamesWithAccountApiEnabled;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
-const ensureForegroundNodeAvailableWithApiEnabled = preflight.ensureForegroundNodeAvailableWithApiEnabled;
+const ensureForegroundCurlAvailableWithApiEnabled = preflight.ensureForegroundCurlAvailableWithApiEnabled;
 const refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly = usage_refresh.refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveOnly;
 const loadInitialLiveSelectionDisplay = live_flow.loadInitialLiveSelectionDisplay;
 const SwitchLiveRuntime = live_flow.SwitchLiveRuntime;
@@ -71,7 +71,7 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
     const usage_api_enabled = apiModeUsesApi(reg.api.usage, opts.api_mode);
     const account_api_enabled = apiModeUsesApi(reg.api.account, opts.api_mode) and !opts.active_only;
 
-    try ensureForegroundNodeAvailableWithApiEnabled(
+    try ensureForegroundCurlAvailableWithApiEnabled(
         allocator,
         codex_home,
         &reg,

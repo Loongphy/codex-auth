@@ -19,6 +19,7 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.ListLiveRequiresTty or
         err == error.TuiOutputUnavailable or
         err == error.NodeJsRequired or
+        err == error.CurlRequired or
         err == error.SwitchSelectionRequiresTty or
         err == error.AliasSelectionRequiresTty or
         err == error.InvalidAlias or
@@ -65,7 +66,7 @@ pub fn apiModeUsesApi(default_enabled: bool, api_mode: cli.types.ApiMode) bool {
     };
 }
 
-pub fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
+pub fn shouldPreflightCurlForForegroundTargetWithApiEnabled(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
@@ -87,7 +88,7 @@ pub fn shouldPreflightNodeForForegroundTargetWithApiEnabled(
     return info.access_token != null and info.chatgpt_account_id != null;
 }
 
-pub fn ensureForegroundNodeAvailableWithApiEnabled(
+pub fn ensureForegroundCurlAvailableWithApiEnabled(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
@@ -95,7 +96,7 @@ pub fn ensureForegroundNodeAvailableWithApiEnabled(
     usage_api_enabled: bool,
     account_api_enabled: bool,
 ) !void {
-    if (!try shouldPreflightNodeForForegroundTargetWithApiEnabled(
+    if (!try shouldPreflightCurlForForegroundTargetWithApiEnabled(
         allocator,
         codex_home,
         reg,
@@ -104,5 +105,5 @@ pub fn ensureForegroundNodeAvailableWithApiEnabled(
         account_api_enabled,
     )) return;
 
-    try chatgpt_http.ensureNodeExecutableAvailable(allocator);
+    try chatgpt_http.ensureCurlExecutableAvailable(allocator);
 }
