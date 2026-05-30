@@ -6,12 +6,7 @@ All API refresh requests are issued through `curl`.
 On Windows, `codex-auth` uses `C:\Windows\System32\curl.exe` by default. On other platforms, it resolves `curl` from `PATH`.
 Set `CODEX_AUTH_CURL_EXECUTABLE` to override the executable path.
 
-`codex-auth` configures proxy support for the curl child process in this order:
-
-1. inherit explicit `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` values from the parent process
-2. map `ALL_PROXY` into `HTTP_PROXY` and `HTTPS_PROXY` when the direct variables are absent
-3. on Windows only, when no proxy environment variables are present, read `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` and map HTTP/HTTPS/SOCKS `ProxyServer` entries into `HTTP_PROXY` / `HTTPS_PROXY`
-4. on Windows only, map explicit `ProxyOverride` entries into `NO_PROXY`; the WinINet-only `<local>` shorthand is not translated
+`codex-auth` does not translate platform proxy settings. The curl child process inherits the parent process environment, and curl applies its own proxy environment variable handling.
 
 ## Endpoints
 

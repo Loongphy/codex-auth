@@ -10,8 +10,6 @@ const computeBatchChildOutputLimitBytes = http.computeBatchChildOutputLimitBytes
 const runChildCapture = http.runChildCapture;
 const runChildCaptureWithOutputLimit = http.runChildCaptureWithOutputLimit;
 const ensureExecutableAvailableAlloc = http.ensureExecutableAvailableAlloc;
-const maybeConfigureCurlProxy = http.maybeConfigureCurlProxy;
-const deriveWindowsSystemProxyAlloc = http.deriveWindowsSystemProxyAlloc;
 const resolveExecutablePathEntryForLaunchAlloc = http.resolveExecutablePathEntryForLaunchAlloc;
 
 test "batch child output limit scales with request count" {
@@ -189,71 +187,6 @@ test "ensure executable available returns generic executable error for missing p
         error.ExecutableRequired,
         ensureExecutableAvailableAlloc(std.testing.allocator, "/definitely/missing/curl"),
     );
-}
-
-test "configure curl proxy maps ALL_PROXY when direct proxy vars are missing" {
-    var env_map = std.process.Environ.Map.init(std.testing.allocator);
-    defer env_map.deinit();
-
-    try env_map.put("ALL_PROXY", "http://127.0.0.1:7890");
-    try maybeConfigureCurlProxy(std.testing.allocator, &env_map);
-
-    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTP_PROXY").?);
-    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTPS_PROXY").?);
-}
-
-test "configure curl proxy preserves direct proxy vars over ALL_PROXY" {
-    var env_map = std.process.Environ.Map.init(std.testing.allocator);
-    defer env_map.deinit();
-
-    try env_map.put("ALL_PROXY", "http://127.0.0.1:7890");
-    try env_map.put("HTTPS_PROXY", "http://127.0.0.1:8080");
-    try maybeConfigureCurlProxy(std.testing.allocator, &env_map);
-
-    try std.testing.expectEqualStrings("http://127.0.0.1:7890", env_map.get("HTTP_PROXY").?);
-    try std.testing.expectEqualStrings("http://127.0.0.1:8080", env_map.get("HTTPS_PROXY").?);
-}
-
-test "derive windows system proxy alloc maps shared proxy and explicit overrides" {
-    const allocator = std.testing.allocator;
-    var proxy = (try deriveWindowsSystemProxyAlloc(
-        allocator,
-        "127.0.0.1:7890",
-        "*.corp;intranet.local;<local>",
-    )) orelse return error.TestUnexpectedResult;
-    defer proxy.deinit(allocator);
-
-    try std.testing.expectEqualStrings("http://127.0.0.1:7890", proxy.http_proxy.?);
-    try std.testing.expectEqualStrings("http://127.0.0.1:7890", proxy.https_proxy.?);
-    try std.testing.expectEqualStrings("*.corp,intranet.local", proxy.no_proxy.?);
-}
-
-test "derive windows system proxy alloc maps protocol-specific entries" {
-    const allocator = std.testing.allocator;
-    var proxy = (try deriveWindowsSystemProxyAlloc(
-        allocator,
-        "http=127.0.0.1:8080;https=https://127.0.0.1:8443",
-        null,
-    )) orelse return error.TestUnexpectedResult;
-    defer proxy.deinit(allocator);
-
-    try std.testing.expectEqualStrings("http://127.0.0.1:8080", proxy.http_proxy.?);
-    try std.testing.expectEqualStrings("https://127.0.0.1:8443", proxy.https_proxy.?);
-    try std.testing.expect(proxy.no_proxy == null);
-}
-
-test "derive windows system proxy alloc maps socks-only entries" {
-    const allocator = std.testing.allocator;
-    var proxy = (try deriveWindowsSystemProxyAlloc(
-        allocator,
-        "socks=127.0.0.1:1080",
-        null,
-    )) orelse return error.TestUnexpectedResult;
-    defer proxy.deinit(allocator);
-
-    try std.testing.expectEqualStrings("socks://127.0.0.1:1080", proxy.http_proxy.?);
-    try std.testing.expectEqualStrings("socks://127.0.0.1:1080", proxy.https_proxy.?);
-    try std.testing.expect(proxy.no_proxy == null);
 }
 
 test "launch path resolution preserves symlink path" {

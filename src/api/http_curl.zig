@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("http_types.zig");
 const env = @import("http_env.zig");
 const child = @import("http_child.zig");
-const proxy = @import("http_proxy.zig");
 const executable = @import("http_executable.zig");
 
 const HttpResult = types.HttpResult;
@@ -15,7 +14,6 @@ const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
 const user_agent = types.user_agent;
 const getEnvMap = env.getEnvMap;
 const runChildCapture = child.runChildCapture;
-const maybeConfigureCurlProxy = proxy.maybeConfigureCurlProxy;
 const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
 
 const CurlHttpOutput = struct {
@@ -93,7 +91,6 @@ fn runCurlJsonCommand(
 
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
-    try maybeConfigureCurlProxy(allocator, &env_map);
 
     const user_agent_header = "User-Agent: " ++ user_agent;
 

@@ -2,7 +2,6 @@ pub const types = @import("http_types.zig");
 pub const env = @import("http_env.zig");
 pub const child = @import("http_child.zig");
 pub const executable = @import("http_executable.zig");
-pub const proxy = @import("http_proxy.zig");
 pub const curl = @import("http_curl.zig");
 
 pub const request_timeout_secs = types.request_timeout_secs;
@@ -33,10 +32,6 @@ pub const runChildCaptureWithOutputLimit = child.runChildCaptureWithOutputLimit;
 pub const runChildCaptureWithInputAndOutputLimit = child.runChildCaptureWithInputAndOutputLimit;
 pub const computeBatchChildTimeoutMs = child.computeBatchChildTimeoutMs;
 pub const computeBatchChildOutputLimitBytes = child.computeBatchChildOutputLimitBytes;
-
-pub const maybeConfigureCurlProxy = proxy.maybeConfigureCurlProxy;
-pub const WindowsSystemProxy = proxy.WindowsSystemProxy;
-pub const deriveWindowsSystemProxyAlloc = proxy.deriveWindowsSystemProxyAlloc;
 
 pub const ensureExecutableAvailableAlloc = executable.ensureExecutableAvailableAlloc;
 pub const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
