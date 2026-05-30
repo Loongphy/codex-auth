@@ -135,6 +135,8 @@ fn runCurlGetJsonBatchCommand(
     requests: []const BatchRequest,
     max_concurrency: usize,
 ) !BatchHttpResult {
+    // curl transport intentionally runs the batch serially; max_concurrency is
+    // retained in the shared interface for callers that do not know the transport.
     _ = max_concurrency;
     const items = try allocator.alloc(BatchItemResult, requests.len);
     errdefer allocator.free(items);

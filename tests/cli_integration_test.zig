@@ -216,21 +216,25 @@ fn fakeCurlCommandPath() []const u8 {
     return if (builtin.os.tag == .windows) "fake-curl-bin/curl.exe" else "fake-curl-bin/curl";
 }
 
-fn writeFailingFakeCurl(dir: fs.Dir) !void {
+fn writeFailingFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     try dir.makePath("fake-curl-bin");
+    if (builtin.os.tag == .windows) {
+        const built_fake_curl = try builtFakeCurlFailPathAlloc(allocator, project_root);
+        defer allocator.free(built_fake_curl);
+        const fake_curl_data = try fixtures.readFileAlloc(allocator, built_fake_curl);
+        defer allocator.free(fake_curl_data);
+        try dir.writeFile(.{ .sub_path = fakeCurlCommandPath(), .data = fake_curl_data });
+        return;
+    }
+
     var script_buf: [160]u8 = undefined;
-    const script = if (builtin.os.tag == .windows)
-        try std.fmt.bufPrint(&script_buf, "@echo off\r\nexit /b 1\r\n", .{})
-    else
-        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nexit 1\n", .{});
+    const script = try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nexit 1\n", .{});
     const sub_path = fakeCurlCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
-    if (builtin.os.tag != .windows) {
-        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
-        defer file.close();
-        try file.chmod(0o755);
-    }
+    var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o755);
 }
 
 fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
@@ -294,6 +298,18 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
 
 fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
     const exe_name = if (builtin.os.tag == .windows) "curl.exe" else "curl";
+    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+
+    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
+    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
+}
+
+fn builtFakeCurlFailPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
+    const exe_name = if (builtin.os.tag == .windows) "curl-fail.exe" else "curl-fail";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -1078,7 +1094,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex");
-    try writeFailingFakeCurl(tmp.dir);
+    try writeFailingFakeCurl(gpa, tmp.dir, project_root);
     const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
     defer gpa.free(fake_curl_dir);
     const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
@@ -1134,7 +1150,7 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
     const home_root = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(home_root);
     try tmp.dir.makePath(".codex/accounts");
-    try writeFailingFakeCurl(tmp.dir);
+    try writeFailingFakeCurl(gpa, tmp.dir, project_root);
     const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
     defer gpa.free(fake_curl_dir);
     const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
@@ -2991,7 +3007,7 @@ test "Scenario: Given auth json already points at another registry account when 
         .{ .email = "alpha@example.com", .alias = "" },
         .{ .email = "beta@example.com", .alias = "" },
     });
-    try writeFailingFakeCurl(tmp.dir);
+    try writeFailingFakeCurl(gpa, tmp.dir, project_root);
     const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
     defer gpa.free(fake_curl_dir);
     const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);

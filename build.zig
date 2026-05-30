@@ -32,9 +32,20 @@ pub fn build(b: *std.Build) void {
         .root_module = fake_curl_module,
     });
     const install_fake_curl = b.addInstallArtifact(fake_curl_exe, .{});
+    const fake_curl_fail_module = b.createModule(.{
+        .root_source_file = b.path("tests/fake_curl_fail.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fake_curl_fail_exe = b.addExecutable(.{
+        .name = "curl-fail",
+        .root_module = fake_curl_fail_module,
+    });
+    const install_fake_curl_fail = b.addInstallArtifact(fake_curl_fail_exe, .{});
     const test_helpers_step = b.step("test-helpers", "Install test helper binaries");
     test_helpers_step.dependOn(b.getInstallStep());
     test_helpers_step.dependOn(&install_fake_curl.step);
+    test_helpers_step.dependOn(&install_fake_curl_fail.step);
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {
