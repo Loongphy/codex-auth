@@ -233,17 +233,6 @@ fn writeFailingFakeCurl(dir: fs.Dir) !void {
     }
 }
 
-fn builtFakeNodePathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
-    const exe_name = if (builtin.os.tag == .windows) "fake-node.exe" else "fake-node";
-    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
-        else => return err,
-    };
-    defer if (install_prefix) |dir| allocator.free(dir);
-    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out" });
-    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
-}
-
 fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     _ = project_root;
     try dir.makePath("fake-curl-bin");

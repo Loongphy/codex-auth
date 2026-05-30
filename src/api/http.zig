@@ -3,8 +3,7 @@ pub const env = @import("http_env.zig");
 pub const child = @import("http_child.zig");
 pub const executable = @import("http_executable.zig");
 pub const proxy = @import("http_proxy.zig");
-pub const parse = @import("http_parse.zig");
-pub const node = @import("http_node.zig");
+pub const curl = @import("http_curl.zig");
 
 pub const request_timeout_secs = types.request_timeout_secs;
 pub const request_timeout_ms = types.request_timeout_ms;
@@ -14,9 +13,6 @@ pub const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
 pub const user_agent = types.user_agent;
 pub const curl_executable_env = types.curl_executable_env;
 pub const curl_requirement_hint = types.curl_requirement_hint;
-pub const node_executable_env = types.node_executable_env;
-pub const node_use_env_proxy_env = types.node_use_env_proxy_env;
-pub const node_requirement_hint = types.node_requirement_hint;
 pub const default_max_output_bytes = types.default_max_output_bytes;
 
 pub const HttpResult = types.HttpResult;
@@ -24,18 +20,13 @@ pub const BatchRequest = types.BatchRequest;
 pub const BatchItemOutcome = types.BatchItemOutcome;
 pub const BatchItemResult = types.BatchItemResult;
 pub const BatchHttpResult = types.BatchHttpResult;
-pub const NodeOutcome = types.NodeOutcome;
-pub const ParsedNodeHttpOutput = types.ParsedNodeHttpOutput;
 pub const ChildCaptureResult = types.ChildCaptureResult;
 
-pub const runGetJsonCommand = node.runGetJsonCommand;
-pub const runBearerGetJsonCommand = node.runBearerGetJsonCommand;
-pub const runGetJsonBatchCommand = node.runGetJsonBatchCommand;
-pub const ensureNodeExecutableAvailable = node.ensureNodeExecutableAvailable;
-pub const ensureCurlExecutableAvailable = node.ensureCurlExecutableAvailable;
-pub const resolveNodeExecutableAlloc = node.resolveNodeExecutableAlloc;
-pub const resolveNodeExecutableForDebugAlloc = node.resolveNodeExecutableForDebugAlloc;
-pub const resolveCurlExecutableAlloc = node.resolveCurlExecutableAlloc;
+pub const runGetJsonCommand = curl.runGetJsonCommand;
+pub const runBearerGetJsonCommand = curl.runBearerGetJsonCommand;
+pub const runGetJsonBatchCommand = curl.runGetJsonBatchCommand;
+pub const ensureCurlExecutableAvailable = curl.ensureCurlExecutableAvailable;
+pub const resolveCurlExecutableAlloc = curl.resolveCurlExecutableAlloc;
 
 pub const runChildCapture = child.runChildCapture;
 pub const runChildCaptureWithOutputLimit = child.runChildCaptureWithOutputLimit;
@@ -43,17 +34,10 @@ pub const runChildCaptureWithInputAndOutputLimit = child.runChildCaptureWithInpu
 pub const computeBatchChildTimeoutMs = child.computeBatchChildTimeoutMs;
 pub const computeBatchChildOutputLimitBytes = child.computeBatchChildOutputLimitBytes;
 
-pub const maybeEnableNodeEnvProxy = proxy.maybeEnableNodeEnvProxy;
 pub const maybeConfigureCurlProxy = proxy.maybeConfigureCurlProxy;
-pub const detectNodeEnvProxySupportWithTimeout = proxy.detectNodeEnvProxySupportWithTimeout;
-pub const parseNodeVersion = proxy.parseNodeVersion;
-pub const nodeVersionSupportsEnvProxy = proxy.nodeVersionSupportsEnvProxy;
 pub const WindowsSystemProxy = proxy.WindowsSystemProxy;
 pub const deriveWindowsSystemProxyAlloc = proxy.deriveWindowsSystemProxyAlloc;
 
 pub const ensureExecutableAvailableAlloc = executable.ensureExecutableAvailableAlloc;
 pub const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
 pub const resolveExecutablePathEntryForLaunchAlloc = executable.resolveExecutablePathEntryForLaunchAlloc;
-
-pub const parseNodeHttpOutput = parse.parseNodeHttpOutput;
-pub const parseBatchNodeHttpOutput = parse.parseBatchNodeHttpOutput;

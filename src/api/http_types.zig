@@ -9,9 +9,6 @@ pub const child_process_timeout_ms_value: u64 = 7000;
 pub const user_agent: []const u8 = "codex-auth/" ++ version.app_version;
 pub const curl_executable_env = "CODEX_AUTH_CURL_EXECUTABLE";
 pub const curl_requirement_hint = "curl is required for API-backed refresh. Install curl or use --skip-api.";
-pub const node_executable_env = "CODEX_AUTH_NODE_EXECUTABLE";
-pub const node_use_env_proxy_env = "NODE_USE_ENV_PROXY";
-pub const node_requirement_hint = "Node.js 22+ is required for ChatGPT API refresh. Install Node.js 22+ or use the npm package.";
 
 pub const default_max_output_bytes = 1024 * 1024;
 
@@ -50,19 +47,6 @@ pub const BatchHttpResult = struct {
         allocator.free(self.items);
         self.* = undefined;
     }
-};
-
-pub const NodeOutcome = enum {
-    ok,
-    timeout,
-    failed,
-    node_too_old,
-};
-
-pub const ParsedNodeHttpOutput = struct {
-    body: []u8,
-    status_code: ?u16,
-    outcome: NodeOutcome,
 };
 
 pub const ChildCaptureResult = struct {

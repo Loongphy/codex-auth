@@ -18,7 +18,6 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.CodexLoginFailed or
         err == error.ListLiveRequiresTty or
         err == error.TuiOutputUnavailable or
-        err == error.NodeJsRequired or
         err == error.CurlRequired or
         err == error.SwitchSelectionRequiresTty or
         err == error.AliasSelectionRequiresTty or

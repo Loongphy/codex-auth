@@ -1,8 +1,5 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const app_runtime = @import("../core/runtime.zig");
-const types = @import("http_types.zig");
-const child = @import("http_child.zig");
 const winreg = if (builtin.os.tag == .windows) struct {
     extern "advapi32" fn RegGetValueW(
         hkey: std.os.windows.HKEY,
@@ -19,25 +16,6 @@ const winreg = if (builtin.os.tag == .windows) struct {
     const RRF_RT_REG_DWORD: u32 = 0x00000010;
 } else struct {};
 
-const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
-const node_use_env_proxy_env = types.node_use_env_proxy_env;
-const runChildCapture = child.runChildCapture;
-
-pub fn maybeEnableNodeEnvProxy(
-    allocator: std.mem.Allocator,
-    env_map: *std.process.Environ.Map,
-    node_env_proxy_supported: bool,
-) !void {
-    try maybeMapAllProxy(env_map);
-    if (node_env_proxy_supported) {
-        try maybeApplyWindowsSystemProxyFallback(allocator, env_map);
-    }
-
-    if (node_env_proxy_supported and env_map.get(node_use_env_proxy_env) == null and hasNodeProxyConfiguration(env_map)) {
-        try env_map.put(node_use_env_proxy_env, "1");
-    }
-}
-
 pub fn maybeConfigureCurlProxy(
     allocator: std.mem.Allocator,
     env_map: *std.process.Environ.Map,
@@ -46,87 +24,8 @@ pub fn maybeConfigureCurlProxy(
     try maybeApplyWindowsSystemProxyFallback(allocator, env_map);
 }
 
-pub fn needsNodeEnvProxySupportCheck(env_map: *std.process.Environ.Map) bool {
-    return builtin.os.tag == .windows or hasNodeProxyConfiguration(env_map) or hasAllProxyConfiguration(env_map);
-}
-
 fn hasAllProxyConfiguration(env_map: *std.process.Environ.Map) bool {
     return env_map.get("ALL_PROXY") != null or env_map.get("all_proxy") != null;
-}
-
-pub const NodeVersion = struct {
-    major: u32,
-    minor: u32,
-    patch: u32,
-};
-
-const NodeEnvProxySupportCache = struct {
-    mutex: std.Io.Mutex = .init,
-    executable: ?[]u8 = null,
-    supported: bool = false,
-};
-
-var node_env_proxy_support_cache: NodeEnvProxySupportCache = .{};
-
-pub fn detectNodeEnvProxySupport(allocator: std.mem.Allocator, node_executable: []const u8) bool {
-    return detectNodeEnvProxySupportWithTimeout(allocator, node_executable, child_process_timeout_ms_value);
-}
-
-pub fn detectNodeEnvProxySupportWithTimeout(
-    allocator: std.mem.Allocator,
-    node_executable: []const u8,
-    timeout_ms: u64,
-) bool {
-    node_env_proxy_support_cache.mutex.lockUncancelable(app_runtime.io());
-    if (node_env_proxy_support_cache.executable) |cached| {
-        if (std.mem.eql(u8, cached, node_executable)) {
-            const supported = node_env_proxy_support_cache.supported;
-            node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
-            return supported;
-        }
-    }
-    node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
-
-    const result = runChildCapture(allocator, &.{ node_executable, "--version" }, timeout_ms, null) catch return false;
-    defer result.deinit(allocator);
-
-    if (result.timed_out) return false;
-    switch (result.term) {
-        .exited => |code| if (code != 0) return false,
-        else => return false,
-    }
-
-    const version = parseNodeVersion(result.stdout) catch return false;
-    const supported = nodeVersionSupportsEnvProxy(version);
-
-    node_env_proxy_support_cache.mutex.lockUncancelable(app_runtime.io());
-    defer node_env_proxy_support_cache.mutex.unlock(app_runtime.io());
-    if (node_env_proxy_support_cache.executable) |cached| {
-        std.heap.page_allocator.free(cached);
-    }
-    node_env_proxy_support_cache.executable = std.heap.page_allocator.dupe(u8, node_executable) catch null;
-    node_env_proxy_support_cache.supported = supported;
-    return supported;
-}
-
-pub fn parseNodeVersion(raw: []const u8) !NodeVersion {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    const version_text = if (trimmed.len != 0 and trimmed[0] == 'v') trimmed[1..] else trimmed;
-
-    var parts = std.mem.splitScalar(u8, version_text, '.');
-    const major_text = parts.next() orelse return error.InvalidVersion;
-    const minor_text = parts.next() orelse return error.InvalidVersion;
-    const patch_text = parts.next() orelse return error.InvalidVersion;
-
-    return .{
-        .major = try std.fmt.parseInt(u32, major_text, 10),
-        .minor = try std.fmt.parseInt(u32, minor_text, 10),
-        .patch = try std.fmt.parseInt(u32, patch_text, 10),
-    };
-}
-
-pub fn nodeVersionSupportsEnvProxy(version: NodeVersion) bool {
-    return version.major >= 24 or (version.major == 22 and version.minor >= 21);
 }
 
 fn maybeMapAllProxy(env_map: *std.process.Environ.Map) !void {
@@ -141,7 +40,7 @@ fn maybeMapAllProxy(env_map: *std.process.Environ.Map) !void {
     }
 }
 
-fn hasNodeProxyConfiguration(env_map: *std.process.Environ.Map) bool {
+fn hasDirectProxyConfiguration(env_map: *std.process.Environ.Map) bool {
     return env_map.get("HTTP_PROXY") != null or
         env_map.get("http_proxy") != null or
         env_map.get("HTTPS_PROXY") != null or
@@ -172,7 +71,7 @@ pub const WindowsSystemProxy = struct {
 
 pub fn maybeApplyWindowsSystemProxyFallback(allocator: std.mem.Allocator, env_map: *std.process.Environ.Map) !void {
     if (builtin.os.tag != .windows) return;
-    if (hasNodeProxyConfiguration(env_map)) return;
+    if (hasDirectProxyConfiguration(env_map)) return;
 
     var proxy = (try queryWindowsSystemProxyAlloc(allocator)) orelse return;
     defer proxy.deinit(allocator);

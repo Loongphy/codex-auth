@@ -17,8 +17,6 @@ const getEnvMap = env.getEnvMap;
 const runChildCapture = child.runChildCapture;
 const maybeConfigureCurlProxy = proxy.maybeConfigureCurlProxy;
 const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
-const resolveNodeExecutable = executable.resolveNodeExecutable;
-const resolveNodeExecutableForLaunchAlloc = executable.resolveNodeExecutableForLaunchAlloc;
 
 const CurlHttpOutput = struct {
     body: []u8,
@@ -51,21 +49,9 @@ pub fn runGetJsonBatchCommand(
     return runCurlGetJsonBatchCommand(allocator, endpoint, requests, max_concurrency);
 }
 
-pub fn ensureNodeExecutableAvailable(allocator: std.mem.Allocator) !void {
-    try ensureCurlExecutableAvailable(allocator);
-}
-
 pub fn ensureCurlExecutableAvailable(allocator: std.mem.Allocator) !void {
     const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
     defer allocator.free(curl_executable);
-}
-
-pub fn resolveNodeExecutableAlloc(allocator: std.mem.Allocator) ![]u8 {
-    return resolveNodeExecutable(allocator);
-}
-
-pub fn resolveNodeExecutableForDebugAlloc(allocator: std.mem.Allocator) ![]u8 {
-    return resolveNodeExecutableForLaunchAlloc(allocator);
 }
 
 pub fn resolveCurlExecutableAlloc(allocator: std.mem.Allocator) ![]u8 {
