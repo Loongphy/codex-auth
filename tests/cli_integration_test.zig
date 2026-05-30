@@ -276,9 +276,8 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
         try std.fmt.allocPrint(
             allocator,
             "#!/bin/sh\n" ++
-                "last=\"\"\n" ++
-                "for arg do last=\"$arg\"; done\n" ++
-                "case \"$last\" in\n" ++
+                "config=$(cat)\n" ++
+                "case \"$config\" in\n" ++
                 "  */v1/me*) printf '%s\\n200' '{s}' ;;\n" ++
                 "  *) printf '%s\\n200' '{s}' ;;\n" ++
                 "esac\n",

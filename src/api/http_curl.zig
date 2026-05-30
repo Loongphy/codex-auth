@@ -11,10 +11,12 @@ const BatchItemResult = types.BatchItemResult;
 const BatchItemOutcome = types.BatchItemOutcome;
 const request_timeout_secs = types.request_timeout_secs;
 const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
+const default_max_output_bytes = types.default_max_output_bytes;
 const user_agent = types.user_agent;
 const getEnvMap = env.getEnvMap;
-const runChildCapture = child.runChildCapture;
+const runChildCaptureWithInputAndOutputLimit = child.runChildCaptureWithInputAndOutputLimit;
 const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
+const curl_timeout_exit_code = 28;
 
 const CurlHttpOutput = struct {
     body: []u8,
@@ -96,18 +98,24 @@ fn runCurlJsonCommand(
 
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(allocator);
-    try appendCurlBaseArgs(allocator, &argv, curl_executable, user_agent_header);
-    for (headers) |header| {
-        try argv.append(allocator, "--header");
-        try argv.append(allocator, header);
-    }
-    try argv.append(allocator, endpoint);
+    try appendCurlBaseArgs(allocator, &argv, curl_executable);
 
-    const result = runChildCapture(
+    var curl_config = std.ArrayList(u8).empty;
+    defer curl_config.deinit(allocator);
+    try appendCurlConfigLine(allocator, &curl_config, "url", endpoint);
+    try appendCurlConfigLine(allocator, &curl_config, "header", user_agent_header);
+    try appendCurlConfigLine(allocator, &curl_config, "header", "Accept: application/json");
+    for (headers) |header| {
+        try appendCurlConfigLine(allocator, &curl_config, "header", header);
+    }
+
+    const result = runChildCaptureWithInputAndOutputLimit(
         allocator,
         argv.items,
+        curl_config.items,
         child_process_timeout_ms_value,
         &env_map,
+        default_max_output_bytes,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.FileNotFound => return error.CurlRequired,
@@ -118,7 +126,10 @@ fn runCurlJsonCommand(
     if (result.timed_out) return error.TimedOut;
 
     switch (result.term) {
-        .exited => |code| if (code != 0) return error.RequestFailed,
+        .exited => |code| if (code != 0) {
+            if (code == curl_timeout_exit_code) return error.TimedOut;
+            return error.RequestFailed;
+        },
         else => return error.RequestFailed,
     }
 
@@ -186,10 +197,10 @@ fn appendCurlBaseArgs(
     allocator: std.mem.Allocator,
     argv: *std.ArrayList([]const u8),
     curl_executable: []const u8,
-    user_agent_header: []const u8,
 ) !void {
     try argv.appendSlice(allocator, &.{
         curl_executable,
+        "--disable",
         "--silent",
         "--show-error",
         "--location",
@@ -199,11 +210,38 @@ fn appendCurlBaseArgs(
         "-",
         "--write-out",
         "\n%{http_code}",
-        "--header",
-        user_agent_header,
-        "--header",
-        "Accept: application/json",
+        "--config",
+        "-",
     });
+}
+
+fn appendCurlConfigLine(
+    allocator: std.mem.Allocator,
+    config: *std.ArrayList(u8),
+    key: []const u8,
+    value: []const u8,
+) !void {
+    try config.appendSlice(allocator, key);
+    try config.appendSlice(allocator, " = \"");
+    try appendCurlConfigQuotedValue(allocator, config, value);
+    try config.appendSlice(allocator, "\"\n");
+}
+
+fn appendCurlConfigQuotedValue(
+    allocator: std.mem.Allocator,
+    config: *std.ArrayList(u8),
+    value: []const u8,
+) !void {
+    for (value) |byte| {
+        switch (byte) {
+            '\\' => try config.appendSlice(allocator, "\\\\"),
+            '"' => try config.appendSlice(allocator, "\\\""),
+            '\n' => try config.appendSlice(allocator, "\\n"),
+            '\r' => try config.appendSlice(allocator, "\\r"),
+            '\t' => try config.appendSlice(allocator, "\\t"),
+            else => try config.append(allocator, byte),
+        }
+    }
 }
 
 fn parseCurlHttpOutput(allocator: std.mem.Allocator, output: []const u8) !CurlHttpOutput {
