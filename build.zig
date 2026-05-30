@@ -22,6 +22,20 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const fake_curl_module = b.createModule(.{
+        .root_source_file = b.path("tests/fake_curl.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const fake_curl_exe = b.addExecutable(.{
+        .name = "curl",
+        .root_module = fake_curl_module,
+    });
+    const install_fake_curl = b.addInstallArtifact(fake_curl_exe, .{});
+    const test_helpers_step = b.step("test-helpers", "Install test helper binaries");
+    test_helpers_step.dependOn(b.getInstallStep());
+    test_helpers_step.dependOn(&install_fake_curl.step);
+
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {
         run_cmd.addArgs(args);

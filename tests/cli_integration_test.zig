@@ -105,7 +105,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
     try env_map.put(cli_integration_install_prefix_env, install_prefix);
 
-    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ "zig", "build", "-p", install_prefix });
+    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ "zig", "build", "-p", install_prefix, "test-helpers" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -213,7 +213,7 @@ fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
 }
 
 fn fakeCurlCommandPath() []const u8 {
-    return if (builtin.os.tag == .windows) "fake-curl-bin/curl.cmd" else "fake-curl-bin/curl";
+    return if (builtin.os.tag == .windows) "fake-curl-bin/curl.exe" else "fake-curl-bin/curl";
 }
 
 fn writeFailingFakeCurl(dir: fs.Dir) !void {
@@ -234,8 +234,16 @@ fn writeFailingFakeCurl(dir: fs.Dir) !void {
 }
 
 fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
-    _ = project_root;
     try dir.makePath("fake-curl-bin");
+    if (builtin.os.tag == .windows) {
+        const built_fake_curl = try builtFakeCurlPathAlloc(allocator, project_root);
+        defer allocator.free(built_fake_curl);
+        const fake_curl_data = try std.fs.cwd().readFileAlloc(allocator, built_fake_curl, 16 * 1024 * 1024);
+        defer allocator.free(fake_curl_data);
+        try dir.writeFile(.{ .sub_path = fakeCurlCommandPath(), .data = fake_curl_data });
+        return;
+    }
+
     const me_body = "{\"id\":\"user_api_e2e\",\"email\":\"apikey-flow@example.com\",\"name\":\"API Flow\"}";
     const usage_body = "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":12,\"limit_window_seconds\":18000,\"reset_at\":4102444800},\"secondary_window\":{\"used_percent\":34,\"limit_window_seconds\":604800,\"reset_at\":4103049600}}}";
 
@@ -282,6 +290,18 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
         defer file.close();
         try file.chmod(0o755);
     }
+}
+
+fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
+    const exe_name = if (builtin.os.tag == .windows) "curl.exe" else "curl";
+    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+
+    const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
+    return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
