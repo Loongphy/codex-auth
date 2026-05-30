@@ -71,6 +71,7 @@ pub const isHandledCliError = preflight.isHandledCliError;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
 const ensureForegroundCurlAvailableWithApiEnabled = preflight.ensureForegroundCurlAvailableWithApiEnabled;
+pub const shouldPreflightCurlForForegroundTargetWithApiEnabled = preflight.shouldPreflightCurlForForegroundTargetWithApiEnabled;
 pub const switch_live_default_refresh_interval_ms = live_flow.switch_live_default_refresh_interval_ms;
 pub const SwitchLiveRefreshPolicy = live_flow.SwitchLiveRefreshPolicy;
 pub const SwitchLiveRuntime = live_flow.SwitchLiveRuntime;

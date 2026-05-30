@@ -446,6 +446,7 @@ pub fn loadSwitchSelectionDisplay(
         &refreshed,
         target,
         initial_policy.usage_api_enabled,
+        false,
         initial_policy.account_api_enabled,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,

@@ -77,6 +77,7 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         &reg,
         .list,
         usage_api_enabled,
+        opts.active_only,
         account_api_enabled,
     );
 

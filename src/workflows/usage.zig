@@ -33,8 +33,12 @@ const ForegroundUsageWorkerResult = struct {
     }
 };
 
+pub fn shouldRefreshChatGptUsageForAccount(rec: *const registry.AccountRecord) bool {
+    return rec.auth_mode == null or rec.auth_mode.? != .apikey;
+}
+
 fn skipsChatGptUsage(rec: *const registry.AccountRecord) bool {
-    return rec.auth_mode != null and rec.auth_mode.? == .apikey;
+    return !shouldRefreshChatGptUsageForAccount(rec);
 }
 
 pub const ForegroundUsageOutcome = struct {

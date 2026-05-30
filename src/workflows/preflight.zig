@@ -5,6 +5,7 @@ const cli = @import("../cli/root.zig");
 const registry = @import("../registry/root.zig");
 const account_names = @import("account_names.zig");
 const targets = @import("targets.zig");
+const usage_refresh = @import("usage.zig");
 
 const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const LiveTtyTarget = targets.LiveTtyTarget;
@@ -71,9 +72,10 @@ pub fn shouldPreflightCurlForForegroundTargetWithApiEnabled(
     reg: *registry.Registry,
     target: ForegroundUsageRefreshTarget,
     usage_api_enabled: bool,
+    active_only: bool,
     account_api_enabled: bool,
 ) !bool {
-    if (shouldRefreshForegroundUsage(target) and usage_api_enabled and reg.accounts.items.len != 0) {
+    if (shouldRefreshForegroundUsage(target) and usage_api_enabled and hasRefreshableChatGptUsageAccount(reg, active_only)) {
         return true;
     }
 
@@ -93,6 +95,7 @@ pub fn ensureForegroundCurlAvailableWithApiEnabled(
     reg: *registry.Registry,
     target: ForegroundUsageRefreshTarget,
     usage_api_enabled: bool,
+    active_only: bool,
     account_api_enabled: bool,
 ) !void {
     if (!try shouldPreflightCurlForForegroundTargetWithApiEnabled(
@@ -101,8 +104,22 @@ pub fn ensureForegroundCurlAvailableWithApiEnabled(
         reg,
         target,
         usage_api_enabled,
+        active_only,
         account_api_enabled,
     )) return;
 
     try chatgpt_http.ensureCurlExecutableAvailable(allocator);
+}
+
+fn hasRefreshableChatGptUsageAccount(reg: *registry.Registry, active_only: bool) bool {
+    if (active_only) {
+        const active_account_key = reg.active_account_key orelse return false;
+        const idx = registry.findAccountIndexByAccountKey(reg, active_account_key) orelse return false;
+        return usage_refresh.shouldRefreshChatGptUsageForAccount(&reg.accounts.items[idx]);
+    }
+
+    for (reg.accounts.items) |*account| {
+        if (usage_refresh.shouldRefreshChatGptUsageForAccount(account)) return true;
+    }
+    return false;
 }
