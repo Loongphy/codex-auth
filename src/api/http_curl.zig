@@ -1,6 +1,5 @@
 const std = @import("std");
 const types = @import("http_types.zig");
-const env = @import("http_env.zig");
 const child = @import("http_child.zig");
 const executable = @import("http_executable.zig");
 
@@ -13,7 +12,6 @@ const request_timeout_secs = types.request_timeout_secs;
 const child_process_timeout_ms_value = types.child_process_timeout_ms_value;
 const default_max_output_bytes = types.default_max_output_bytes;
 const user_agent = types.user_agent;
-const getEnvMap = env.getEnvMap;
 const runChildCaptureWithInputAndOutputLimit = child.runChildCaptureWithInputAndOutputLimit;
 const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
 const curl_timeout_exit_code = 28;
@@ -75,12 +73,25 @@ fn runCurlGetJsonCommand(
     access_token: []const u8,
     account_id: []const u8,
 ) !HttpResult {
+    const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
+    defer allocator.free(curl_executable);
+
+    return runCurlGetJsonCommandWithExecutable(allocator, curl_executable, endpoint, access_token, account_id);
+}
+
+fn runCurlGetJsonCommandWithExecutable(
+    allocator: std.mem.Allocator,
+    curl_executable: []const u8,
+    endpoint: []const u8,
+    access_token: []const u8,
+    account_id: []const u8,
+) !HttpResult {
     const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
     const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
     defer allocator.free(account_header);
 
-    return try runCurlJsonCommand(allocator, endpoint, &[_][]const u8{ authorization, account_header });
+    return try runCurlJsonCommandWithExecutable(allocator, curl_executable, endpoint, &[_][]const u8{ authorization, account_header });
 }
 
 fn runCurlJsonCommand(
@@ -91,9 +102,15 @@ fn runCurlJsonCommand(
     const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
     defer allocator.free(curl_executable);
 
-    var env_map = try getEnvMap(allocator);
-    defer env_map.deinit();
+    return runCurlJsonCommandWithExecutable(allocator, curl_executable, endpoint, headers);
+}
 
+fn runCurlJsonCommandWithExecutable(
+    allocator: std.mem.Allocator,
+    curl_executable: []const u8,
+    endpoint: []const u8,
+    headers: []const []const u8,
+) !HttpResult {
     const user_agent_header = "User-Agent: " ++ user_agent;
 
     var argv = std.ArrayList([]const u8).empty;
@@ -114,7 +131,7 @@ fn runCurlJsonCommand(
         argv.items,
         curl_config.items,
         child_process_timeout_ms_value,
-        &env_map,
+        null,
         default_max_output_bytes,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -158,15 +175,28 @@ fn runCurlGetJsonBatchCommand(
             if (item.body.len != 0) allocator.free(item.body);
         }
     }
+    if (requests.len == 0) return .{ .items = items };
+
+    const curl_executable = resolveCurlExecutableForLaunchAlloc(allocator) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                fillCurlBatchErrorItems(allocator, items, err);
+                return .{ .items = items };
+            },
+        }
+    };
+    defer allocator.free(curl_executable);
 
     const worker_count = @min(requests.len, @max(@as(usize, 1), max_concurrency));
     if (worker_count <= 1) {
-        runCurlGetJsonBatchSerially(allocator, endpoint, requests, items);
+        runCurlGetJsonBatchSerially(allocator, curl_executable, endpoint, requests, items);
         return .{ .items = items };
     }
 
     var queue: CurlBatchWorkerQueue = .{
         .allocator = allocator,
+        .curl_executable = curl_executable,
         .endpoint = endpoint,
         .requests = requests,
         .items = items,
@@ -195,6 +225,7 @@ fn runCurlGetJsonBatchCommand(
 
 const CurlBatchWorkerQueue = struct {
     allocator: std.mem.Allocator,
+    curl_executable: []const u8,
     endpoint: []const u8,
     requests: []const BatchRequest,
     items: []BatchItemResult,
@@ -204,30 +235,33 @@ const CurlBatchWorkerQueue = struct {
         while (true) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.requests.len) return;
-            runCurlBatchItem(self.allocator, self.endpoint, self.requests[idx], &self.items[idx]);
+            runCurlBatchItem(self.allocator, self.curl_executable, self.endpoint, self.requests[idx], &self.items[idx]);
         }
     }
 };
 
 fn runCurlGetJsonBatchSerially(
     allocator: std.mem.Allocator,
+    curl_executable: []const u8,
     endpoint: []const u8,
     requests: []const BatchRequest,
     items: []BatchItemResult,
 ) void {
     for (requests, 0..) |request, idx| {
-        runCurlBatchItem(allocator, endpoint, request, &items[idx]);
+        runCurlBatchItem(allocator, curl_executable, endpoint, request, &items[idx]);
     }
 }
 
 fn runCurlBatchItem(
     allocator: std.mem.Allocator,
+    curl_executable: []const u8,
     endpoint: []const u8,
     request: BatchRequest,
     item: *BatchItemResult,
 ) void {
-    const result = runCurlGetJsonCommand(
+    const result = runCurlGetJsonCommandWithExecutable(
         allocator,
+        curl_executable,
         endpoint,
         request.access_token,
         request.account_id,
@@ -240,6 +274,12 @@ fn runCurlBatchItem(
         .status_code = result.status_code,
         .outcome = .ok,
     };
+}
+
+fn fillCurlBatchErrorItems(allocator: std.mem.Allocator, items: []BatchItemResult, err: anyerror) void {
+    for (items) |*item| {
+        item.* = curlBatchErrorItem(allocator, err);
+    }
 }
 
 fn curlBatchErrorItem(allocator: std.mem.Allocator, err: anyerror) BatchItemResult {

@@ -1,12 +1,10 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const types = @import("http_types.zig");
-const env = @import("http_env.zig");
 
 const ChildCaptureResult = types.ChildCaptureResult;
 const default_max_output_bytes = types.default_max_output_bytes;
 const request_timeout_ms_value = types.request_timeout_ms_value;
-const getEnvMap = env.getEnvMap;
 
 pub fn runChildCapture(
     allocator: std.mem.Allocator,
@@ -35,13 +33,9 @@ pub fn runChildCaptureWithInputAndOutputLimit(
     env_map: ?*const std.process.Environ.Map,
     output_limit_bytes: usize,
 ) !ChildCaptureResult {
-    var local_env_map = try getEnvMap(allocator);
-    defer local_env_map.deinit();
-    const effective_env_map = env_map orelse &local_env_map;
-
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = argv,
-        .environ_map = effective_env_map,
+        .environ_map = env_map,
         .stdin = if (stdin_bytes != null) .pipe else .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
