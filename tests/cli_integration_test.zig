@@ -164,7 +164,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
                 "if \"%CODEX_HOME_DIR%\"==\"\" set \"CODEX_HOME_DIR=%HOME%\\.codex\"\r\n" ++
                 "if not exist \"%CODEX_HOME_DIR%\" mkdir \"%CODEX_HOME_DIR%\"\r\n" ++
                 "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME_DIR%\\auth.json\" >NUL\r\n" ++
-                ">\"%CODEX_HOME_DIR%\\helper-state.txt\" echo installed\r\n" ++
+                "echo|set /p=\"installed\" >\"%CODEX_HOME_DIR%\\helper-state.txt\" & echo.>>\"%CODEX_HOME_DIR%\\helper-state.txt\"\r\n" ++
                 "exit /b 0\r\n"
         else
             "#!/bin/sh\n" ++
