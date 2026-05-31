@@ -41,8 +41,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     defer allocator.free(auth_path);
     const original_auth = try loadActiveAuthState(allocator, auth_path);
     defer if (original_auth) |data| allocator.free(data);
-    var keep_updated_auth = false;
-    errdefer if (!keep_updated_auth) restoreActiveAuthState(auth_path, original_auth) catch {};
+    errdefer restoreActiveAuthState(auth_path, original_auth) catch {};
 
     try registry.ensureAccountsDir(allocator, codex_home);
     try cli.login.runCodexLogin(opts, codex_home);
@@ -66,7 +65,6 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         try registry.upsertAccount(allocator, &reg, record);
         try registry.setActiveAccountKey(allocator, &reg, record_key);
         try registry.saveRegistry(allocator, codex_home, &reg);
-        keep_updated_auth = true;
         return;
     }
 
@@ -83,5 +81,4 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     try registry.setActiveAccountKey(allocator, &reg, record_key);
     _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
-    keep_updated_auth = true;
 }
