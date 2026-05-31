@@ -146,9 +146,6 @@ fn runCurlGetJsonBatchCommand(
     requests: []const BatchRequest,
     max_concurrency: usize,
 ) !BatchHttpResult {
-    // curl transport intentionally runs the batch serially; max_concurrency is
-    // retained in the shared interface for callers that do not know the transport.
-    _ = max_concurrency;
     const items = try allocator.alloc(BatchItemResult, requests.len);
     errdefer allocator.free(items);
     for (items) |*item| item.* = .{
@@ -162,35 +159,102 @@ fn runCurlGetJsonBatchCommand(
         }
     }
 
-    for (requests, 0..) |request, idx| {
-        const result = runCurlGetJsonCommand(
-            allocator,
-            endpoint,
-            request.access_token,
-            request.account_id,
-        ) catch |err| {
-            items[idx] = switch (err) {
-                error.TimedOut => .{
-                    .body = &.{},
-                    .status_code = null,
-                    .outcome = .timeout,
-                },
-                else => .{
-                    .body = try allocator.dupe(u8, @errorName(err)),
-                    .status_code = null,
-                    .outcome = .failed,
-                },
-            };
-            continue;
-        };
-        items[idx] = .{
-            .body = result.body,
-            .status_code = result.status_code,
-            .outcome = .ok,
-        };
+    const worker_count = @min(requests.len, @max(@as(usize, 1), max_concurrency));
+    if (worker_count <= 1) {
+        runCurlGetJsonBatchSerially(allocator, endpoint, requests, items);
+        return .{ .items = items };
     }
 
+    var queue: CurlBatchWorkerQueue = .{
+        .allocator = allocator,
+        .endpoint = endpoint,
+        .requests = requests,
+        .items = items,
+    };
+
+    const helper_count = worker_count - 1;
+    var threads = try allocator.alloc(std.Thread, helper_count);
+    defer allocator.free(threads);
+
+    var spawned_count: usize = 0;
+    defer {
+        for (threads[0..spawned_count]) |thread| thread.join();
+    }
+
+    for (threads) |*thread| {
+        thread.* = std.Thread.spawn(.{}, CurlBatchWorkerQueue.run, .{&queue}) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => break,
+        };
+        spawned_count += 1;
+    }
+
+    queue.run();
     return .{ .items = items };
+}
+
+const CurlBatchWorkerQueue = struct {
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const BatchRequest,
+    items: []BatchItemResult,
+    next_index: std.atomic.Value(usize) = .init(0),
+
+    fn run(self: *CurlBatchWorkerQueue) void {
+        while (true) {
+            const idx = self.next_index.fetchAdd(1, .monotonic);
+            if (idx >= self.requests.len) return;
+            runCurlBatchItem(self.allocator, self.endpoint, self.requests[idx], &self.items[idx]);
+        }
+    }
+};
+
+fn runCurlGetJsonBatchSerially(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const BatchRequest,
+    items: []BatchItemResult,
+) void {
+    for (requests, 0..) |request, idx| {
+        runCurlBatchItem(allocator, endpoint, request, &items[idx]);
+    }
+}
+
+fn runCurlBatchItem(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    request: BatchRequest,
+    item: *BatchItemResult,
+) void {
+    const result = runCurlGetJsonCommand(
+        allocator,
+        endpoint,
+        request.access_token,
+        request.account_id,
+    ) catch |err| {
+        item.* = curlBatchErrorItem(allocator, err);
+        return;
+    };
+    item.* = .{
+        .body = result.body,
+        .status_code = result.status_code,
+        .outcome = .ok,
+    };
+}
+
+fn curlBatchErrorItem(allocator: std.mem.Allocator, err: anyerror) BatchItemResult {
+    return switch (err) {
+        error.TimedOut => .{
+            .body = &.{},
+            .status_code = null,
+            .outcome = .timeout,
+        },
+        else => .{
+            .body = allocator.dupe(u8, @errorName(err)) catch &.{},
+            .status_code = null,
+            .outcome = .failed,
+        },
+    };
 }
 
 fn appendCurlBaseArgs(
