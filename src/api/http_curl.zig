@@ -16,6 +16,61 @@ const runChildCaptureWithInputAndOutputLimit = child.runChildCaptureWithInputAnd
 const resolveCurlExecutableForLaunchAlloc = executable.resolveCurlExecutableForLaunchAlloc;
 const curl_timeout_exit_code = 28;
 
+const LockedAllocator = struct {
+    allocator: std.mem.Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
+
+    fn lockedAllocator(self: *LockedAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn lock(self: *LockedAllocator) void {
+        while (!self.mutex.tryLock()) {
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn unlock(self: *LockedAllocator) void {
+        self.mutex.unlock();
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.allocator.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.allocator.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        return self.allocator.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *LockedAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.unlock();
+        self.allocator.rawFree(memory, alignment, ret_addr);
+    }
+};
+
 const CurlHttpOutput = struct {
     body: []u8,
     status_code: ?u16,
@@ -194,8 +249,9 @@ fn runCurlGetJsonBatchCommand(
         return .{ .items = items };
     }
 
+    var locked_allocator: LockedAllocator = .{ .allocator = allocator };
     var queue: CurlBatchWorkerQueue = .{
-        .allocator = allocator,
+        .allocator = locked_allocator.lockedAllocator(),
         .curl_executable = curl_executable,
         .endpoint = endpoint,
         .requests = requests,
