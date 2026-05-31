@@ -10,21 +10,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const rootPackageJsonPath = path.join(__dirname, "..", "package.json");
-const requiredNodeMajor = 22;
-
-function ensureSupportedNodeVersion() {
-  const major = Number(process.versions?.node?.split(".")[0] ?? 0);
-  if (Number.isInteger(major) && major >= requiredNodeMajor) {
-    return;
-  }
-
-  console.error(
-    `Node.js ${requiredNodeMajor}+ is required to run @loongphy/codex-auth. Current version: ${process.version}.`
-  );
-  process.exit(1);
-}
-
-ensureSupportedNodeVersion();
 
 const packageMap = {
   "linux:x64": "@loongphy/codex-auth-linux-x64",
@@ -92,11 +77,7 @@ function resolveBinary() {
 
 const binaryPath = resolveBinary();
 const child = spawnSync(binaryPath, process.argv.slice(2), {
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    CODEX_AUTH_NODE_EXECUTABLE: process.execPath
-  }
+  stdio: "inherit"
 });
 
 if (child.error) {
