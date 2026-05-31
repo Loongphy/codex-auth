@@ -251,48 +251,24 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     const me_body = "{\"id\":\"user_api_e2e\",\"email\":\"apikey-flow@example.com\",\"name\":\"API Flow\"}";
     const usage_body = "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":12,\"limit_window_seconds\":18000,\"reset_at\":4102444800},\"secondary_window\":{\"used_percent\":34,\"limit_window_seconds\":604800,\"reset_at\":4103049600}}}";
 
-    const script = if (builtin.os.tag == .windows)
-        try std.fmt.allocPrint(
-            allocator,
-            "@echo off\r\n" ++
-                "set last=\r\n" ++
-                ":loop\r\n" ++
-                "if \"%~1\"==\"\" goto done\r\n" ++
-                "set last=%~1\r\n" ++
-                "shift\r\n" ++
-                "goto loop\r\n" ++
-                ":done\r\n" ++
-                "echo %last%| findstr /C:\"/v1/me\" >nul\r\n" ++
-                "if %errorlevel%==0 (\r\n" ++
-                "  echo {s}\r\n" ++
-                "  echo 200\r\n" ++
-                "  exit /b 0\r\n" ++
-                ")\r\n" ++
-                "echo {s}\r\n" ++
-                "echo 200\r\n",
-            .{ me_body, usage_body },
-        )
-    else
-        try std.fmt.allocPrint(
-            allocator,
-            "#!/bin/sh\n" ++
-                "config=$(cat)\n" ++
-                "case \"$config\" in\n" ++
-                "  */v1/me*) printf '%s\\n200' '{s}' ;;\n" ++
-                "  *) printf '%s\\n200' '{s}' ;;\n" ++
-                "esac\n",
-            .{ me_body, usage_body },
-        );
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "#!/bin/sh\n" ++
+            "config=$(cat)\n" ++
+            "case \"$config\" in\n" ++
+            "  */v1/me*) printf '%s\\n200' '{s}' ;;\n" ++
+            "  *) printf '%s\\n200' '{s}' ;;\n" ++
+            "esac\n",
+        .{ me_body, usage_body },
+    );
     defer allocator.free(script);
 
     const sub_path = fakeCurlCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
-    if (builtin.os.tag != .windows) {
-        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
-        defer file.close();
-        try file.chmod(0o755);
-    }
+    var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o755);
 }
 
 fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
