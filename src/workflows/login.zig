@@ -37,6 +37,8 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg);
     }
 
+    try registry.ensureAccountsDir(allocator, codex_home);
+
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
     const original_auth = try loadActiveAuthState(allocator, auth_path);
@@ -48,7 +50,6 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         );
     };
 
-    try registry.ensureAccountsDir(allocator, codex_home);
     try cli.login.runCodexLogin(opts, codex_home);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
@@ -64,6 +65,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
         defer allocator.free(dest);
 
+        try registry.ensureAccountsDir(allocator, codex_home);
         try registry.copyManagedFile(auth_path, dest);
 
         const record = try registry.accountFromApiKeyMe(allocator, "", &info, &me);
@@ -79,6 +81,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
+    try registry.ensureAccountsDir(allocator, codex_home);
     try registry.copyManagedFile(auth_path, dest);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
