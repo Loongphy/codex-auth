@@ -41,7 +41,12 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     defer allocator.free(auth_path);
     const original_auth = try loadActiveAuthState(allocator, auth_path);
     defer if (original_auth) |data| allocator.free(data);
-    errdefer restoreActiveAuthState(auth_path, original_auth) catch {};
+    errdefer |login_err| restoreActiveAuthState(auth_path, original_auth) catch |restore_err| {
+        std.log.err(
+            "failed to restore auth.json after login failure ({s}): {s}",
+            .{ @errorName(login_err), @errorName(restore_err) },
+        );
+    };
 
     try registry.ensureAccountsDir(allocator, codex_home);
     try cli.login.runCodexLogin(opts, codex_home);
