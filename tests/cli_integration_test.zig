@@ -164,6 +164,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
                 "if \"%CODEX_HOME_DIR%\"==\"\" set \"CODEX_HOME_DIR=%HOME%\\.codex\"\r\n" ++
                 "if not exist \"%CODEX_HOME_DIR%\" mkdir \"%CODEX_HOME_DIR%\"\r\n" ++
                 "copy /Y \"%HOME%\\fake-auth.json\" \"%CODEX_HOME_DIR%\\auth.json\" >NUL\r\n" ++
+                ">\"%CODEX_HOME_DIR%\\helper-state.txt\" echo installed\r\n" ++
                 "exit /b 0\r\n"
         else
             "#!/bin/sh\n" ++
@@ -172,6 +173,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
                 "CODEX_HOME_DIR=\"${CODEX_HOME:-$HOME/.codex}\"\n" ++
                 "mkdir -p \"$CODEX_HOME_DIR\"\n" ++
                 "cp \"$HOME/fake-auth.json\" \"$CODEX_HOME_DIR/auth.json\"\n" ++
+                "printf 'installed\\n' > \"$CODEX_HOME_DIR/helper-state.txt\"\n" ++
                 "exit 0\n";
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
@@ -792,9 +794,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
-    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
+    try std.testing.expectEqualStrings(codex_home, fake_codex_home);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -817,9 +817,15 @@ test "Scenario: Given device auth login when running login then it forwards the 
     const active_auth = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(active_auth);
     try std.testing.expectEqualStrings(fake_auth, active_auth);
+
+    const helper_state_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "helper-state.txt" });
+    defer gpa.free(helper_state_path);
+    const helper_state = try fixtures.readFileAlloc(gpa, helper_state_path);
+    defer gpa.free(helper_state);
+    try std.testing.expectEqualStrings("installed\n", helper_state);
 }
 
-test "Scenario: Given strict codex login when running login then scratch CODEX_HOME exists before launch" {
+test "Scenario: Given strict codex login when running login then the real CODEX_HOME exists before launch" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -864,9 +870,7 @@ test "Scenario: Given strict codex login when running login then scratch CODEX_H
     const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
-    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
-    try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
+    try std.testing.expectEqualStrings(codex_home, fake_codex_home);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -989,8 +993,7 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     const fake_codex_home_data = try fixtures.readFileAlloc(gpa, fake_codex_home_path);
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
-    try std.testing.expect(!std.mem.eql(u8, fake_codex_home, custom_codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expectEqualStrings(custom_codex_home, fake_codex_home);
 
     const default_auth_path = try authJsonPathAlloc(gpa, home_root);
     defer gpa.free(default_auth_path);

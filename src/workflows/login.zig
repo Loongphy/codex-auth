@@ -9,11 +9,25 @@ const app_runtime = @import("../core/runtime.zig");
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
 const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogin;
 
-fn loginScratchCodexHomeAlloc(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    const stamp = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
-    const name = try std.fmt.allocPrint(allocator, "login-{d}", .{stamp});
-    defer allocator.free(name);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", name });
+fn loadActiveAuthState(allocator: std.mem.Allocator, auth_path: []const u8) !?[]u8 {
+    const file = std.Io.Dir.cwd().openFile(app_runtime.io(), auth_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer file.close(app_runtime.io());
+
+    return try registry.readFileAlloc(file, allocator, 10 * 1024 * 1024);
+}
+
+fn restoreActiveAuthState(auth_path: []const u8, state: ?[]const u8) !void {
+    if (state) |data| {
+        try registry.writeFile(auth_path, data);
+    } else {
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), auth_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
 }
 
 pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {
@@ -23,19 +37,15 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         _ = try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg);
     }
 
-    try registry.ensureAccountsDir(allocator, codex_home);
-    const login_codex_home = try loginScratchCodexHomeAlloc(allocator, codex_home);
-    defer allocator.free(login_codex_home);
-    defer std.Io.Dir.cwd().deleteTree(app_runtime.io(), login_codex_home) catch {};
-    try registry.ensurePrivateDir(login_codex_home);
-
-    try cli.login.runCodexLogin(opts, login_codex_home);
-    const login_auth_path = try registry.activeAuthPath(allocator, login_codex_home);
-    defer allocator.free(login_auth_path);
-
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
-    try registry.copyManagedFile(login_auth_path, auth_path);
+    const original_auth = try loadActiveAuthState(allocator, auth_path);
+    defer if (original_auth) |data| allocator.free(data);
+    var keep_updated_auth = false;
+    errdefer if (!keep_updated_auth) restoreActiveAuthState(auth_path, original_auth) catch {};
+
+    try registry.ensureAccountsDir(allocator, codex_home);
+    try cli.login.runCodexLogin(opts, codex_home);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
@@ -50,13 +60,13 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
         const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
         defer allocator.free(dest);
 
-        try registry.ensureAccountsDir(allocator, codex_home);
         try registry.copyManagedFile(auth_path, dest);
 
         const record = try registry.accountFromApiKeyMe(allocator, "", &info, &me);
         try registry.upsertAccount(allocator, &reg, record);
         try registry.setActiveAccountKey(allocator, &reg, record_key);
         try registry.saveRegistry(allocator, codex_home, &reg);
+        keep_updated_auth = true;
         return;
     }
 
@@ -66,7 +76,6 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
-    try registry.ensureAccountsDir(allocator, codex_home);
     try registry.copyManagedFile(auth_path, dest);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
@@ -74,4 +83,5 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     try registry.setActiveAccountKey(allocator, &reg, record_key);
     _ = try refreshAccountNamesAfterLogin(allocator, &reg, &info, defaultAccountFetcher);
     try registry.saveRegistry(allocator, codex_home, &reg);
+    keep_updated_auth = true;
 }
