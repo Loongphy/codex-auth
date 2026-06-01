@@ -176,6 +176,13 @@ fn handleSwitchPrevious(
         return error.PreviousAccountUnavailable;
     }
 
+    if (reg.active_account_key) |active_account_key| {
+        if (std.mem.eql(u8, active_account_key, previous_account_key)) {
+            try cli.output.printNoPreviousAccountError();
+            return error.NoPreviousAccount;
+        }
+    }
+
     try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);

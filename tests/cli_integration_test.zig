@@ -2059,6 +2059,75 @@ test "Scenario: Given no previous account when running dash then it fails cleanl
     try std.testing.expectEqualStrings("error: no previous account to switch to.\n", result.stderr);
 }
 
+test "Scenario: Given previous is active after remove when running dash then it fails cleanly" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "previous@example.com", .alias = "previous" },
+        .{ .email = "active@example.com", .alias = "active" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const previous_key = try fixtures.accountKeyForEmailAlloc(gpa, "previous@example.com");
+    defer gpa.free(previous_key);
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const previous_snapshot_path = try registry.accountAuthPath(gpa, codex_home, previous_key);
+    defer gpa.free(previous_snapshot_path);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+
+    const previous_auth = try fixtures.authJsonWithEmailPlan(gpa, "previous@example.com", "plus");
+    defer gpa.free(previous_auth);
+    const active_auth = try fixtures.authJsonWithEmailPlan(gpa, "active@example.com", "pro");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = previous_snapshot_path, .data = previous_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+
+    var seeded = try registry.loadRegistry(gpa, codex_home);
+    defer seeded.deinit(gpa);
+    try registry.setActiveAccountKey(gpa, &seeded, previous_key);
+    try registry.setActiveAccountKey(gpa, &seeded, active_key);
+    try registry.saveRegistry(gpa, codex_home, &seeded);
+
+    const remove_result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(remove_result.stdout);
+    defer gpa.free(remove_result.stderr);
+    try expectSuccess(remove_result);
+
+    const dash_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{"-"});
+    defer gpa.free(dash_result.stdout);
+    defer gpa.free(dash_result.stderr);
+    try expectFailure(dash_result);
+    try std.testing.expectEqualStrings("", dash_result.stdout);
+    try std.testing.expectEqualStrings("error: no previous account to switch to.\n", dash_result.stderr);
+
+    const active_auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(active_auth_after);
+    try std.testing.expectEqualStrings(previous_auth, active_auth_after);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(loaded.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(previous_key, loaded.active_account_key.?);
+    try std.testing.expectEqualStrings(previous_key, loaded.previous_active_account_key.?);
+}
+
 test "Scenario: Given missing previous account when running switch dash then it fails cleanly" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
