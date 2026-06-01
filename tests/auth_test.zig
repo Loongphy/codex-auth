@@ -366,3 +366,30 @@ test "convert standard auth json to cpa omits optional empty fields" {
     try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
 }
+
+test "convert standard auth json to cpa derives account id from id token" {
+    const gpa = std.testing.allocator;
+    const standard_json = try fixtures.authJsonWithEmailPlan(gpa, "standard-mismatched-account@example.com", "plus");
+    defer gpa.free(standard_json);
+    const expected_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "standard-mismatched-account@example.com");
+    defer gpa.free(expected_account_id);
+    const stale_account_id_json = try std.fmt.allocPrint(gpa, "\"account_id\":\"{s}\"", .{expected_account_id});
+    defer gpa.free(stale_account_id_json);
+    const mismatched = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        standard_json,
+        stale_account_id_json,
+        "\"account_id\":\"stale-account-id\"",
+    );
+    defer gpa.free(mismatched);
+
+    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{expected_account_id});
+    defer gpa.free(expected_json);
+
+    const converted = try auth.convertStandardAuthJsonToCpa(gpa, mismatched);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "stale-account-id") == null);
+}

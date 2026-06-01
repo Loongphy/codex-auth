@@ -290,6 +290,8 @@ pub fn convertStandardAuthJsonToCpa(allocator: std.mem.Allocator, data: []const 
     };
     const id_token = jsonNonEmptyStringField(tokens, "id_token") orelse return error.MissingIdToken;
     const access_token = jsonNonEmptyStringField(tokens, "access_token") orelse return error.MissingAccessToken;
+    const account_id = try cpaAccountIdFromIdTokenAlloc(allocator, tokens) orelse return error.MissingAccountId;
+    defer allocator.free(account_id);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
@@ -298,7 +300,7 @@ pub fn convertStandardAuthJsonToCpa(allocator: std.mem.Allocator, data: []const 
         .id_token = id_token,
         .access_token = access_token,
         .refresh_token = jsonNonEmptyStringField(tokens, "refresh_token"),
-        .account_id = jsonNonEmptyStringField(tokens, "account_id"),
+        .account_id = account_id,
         .last_refresh = jsonNonEmptyStringField(obj, "last_refresh"),
     }, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, &out.writer);
     try out.writer.writeAll("\n");
