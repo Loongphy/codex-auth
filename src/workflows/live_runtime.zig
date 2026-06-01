@@ -373,9 +373,9 @@ pub fn removeSelectedAccountsAndPersist(
 
     if (replacement_account_key) |key| {
         if (allow_auth_file_update) {
-            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, key);
+            try registry.replaceActiveAuthWithAccountByKeyPreservingPrevious(allocator, codex_home, reg, key);
         } else {
-            try registry.setActiveAccountKey(allocator, reg, key);
+            try registry.setActiveAccountKeyPreservingPrevious(allocator, reg, key);
         }
     }
 

@@ -1927,7 +1927,173 @@ test "Scenario: Given switch query with a direct local match when running switch
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(loaded.previous_active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+    try std.testing.expect(std.mem.eql(u8, loaded.previous_active_account_key.?, active_key));
+}
+
+test "Scenario: Given previous account exists when running top-level dash then it switches back and forth" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try fixtures.authJsonWithEmailPlan(gpa, "active@example.com", "team");
+    defer gpa.free(active_auth);
+    const backup_auth = try fixtures.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const switch_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "backup@" },
+    );
+    defer gpa.free(switch_result.stdout);
+    defer gpa.free(switch_result.stderr);
+    try expectSuccess(switch_result);
+
+    const dash_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{"-"},
+    );
+    defer gpa.free(dash_result.stdout);
+    defer gpa.free(dash_result.stderr);
+    try expectSuccess(dash_result);
+    try std.testing.expectEqualStrings("Switched to active(active@example.com)\n", dash_result.stdout);
+    try std.testing.expectEqualStrings("", dash_result.stderr);
+
+    const auth_after_dash = try fixtures.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after_dash);
+    try std.testing.expectEqualStrings(active_auth, auth_after_dash);
+
+    var loaded_after_dash = try registry.loadRegistry(gpa, codex_home);
+    defer loaded_after_dash.deinit(gpa);
+    try std.testing.expect(loaded_after_dash.active_account_key != null);
+    try std.testing.expect(loaded_after_dash.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(active_key, loaded_after_dash.active_account_key.?);
+    try std.testing.expectEqualStrings(backup_key, loaded_after_dash.previous_active_account_key.?);
+
+    const switch_dash_result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "-" },
+    );
+    defer gpa.free(switch_dash_result.stdout);
+    defer gpa.free(switch_dash_result.stderr);
+    try expectSuccess(switch_dash_result);
+    try std.testing.expectEqualStrings("Switched to backup(backup@example.com)\n", switch_dash_result.stdout);
+    try std.testing.expectEqualStrings("", switch_dash_result.stderr);
+
+    const auth_after_switch_dash = try fixtures.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(auth_after_switch_dash);
+    try std.testing.expectEqualStrings(backup_auth, auth_after_switch_dash);
+}
+
+test "Scenario: Given no previous account when running dash then it fails cleanly" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+    });
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{"-"},
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("error: no previous account to switch to.\n", result.stderr);
+}
+
+test "Scenario: Given missing previous account when running switch dash then it fails cleanly" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var reg = try registry.loadRegistry(gpa, codex_home);
+    defer reg.deinit(gpa);
+    reg.previous_active_account_key = try fixtures.accountKeyForEmailAlloc(gpa, "removed@example.com");
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "switch", "-" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expectEqualStrings("error: previous account is no longer available.\n", result.stderr);
 }
 
 test "Scenario: Given alias set with a direct local match when running alias then registry alias is updated" {
@@ -2847,6 +3013,81 @@ test "Scenario: Given active account removal with a replacement when running rem
     try std.testing.expectEqualStrings(backup_auth, replaced_auth);
     try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_snapshot_path, .{}));
     try std.testing.expectEqual(@as(usize, 0), try countAuthBackups(tmp.dir, ".codex/accounts"));
+}
+
+test "Scenario: Given active account removal with a replacement when running remove then previous account is preserved" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "previous@example.com", .alias = "previous" },
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_auth_path = try authJsonPathAlloc(gpa, home_root);
+    defer gpa.free(active_auth_path);
+
+    const previous_key = try fixtures.accountKeyForEmailAlloc(gpa, "previous@example.com");
+    defer gpa.free(previous_key);
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+
+    const previous_snapshot_path = try registry.accountAuthPath(gpa, codex_home, previous_key);
+    defer gpa.free(previous_snapshot_path);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const previous_auth = try fixtures.authJsonWithEmailPlan(gpa, "previous@example.com", "pro");
+    defer gpa.free(previous_auth);
+    const active_auth = try fixtures.authJsonWithEmailPlan(gpa, "active@example.com", "plus");
+    defer gpa.free(active_auth);
+    const backup_auth = try fixtures.authJsonWithEmailPlan(gpa, "backup@example.com", "team");
+    defer gpa.free(backup_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = previous_snapshot_path, .data = previous_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+
+    var seeded = try registry.loadRegistry(gpa, codex_home);
+    defer seeded.deinit(gpa);
+    try registry.setActiveAccountKey(gpa, &seeded, previous_key);
+    try registry.setActiveAccountKey(gpa, &seeded, active_key);
+    registry.updateUsage(gpa, &seeded, backup_key, makeUsageSnapshot(10.0, 10.0));
+    try registry.saveRegistry(gpa, codex_home, &seeded);
+
+    const result = try runCliWithIsolatedHomeAndStdin(gpa, project_root, home_root, &[_][]const u8{ "remove", "active@" }, "");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("Removed 1 account(s): active(active@example.com)\n", result.stdout);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    const replaced_auth = try fixtures.readFileAlloc(gpa, active_auth_path);
+    defer gpa.free(replaced_auth);
+    try std.testing.expectEqualStrings(backup_auth, replaced_auth);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(loaded.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(backup_key, loaded.active_account_key.?);
+    try std.testing.expectEqualStrings(previous_key, loaded.previous_active_account_key.?);
 }
 
 test "Scenario: Given active account removal with missing auth json when running remove then replacement auth is recreated" {

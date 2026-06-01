@@ -21,6 +21,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
 - In the current code, supported automatic migration is `version = 2 -> schema_version = 4`; older current-layout schema `3` files are rewritten once as schema `4`.
+- Current-layout schema `4` files are also rewritten once when they are missing normalized current fields such as `previous_active_account_key`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Released Schemas
@@ -41,6 +42,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Same account layout as schema `3`
   - Live refresh interval stored as top-level `interval_seconds`
   - Older `live.interval_seconds` and removed `auto_switch` blocks are omitted on rewrite
+  - Adds top-level `previous_active_account_key` for `codex-auth -` and `codex-auth switch -`
 
 ## When To Bump `schema_version`
 

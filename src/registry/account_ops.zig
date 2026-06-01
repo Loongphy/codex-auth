@@ -52,6 +52,35 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
     if (reg.active_account_key) |k| {
         if (std.mem.eql(u8, k, account_key)) return;
     }
+    const previous_active_account_key = if (reg.active_account_key) |k| blk: {
+        if (findAccountIndexByAccountKey(reg, k) == null) break :blk null;
+        break :blk try allocator.dupe(u8, k);
+    } else null;
+    errdefer if (previous_active_account_key) |k| allocator.free(k);
+    const new_active_account_key = try allocator.dupe(u8, account_key);
+    errdefer allocator.free(new_active_account_key);
+    if (reg.previous_active_account_key) |k| {
+        allocator.free(k);
+    }
+    reg.previous_active_account_key = previous_active_account_key;
+    if (reg.active_account_key) |k| {
+        allocator.free(k);
+    }
+    reg.active_account_key = new_active_account_key;
+    reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    for (reg.accounts.items) |*rec| {
+        if (std.mem.eql(u8, rec.account_key, account_key)) {
+            rec.last_used_at = now;
+            break;
+        }
+    }
+}
+
+pub fn setActiveAccountKeyPreservingPrevious(allocator: std.mem.Allocator, reg: *Registry, account_key: []const u8) !void {
+    if (reg.active_account_key) |k| {
+        if (std.mem.eql(u8, k, account_key)) return;
+    }
     const new_active_account_key = try allocator.dupe(u8, account_key);
     if (reg.active_account_key) |k| {
         allocator.free(k);
@@ -64,6 +93,13 @@ pub fn setActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry, account
             rec.last_used_at = now;
             break;
         }
+    }
+}
+
+fn clearPreviousActiveAccountKey(allocator: std.mem.Allocator, reg: *Registry) void {
+    if (reg.previous_active_account_key) |key| {
+        allocator.free(key);
+        reg.previous_active_account_key = null;
     }
 }
 
@@ -277,6 +313,19 @@ pub fn removeAccounts(allocator: std.mem.Allocator, codex_home: []const u8, reg:
             allocator.free(key);
             reg.active_account_key = null;
             reg.active_account_activated_at_ms = null;
+        }
+    }
+
+    if (reg.previous_active_account_key) |key| {
+        var previous_removed = false;
+        for (reg.accounts.items, 0..) |rec, i| {
+            if (removed[i] and std.mem.eql(u8, rec.account_key, key)) {
+                previous_removed = true;
+                break;
+            }
+        }
+        if (previous_removed) {
+            clearPreviousActiveAccountKey(allocator, reg);
         }
     }
 
@@ -503,6 +552,24 @@ pub fn replaceActiveAuthWithAccountByKey(
     try ensureAccountsDir(allocator, codex_home);
     try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKey(allocator, reg, account_key);
+}
+
+pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *Registry,
+    account_key: []const u8,
+) !void {
+    _ = findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
+    const src = try resolveStrictAccountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(src);
+
+    const dest = try activeAuthPath(allocator, codex_home);
+    defer allocator.free(dest);
+
+    try ensureAccountsDir(allocator, codex_home);
+    try replaceFilePreservingPermissions(src, dest);
+    try setActiveAccountKeyPreservingPrevious(allocator, reg, account_key);
 }
 
 pub fn accountFromAuth(

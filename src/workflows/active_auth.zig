@@ -30,9 +30,9 @@ pub fn reconcileActiveAuthAfterRemove(
         const best_idx = registry.selectBestAccountIndexByUsage(reg) orelse 0;
         const account_key = reg.accounts.items[best_idx].account_key;
         if (allow_auth_file_update) {
-            try registry.replaceActiveAuthWithAccountByKey(allocator, codex_home, reg, account_key);
+            try registry.replaceActiveAuthWithAccountByKeyPreservingPrevious(allocator, codex_home, reg, account_key);
         } else {
-            try registry.setActiveAccountKey(allocator, reg, account_key);
+            try registry.setActiveAccountKeyPreservingPrevious(allocator, reg, account_key);
         }
         return;
     }

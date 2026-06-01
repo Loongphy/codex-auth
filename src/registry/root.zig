@@ -119,6 +119,7 @@ pub const exportAccounts = export_mod.exportAccounts;
 
 pub const findAccountIndexByAccountKey = account_ops.findAccountIndexByAccountKey;
 pub const setActiveAccountKey = account_ops.setActiveAccountKey;
+pub const setActiveAccountKeyPreservingPrevious = account_ops.setActiveAccountKeyPreservingPrevious;
 pub const updateUsage = account_ops.updateUsage;
 pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []const u8, reg: *Registry) !bool {
     return account_ops.syncActiveAccountFromAuthWithImporter(allocator, codex_home, reg, autoImportActiveAuth);
@@ -134,6 +135,7 @@ pub const activeChatgptUserId = account_ops.activeChatgptUserId;
 pub const applyAccountNamesForUser = account_ops.applyAccountNamesForUser;
 pub const activateAccountByKey = account_ops.activateAccountByKey;
 pub const replaceActiveAuthWithAccountByKey = account_ops.replaceActiveAuthWithAccountByKey;
+pub const replaceActiveAuthWithAccountByKeyPreservingPrevious = account_ops.replaceActiveAuthWithAccountByKeyPreservingPrevious;
 pub const accountFromAuth = account_ops.accountFromAuth;
 pub const accountFromApiKeyMe = account_ops.accountFromApiKeyMe;
 pub const apiKeyAccountKeyAlloc = account_ops.apiKeyAccountKeyAlloc;

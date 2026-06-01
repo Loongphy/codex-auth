@@ -75,6 +75,7 @@ pub fn defaultRegistry() Registry {
     return Registry{
         .schema_version = current_schema_version,
         .active_account_key = null,
+        .previous_active_account_key = null,
         .active_account_activated_at_ms = null,
         .api = defaultApiConfig(),
         .live = defaultLiveConfig(),
@@ -267,6 +268,12 @@ fn loadLegacyRegistryV2(
             else => {},
         }
     }
+    if (root_obj.get("previous_active_account_key")) |v| {
+        switch (v) {
+            .string => |s| reg.previous_active_account_key = try allocator.dupe(u8, s),
+            else => {},
+        }
+    }
     if (reg.active_account_key != null) {
         reg.active_account_activated_at_ms = 0;
     }
@@ -314,6 +321,12 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     if (root_obj.get("active_account_key")) |v| {
         switch (v) {
             .string => |s| reg.active_account_key = try allocator.dupe(u8, s),
+            else => {},
+        }
+    }
+    if (root_obj.get("previous_active_account_key")) |v| {
+        switch (v) {
+            .string => |s| reg.previous_active_account_key = try allocator.dupe(u8, s),
             else => {},
         }
     }
@@ -369,6 +382,7 @@ fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
     } else {
         return true;
     }
+    if (root_obj.get("previous_active_account_key") == null) return true;
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
 }
 

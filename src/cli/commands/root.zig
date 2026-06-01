@@ -39,6 +39,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
         return .{ .command = .{ .version = {} } };
     }
 
+    if (std.mem.eql(u8, cmd, "-")) {
+        if (args.len > 2) {
+            return common.usageErrorResult(allocator, .top_level, "unexpected argument after `-`: `{s}`.", .{
+                std.mem.sliceTo(args[2], 0),
+            });
+        }
+        return .{ .command = .{ .switch_account = .{ .target = .previous } } };
+    }
+
     if (std.mem.eql(u8, cmd, "list")) return list.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "login")) return login.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "import")) return import_auth.parse(allocator, args[2..]);
@@ -67,8 +76,9 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
         .export_auth => |opts| {
             if (opts.dest_path) |path| allocator.free(path);
         },
-        .switch_account => |opts| {
-            if (opts.query) |query| allocator.free(query);
+        .switch_account => |opts| switch (opts.target) {
+            .query => |query| allocator.free(query),
+            else => {},
         },
         .remove_account => |opts| {
             common.freeOwnedStringList(allocator, opts.selectors);

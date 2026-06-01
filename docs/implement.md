@@ -33,10 +33,10 @@ Managed files:
 
 - `registry.json.schema_version` is the on-disk migration gate.
 - `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
-- Current-layout files that still use the top-level `version = 3` key are rewritten to `schema_version = 4`.
+- Current-layout files that still use the top-level `version = 3` key are rewritten to the current schema.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`.
-- Saving always rewrites `registry.json` into the current schema `4` field set.
+- Saving always rewrites `registry.json` into the current schema field set.
 
 See [docs/schema-migration.md](./schema-migration.md) for versioning policy and migration rules.
 

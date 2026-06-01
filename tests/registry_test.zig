@@ -297,6 +297,7 @@ test "registry save/load" {
     const saved = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(saved);
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"previous_active_account_key\": null") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -304,10 +305,65 @@ test "registry save/load" {
     try std.testing.expect(loaded.api.usage);
     try std.testing.expect(loaded.api.account);
     try std.testing.expect(loaded.active_account_activated_at_ms != null);
+    try std.testing.expect(loaded.previous_active_account_key == null);
     try std.testing.expect(loaded.accounts.items[0].last_local_rollout != null);
     try std.testing.expectEqual(@as(i64, 1735689600000), loaded.accounts.items[0].last_local_rollout.?.event_timestamp_ms);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].last_local_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
+}
+
+test "registry save/load round-trips previous active account key" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "alpha@example.com", "alpha", .plus, .chatgpt, 1));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "beta@example.com", "beta", .pro, .chatgpt, 2));
+
+    const alpha_key = try accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+
+    try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+    try registry.setActiveAccountKey(gpa, &reg, beta_key);
+    try std.testing.expect(reg.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(alpha_key, reg.previous_active_account_key.?);
+
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+
+    try std.testing.expect(loaded.active_account_key != null);
+    try std.testing.expect(loaded.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(beta_key, loaded.active_account_key.?);
+    try std.testing.expectEqualStrings(alpha_key, loaded.previous_active_account_key.?);
+}
+
+test "setting same active account preserves previous active account key" {
+    const gpa = std.testing.allocator;
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "alpha@example.com", "alpha", .plus, .chatgpt, 1));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "beta@example.com", "beta", .pro, .chatgpt, 2));
+
+    const alpha_key = try accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+
+    try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+    try registry.setActiveAccountKey(gpa, &reg, beta_key);
+    try registry.setActiveAccountKey(gpa, &reg, beta_key);
+
+    try std.testing.expect(reg.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(alpha_key, reg.previous_active_account_key.?);
 }
 
 test "plan labels are human-readable while registry stores raw plan values" {
@@ -420,6 +476,39 @@ test "registry save/load round-trips account_name null" {
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
+}
+
+test "registry load normalizes schema four without previous active account key" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 4,
+        \\  "active_account_key": null,
+        \\  "active_account_activated_at_ms": null,
+        \\  "interval_seconds": 60,
+        \\  "accounts": []
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(loaded.previous_active_account_key == null);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
 }
 
 test "registry save/load round-trips account_name string" {
@@ -1314,6 +1403,34 @@ test "remove accounts deletes matching snapshots and auth backups only for remov
     keep_backup.close();
     var malformed_backup = try tmp.dir.openFile("accounts/auth.json.bak.20260320-030303", .{});
     malformed_backup.close();
+}
+
+test "remove accounts clears previous active account when previous is removed" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "previous@example.com", "", .plus, .chatgpt, 1));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "active@example.com", "", .team, .chatgpt, 2));
+
+    const previous_key = try accountKeyForEmailAlloc(gpa, "previous@example.com");
+    defer gpa.free(previous_key);
+    const active_key = try accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    try registry.setActiveAccountKey(gpa, &reg, previous_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_key);
+
+    try registry.removeAccounts(gpa, codex_home, &reg, &[_]usize{0});
+
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expectEqualStrings(active_key, reg.active_account_key.?);
+    try std.testing.expect(reg.previous_active_account_key == null);
 }
 
 test "import auth path with single file keeps explicit alias" {

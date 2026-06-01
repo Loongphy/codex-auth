@@ -184,6 +184,26 @@ pub fn printSwitchAccountNotFoundError(query: []const u8) !void {
     try out.flush();
 }
 
+pub fn printNoPreviousAccountError() !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" no previous account to switch to.\n");
+    try out.flush();
+}
+
+pub fn printPreviousAccountUnavailableError() !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" previous account is no longer available.\n");
+    try out.flush();
+}
+
 pub fn printAliasAccountNotFoundError(query: []const u8) !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();

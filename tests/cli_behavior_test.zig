@@ -833,9 +833,49 @@ test "Scenario: Given switch with positional query when parsing then non-interac
     switch (result) {
         .command => |cmd| switch (cmd) {
             .switch_account => |opts| {
-                try std.testing.expect(opts.query != null);
-                try std.testing.expect(std.mem.eql(u8, opts.query.?, "user@example.com"));
+                switch (opts.target) {
+                    .query => |query| try std.testing.expectEqualStrings("user@example.com", query),
+                    else => return error.TestExpectedEqual,
+                }
                 try std.testing.expectEqual(cli.types.ApiMode.default, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given top-level dash when parsing then previous switch is selected" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expectEqual(cli.types.SwitchTarget.previous, opts.target);
+                try std.testing.expectEqual(cli.types.ApiMode.default, opts.api_mode);
+                try std.testing.expect(!opts.live);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch dash when parsing then previous switch is selected" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expectEqual(cli.types.SwitchTarget.previous, opts.target);
+                try std.testing.expectEqual(cli.types.ApiMode.default, opts.api_mode);
+                try std.testing.expect(!opts.live);
             },
             else => return error.TestExpectedEqual,
         },
@@ -862,7 +902,7 @@ test "Scenario: Given switch interactive with live flag when parsing then live m
         .command => |cmd| switch (cmd) {
             .switch_account => |opts| {
                 try std.testing.expect(opts.live);
-                try std.testing.expect(opts.query == null);
+                try std.testing.expectEqual(cli.types.SwitchTarget.picker, opts.target);
             },
             else => return error.TestExpectedEqual,
         },
@@ -906,7 +946,7 @@ test "Scenario: Given switch interactive with skip-api flag when parsing then sk
     switch (result) {
         .command => |cmd| switch (cmd) {
             .switch_account => |opts| {
-                try std.testing.expect(opts.query == null);
+                try std.testing.expectEqual(cli.types.SwitchTarget.picker, opts.target);
                 try std.testing.expectEqual(cli.types.ApiMode.skip_api, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
@@ -924,7 +964,7 @@ test "Scenario: Given switch interactive with api flag when parsing then api mod
     switch (result) {
         .command => |cmd| switch (cmd) {
             .switch_account => |opts| {
-                try std.testing.expect(opts.query == null);
+                try std.testing.expectEqual(cli.types.SwitchTarget.picker, opts.target);
                 try std.testing.expectEqual(cli.types.ApiMode.force_api, opts.api_mode);
             },
             else => return error.TestExpectedEqual,
@@ -940,6 +980,33 @@ test "Scenario: Given switch query with api flag when parsing then usage error i
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .switch_account, "does not support");
+}
+
+test "Scenario: Given switch dash with api flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--api", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
+}
+
+test "Scenario: Given switch dash with live flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
+}
+
+test "Scenario: Given switch dash with skip-api flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--skip-api", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
 }
 
 test "Scenario: Given switch query with removed auto flag when parsing then usage error is returned" {

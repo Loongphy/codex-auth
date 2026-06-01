@@ -3,10 +3,20 @@
 ## Usage
 
 ```shell
+codex-auth switch -
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
 ```
+
+## Previous Switch
+
+`codex-auth switch -` switches to the previous active account.
+
+- `codex-auth -` is a shortcut for the same behavior.
+- The command fails when no previous account has been recorded.
+- The command fails when the recorded previous account was removed.
+- `switch -` does not accept `--live`, `--api`, or `--skip-api`.
 
 ## Interactive Switch
 
@@ -46,4 +56,5 @@ When switching succeeds:
 1. `auth.json` is backed up when its contents would change.
 2. The selected account snapshot is copied to `~/.codex/auth.json`.
 3. `active_account_key` is updated in `registry.json`.
-4. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
+4. `previous_active_account_key` records the account that was active before the switch, when one exists.
+5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.

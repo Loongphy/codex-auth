@@ -36,6 +36,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "--help, -h", "Show this help");
     try writeCommandSummary(out, use_color, "help <command>", "Show command-specific help");
     try writeCommandSummary(out, use_color, "--version, -V", "Show version");
+    try writeCommandSummary(out, use_color, "-", "Switch to the previous active account");
     try writeCommandSummary(out, use_color, "list [--live] [--active] [--api|--skip-api]", "List available accounts");
     try writeCommandSummary(out, use_color, "login [--device-auth]", "Login and add the current account");
     try writeCommandSummary(out, use_color, "import", "Import auth files or rebuild registry");
@@ -44,6 +45,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "import --purge [<path>]");
     try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
+    try writeCommandDetail(out, use_color, "switch -");
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
@@ -187,6 +189,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .top_level => {
             try out.writeAll("  codex-auth <command>\n");
+            try out.writeAll("  codex-auth -\n");
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
@@ -205,6 +208,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
         },
         .switch_account => {
+            try out.writeAll("  codex-auth switch -\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
         },
@@ -279,6 +283,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
+            try out.writeAll("  -            Switch to the previous active account.\n");
         },
         .remove_account => {
             try out.writeAll("  --live       Open the live remove UI.\n");
@@ -348,6 +353,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
+            try out.writeAll("  codex-auth switch -\n");
             try out.writeAll("  codex-auth switch --live\n");
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
@@ -391,7 +397,7 @@ fn writeNotesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopi
     try out.writeAll("\n");
     switch (topic) {
         .switch_account => {
-            try out.writeAll("  Targets can be aliases, emails, display numbers, or partial queries.\n");
+            try out.writeAll("  Targets can be `-`, aliases, emails, display numbers, or partial queries.\n");
         },
         .alias => {
             try out.writeAll("  Alias targets can be aliases, emails, display numbers, or partial queries.\n");

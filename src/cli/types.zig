@@ -24,8 +24,13 @@ pub const ExportOptions = struct {
     dest_path: ?[]u8,
     format: ExportFormat,
 };
+pub const SwitchTarget = union(enum) {
+    picker,
+    query: []u8,
+    previous,
+};
 pub const SwitchOptions = struct {
-    query: ?[]u8,
+    target: SwitchTarget = .picker,
     live: bool = false,
     api_mode: ApiMode = .default,
 };
