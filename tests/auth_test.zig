@@ -325,6 +325,34 @@ test "convert cpa auth json requires non-empty access token" {
     try std.testing.expectError(error.MissingAccessToken, auth.convertCpaAuthJson(gpa, without_access_token));
 }
 
+test "convert cpa auth json trims required token fields" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "trimmed-tokens@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const spaced_id_token = try std.mem.replaceOwned(u8, gpa, cpa_json, "\"id_token\":\"", "\"id_token\":\"  ");
+    defer gpa.free(spaced_id_token);
+    const spaced_tokens = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        spaced_id_token,
+        "\",\"access_token\":\"access-trimmed-tokens@example.com\"",
+        "  \",\"access_token\":\" access-trimmed-tokens@example.com \"",
+    );
+    defer gpa.free(spaced_tokens);
+
+    const converted = try auth.convertCpaAuthJson(gpa, spaced_tokens);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"id_token\": \"  ") == null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"access_token\": \" access-trimmed-tokens@example.com \"") == null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.auth_mode == .chatgpt);
+    try std.testing.expect(info.access_token != null);
+    try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-trimmed-tokens@example.com"));
+}
+
 test "convert standard auth json to cpa omits optional empty fields" {
     const gpa = std.testing.allocator;
     const standard_json = try fixtures.authJsonWithEmailPlan(gpa, "standard-no-refresh@example.com", "plus");

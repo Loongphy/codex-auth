@@ -36,7 +36,6 @@ pub fn isImportValidationError(err: anyerror) bool {
         error.MissingAccountId,
         error.MissingAccessToken,
         error.MissingIdToken,
-        error.MissingRefreshToken,
         error.AccountIdMismatch,
         error.InvalidJwt,
         error.InvalidBase64,
