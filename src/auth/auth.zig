@@ -26,22 +26,22 @@ pub const AuthInfo = struct {
 
 const StandardAuthJson = struct {
     auth_mode: []const u8,
-    OPENAI_API_KEY: ?[]const u8,
+    OPENAI_API_KEY: std.json.Value,
     tokens: struct {
         id_token: []const u8,
         access_token: []const u8,
-        refresh_token: []const u8,
+        refresh_token: ?[]const u8,
         account_id: []const u8,
     },
-    last_refresh: []const u8,
+    last_refresh: ?[]const u8,
 };
 
 const CpaAuthJson = struct {
     id_token: []const u8,
     access_token: []const u8,
-    refresh_token: []const u8,
-    account_id: []const u8,
-    last_refresh: []const u8,
+    refresh_token: ?[]const u8,
+    account_id: ?[]const u8,
+    last_refresh: ?[]const u8,
 };
 
 fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
@@ -252,23 +252,25 @@ pub fn convertCpaAuthJson(allocator: std.mem.Allocator, data: []const u8) ![]u8 
         else => return error.InvalidCPAFormat,
     };
 
-    const refresh_token = jsonStringField(obj, "refresh_token") orelse return error.MissingRefreshToken;
-    if (refresh_token.len == 0) return error.MissingRefreshToken;
+    const id_token = jsonNonEmptyStringField(obj, "id_token") orelse return error.MissingIdToken;
+    const access_token = jsonNonEmptyStringField(obj, "access_token") orelse return error.MissingAccessToken;
+    const account_id = try cpaAccountIdFromIdTokenAlloc(allocator, obj) orelse return error.MissingAccountId;
+    defer allocator.free(account_id);
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
 
     try std.json.Stringify.value(StandardAuthJson{
         .auth_mode = "chatgpt",
-        .OPENAI_API_KEY = null,
+        .OPENAI_API_KEY = .null,
         .tokens = .{
-            .id_token = jsonStringFieldOrDefault(obj, "id_token"),
-            .access_token = jsonStringFieldOrDefault(obj, "access_token"),
-            .refresh_token = refresh_token,
-            .account_id = jsonStringFieldOrDefault(obj, "account_id"),
+            .id_token = id_token,
+            .access_token = access_token,
+            .refresh_token = jsonNonEmptyStringField(obj, "refresh_token"),
+            .account_id = account_id,
         },
-        .last_refresh = jsonStringFieldOrDefault(obj, "last_refresh"),
-    }, .{ .whitespace = .indent_2 }, &out.writer);
+        .last_refresh = jsonNonEmptyStringField(obj, "last_refresh"),
+    }, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, &out.writer);
     try out.writer.writeAll("\n");
     return try out.toOwnedSlice();
 }
@@ -286,19 +288,19 @@ pub fn convertStandardAuthJsonToCpa(allocator: std.mem.Allocator, data: []const 
         .object => |tokens| tokens,
         else => return error.MissingTokens,
     };
-    const refresh_token = jsonStringField(tokens, "refresh_token") orelse return error.MissingRefreshToken;
-    if (refresh_token.len == 0) return error.MissingRefreshToken;
+    const id_token = jsonNonEmptyStringField(tokens, "id_token") orelse return error.MissingIdToken;
+    const access_token = jsonNonEmptyStringField(tokens, "access_token") orelse return error.MissingAccessToken;
 
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
 
     try std.json.Stringify.value(CpaAuthJson{
-        .id_token = jsonStringFieldOrDefault(tokens, "id_token"),
-        .access_token = jsonStringFieldOrDefault(tokens, "access_token"),
-        .refresh_token = refresh_token,
-        .account_id = jsonStringFieldOrDefault(tokens, "account_id"),
-        .last_refresh = jsonStringFieldOrDefault(obj, "last_refresh"),
-    }, .{ .whitespace = .indent_2 }, &out.writer);
+        .id_token = id_token,
+        .access_token = access_token,
+        .refresh_token = jsonNonEmptyStringField(tokens, "refresh_token"),
+        .account_id = jsonNonEmptyStringField(tokens, "account_id"),
+        .last_refresh = jsonNonEmptyStringField(obj, "last_refresh"),
+    }, .{ .whitespace = .indent_2, .emit_null_optional_fields = false }, &out.writer);
     try out.writer.writeAll("\n");
     return try out.toOwnedSlice();
 }
@@ -362,6 +364,30 @@ fn organizationAccountIdAlloc(allocator: std.mem.Allocator, auth_obj: std.json.O
     return null;
 }
 
+fn cpaAccountIdFromIdTokenAlloc(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?[]u8 {
+    const id_token = jsonNonEmptyStringField(obj, "id_token") orelse return null;
+    const payload = try decodeJwtPayload(allocator, id_token);
+    defer allocator.free(payload);
+
+    var payload_json = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer payload_json.deinit();
+
+    const claims = switch (payload_json.value) {
+        .object => |cobj| cobj,
+        else => return null,
+    };
+    const auth_val = claims.get("https://api.openai.com/auth") orelse return null;
+    const auth_obj = switch (auth_val) {
+        .object => |aobj| aobj,
+        else => return null,
+    };
+
+    if (jsonNonEmptyStringField(auth_obj, "chatgpt_account_id")) |account_id| {
+        return try allocator.dupe(u8, account_id);
+    }
+    return try organizationAccountIdAlloc(allocator, auth_obj);
+}
+
 fn resolveChatGptAccountId(
     token_chatgpt_account_id: ?[]u8,
     jwt_chatgpt_account_id: ?[]u8,
@@ -383,6 +409,12 @@ fn jsonStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
         .string => |s| s,
         else => null,
     };
+}
+
+fn jsonNonEmptyStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
+    const value = jsonStringField(obj, key) orelse return null;
+    if (std.mem.trim(u8, value, &std.ascii.whitespace).len == 0) return null;
+    return value;
 }
 
 fn jsonStringFieldOrDefault(obj: std.json.ObjectMap, key: []const u8) []const u8 {

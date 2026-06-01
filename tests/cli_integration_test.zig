@@ -1758,21 +1758,20 @@ test "Scenario: Given cpa directory in default location when running import cpa 
         gpa,
         "Scanning ~/.cli-proxy-api...\n" ++
             "  imported  first.json\n" ++
+            "  imported  no-refresh.json\n" ++
             "  imported  second.json\n" ++
-            "Import Summary: 2 imported, 0 updated, 1 skipped (total 3 files)\n",
+            "Import Summary: 3 imported, 0 updated, 0 skipped (total 3 files)\n",
         .{},
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   no-refresh.json: MissingRefreshToken\n", .{});
-    defer gpa.free(expected_stderr);
-    try std.testing.expectEqualStrings(expected_stderr, result.stderr);
+    try std.testing.expectEqualStrings("", result.stderr);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
-    try std.testing.expectEqual(@as(usize, 2), loaded.accounts.items.len);
+    try std.testing.expectEqual(@as(usize, 3), loaded.accounts.items.len);
 }
 
 test "Scenario: Given missing default cpa directory when running import cpa then it fails" {

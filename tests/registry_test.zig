@@ -1573,6 +1573,46 @@ test "import cpa path with single file converts to standard auth and keeps expli
     try expectModeUnix(snapshot_path, 0o600);
 }
 
+test "import cpa path with empty last refresh omits refresh metadata" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "empty-cpa-refresh@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const empty_last_refresh = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        "\"last_refresh\":\"2026-03-20T00:00:00Z\"",
+        "\"last_refresh\":\"\"",
+    );
+    defer gpa.free(empty_last_refresh);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/empty-refresh.json", .data = empty_last_refresh });
+
+    const import_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "empty-refresh.json" });
+    defer gpa.free(import_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var report = try registry.importCpaPath(gpa, codex_home, &reg, import_path, null);
+    defer report.deinit(gpa);
+    try std.testing.expect(report.imported == 1);
+
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "empty-cpa-refresh@example.com");
+    defer gpa.free(account_key);
+    const snapshot_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(snapshot_path);
+    const snapshot_data = try fixtures.readFileAlloc(gpa, snapshot_path);
+    defer gpa.free(snapshot_data);
+    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"last_refresh\"") == null);
+}
+
 test "import cpa path with repeated single file reports updated on second import" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1635,11 +1675,11 @@ test "import cpa path with directory imports multiple json files and skips bad f
     var report = try registry.importCpaPath(gpa, codex_home, &reg, imports_dir, null);
     defer report.deinit(gpa);
     try std.testing.expect(report.render_kind == .scanned);
-    try std.testing.expect(report.imported == 2);
+    try std.testing.expect(report.imported == 3);
     try std.testing.expect(report.updated == 0);
-    try std.testing.expect(report.skipped == 2);
+    try std.testing.expect(report.skipped == 1);
     try std.testing.expect(report.total_files == 4);
-    try std.testing.expectEqual(@as(usize, 2), reg.accounts.items.len);
+    try std.testing.expectEqual(@as(usize, 3), reg.accounts.items.len);
 }
 
 test "export accounts writes standard auth snapshots to explicit directory" {

@@ -175,10 +175,166 @@ test "convert cpa auth json produces a parseable standard auth snapshot" {
     try std.testing.expect(info.auth_mode == .chatgpt);
 }
 
-test "convert cpa auth json requires refresh token" {
+test "convert cpa auth json omits empty last refresh" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "empty-refresh@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const empty_last_refresh = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        "\"last_refresh\":\"2026-03-20T00:00:00Z\"",
+        "\"last_refresh\":\"\"",
+    );
+    defer gpa.free(empty_last_refresh);
+
+    const converted = try auth.convertCpaAuthJson(gpa, empty_last_refresh);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.last_refresh == null);
+}
+
+test "convert cpa auth json omits missing last refresh" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "missing-last-refresh@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const without_last_refresh = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        ",\"last_refresh\":\"2026-03-20T00:00:00Z\"",
+        "",
+    );
+    defer gpa.free(without_last_refresh);
+
+    const converted = try auth.convertCpaAuthJson(gpa, without_last_refresh);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.last_refresh == null);
+}
+
+test "convert cpa auth json derives missing account id from id token" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "missing-account-id@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const without_account_id = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        ",\"account_id\":\"",
+        ",\"removed_account_id\":\"",
+    );
+    defer gpa.free(without_account_id);
+
+    const expected_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "missing-account-id@example.com");
+    defer gpa.free(expected_account_id);
+    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{expected_account_id});
+    defer gpa.free(expected_json);
+
+    const converted = try auth.convertCpaAuthJson(gpa, without_account_id);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.chatgpt_account_id != null);
+    try std.testing.expect(std.mem.eql(u8, info.chatgpt_account_id.?, expected_account_id));
+}
+
+test "convert cpa auth json ignores top-level account id" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "mismatched-account-id@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const source_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "mismatched-account-id@example.com");
+    defer gpa.free(source_account_id);
+    const source_json = try std.fmt.allocPrint(gpa, "\"account_id\":\"{s}\"", .{source_account_id});
+    defer gpa.free(source_json);
+    const mismatched = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        source_json,
+        "\"account_id\":\"wrong-account-id\"",
+    );
+    defer gpa.free(mismatched);
+
+    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{source_account_id});
+    defer gpa.free(expected_json);
+
+    const converted = try auth.convertCpaAuthJson(gpa, mismatched);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "wrong-account-id") == null);
+}
+
+test "convert cpa auth json omits missing refresh token" {
     const gpa = std.testing.allocator;
     const cpa_json = try fixtures.cpaJsonWithoutRefreshToken(gpa, "missing-refresh@example.com", "plus");
     defer gpa.free(cpa_json);
 
-    try std.testing.expectError(error.MissingRefreshToken, auth.convertCpaAuthJson(gpa, cpa_json));
+    const converted = try auth.convertCpaAuthJson(gpa, cpa_json);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\"") == null);
+
+    const info = try auth.parseAuthInfoData(gpa, converted);
+    defer info.deinit(gpa);
+    try std.testing.expect(info.auth_mode == .chatgpt);
+    try std.testing.expect(info.access_token != null);
+}
+
+test "convert cpa auth json requires non-empty id token" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "missing-id-token@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const without_id_token = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        ",\"id_token\":\"",
+        ",\"removed_id_token\":\"",
+    );
+    defer gpa.free(without_id_token);
+
+    try std.testing.expectError(error.MissingIdToken, auth.convertCpaAuthJson(gpa, without_id_token));
+}
+
+test "convert cpa auth json requires non-empty access token" {
+    const gpa = std.testing.allocator;
+    const cpa_json = try fixtures.cpaJsonWithEmailPlan(gpa, "missing-access-token@example.com", "plus");
+    defer gpa.free(cpa_json);
+    const without_access_token = try std.mem.replaceOwned(
+        u8,
+        gpa,
+        cpa_json,
+        ",\"access_token\":\"access-missing-access-token@example.com\"",
+        "",
+    );
+    defer gpa.free(without_access_token);
+
+    try std.testing.expectError(error.MissingAccessToken, auth.convertCpaAuthJson(gpa, without_access_token));
+}
+
+test "convert standard auth json to cpa omits optional empty fields" {
+    const gpa = std.testing.allocator;
+    const standard_json = try fixtures.authJsonWithEmailPlan(gpa, "standard-no-refresh@example.com", "plus");
+    defer gpa.free(standard_json);
+
+    const converted = try auth.convertStandardAuthJsonToCpa(gpa, standard_json);
+    defer gpa.free(converted);
+
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"id_token\": \"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"access_token\": \"access-standard-no-refresh@example.com\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
 }

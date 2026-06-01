@@ -34,6 +34,8 @@ pub fn isImportValidationError(err: anyerror) bool {
         error.InvalidOpenAIMeResponse,
         error.OpenAIMeRequestFailed,
         error.MissingAccountId,
+        error.MissingAccessToken,
+        error.MissingIdToken,
         error.MissingRefreshToken,
         error.AccountIdMismatch,
         error.InvalidJwt,
