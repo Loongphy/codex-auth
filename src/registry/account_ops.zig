@@ -167,7 +167,7 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
         errdefer if (record_owned) freeAccountRecord(allocator, &record);
         try upsertAccount(allocator, reg, record);
         record_owned = false;
-        try setActiveAccountKey(allocator, reg, record_key);
+        try setActiveAccountKeyPreservingPrevious(allocator, reg, record_key);
         return true;
     }
 
@@ -204,7 +204,7 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
         try hardenSensitiveFile(dest);
     }
 
-    try setActiveAccountKey(allocator, reg, rec_account_key);
+    try setActiveAccountKeyPreservingPrevious(allocator, reg, rec_account_key);
     return changed;
 }
 
@@ -245,7 +245,7 @@ fn syncActiveApiKeyAccountFromAuth(
         errdefer if (record_owned) freeAccountRecord(allocator, &record);
         try upsertAccount(allocator, reg, record);
         record_owned = false;
-        try setActiveAccountKey(allocator, reg, record_key);
+        try setActiveAccountKeyPreservingPrevious(allocator, reg, record_key);
         return true;
     }
 
@@ -285,7 +285,7 @@ fn syncActiveApiKeyAccountFromAuth(
         try hardenSensitiveFile(dest);
     }
 
-    try setActiveAccountKey(allocator, reg, rec_account_key);
+    try setActiveAccountKeyPreservingPrevious(allocator, reg, rec_account_key);
     return changed;
 }
 

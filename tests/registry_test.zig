@@ -1207,6 +1207,42 @@ test "sync active auth matches by email and updates account auth" {
     try std.testing.expect(std.mem.eql(u8, data, active_auth));
 }
 
+test "sync active auth preserves previous account on external drift" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "previous@example.com", "previous", .plus, .chatgpt, 1));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "active@example.com", "active", .pro, .chatgpt, 2));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "external@example.com", "external", .free, .chatgpt, 3));
+
+    const previous_key = try accountKeyForEmailAlloc(gpa, "previous@example.com");
+    defer gpa.free(previous_key);
+    const active_key = try accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const external_key = try accountKeyForEmailAlloc(gpa, "external@example.com");
+    defer gpa.free(external_key);
+    try registry.setActiveAccountKey(gpa, &reg, previous_key);
+    try registry.setActiveAccountKey(gpa, &reg, active_key);
+
+    const active_auth = try authJsonWithEmailPlan(gpa, "external@example.com", "team");
+    defer gpa.free(active_auth);
+    try tmp.dir.writeFile(.{ .sub_path = "auth.json", .data = active_auth });
+
+    const changed = try registry.syncActiveAccountFromAuth(gpa, codex_home, &reg);
+    try std.testing.expect(changed);
+    try std.testing.expect(reg.active_account_key != null);
+    try std.testing.expectEqualStrings(external_key, reg.active_account_key.?);
+    try std.testing.expect(reg.previous_active_account_key != null);
+    try std.testing.expectEqualStrings(previous_key, reg.previous_active_account_key.?);
+}
+
 test "registry backup only on change" {
     var gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

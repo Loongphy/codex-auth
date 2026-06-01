@@ -23,10 +23,6 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         .picker => {},
     }
 
-    if (opts.target == .picker) {
-        std.debug.assert(opts.api_mode == .default or opts.api_mode == .force_api or opts.api_mode == .skip_api);
-    }
-
     {
         if (!opts.live) {
             var loaded = if (opts.api_mode == .skip_api)
