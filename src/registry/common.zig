@@ -402,7 +402,7 @@ pub fn hardenSensitiveDir(path: []const u8) !void {
 }
 
 pub fn ensurePrivateDir(path: []const u8) !void {
-    try std.Io.Dir.cwd().createDirPath(app_runtime.io(), path);
+    _ = try std.Io.Dir.cwd().createDirPathStatus(app_runtime.io(), path, private_dir_permissions);
     try hardenSensitiveDir(path);
 }
 
