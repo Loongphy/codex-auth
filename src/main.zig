@@ -1573,6 +1573,8 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
     const base = try tempBasePathAlloc(allocator);
     defer allocator.free(base);
+    try std.fs.cwd().makePath(base);
+
     var counter: usize = 0;
     while (counter < 100) : (counter += 1) {
         const path = try std.fmt.allocPrint(
