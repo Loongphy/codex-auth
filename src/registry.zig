@@ -366,6 +366,8 @@ pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !
 }
 
 pub fn ensurePrivateDir(path: []const u8) !void {
+    // makePath can create the leaf with the process umask before chmod.
+    // Callers do not write sensitive data until hardenPrivateDir returns.
     try std.fs.cwd().makePath(path);
     try hardenPrivateDir(path);
 }
