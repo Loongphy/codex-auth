@@ -1531,7 +1531,7 @@ fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.Li
 }
 
 fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.LoginOptions) !void {
-    const login_home = try createTempLoginCodexHome(allocator);
+    const login_home = try createTempLoginCodexHome(allocator, codex_home);
     defer {
         std.fs.cwd().deleteTree(login_home) catch |err| {
             std.log.warn("failed to remove temporary Codex login home `{s}`: {s}", .{ login_home, @errorName(err) });
@@ -1570,17 +1570,15 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     try registry.saveRegistry(allocator, codex_home, &reg);
 }
 
-fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
-    const base = try tempBasePathAlloc(allocator);
-    defer allocator.free(base);
-    try ensureTempBasePath(base);
+fn createTempLoginCodexHome(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+    try registry.ensureAccountsDir(allocator, codex_home);
 
     var counter: usize = 0;
     while (counter < 100) : (counter += 1) {
         const path = try std.fmt.allocPrint(
             allocator,
-            "{s}{c}codex-auth-login-{d}-{d}",
-            .{ base, std.fs.path.sep, std.time.nanoTimestamp(), counter },
+            "{s}{c}accounts{c}login-{d}-{d}",
+            .{ codex_home, std.fs.path.sep, std.fs.path.sep, std.time.nanoTimestamp(), counter },
         );
         std.fs.cwd().makePath(path) catch |err| switch (err) {
             error.PathAlreadyExists => {
@@ -1595,43 +1593,6 @@ fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
         return path;
     }
     return error.PathAlreadyExists;
-}
-
-fn ensureTempBasePath(base: []const u8) !void {
-    std.fs.cwd().makePath(base) catch |err| switch (err) {
-        error.BadPathName => try std.fs.cwd().access(base, .{}),
-        else => return err,
-    };
-}
-
-test "temp base path accepts filesystem root" {
-    const root = if (builtin.os.tag == .windows) "C:\\" else "/";
-    try ensureTempBasePath(root);
-}
-
-fn tempBasePathAlloc(allocator: std.mem.Allocator) ![]u8 {
-    if (builtin.os.tag == .windows) {
-        if (try getNonEmptyEnvVarOwned(allocator, "TEMP")) |path| return path;
-        if (try getNonEmptyEnvVarOwned(allocator, "TMP")) |path| return path;
-        if (try getNonEmptyEnvVarOwned(allocator, "TMPDIR")) |path| return path;
-        return allocator.dupe(u8, "C:\\Temp");
-    }
-    if (try getNonEmptyEnvVarOwned(allocator, "TMPDIR")) |path| return path;
-    if (try getNonEmptyEnvVarOwned(allocator, "TMP")) |path| return path;
-    if (try getNonEmptyEnvVarOwned(allocator, "TEMP")) |path| return path;
-    return allocator.dupe(u8, "/tmp");
-}
-
-fn getNonEmptyEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) !?[]u8 {
-    const value = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => return null,
-        else => return err,
-    };
-    if (value.len == 0) {
-        allocator.free(value);
-        return null;
-    }
-    return value;
 }
 
 fn handleImport(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.ImportOptions) !void {

@@ -300,43 +300,6 @@ fn runCliWithIsolatedHomeAndPath(
     });
 }
 
-fn runCliWithIsolatedHomePathAndTmpDir(
-    allocator: std.mem.Allocator,
-    project_root: []const u8,
-    home_root: []const u8,
-    path_override: []const u8,
-    tmpdir: []const u8,
-    args: []const []const u8,
-) !std.process.Child.RunResult {
-    const exe_path = try builtCliPathAlloc(allocator, project_root);
-    defer allocator.free(exe_path);
-
-    var argv = std.ArrayList([]const u8).empty;
-    defer argv.deinit(allocator);
-    try argv.append(allocator, exe_path);
-    try argv.appendSlice(allocator, args);
-
-    var env_map = try std.process.getEnvMap(allocator);
-    defer env_map.deinit();
-    try env_map.put("HOME", home_root);
-    try env_map.put("USERPROFILE", home_root);
-    env_map.remove("CODEX_HOME");
-    try env_map.put("PATH", path_override);
-    try env_map.put("TEMP", tmpdir);
-    try env_map.put("TMP", tmpdir);
-    try env_map.put("TMPDIR", tmpdir);
-    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-    try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
-
-    return try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv.items,
-        .cwd = project_root,
-        .env_map = &env_map,
-        .max_output_bytes = 1024 * 1024,
-    });
-}
-
 fn runCliWithIsolatedHomeAndStdin(
     allocator: std.mem.Allocator,
     project_root: []const u8,
@@ -681,7 +644,7 @@ test "Scenario: Given existing active auth when login succeeds then upstream log
     try std.testing.expectEqualStrings(existing_auth, existing_snapshot_data);
 }
 
-test "Scenario: Given missing temp root when running login then it creates a temporary Codex home" {
+test "Scenario: Given login when running codex login then scratch home is under accounts cache" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -694,9 +657,6 @@ test "Scenario: Given missing temp root when running login then it creates a tem
     defer gpa.free(home_root);
     try tmp.dir.makePath("fake-bin");
 
-    const missing_temp_root = try std.fs.path.join(gpa, &[_][]const u8{ home_root, "missing-temp-root" });
-    defer gpa.free(missing_temp_root);
-
     const expected_email = "new-login@example.com";
     const fake_auth = try bdd.authJsonWithEmailPlan(gpa, expected_email, "pro");
     defer gpa.free(fake_auth);
@@ -708,12 +668,11 @@ test "Scenario: Given missing temp root when running login then it creates a tem
     const path_override = try prependPathEntryAlloc(gpa, fake_bin_path);
     defer gpa.free(path_override);
 
-    const result = try runCliWithIsolatedHomePathAndTmpDir(
+    const result = try runCliWithIsolatedHomeAndPath(
         gpa,
         project_root,
         home_root,
         path_override,
-        missing_temp_root,
         &[_][]const u8{ "login", "--device-auth" },
     );
     defer gpa.free(result.stdout);
@@ -726,12 +685,15 @@ test "Scenario: Given missing temp root when running login then it creates a tem
     const fake_codex_home_data = try bdd.readFileAlloc(gpa, fake_codex_home_path);
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
-    try std.testing.expect(std.mem.startsWith(u8, fake_codex_home, missing_temp_root));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "codex-auth-login-") != null);
-    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(fake_codex_home, .{}));
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
+    const accounts_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts" });
+    defer gpa.free(accounts_dir);
+    try std.testing.expect(std.mem.startsWith(u8, fake_codex_home, accounts_dir));
+    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(fake_codex_home, .{}));
+
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), loaded.accounts.items.len);
