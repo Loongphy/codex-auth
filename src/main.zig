@@ -1573,7 +1573,7 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
 fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
     const base = try tempBasePathAlloc(allocator);
     defer allocator.free(base);
-    try std.fs.cwd().makePath(base);
+    try ensureTempBasePath(base);
 
     var counter: usize = 0;
     while (counter < 100) : (counter += 1) {
@@ -1595,6 +1595,18 @@ fn createTempLoginCodexHome(allocator: std.mem.Allocator) ![]u8 {
         return path;
     }
     return error.PathAlreadyExists;
+}
+
+fn ensureTempBasePath(base: []const u8) !void {
+    std.fs.cwd().makePath(base) catch |err| switch (err) {
+        error.BadPathName => try std.fs.cwd().access(base, .{}),
+        else => return err,
+    };
+}
+
+test "temp base path accepts filesystem root" {
+    const root = if (builtin.os.tag == .windows) "C:\\" else "/";
+    try ensureTempBasePath(root);
 }
 
 fn tempBasePathAlloc(allocator: std.mem.Allocator) ![]u8 {
