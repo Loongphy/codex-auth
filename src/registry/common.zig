@@ -402,6 +402,7 @@ pub fn hardenSensitiveDir(path: []const u8) !void {
 }
 
 pub fn ensurePrivateDir(path: []const u8) !void {
+    // Ignore created/existed status; existing dirs are hardened below too.
     _ = try std.Io.Dir.cwd().createDirPathStatus(app_runtime.io(), path, private_dir_permissions);
     try hardenSensitiveDir(path);
 }
