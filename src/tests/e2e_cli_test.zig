@@ -322,6 +322,8 @@ fn runCliWithIsolatedHomePathAndTmpDir(
     try env_map.put("USERPROFILE", home_root);
     env_map.remove("CODEX_HOME");
     try env_map.put("PATH", path_override);
+    try env_map.put("TEMP", tmpdir);
+    try env_map.put("TMP", tmpdir);
     try env_map.put("TMPDIR", tmpdir);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
     try env_map.put("CODEX_AUTH_DISABLE_BACKGROUND_ACCOUNT_NAME_REFRESH", "1");
