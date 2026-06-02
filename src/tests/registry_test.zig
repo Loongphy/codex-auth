@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const account_api = @import("../account_api.zig");
 const registry = @import("../registry.zig");
 const bdd = @import("bdd_helpers.zig");
@@ -79,6 +80,12 @@ fn legacySnapshotRelPath(allocator: std.mem.Allocator, email: []const u8) ![]u8 
     const filename = try std.fmt.allocPrint(allocator, "{s}.auth.json", .{key});
     defer allocator.free(filename);
     return try std.fs.path.join(allocator, &[_][]const u8{ "accounts", filename });
+}
+
+fn expectPathMode(path: []const u8, expected: std.fs.File.Mode) !void {
+    if (builtin.os.tag == .windows) return;
+    const stat = try std.fs.cwd().statFile(path);
+    try std.testing.expectEqual(expected, stat.mode & 0o777);
 }
 
 fn makeEmptyRegistry() registry.Registry {
@@ -199,6 +206,44 @@ test "resolveCodexHomeFromEnv falls back to USERPROFILE when HOME is unset" {
     defer gpa.free(expected);
 
     try std.testing.expectEqualStrings(expected, resolved);
+}
+
+test "ensureAccountsDir creates private accounts directory" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const accounts_dir = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts" });
+    defer gpa.free(accounts_dir);
+    try expectPathMode(accounts_dir, 0o700);
+}
+
+test "copyManagedFile writes private auth file" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try registry.ensureAccountsDir(gpa, codex_home);
+
+    const src = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "source-auth.json" });
+    defer gpa.free(src);
+    try tmp.dir.writeFile(.{ .sub_path = "source-auth.json", .data = "{\"tokens\":{}}" });
+
+    const dest = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "managed.auth.json" });
+    defer gpa.free(dest);
+    try registry.copyManagedFile(src, dest);
+
+    try expectPathMode(dest, 0o600);
+    const copied = try bdd.readFileAlloc(gpa, dest);
+    defer gpa.free(copied);
+    try std.testing.expectEqualStrings("{\"tokens\":{}}", copied);
 }
 
 fn setRecordIds(

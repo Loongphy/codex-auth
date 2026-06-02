@@ -1557,10 +1557,10 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
-    try registry.copyFile(auth_path, dest);
+    try registry.copyManagedFile(auth_path, dest);
     const active_auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(active_auth_path);
-    try registry.copyFile(auth_path, active_auth_path);
+    try registry.copyManagedFile(auth_path, active_auth_path);
 
     const record = try registry.accountFromAuth(allocator, "", &info);
     try registry.upsertAccount(allocator, &reg, record);
@@ -1579,7 +1579,7 @@ fn createTempLoginCodexHome(allocator: std.mem.Allocator, codex_home: []const u8
             "{s}{c}accounts{c}login-{d}-{d}",
             .{ codex_home, std.fs.path.sep, std.fs.path.sep, std.time.nanoTimestamp(), counter },
         );
-        std.fs.cwd().makePath(path) catch |err| switch (err) {
+        registry.createPrivateDir(path) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 allocator.free(path);
                 continue;

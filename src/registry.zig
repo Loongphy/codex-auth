@@ -362,7 +362,22 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
     const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
-    try std.fs.cwd().makePath(accounts_dir);
+    try ensurePrivateDir(accounts_dir);
+}
+
+pub fn ensurePrivateDir(path: []const u8) !void {
+    try std.fs.cwd().makePath(path);
+    try hardenPrivateDir(path);
+}
+
+pub fn createPrivateDir(path: []const u8) !void {
+    try std.fs.cwd().makeDir(path);
+    try hardenPrivateDir(path);
+}
+
+fn hardenPrivateDir(path: []const u8) !void {
+    if (builtin.os.tag == .windows) return;
+    try std.posix.fchmodat(std.posix.AT.FDCWD, path, 0o700, 0);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
@@ -422,6 +437,14 @@ pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u
 
 pub fn copyFile(src: []const u8, dest: []const u8) !void {
     try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{});
+}
+
+pub fn copyManagedFile(src: []const u8, dest: []const u8) !void {
+    if (builtin.os.tag == .windows) {
+        try copyFile(src, dest);
+        return;
+    }
+    try std.fs.cwd().copyFile(src, std.fs.cwd(), dest, .{ .override_mode = 0o600 });
 }
 
 fn writeFile(path: []const u8, data: []const u8) !void {
