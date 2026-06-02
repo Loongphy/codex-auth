@@ -1557,7 +1557,6 @@ fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.L
     const dest = try registry.accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
 
-    try registry.ensureAccountsDir(allocator, codex_home);
     try registry.copyFile(auth_path, dest);
     const active_auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(active_auth_path);
