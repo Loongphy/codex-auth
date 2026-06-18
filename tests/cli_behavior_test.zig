@@ -225,6 +225,33 @@ test "Scenario: Given import cpa with purge when parsing then usage error is ret
     try expectUsageError(result, .import_auth, "`--purge`");
 }
 
+test "Scenario: Given reset selector and yes flag when parsing then reset options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "02", "--yes" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset => |opts| {
+                try std.testing.expectEqualStrings("02", opts.selector);
+                try std.testing.expect(opts.yes);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset without selector when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "--yes" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset, "`reset` requires an account selector.");
+}
+
 test "Scenario: Given export directory when parsing then export options are preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "export", "/tmp/codex-backup" };

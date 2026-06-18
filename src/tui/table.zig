@@ -76,19 +76,25 @@ fn usageCellFullTextAlloc(
     return formatRateLimitFullAlloc(window);
 }
 
+fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.RateLimitSnapshot) ![]u8 {
+    const count = if (usage) |snapshot| snapshot.reset_credits else null;
+    return if (count) |value| std.fmt.allocPrint(allocator, "{d}", .{value}) else allocator.dupe(u8, "-");
+}
+
 pub fn writeAccountsTableWithUsageOverrides(
     out: *std.Io.Writer,
     reg: *registry.Registry,
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST ACTIVITY" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "RESETS", "5H", "WEEKLY", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
         headers[1].len,
         headers[2].len,
         headers[3].len,
         headers[4].len,
+        headers[5].len,
     };
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
@@ -106,6 +112,8 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const resets_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            defer std.heap.page_allocator.free(resets_str);
             const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
             const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
@@ -114,9 +122,10 @@ pub fn writeAccountsTableWithUsageOverrides(
             defer std.heap.page_allocator.free(last_str);
 
             widths[1] = @max(widths[1], plan.len);
-            widths[2] = @max(widths[2], rate_5h_str.len);
-            widths[3] = @max(widths[3], rate_week_str.len);
-            widths[4] = @max(widths[4], last_str.len);
+            widths[2] = @max(widths[2], resets_str.len);
+            widths[3] = @max(widths[3], rate_5h_str.len);
+            widths[4] = @max(widths[4], rate_week_str.len);
+            widths[5] = @max(widths[5], last_str.len);
         }
     }
 
@@ -128,12 +137,14 @@ pub fn writeAccountsTableWithUsageOverrides(
     defer std.heap.page_allocator.free(h1);
     const h2 = try truncateAlloc(headers[2], widths[2]);
     defer std.heap.page_allocator.free(h2);
-    const header_week = if (widths[3] >= "WEEKLY".len) "WEEKLY" else if (widths[3] >= "WEEK".len) "WEEK" else "W";
-    const h3 = try truncateAlloc(header_week, widths[3]);
+    const h3 = try truncateAlloc(headers[3], widths[3]);
     defer std.heap.page_allocator.free(h3);
-    const header_last = if (widths[4] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
-    const h4 = try truncateAlloc(header_last, widths[4]);
+    const header_week = if (widths[4] >= "WEEKLY".len) "WEEKLY" else if (widths[4] >= "WEEK".len) "WEEK" else "W";
+    const h4 = try truncateAlloc(header_week, widths[4]);
     defer std.heap.page_allocator.free(h4);
+    const header_last = if (widths[5] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
+    const h5 = try truncateAlloc(header_last, widths[5]);
+    defer std.heap.page_allocator.free(h5);
 
     if (use_color) try out.writeAll(ansi.cyan);
     try writeRepeat(out, ' ', prefix_len);
@@ -146,6 +157,8 @@ pub fn writeAccountsTableWithUsageOverrides(
     try writePadded(out, h3, widths[3]);
     try out.writeAll("  ");
     try writePadded(out, h4, widths[4]);
+    try out.writeAll("  ");
+    try writePadded(out, h5, widths[5]);
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
     if (use_color) try out.writeAll(ansi.dim);
@@ -161,9 +174,11 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[2], usage_override);
+            const resets_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            defer std.heap.page_allocator.free(resets_str);
+            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[3], usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[3], usage_override);
+            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[4], usage_override);
             defer std.heap.page_allocator.free(rate_week_str);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last);
@@ -173,11 +188,13 @@ pub fn writeAccountsTableWithUsageOverrides(
             defer std.heap.page_allocator.free(account_cell);
             const plan_cell = try truncateAlloc(plan, widths[1]);
             defer std.heap.page_allocator.free(plan_cell);
-            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[2]);
+            const resets_cell = try truncateAlloc(resets_str, widths[2]);
+            defer std.heap.page_allocator.free(resets_cell);
+            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[3]);
             defer std.heap.page_allocator.free(rate_5h_cell);
-            const rate_week_cell = try truncateAlloc(rate_week_str, widths[3]);
+            const rate_week_cell = try truncateAlloc(rate_week_str, widths[4]);
             defer std.heap.page_allocator.free(rate_week_cell);
-            const last_cell = try truncateAlloc(last, widths[4]);
+            const last_cell = try truncateAlloc(last, widths[5]);
             defer std.heap.page_allocator.free(last_cell);
             if (use_color) {
                 if (row.is_active) {
@@ -194,11 +211,13 @@ pub fn writeAccountsTableWithUsageOverrides(
             try out.writeAll("  ");
             try writePadded(out, plan_cell, widths[1]);
             try out.writeAll("  ");
-            try writePadded(out, rate_5h_cell, widths[2]);
+            try writePadded(out, resets_cell, widths[2]);
             try out.writeAll("  ");
-            try writePadded(out, rate_week_cell, widths[3]);
+            try writePadded(out, rate_5h_cell, widths[3]);
             try out.writeAll("  ");
-            try writePadded(out, last_cell, widths[4]);
+            try writePadded(out, rate_week_cell, widths[4]);
+            try out.writeAll("  ");
+            try writePadded(out, last_cell, widths[5]);
             try out.writeAll("\n");
             if (use_color) try out.writeAll(ansi.reset);
             selectable_counter += 1;
@@ -282,14 +301,14 @@ fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     }
 }
 
-fn listTotalWidth(widths: *const [5]usize, prefix_len: usize, sep_len: usize) usize {
+fn listTotalWidth(widths: *const [6]usize, prefix_len: usize, sep_len: usize) usize {
     var sum: usize = prefix_len;
     for (widths) |w| sum += w;
     sum += sep_len * (widths.len - 1);
     return sum;
 }
 
-fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
+fn adjustListWidths(widths: *[6]usize, prefix_len: usize, sep_len: usize) void {
     const term_cols = terminalWidth();
     if (term_cols == 0) return;
     const total = listTotalWidth(widths, prefix_len, sep_len);
@@ -297,6 +316,7 @@ fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
 
     const min_email: usize = 10;
     const min_plan: usize = 4;
+    const min_resets: usize = 1;
     const min_rate: usize = 1;
     const min_last: usize = 4;
 
@@ -319,8 +339,8 @@ fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
     }
     if (over == 0) return;
 
-    if (widths[2] > min_rate) {
-        const reducible = widths[2] - min_rate;
+    if (widths[2] > min_resets) {
+        const reducible = widths[2] - min_resets;
         const reduce = @min(reducible, over);
         widths[2] -= reduce;
         over -= reduce;
@@ -335,10 +355,18 @@ fn adjustListWidths(widths: *[5]usize, prefix_len: usize, sep_len: usize) void {
     }
     if (over == 0) return;
 
-    if (widths[4] > min_last) {
-        const reducible = widths[4] - min_last;
+    if (widths[4] > min_rate) {
+        const reducible = widths[4] - min_rate;
         const reduce = @min(reducible, over);
         widths[4] -= reduce;
+        over -= reduce;
+    }
+    if (over == 0) return;
+
+    if (widths[5] > min_last) {
+        const reducible = widths[5] - min_last;
+        const reduce = @min(reducible, over);
+        widths[5] -= reduce;
         over -= reduce;
     }
 }

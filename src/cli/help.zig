@@ -55,6 +55,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "alias", "Set or clear account aliases");
     try writeCommandDetail(out, use_color, "alias set <alias|email|display-number|query> <alias>");
     try writeCommandDetail(out, use_color, "alias clear <alias|email|display-number|query>");
+    try writeCommandSummary(out, use_color, "reset <alias|email|display-number|query> --yes", "Consume one reset credit");
     try writeCommandSummary(out, use_color, "clean", "Delete backup and stale files under accounts/");
     try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
@@ -132,6 +133,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
         .switch_account => "switch",
         .remove_account => "remove",
         .alias => "alias",
+        .reset => "reset",
         .clean => "clean",
         .config => "config",
         .app => "app",
@@ -148,6 +150,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .switch_account => "Switch the active account by alias, email, display number, or partial query.",
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
+        .reset => "Consume one rate-limit reset credit for an account.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage live refresh configuration.",
         .app => "Launch Codex App with CLI overrides.",
@@ -156,21 +159,21 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .import_auth, .export_auth, .switch_account, .remove_account, .alias, .reset, .config, .app => true,
         else => false,
     };
 }
 
 fn commandHelpHasOptions(topic: HelpTopic) bool {
     return switch (topic) {
-        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .reset, .config, .app => true,
         else => false,
     };
 }
 
 fn commandHelpHasNotes(topic: HelpTopic) bool {
     return switch (topic) {
-        .switch_account, .alias => true,
+        .switch_account, .alias, .reset => true,
         else => false,
     };
 }
@@ -221,6 +224,9 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth alias set <alias|email|display-number|query> <alias>\n");
             try out.writeAll("  codex-auth alias clear <alias|email|display-number|query>\n");
         },
+        .reset => {
+            try out.writeAll("  codex-auth reset <alias|email|display-number|query> --yes\n");
+        },
         .clean => {
             try out.writeAll("  codex-auth clean\n");
             try out.writeAll("  codex-auth clean background\n");
@@ -244,6 +250,7 @@ pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
         .switch_account => "codex-auth switch --help",
         .remove_account => "codex-auth remove --help",
         .alias => "codex-auth alias --help",
+        .reset => "codex-auth reset --help",
         .clean => "codex-auth clean --help",
         .config => "codex-auth config --help",
         .app => "codex-auth app --help",
@@ -298,6 +305,11 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("                    Set one stored account alias without remote refresh.\n");
             try out.writeAll("  clear <selector>\n");
             try out.writeAll("                    Remove one stored account alias without remote refresh.\n");
+        },
+        .reset => {
+            try out.writeAll("  --yes        Actually consume one reset credit.\n");
+            try out.writeAll("  <alias|email|display-number|query>\n");
+            try out.writeAll("               Select one stored ChatGPT account.\n");
         },
         .config => {
             try out.writeAll("  live --interval <seconds>\n");
@@ -378,6 +390,10 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth alias set old-name new-name\n");
             try out.writeAll("  codex-auth alias clear work\n");
         },
+        .reset => {
+            try out.writeAll("  codex-auth reset 02 --yes\n");
+            try out.writeAll("  codex-auth reset work --yes\n");
+        },
         .clean => {
             try out.writeAll("  codex-auth clean\n");
             try out.writeAll("  codex-auth clean background\n");
@@ -402,6 +418,10 @@ fn writeNotesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopi
         .alias => {
             try out.writeAll("  Alias targets can be aliases, emails, display numbers, or partial queries.\n");
             try out.writeAll("  New aliases cannot be empty or only digits.\n");
+        },
+        .reset => {
+            try out.writeAll("  Reset targets can be aliases, emails, display numbers, or partial queries.\n");
+            try out.writeAll("  Consuming a reset credit calls ChatGPT's reset-credit consume endpoint.\n");
         },
         else => {},
     }

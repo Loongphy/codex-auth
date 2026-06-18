@@ -75,6 +75,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
 | [`codex-auth alias set <query> <alias>`](./docs/commands/alias.md) | Set an alias for an account |
 | [`codex-auth alias clear <query>`](./docs/commands/alias.md) | Clear the alias for an account |
+| [`codex-auth reset <query> --yes`](./docs/commands/reset.md) | Consume one rate-limit reset credit |
 
 ### Import and Maintenance
 
@@ -101,6 +102,7 @@ codex-auth list --active
 codex-auth switch
 codex-auth switch 02
 codex-auth remove work
+codex-auth reset work --yes
 codex-auth import /path/to/auth.json --alias personal
 codex-auth list --skip-api
 ```

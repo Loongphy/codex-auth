@@ -430,7 +430,7 @@ fn looksLikeUsageEventLine(line: []const u8) bool {
 }
 
 fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) ?registry.RateLimitSnapshot {
-    var snap = registry.RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .plan_type = null };
+    var snap = registry.RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .plan_type = null };
     if (parsed.primary) |p| snap.primary = parseWindow(p);
     if (parsed.secondary) |p| snap.secondary = parseWindow(p);
     if (parsed.credits) |c| snap.credits = parseCredits(allocator, c);

@@ -10,7 +10,7 @@ pub const LiveListViewport = struct {
     max_cols: ?usize = null,
 };
 
-pub const column_count = 5;
+pub const column_count = 6;
 const live_account_ident_width: usize = 10;
 const live_account_suffix_min_width: usize = 10;
 const live_account_suffix_min_len: usize = 3;
@@ -39,6 +39,7 @@ pub const LiveTable = struct {
             .{ .text = self.columns[2].header },
             .{ .text = self.columns[3].header },
             .{ .text = self.columns[4].header },
+            .{ .text = self.columns[5].header },
         });
         try writer.reset();
         try writer.writeAll("\n");
@@ -92,6 +93,7 @@ pub fn accountTable(widths: SwitchWidths, prefix_width: usize) LiveTable {
         .columns = .{
             .{ .header = "ACCOUNT", .width = widths.email },
             .{ .header = "PLAN", .width = widths.plan },
+            .{ .header = "RESETS", .width = widths.resets },
             .{ .header = "5H", .width = widths.rate_5h },
             .{ .header = "WEEKLY", .width = widths.rate_week },
             .{ .header = "LAST", .width = widths.last },
@@ -107,6 +109,7 @@ pub fn boundWidths(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) 
         return .{
             .email = 0,
             .plan = 0,
+            .resets = 0,
             .rate_5h = 0,
             .rate_week = 0,
             .last = 0,
@@ -117,6 +120,7 @@ pub fn boundWidths(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) 
     var bounded = SwitchWidths{
         .email = 0,
         .plan = 0,
+        .resets = 0,
         .rate_5h = 0,
         .rate_week = 0,
         .last = 0,
@@ -125,13 +129,13 @@ pub fn boundWidths(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) 
     growBoundedWidth(&remaining, &bounded.email, @min(widths.email, live_account_ident_width));
     growBoundedWidth(&remaining, &bounded.rate_5h, @min(widths.rate_5h, @max(@as(usize, 4), "5H".len)));
     growBoundedWidth(&remaining, &bounded.rate_week, @min(widths.rate_week, "WEEKLY".len));
-    growBoundedWidth(&remaining, &bounded.plan, @min(widths.plan, "PLAN".len));
-    growBoundedWidth(&remaining, &bounded.last, @min(widths.last, @as(usize, 3)));
+    growBoundedWidth(&remaining, &bounded.plan, widths.plan);
+    growBoundedWidth(&remaining, &bounded.last, widths.last);
+    growBoundedWidth(&remaining, &bounded.resets, @min(widths.resets, "RESETS".len));
 
     growBoundedWidth(&remaining, &bounded.rate_5h, widths.rate_5h);
     growBoundedWidth(&remaining, &bounded.rate_week, widths.rate_week);
-    growBoundedWidth(&remaining, &bounded.plan, widths.plan);
-    growBoundedWidth(&remaining, &bounded.last, widths.last);
+    growBoundedWidth(&remaining, &bounded.resets, widths.resets);
     growBoundedWidth(&remaining, &bounded.email, widths.email);
 
     return bounded;

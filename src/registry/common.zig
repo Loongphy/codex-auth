@@ -68,6 +68,7 @@ pub const RateLimitSnapshot = struct {
     primary: ?RateLimitWindow,
     secondary: ?RateLimitWindow,
     credits: ?CreditsSnapshot,
+    reset_credits: ?i64 = null,
     plan_type: ?PlanType,
 };
 
@@ -216,6 +217,7 @@ pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitS
         .primary = snapshot.primary,
         .secondary = snapshot.secondary,
         .credits = cloned_credits,
+        .reset_credits = snapshot.reset_credits,
         .plan_type = snapshot.plan_type,
     };
 }
@@ -261,6 +263,7 @@ pub fn rateLimitSnapshotEqual(a: RateLimitSnapshot, b: RateLimitSnapshot) bool {
     return rateLimitWindowEqual(a.primary, b.primary) and
         rateLimitWindowEqual(a.secondary, b.secondary) and
         creditsEqual(a.credits, b.credits) and
+        a.reset_credits == b.reset_credits and
         a.plan_type == b.plan_type;
 }
 

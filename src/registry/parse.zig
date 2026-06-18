@@ -32,7 +32,7 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSna
         .object => |o| o,
         else => return null,
     };
-    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .plan_type = null };
+    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .plan_type = null };
 
     if (obj.get("plan_type")) |p| {
         switch (p) {
@@ -43,6 +43,7 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSna
     if (obj.get("primary")) |p| snap.primary = parseWindow(p);
     if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
     if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
+    snap.reset_credits = readInt(obj.get("reset_credits"));
     return snap;
 }
 

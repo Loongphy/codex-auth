@@ -13,6 +13,7 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `switch` | [docs/commands/switch.md](./switch.md) |
 | `remove` | [docs/commands/remove.md](./remove.md) |
 | `alias` | [docs/commands/alias.md](./alias.md) |
+| `reset` | [docs/commands/reset.md](./reset.md) |
 | `clean` | [docs/commands/clean.md](./clean.md) |
 | `config` | [docs/commands/config.md](./config.md) |
 | `app` | [docs/commands/app.md](./app.md) |

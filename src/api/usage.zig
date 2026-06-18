@@ -4,12 +4,25 @@ const chatgpt_http = @import("http.zig");
 const registry = @import("../registry/root.zig");
 
 pub const default_usage_endpoint = "https://chatgpt.com/backend-api/wham/usage";
+pub const default_reset_consume_endpoint = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
 pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
+};
+
+pub const ResetConsumeResult = struct {
+    code: ?[]u8,
+    windows_reset: ?bool,
+    redeem_request_id: []u8,
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.code) |value| allocator.free(value);
+        allocator.free(self.redeem_request_id);
+        self.* = undefined;
+    }
 };
 
 pub const max_response_error_code_bytes: usize = 64;
@@ -207,6 +220,70 @@ pub fn fetchUsageForTokenDetailed(
     };
 }
 
+pub fn consumeResetForAuthPath(
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) !ResetConsumeResult {
+    const info = try auth.parseAuthInfo(allocator, auth_path);
+    defer info.deinit(allocator);
+
+    if (info.auth_mode == .apikey) return error.UnsupportedAuthMode;
+    if (info.auth_mode != .chatgpt) return error.MissingAuth;
+    const access_token = info.access_token orelse return error.MissingAuth;
+    const chatgpt_account_id = info.chatgpt_account_id orelse return error.MissingAuth;
+
+    return try consumeResetForToken(allocator, default_reset_consume_endpoint, access_token, chatgpt_account_id);
+}
+
+pub fn consumeResetForToken(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    access_token: []const u8,
+    account_id: []const u8,
+) !ResetConsumeResult {
+    const request_id = try randomRedeemRequestIdAlloc(allocator);
+    errdefer allocator.free(request_id);
+
+    const body = try std.fmt.allocPrint(allocator, "{{\"redeem_request_id\":\"{s}\"}}", .{request_id});
+    defer allocator.free(body);
+
+    const http_result = try chatgpt_http.runPostJsonCommand(allocator, endpoint, access_token, account_id, body);
+    defer allocator.free(http_result.body);
+    if (http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) return error.RequestFailed;
+
+    var result = try parseResetConsumeResponse(allocator, http_result.body);
+    allocator.free(result.redeem_request_id);
+    result.redeem_request_id = request_id;
+    return result;
+}
+
+pub fn parseResetConsumeResponse(allocator: std.mem.Allocator, body: []const u8) !ResetConsumeResult {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer parsed.deinit();
+
+    const root_obj = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return error.InvalidResponse,
+    };
+
+    const code = if (root_obj.get("code")) |value| switch (value) {
+        .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
+        else => null,
+    } else null;
+    errdefer if (code) |value| allocator.free(value);
+
+    const windows_reset = if (root_obj.get("windows_reset")) |value| switch (value) {
+        .bool => |b| b,
+        else => null,
+    } else null;
+
+    return .{
+        .code = code,
+        .windows_reset = windows_reset,
+        .redeem_request_id = try allocator.dupe(u8, ""),
+    };
+}
+
 fn isNonSuccessStatus(status_code: ?u16) bool {
     const status = status_code orelse return false;
     return status < 200 or status > 299;
@@ -261,6 +338,7 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
         .primary = null,
         .secondary = null,
         .credits = null,
+        .reset_credits = null,
         .plan_type = null,
     };
 
@@ -269,6 +347,9 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
     }
     if (root_obj.get("credits")) |credits| {
         snapshot.credits = try parseCredits(allocator, credits);
+    }
+    if (root_obj.get("rate_limit_reset_credits")) |reset_credits| {
+        snapshot.reset_credits = parseResetCredits(reset_credits);
     }
     if (root_obj.get("rate_limit")) |rate_limit| {
         switch (rate_limit) {
@@ -284,7 +365,7 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
         }
     }
 
-    if (snapshot.primary == null and snapshot.secondary == null) {
+    if (snapshot.primary == null and snapshot.secondary == null and snapshot.reset_credits == null) {
         if (snapshot.credits) |*credits| {
             if (credits.balance) |balance| allocator.free(balance);
         }
@@ -292,6 +373,17 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
     }
 
     return snapshot;
+}
+
+fn parseResetCredits(v: std.json.Value) ?i64 {
+    const obj = switch (v) {
+        .object => |o| o,
+        else => return null,
+    };
+    return switch (obj.get("available_count") orelse return null) {
+        .integer => |i| i,
+        else => null,
+    };
 }
 
 fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
@@ -368,6 +460,21 @@ fn parsePlanType(v: std.json.Value) ?registry.PlanType {
 fn ceilMinutes(seconds: i64) ?i64 {
     if (seconds <= 0) return null;
     return @divTrunc(seconds + 59, 60);
+}
+
+fn randomRedeemRequestIdAlloc(allocator: std.mem.Allocator) ![]u8 {
+    var bytes: [16]u8 = undefined;
+    @import("../core/runtime.zig").io().random(&bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = std.fmt.bytesToHex(bytes, .lower);
+    return std.fmt.allocPrint(allocator, "{s}-{s}-{s}-{s}-{s}", .{
+        hex[0..8],
+        hex[8..12],
+        hex[12..16],
+        hex[16..20],
+        hex[20..32],
+    });
 }
 
 fn runUsageCommand(

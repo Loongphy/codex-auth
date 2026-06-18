@@ -24,6 +24,11 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.CurlRequired or
         err == error.SwitchSelectionRequiresTty or
         err == error.AliasSelectionRequiresTty or
+        err == error.ResetRequiresConfirmation or
+        err == error.MultipleAccountsMatched or
+        err == error.UnsupportedAuthMode or
+        err == error.MissingAuth or
+        err == error.RequestFailed or
         err == error.InvalidAlias or
         err == error.DuplicateAlias or
         err == error.RemoveConfirmationUnavailable or

@@ -46,6 +46,9 @@ test "parse usage api response maps live usage windows and plan" {
         \\    "approx_local_messages": null,
         \\    "approx_cloud_messages": null
         \\  },
+        \\  "rate_limit_reset_credits": {
+        \\    "available_count": 3
+        \\  },
         \\  "promo": null
         \\}
     ;
@@ -61,6 +64,23 @@ test "parse usage api response maps live usage windows and plan" {
     try std.testing.expect(snapshot.credits != null);
     try std.testing.expect(!snapshot.credits.?.has_credits);
     try std.testing.expect(snapshot.credits.?.balance == null);
+    try std.testing.expectEqual(@as(?i64, 3), snapshot.reset_credits);
+}
+
+test "parse reset consume response maps code and windows reset" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "code": "success",
+        \\  "windows_reset": true
+        \\}
+    ;
+
+    var result = try usage_api.parseResetConsumeResponse(gpa, body);
+    defer result.deinit(gpa);
+
+    try std.testing.expectEqualStrings("success", result.code.?);
+    try std.testing.expectEqual(@as(?bool, true), result.windows_reset);
 }
 
 test "parse usage api response without windows is ignored" {

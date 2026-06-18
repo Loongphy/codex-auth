@@ -11,6 +11,7 @@ const c = @cImport({
 pub const SwitchWidths = struct {
     email: usize,
     plan: usize,
+    resets: usize = "RESETS".len,
     rate_5h: usize,
     rate_week: usize,
     last: usize,
@@ -20,6 +21,7 @@ pub const SwitchRow = struct {
     account_index: ?usize,
     account: []u8,
     plan: []const u8,
+    resets: []const u8 = "",
     rate_5h: []u8,
     rate_week: []u8,
     last: []u8,
@@ -30,6 +32,7 @@ pub const SwitchRow = struct {
 
     fn deinit(self: *SwitchRow, allocator: std.mem.Allocator) void {
         allocator.free(self.account);
+        if (self.resets.len != 0) allocator.free(@constCast(self.resets));
         allocator.free(self.rate_5h);
         allocator.free(self.rate_week);
         allocator.free(self.last);
@@ -84,6 +87,11 @@ fn usageCellTextAlloc(
     return formatRateLimitSwitchAlloc(allocator, window);
 }
 
+fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.RateLimitSnapshot) ![]u8 {
+    const count = if (usage) |snapshot| snapshot.reset_credits else null;
+    return if (count) |value| std.fmt.allocPrint(allocator, "{d}", .{value}) else allocator.dupe(u8, "-");
+}
+
 pub fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !SwitchRows {
     return buildSwitchRowsWithUsageOverrides(allocator, reg, null);
 }
@@ -99,6 +107,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
     var widths = SwitchWidths{
         .email = "EMAIL".len,
         .plan = "PLAN".len,
+        .resets = "RESETS".len,
         .rate_5h = "5H".len,
         .rate_week = "WEEKLY".len,
         .last = "LAST".len,
@@ -111,6 +120,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const resets_str = try resetCreditsCellAlloc(allocator, rec.last_usage);
             const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
             const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
@@ -118,6 +128,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
                 .account_index = account_idx,
                 .account = try allocator.dupe(u8, display_row.account_cell),
                 .plan = plan,
+                .resets = resets_str,
                 .rate_5h = rate_5h_str,
                 .rate_week = rate_week_str,
                 .last = last,
@@ -128,6 +139,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
+            widths.resets = @max(widths.resets, resets_str.len);
             widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
             widths.rate_week = @max(widths.rate_week, rate_week_str.len);
             widths.last = @max(widths.last, last.len);
@@ -136,6 +148,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
                 .account_index = null,
                 .account = try allocator.dupe(u8, display_row.account_cell),
                 .plan = "",
+                .resets = "",
                 .rate_5h = try allocator.dupe(u8, ""),
                 .rate_week = try allocator.dupe(u8, ""),
                 .last = try allocator.dupe(u8, ""),
@@ -175,6 +188,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
     var widths = SwitchWidths{
         .email = "EMAIL".len,
         .plan = "PLAN".len,
+        .resets = "RESETS".len,
         .rate_5h = "5H".len,
         .rate_week = "WEEKLY".len,
         .last = "LAST".len,
@@ -187,6 +201,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
+            const resets_str = try resetCreditsCellAlloc(allocator, rec.last_usage);
             const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
             const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(allocator, rec.last_usage_at, now);
@@ -194,6 +209,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .account_index = account_idx,
                 .account = try allocator.dupe(u8, display_row.account_cell),
                 .plan = plan,
+                .resets = resets_str,
                 .rate_5h = rate_5h_str,
                 .rate_week = rate_week_str,
                 .last = last,
@@ -204,6 +220,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
             };
             widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
+            widths.resets = @max(widths.resets, resets_str.len);
             widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
             widths.rate_week = @max(widths.rate_week, rate_week_str.len);
             widths.last = @max(widths.last, last.len);
@@ -212,6 +229,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .account_index = null,
                 .account = try allocator.dupe(u8, display_row.account_cell),
                 .plan = "",
+                .resets = "",
                 .rate_5h = try allocator.dupe(u8, ""),
                 .rate_week = try allocator.dupe(u8, ""),
                 .last = try allocator.dupe(u8, ""),
