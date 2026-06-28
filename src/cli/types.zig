@@ -32,6 +32,7 @@ pub const SwitchTarget = union(enum) {
 pub const SwitchOptions = struct {
     target: SwitchTarget = .picker,
     live: bool = false,
+    auto: bool = false,
     api_mode: ApiMode = .default,
 };
 pub const RemoveOptions = struct {

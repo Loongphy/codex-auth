@@ -18,6 +18,14 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             opts.live = true;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--auto")) {
+            if (opts.auto) {
+                freeTarget(allocator, opts.target);
+                return common.usageErrorResult(allocator, .switch_account, "duplicate `--auto` for `switch`.", .{});
+            }
+            opts.auto = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--api")) {
             switch (opts.api_mode) {
                 .default => opts.api_mode = .force_api,
@@ -59,12 +67,21 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         else
             .{ .query = try allocator.dupe(u8, arg) };
     }
-    if (opts.target != .picker and (opts.api_mode != .default or opts.live)) {
+    if (opts.auto and opts.live) {
         freeTarget(allocator, opts.target);
         return common.usageErrorResult(
             allocator,
             .switch_account,
-            "`switch -|<alias|email|display-number|query>` does not support `--live`, `--api`, or `--skip-api`.",
+            "`--auto` cannot be combined with `--live` for `switch`.",
+            .{},
+        );
+    }
+    if (opts.target != .picker and (opts.api_mode != .default or opts.live or opts.auto)) {
+        freeTarget(allocator, opts.target);
+        return common.usageErrorResult(
+            allocator,
+            .switch_account,
+            "`switch -|<alias|email|display-number|query>` does not support `--auto`, `--live`, `--api`, or `--skip-api`.",
             .{},
         );
     }

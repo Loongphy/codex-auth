@@ -408,6 +408,72 @@ pub fn selectBestAccountIndexByUsage(reg: *Registry) ?usize {
     return best_idx;
 }
 
+pub fn selectAutoSwitchAccountIndexByLimits(reg: *Registry) ?usize {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    return selectAutoSwitchAccountIndexByLimitsWithUsageOverridesAt(reg, null, now);
+}
+
+pub fn selectAutoSwitchAccountIndexByLimitsWithUsageOverrides(
+    reg: *Registry,
+    usage_overrides: ?[]const ?[]const u8,
+) ?usize {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    return selectAutoSwitchAccountIndexByLimitsWithUsageOverridesAt(reg, usage_overrides, now);
+}
+
+pub fn selectAutoSwitchAccountIndexByLimitsAt(reg: *Registry, now: i64) ?usize {
+    return selectAutoSwitchAccountIndexByLimitsWithUsageOverridesAt(reg, null, now);
+}
+
+fn selectAutoSwitchAccountIndexByLimitsWithUsageOverridesAt(
+    reg: *Registry,
+    usage_overrides: ?[]const ?[]const u8,
+    now: i64,
+) ?usize {
+    var best_idx: ?usize = null;
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        if (reg.active_account_key) |active_key| {
+            if (std.mem.eql(u8, rec.account_key, active_key)) continue;
+        }
+        if (usageOverrideForAccount(usage_overrides, idx) != null) continue;
+        if (!accountHasPositiveFiveHourAndWeeklyLimits(rec, now)) continue;
+
+        if (best_idx == null or autoSwitchAccountIsBetter(rec, &reg.accounts.items[best_idx.?], now)) {
+            best_idx = idx;
+        }
+    }
+    return best_idx;
+}
+
+fn usageOverrideForAccount(usage_overrides: ?[]const ?[]const u8, account_idx: usize) ?[]const u8 {
+    const overrides = usage_overrides orelse return null;
+    if (account_idx >= overrides.len) return null;
+    return overrides[account_idx];
+}
+
+fn accountHasPositiveFiveHourAndWeeklyLimits(rec: *const AccountRecord, now: i64) bool {
+    const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
+    const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+    const rem_5h = remainingPercentAt(rate_5h, now) orelse return false;
+    const rem_week = remainingPercentAt(rate_week, now) orelse return false;
+    return rem_5h > 0 and rem_week > 0;
+}
+
+fn autoSwitchAccountIsBetter(candidate: *const AccountRecord, best: *const AccountRecord, now: i64) bool {
+    const candidate_5h_reset = resetDistanceForWindow(resolveRateWindow(candidate.last_usage, 300, true), now);
+    const best_5h_reset = resetDistanceForWindow(resolveRateWindow(best.last_usage, 300, true), now);
+    if (candidate_5h_reset != best_5h_reset) return candidate_5h_reset < best_5h_reset;
+
+    const candidate_weekly_reset = resetDistanceForWindow(resolveRateWindow(candidate.last_usage, 10080, false), now);
+    const best_weekly_reset = resetDistanceForWindow(resolveRateWindow(best.last_usage, 10080, false), now);
+    return candidate_weekly_reset < best_weekly_reset;
+}
+
+fn resetDistanceForWindow(window: ?RateLimitWindow, now: i64) i64 {
+    const resets_at = if (window) |value| value.resets_at orelse return std.math.maxInt(i64) else return std.math.maxInt(i64);
+    return @max(resets_at - now, 0);
+}
+
 pub fn usageScoreAt(usage: ?RateLimitSnapshot, now: i64) ?i64 {
     const rate_5h = resolveRateWindow(usage, 300, true);
     const rate_week = resolveRateWindow(usage, 10080, false);

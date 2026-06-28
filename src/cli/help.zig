@@ -46,7 +46,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
     try writeCommandDetail(out, use_color, "switch -");
-    try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
+    try writeCommandDetail(out, use_color, "switch [--auto|--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
@@ -209,6 +209,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch -\n");
+            try out.writeAll("  codex-auth switch --auto [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
         },
@@ -278,6 +279,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --cpa   Export CPA flat token JSON. Without this, exports Codex auth snapshots.\n");
         },
         .switch_account => {
+            try out.writeAll("  --auto       Switch once to an inactive account with both 5h and weekly limits remaining.\n");
             try out.writeAll("  --live       Open the live switch UI.\n");
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
@@ -353,6 +355,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .switch_account => {
             try out.writeAll("  codex-auth switch\n");
+            try out.writeAll("  codex-auth switch --auto\n");
             try out.writeAll("  codex-auth switch -\n");
             try out.writeAll("  codex-auth switch --live\n");
             try out.writeAll("  codex-auth switch --api\n");
@@ -398,6 +401,7 @@ fn writeNotesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopi
     switch (topic) {
         .switch_account => {
             try out.writeAll("  Targets can be `-`, aliases, emails, display numbers, or partial queries.\n");
+            try out.writeAll("  `--auto` selects the eligible inactive account with the earliest 5h reset.\n");
         },
         .alias => {
             try out.writeAll("  Alias targets can be aliases, emails, display numbers, or partial queries.\n");

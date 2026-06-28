@@ -22,6 +22,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         .previous => return handleSwitchPrevious(allocator, codex_home, opts),
         .picker => {},
     }
+    if (opts.auto) return handleSwitchAuto(allocator, codex_home, opts);
 
     {
         if (!opts.live) {
@@ -105,6 +106,46 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             return err;
         };
     }
+}
+
+fn handleSwitchAuto(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.types.SwitchOptions,
+) !void {
+    std.debug.assert(opts.target == .picker);
+    std.debug.assert(!opts.live);
+    std.debug.assert(opts.auto);
+
+    var loaded = if (opts.api_mode == .skip_api)
+        try loadStoredSwitchSelectionDisplay(
+            allocator,
+            codex_home,
+            .switch_account,
+            opts.api_mode,
+        )
+    else
+        try loadSwitchSelectionDisplay(
+            allocator,
+            codex_home,
+            opts.api_mode,
+            .switch_account,
+            true,
+        );
+    defer loaded.display.deinit(allocator);
+    defer if (loaded.refresh_error_name) |name| allocator.free(name);
+
+    const selected_account_idx = registry.selectAutoSwitchAccountIndexByLimitsWithUsageOverrides(
+        &loaded.display.reg,
+        loaded.display.usage_overrides,
+    ) orelse {
+        try cli.output.printNoAutoSwitchCandidateError();
+        return error.NoAutoSwitchCandidate;
+    };
+    const selected_account_key = loaded.display.reg.accounts.items[selected_account_idx].account_key;
+    try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key);
+    try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
+    try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key);
 }
 
 fn handleSwitchQuery(

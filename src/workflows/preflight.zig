@@ -23,6 +23,7 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.TuiOutputUnavailable or
         err == error.CurlRequired or
         err == error.SwitchSelectionRequiresTty or
+        err == error.NoAutoSwitchCandidate or
         err == error.AliasSelectionRequiresTty or
         err == error.InvalidAlias or
         err == error.DuplicateAlias or

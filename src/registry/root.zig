@@ -126,6 +126,9 @@ pub fn syncActiveAccountFromAuth(allocator: std.mem.Allocator, codex_home: []con
 }
 pub const removeAccounts = account_ops.removeAccounts;
 pub const selectBestAccountIndexByUsage = account_ops.selectBestAccountIndexByUsage;
+pub const selectAutoSwitchAccountIndexByLimits = account_ops.selectAutoSwitchAccountIndexByLimits;
+pub const selectAutoSwitchAccountIndexByLimitsWithUsageOverrides = account_ops.selectAutoSwitchAccountIndexByLimitsWithUsageOverrides;
+pub const selectAutoSwitchAccountIndexByLimitsAt = account_ops.selectAutoSwitchAccountIndexByLimitsAt;
 pub const usageScoreAt = account_ops.usageScoreAt;
 pub const remainingPercentAt = account_ops.remainingPercentAt;
 pub const resolveRateWindow = account_ops.resolveRateWindow;
