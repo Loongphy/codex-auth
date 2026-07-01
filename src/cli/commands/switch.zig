@@ -32,6 +32,28 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             }
             continue;
         }
+        if (std.mem.eql(u8, arg, "--kill")) {
+            if (opts.kill) |value| {
+                freeTarget(allocator, opts.target);
+                if (!value) {
+                    return common.usageErrorResult(allocator, .switch_account, "`--kill` cannot be combined with `--no-kill` for `switch`.", .{});
+                }
+                return common.usageErrorResult(allocator, .switch_account, "duplicate `--kill` for `switch`.", .{});
+            }
+            opts.kill = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--no-kill")) {
+            if (opts.kill) |value| {
+                freeTarget(allocator, opts.target);
+                if (value) {
+                    return common.usageErrorResult(allocator, .switch_account, "`--kill` cannot be combined with `--no-kill` for `switch`.", .{});
+                }
+                return common.usageErrorResult(allocator, .switch_account, "duplicate `--no-kill` for `switch`.", .{});
+            }
+            opts.kill = false;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--skip-api")) {
             switch (opts.api_mode) {
                 .default => opts.api_mode = .skip_api,

@@ -89,6 +89,8 @@ pub const LiveConfig = struct {
     interval_seconds: u16 = default_live_refresh_interval_seconds,
 };
 
+pub const default_auto_kill: bool = false;
+
 pub const AccountRecord = struct {
     account_key: []u8,
     chatgpt_account_id: []u8,
@@ -139,6 +141,7 @@ pub const Registry = struct {
     active_account_activated_at_ms: ?i64,
     api: ApiConfig,
     live: LiveConfig = defaultLiveConfig(),
+    auto_kill: bool = default_auto_kill,
     accounts: std.ArrayList(AccountRecord),
 
     pub fn deinit(self: *Registry, allocator: std.mem.Allocator) void {

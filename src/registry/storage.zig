@@ -304,6 +304,7 @@ fn loadLegacyRegistryV2(
     }
 
     parseRegistryLiveConfig(&reg.live, root_obj);
+    parseRegistryAutoKill(&reg, root_obj);
 
     for (legacy_accounts.items) |*legacy| {
         try migrateLegacyRecord(allocator, codex_home, &reg, legacy_active_email, legacy);
@@ -352,6 +353,7 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     }
 
     parseRegistryLiveConfig(&reg.live, root_obj);
+    parseRegistryAutoKill(&reg, root_obj);
 
     return reg;
 }
@@ -383,6 +385,7 @@ fn currentLayoutNeedsRewrite(root_obj: std.json.ObjectMap) bool {
         return true;
     }
     if (root_obj.get("previous_active_account_key") == null) return true;
+    if (root_obj.get("auto_kill") == null) return true;
     return root_obj.get("active_account_key") != null and root_obj.get("active_account_activated_at_ms") == null;
 }
 
@@ -395,6 +398,15 @@ fn parseRegistryLiveConfig(live: *LiveConfig, root_obj: std.json.ObjectMap) void
     }
     if (root_obj.get("live")) |v| {
         parseLiveConfig(live, v);
+    }
+}
+
+fn parseRegistryAutoKill(reg: *Registry, root_obj: std.json.ObjectMap) void {
+    if (root_obj.get("auto_kill")) |v| {
+        switch (v) {
+            .bool => |b| reg.auto_kill = b,
+            else => {},
+        }
     }
 }
 
