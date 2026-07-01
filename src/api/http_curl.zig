@@ -85,16 +85,6 @@ pub fn runGetJsonCommand(
     return runCurlGetJsonCommand(allocator, endpoint, access_token, account_id);
 }
 
-pub fn runPostJsonCommand(
-    allocator: std.mem.Allocator,
-    endpoint: []const u8,
-    access_token: []const u8,
-    account_id: []const u8,
-    body: []const u8,
-) !HttpResult {
-    return runCurlPostJsonCommand(allocator, endpoint, access_token, account_id, body);
-}
-
 pub fn runBearerGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,
@@ -144,30 +134,6 @@ fn runCurlGetJsonCommand(
     return runCurlGetJsonCommandWithExecutable(allocator, curl_executable, endpoint, access_token, account_id);
 }
 
-fn runCurlPostJsonCommand(
-    allocator: std.mem.Allocator,
-    endpoint: []const u8,
-    access_token: []const u8,
-    account_id: []const u8,
-    body: []const u8,
-) !HttpResult {
-    const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
-    defer allocator.free(curl_executable);
-
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
-    defer allocator.free(authorization);
-    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
-    defer allocator.free(account_header);
-
-    return try runCurlJsonCommandWithExecutableAndBody(
-        allocator,
-        curl_executable,
-        endpoint,
-        &[_][]const u8{ authorization, account_header, "Content-Type: application/json" },
-        body,
-    );
-}
-
 fn runCurlGetJsonCommandWithExecutable(
     allocator: std.mem.Allocator,
     curl_executable: []const u8,
@@ -200,16 +166,6 @@ fn runCurlJsonCommandWithExecutable(
     endpoint: []const u8,
     headers: []const []const u8,
 ) !HttpResult {
-    return runCurlJsonCommandWithExecutableAndBody(allocator, curl_executable, endpoint, headers, null);
-}
-
-fn runCurlJsonCommandWithExecutableAndBody(
-    allocator: std.mem.Allocator,
-    curl_executable: []const u8,
-    endpoint: []const u8,
-    headers: []const []const u8,
-    body: ?[]const u8,
-) !HttpResult {
     const user_agent_header = "User-Agent: " ++ user_agent;
 
     var argv = std.ArrayList([]const u8).empty;
@@ -223,10 +179,6 @@ fn runCurlJsonCommandWithExecutableAndBody(
     try appendCurlConfigLine(allocator, &curl_config, "header", "Accept: application/json");
     for (headers) |header| {
         try appendCurlConfigLine(allocator, &curl_config, "header", header);
-    }
-    if (body) |value| {
-        try appendCurlConfigLine(allocator, &curl_config, "request", "POST");
-        try appendCurlConfigLine(allocator, &curl_config, "data", value);
     }
 
     const result = runChildCaptureWithInputAndOutputLimit(

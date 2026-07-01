@@ -312,9 +312,9 @@ test "Scenario: Given live switch table rows when rendering then table spacing a
     }, null, false);
 
     try std.testing.expectEqualStrings(
-        "     ACCOUNT  PLAN  RESETS  5H  WEEKLY  LAST\n" ++
+        "     ACCOUNT  PLAN  5H  WEEKLY  LAST\n" ++
             "     group  \n" ++
-            "* 01   child  Team          -   -       -   \n",
+            "* 01   child  Team  -   -       -   \n",
         writer.buffered(),
     );
 }
@@ -361,9 +361,9 @@ test "Scenario: Given live remove table rows when rendering then checkbox spacin
     }, 0, &checked, false);
 
     try std.testing.expectEqualStrings(
-        "         ACCOUNT  PLAN  RESETS  5H  WEEKLY  LAST\n" ++
+        "         ACCOUNT  PLAN  5H  WEEKLY  LAST\n" ++
             "         group  \n" ++
-            "> [x] 01   child  Team          -   -       -   \n",
+            "> [x] 01   child  Team  -   -       -   \n",
         writer.buffered(),
     );
 }

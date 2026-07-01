@@ -1,5 +1,4 @@
 const std = @import("std");
-const usage_api = @import("../api/usage.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
@@ -214,62 +213,6 @@ pub fn printAliasAccountNotFoundError(query: []const u8) !void {
     try out.print(" no alias target matches '{s}'.\n", .{query});
     try writeHintPrefixTo(out, use_color);
     try out.writeAll(" Alias targets accept one account: alias, email, display number, or partial query.\n");
-    try out.flush();
-}
-
-pub fn printResetAccountNotFoundError(query: []const u8) !void {
-    var stderr: io_util.Stderr = undefined;
-    stderr.init();
-    const out = stderr.out();
-    const use_color = stderr.color_enabled;
-    try writeErrorPrefixTo(out, use_color);
-    try out.print(" no reset target matches '{s}'.\n", .{query});
-    try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Reset accepts one target: alias, email, display number, or partial query.\n");
-    try out.flush();
-}
-
-pub fn printResetMultipleTargetsError(query: []const u8) !void {
-    var stderr: io_util.Stderr = undefined;
-    stderr.init();
-    const out = stderr.out();
-    const use_color = stderr.color_enabled;
-    try writeErrorPrefixTo(out, use_color);
-    try out.print(" reset target '{s}' matches multiple accounts.\n", .{query});
-    try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Use a displayed row number from `codex-auth list`.\n");
-    try out.flush();
-}
-
-pub fn printResetRequiresYesError() !void {
-    var stderr: io_util.Stderr = undefined;
-    stderr.init();
-    const out = stderr.out();
-    const use_color = stderr.color_enabled;
-    try writeErrorPrefixTo(out, use_color);
-    try out.writeAll(" refusing to consume a reset credit without `--yes`.\n");
-    try writeHintPrefixTo(out, use_color);
-    try out.writeAll(" Run `codex-auth reset <alias|email|display-number|query> --yes`.\n");
-    try out.flush();
-}
-
-pub fn printResetUnsupportedAuthModeError(email: []const u8) !void {
-    var stderr: io_util.Stderr = undefined;
-    stderr.init();
-    const out = stderr.out();
-    const use_color = stderr.color_enabled;
-    try writeErrorPrefixTo(out, use_color);
-    try out.print(" reset credits are only available for ChatGPT auth accounts: {s}.\n", .{email});
-    try out.flush();
-}
-
-pub fn printResetConsumeFailedError(err_name: []const u8) !void {
-    var stderr: io_util.Stderr = undefined;
-    stderr.init();
-    const out = stderr.out();
-    const use_color = stderr.color_enabled;
-    try writeErrorPrefixTo(out, use_color);
-    try out.print(" failed to consume reset credit: {s}.\n", .{err_name});
     try out.flush();
 }
 
@@ -503,34 +446,6 @@ pub fn printSwitchedAccount(
     const use_color = stdout.color_enabled;
     if (use_color) try out.writeAll(style.ansi.green);
     try out.print("Switched to {s}\n", .{label});
-    if (use_color) try out.writeAll(style.ansi.reset);
-    try out.flush();
-}
-
-pub fn printResetConsumed(
-    allocator: std.mem.Allocator,
-    reg: *registry.Registry,
-    account_key: []const u8,
-    result: *const usage_api.ResetConsumeResult,
-) !void {
-    const label = if (registry.findAccountIndexByAccountKey(reg, account_key)) |idx|
-        try display_rows.buildAccountIdentityLabelAlloc(allocator, &reg.accounts.items[idx])
-    else
-        try allocator.dupe(u8, account_key);
-    defer allocator.free(label);
-
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    const use_color = stdout.color_enabled;
-    if (use_color) try out.writeAll(style.ansi.green);
-    try out.print("Consumed reset credit for {s}", .{label});
-    if (result.code) |code| try out.print(": {s}", .{code});
-    try out.writeAll("\n");
-    if (result.windows_reset) |value| {
-        try out.print("windows_reset: {any}\n", .{value});
-    }
-    try out.print("redeem_request_id: {s}\n", .{result.redeem_request_id});
     if (use_color) try out.writeAll(style.ansi.reset);
     try out.flush();
 }

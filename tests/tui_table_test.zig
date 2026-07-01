@@ -162,7 +162,7 @@ test "writeAccountsTable shows reset credits column" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "RESETS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Plus  2") != null);
 }
 

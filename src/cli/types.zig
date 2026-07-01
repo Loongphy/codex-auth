@@ -51,10 +51,6 @@ pub const AliasOptions = union(enum) {
     set: AliasSetOptions,
     clear: AliasClearOptions,
 };
-pub const ResetOptions = struct {
-    selector: []u8,
-    yes: bool = false,
-};
 pub const CleanTarget = enum { accounts, background };
 pub const CleanOptions = struct {
     target: CleanTarget = .accounts,
@@ -82,7 +78,6 @@ pub const HelpTopic = enum {
     switch_account,
     remove_account,
     alias,
-    reset,
     clean,
     config,
     app,
@@ -96,7 +91,6 @@ pub const Command = union(enum) {
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
     alias: AliasOptions,
-    reset: ResetOptions,
     clean: CleanOptions,
     config: ConfigOptions,
     app: AppOptions,

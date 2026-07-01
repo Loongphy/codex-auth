@@ -117,7 +117,7 @@ test "Scenario: Given remaining table width when rendering then status plan and 
 
     const output = writer.buffered();
     try expectLinesWithin(output, 50);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.mple.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);

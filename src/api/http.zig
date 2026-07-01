@@ -21,7 +21,6 @@ pub const BatchHttpResult = types.BatchHttpResult;
 pub const ChildCaptureResult = types.ChildCaptureResult;
 
 pub const runGetJsonCommand = curl.runGetJsonCommand;
-pub const runPostJsonCommand = curl.runPostJsonCommand;
 pub const runBearerGetJsonCommand = curl.runBearerGetJsonCommand;
 pub const runGetJsonBatchCommand = curl.runGetJsonBatchCommand;
 pub const ensureCurlExecutableAvailable = curl.ensureCurlExecutableAvailable;

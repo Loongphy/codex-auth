@@ -67,22 +67,6 @@ test "parse usage api response maps live usage windows and plan" {
     try std.testing.expectEqual(@as(?i64, 3), snapshot.reset_credits);
 }
 
-test "parse reset consume response maps code and windows reset" {
-    const gpa = std.testing.allocator;
-    const body =
-        \\{
-        \\  "code": "success",
-        \\  "windows_reset": true
-        \\}
-    ;
-
-    var result = try usage_api.parseResetConsumeResponse(gpa, body);
-    defer result.deinit(gpa);
-
-    try std.testing.expectEqualStrings("success", result.code.?);
-    try std.testing.expectEqual(@as(?bool, true), result.windows_reset);
-}
-
 test "parse usage api response without windows is ignored" {
     const gpa = std.testing.allocator;
     const body =
@@ -99,6 +83,26 @@ test "parse usage api response without windows is ignored" {
 
     const snapshot = try usage_api.parseUsageResponse(gpa, body);
     try std.testing.expect(snapshot == null);
+}
+
+test "parse usage api response keeps reset credits without windows" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "plan_type": "plus",
+        \\  "rate_limit": null,
+        \\  "rate_limit_reset_credits": {
+        \\    "available_count": 4
+        \\  }
+        \\}
+    ;
+
+    const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer registry.freeRateLimitSnapshot(gpa, &snapshot);
+
+    try std.testing.expect(snapshot.primary == null);
+    try std.testing.expect(snapshot.secondary == null);
+    try std.testing.expectEqual(@as(?i64, 4), snapshot.reset_credits);
 }
 
 test "parse usage api response maps prolite plan" {

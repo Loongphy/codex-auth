@@ -333,7 +333,6 @@ fn liveAccountCells(row: SwitchRow) [table_layout.column_count]table_layout.Cell
     return .{
         .{ .text = row.account, .indent = @as(usize, row.depth) * 2 },
         .{ .text = row.plan },
-        .{ .text = row.resets },
         .{ .text = row.rate_5h },
         .{ .text = row.rate_week },
         .{ .text = row.last },

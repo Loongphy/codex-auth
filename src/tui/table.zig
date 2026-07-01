@@ -87,7 +87,7 @@ pub fn writeAccountsTableWithUsageOverrides(
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "RESETS", "5H", "WEEKLY", "LAST ACTIVITY" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY" };
     var widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -112,8 +112,8 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const resets_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
-            defer std.heap.page_allocator.free(resets_str);
+            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            defer std.heap.page_allocator.free(reset_credits_str);
             const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
             const rate_week_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_week, usage_override);
@@ -122,7 +122,7 @@ pub fn writeAccountsTableWithUsageOverrides(
             defer std.heap.page_allocator.free(last_str);
 
             widths[1] = @max(widths[1], plan.len);
-            widths[2] = @max(widths[2], resets_str.len);
+            widths[2] = @max(widths[2], reset_credits_str.len);
             widths[3] = @max(widths[3], rate_5h_str.len);
             widths[4] = @max(widths[4], rate_week_str.len);
             widths[5] = @max(widths[5], last_str.len);
@@ -174,8 +174,8 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const resets_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
-            defer std.heap.page_allocator.free(resets_str);
+            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            defer std.heap.page_allocator.free(reset_credits_str);
             const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[3], usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
             const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[4], usage_override);
@@ -188,8 +188,8 @@ pub fn writeAccountsTableWithUsageOverrides(
             defer std.heap.page_allocator.free(account_cell);
             const plan_cell = try truncateAlloc(plan, widths[1]);
             defer std.heap.page_allocator.free(plan_cell);
-            const resets_cell = try truncateAlloc(resets_str, widths[2]);
-            defer std.heap.page_allocator.free(resets_cell);
+            const reset_credits_cell = try truncateAlloc(reset_credits_str, widths[2]);
+            defer std.heap.page_allocator.free(reset_credits_cell);
             const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[3]);
             defer std.heap.page_allocator.free(rate_5h_cell);
             const rate_week_cell = try truncateAlloc(rate_week_str, widths[4]);
@@ -211,7 +211,7 @@ pub fn writeAccountsTableWithUsageOverrides(
             try out.writeAll("  ");
             try writePadded(out, plan_cell, widths[1]);
             try out.writeAll("  ");
-            try writePadded(out, resets_cell, widths[2]);
+            try writePadded(out, reset_credits_cell, widths[2]);
             try out.writeAll("  ");
             try writePadded(out, rate_5h_cell, widths[3]);
             try out.writeAll("  ");
