@@ -181,7 +181,7 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
     try writeAccountsTableWithUsageOverrides(&writer, &reg, false, &usage_overrides);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.count(u8, output, "403") >= 2);
+    try std.testing.expect(std.mem.count(u8, output, "403") >= 3);
 }
 
 test "writeAccountsTable highlights usage override rows in red when color is enabled" {

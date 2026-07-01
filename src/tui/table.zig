@@ -76,7 +76,12 @@ fn usageCellFullTextAlloc(
     return formatRateLimitFullAlloc(window);
 }
 
-fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.RateLimitSnapshot) ![]u8 {
+fn resetCreditsCellAlloc(
+    allocator: std.mem.Allocator,
+    usage: ?registry.RateLimitSnapshot,
+    usage_override: ?[]const u8,
+) ![]u8 {
+    if (usage_override) |value| return allocator.dupe(u8, value);
     const count = if (usage) |snapshot| snapshot.reset_credits else null;
     return if (count) |value| std.fmt.allocPrint(allocator, "{d}", .{value}) else allocator.dupe(u8, "-");
 }
@@ -112,7 +117,7 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage, usage_override);
             defer std.heap.page_allocator.free(reset_credits_str);
             const rate_5h_str = try usageCellFullTextAlloc(std.heap.page_allocator, rate_5h, usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
@@ -174,7 +179,7 @@ pub fn writeAccountsTableWithUsageOverrides(
             const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
             const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
-            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage);
+            const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage, usage_override);
             defer std.heap.page_allocator.free(reset_credits_str);
             const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[3], usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
