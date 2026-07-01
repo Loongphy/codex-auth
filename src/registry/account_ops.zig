@@ -466,7 +466,7 @@ fn autoSwitchAccountIsBetter(candidate: *const AccountRecord, best: *const Accou
 
     const candidate_weekly_reset = resetDistanceForWindow(resolveRateWindow(candidate.last_usage, 10080, false), now);
     const best_weekly_reset = resetDistanceForWindow(resolveRateWindow(best.last_usage, 10080, false), now);
-    return candidate_weekly_reset < best_weekly_reset;
+    return candidate_weekly_reset > best_weekly_reset;
 }
 
 fn resetDistanceForWindow(window: ?RateLimitWindow, now: i64) i64 {

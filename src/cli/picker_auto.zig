@@ -41,7 +41,7 @@ fn autoSwitchCandidateIsBetter(candidate: *const registry.AccountRecord, best: *
 
     const candidate_weekly_reset = resetDistanceForMinutes(candidate.last_usage, 10080, false, now);
     const best_weekly_reset = resetDistanceForMinutes(best.last_usage, 10080, false, now);
-    return candidate_weekly_reset < best_weekly_reset;
+    return candidate_weekly_reset > best_weekly_reset;
 }
 
 fn bestAutoSwitchCandidateSelectableIndex(
