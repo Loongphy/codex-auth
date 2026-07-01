@@ -46,8 +46,8 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
     try writeCommandDetail(out, use_color, "switch -");
-    try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
-    try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
+    try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api] [--kill|--no-kill]");
+    try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query> [--kill|--no-kill]");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
@@ -59,6 +59,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
+    try writeCommandDetail(out, use_color, "config kill on|off");
     try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
 
     try out.writeAll("\n");
