@@ -4,6 +4,7 @@ const registry = @import("../registry/root.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
+const process_kill = @import("process_kill.zig");
 
 const ensureLiveTty = preflight.ensureLiveTty;
 const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
@@ -17,6 +18,10 @@ const switchLiveRuntimeBuildStatusLine = live_flow.switchLiveRuntimeBuildStatusL
 const switchLiveRuntimeApplySelection = live_flow.switchLiveRuntimeApplySelection;
 
 pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.SwitchOptions) !void {
+    if (try shouldKillBeforeSwitch(allocator, codex_home, opts)) {
+        try process_kill.ensureCodexStoppedForSwitch(allocator);
+    }
+
     switch (opts.target) {
         .query => |query| return handleSwitchQuery(allocator, codex_home, opts, query),
         .previous => return handleSwitchPrevious(allocator, codex_home, opts),
@@ -105,6 +110,17 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             return err;
         };
     }
+}
+
+fn shouldKillBeforeSwitch(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    opts: cli.types.SwitchOptions,
+) !bool {
+    if (opts.kill) |kill| return kill;
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    return reg.auto_kill;
 }
 
 fn handleSwitchQuery(

@@ -12,7 +12,25 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, scope, "live")) {
         return parseLive(allocator, args[1..]);
     }
+    if (std.mem.eql(u8, scope, "kill")) {
+        return parseKill(allocator, args[1..]);
+    }
     return common.usageErrorResult(allocator, .config, "unknown config section `{s}`.", .{scope});
+}
+
+fn parseKill(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len == 1 and common.isHelpFlag(std.mem.sliceTo(args[0], 0))) {
+        return .{ .command = .{ .help = .config } };
+    }
+    if (args.len != 1) return common.usageErrorResult(allocator, .config, "`config kill` requires `on` or `off`.", .{});
+    const value = std.mem.sliceTo(args[0], 0);
+    const enabled = if (std.mem.eql(u8, value, "on"))
+        true
+    else if (std.mem.eql(u8, value, "off"))
+        false
+    else
+        return common.usageErrorResult(allocator, .config, "`config kill` requires `on` or `off`.", .{});
+    return .{ .command = .{ .config = .{ .kill = .{ .enabled = enabled } } } };
 }
 
 fn parseLive(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {

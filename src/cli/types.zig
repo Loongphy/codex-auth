@@ -33,6 +33,8 @@ pub const SwitchOptions = struct {
     target: SwitchTarget = .picker,
     live: bool = false,
     api_mode: ApiMode = .default,
+    // null = use the registry `auto_kill` setting; true/false = per-run override.
+    kill: ?bool = null,
 };
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
@@ -58,7 +60,13 @@ pub const CleanOptions = struct {
 pub const LiveOptions = struct {
     interval_seconds: u16,
 };
-pub const ConfigOptions = union(enum) { live: LiveOptions };
+pub const KillConfigOptions = struct {
+    enabled: bool,
+};
+pub const ConfigOptions = union(enum) {
+    live: LiveOptions,
+    kill: KillConfigOptions,
+};
 pub const AppAction = enum { launch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {

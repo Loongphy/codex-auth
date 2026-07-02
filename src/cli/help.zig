@@ -46,8 +46,8 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
     try writeCommandDetail(out, use_color, "switch -");
-    try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
-    try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
+    try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api] [--kill|--no-kill]");
+    try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query> [--kill|--no-kill]");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
@@ -59,6 +59,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
+    try writeCommandDetail(out, use_color, "config kill on|off");
     try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
 
     try out.writeAll("\n");
@@ -149,7 +150,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
-        .config => "Manage live refresh configuration.",
+        .config => "Manage live refresh and auto-kill configuration.",
         .app => "Launch Codex App with CLI overrides.",
     };
 }
@@ -208,9 +209,9 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth switch -\n");
-            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
-            try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
+            try out.writeAll("  codex-auth switch [-] [--kill|--no-kill]\n");
+            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api] [--kill|--no-kill]\n");
+            try out.writeAll("  codex-auth switch <alias|email|display-number|query> [--kill|--no-kill]\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
@@ -227,6 +228,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
+            try out.writeAll("  codex-auth config kill on|off\n");
         },
         .app => {
             try out.writeAll("  codex-auth app [--id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
@@ -281,6 +283,8 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --live       Open the live switch UI.\n");
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+            try out.writeAll("  --kill       Stop all running Codex processes (CLI and GUI) first; only switch if none remain.\n");
+            try out.writeAll("  --no-kill    Skip stopping Codex even when the `auto_kill` setting is on.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
             try out.writeAll("  -            Switch to the previous active account.\n");
@@ -302,6 +306,8 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .config => {
             try out.writeAll("  live --interval <seconds>\n");
             try out.writeAll("                    Set the live TUI refresh interval from 5 to 3600 seconds.\n");
+            try out.writeAll("  kill on|off\n");
+            try out.writeAll("                    Toggle stopping all Codex processes before every switch.\n");
         },
         .app => {
             try out.writeAll("  --id <id>          Windows package/AUMID or macOS bundle identifier.\n");
@@ -361,6 +367,9 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch john@example.com\n");
             try out.writeAll("  codex-auth switch 02\n");
             try out.writeAll("  codex-auth switch work\n");
+            try out.writeAll("  codex-auth switch --kill\n");
+            try out.writeAll("  codex-auth switch work --kill\n");
+            try out.writeAll("  codex-auth switch --no-kill\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove\n");
@@ -384,6 +393,8 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval 60\n");
+            try out.writeAll("  codex-auth config kill on\n");
+            try out.writeAll("  codex-auth config kill off\n");
         },
         .app => {
             try out.writeAll("  codex-auth app\n");

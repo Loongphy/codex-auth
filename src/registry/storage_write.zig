@@ -26,6 +26,7 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
         .previous_active_account_key = reg.previous_active_account_key,
         .active_account_activated_at_ms = reg.active_account_activated_at_ms,
         .interval_seconds = reg.live.interval_seconds,
+        .auto_kill = reg.auto_kill,
         .accounts = reg.accounts.items,
     };
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -106,5 +107,6 @@ const RegistryOut = struct {
     previous_active_account_key: ?[]const u8,
     active_account_activated_at_ms: ?i64,
     interval_seconds: u16,
+    auto_kill: bool,
     accounts: []const AccountRecord,
 };

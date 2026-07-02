@@ -238,6 +238,18 @@ pub fn printAccountNotFoundErrors(queries: []const []const u8) !void {
     try out.flush();
 }
 
+pub fn printCodexStillRunningError() !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" codex is still running; not switching accounts.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Close all Codex windows and processes, then retry (or switch without `--kill`).\n");
+    try out.flush();
+}
+
 pub fn printSwitchRequiresTtyError() !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();

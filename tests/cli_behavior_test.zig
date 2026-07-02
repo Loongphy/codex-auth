@@ -518,7 +518,9 @@ test "Scenario: Given config help when rendering then live mode is explained" {
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 60") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto") == null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config kill on|off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "kill on|off") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto_switch") == null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -662,6 +664,7 @@ test "Scenario: Given config live interval when parsing then interval is preserv
         .command => |cmd| switch (cmd) {
             .config => |opts| switch (opts) {
                 .live => |live_opts| try std.testing.expectEqual(@as(u16, 30), live_opts.interval_seconds),
+                else => return error.TestExpectedEqual,
             },
             else => return error.TestExpectedEqual,
         },
@@ -685,6 +688,122 @@ test "Scenario: Given config live unknown flag when parsing then usage error is 
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .config, "unknown flag `--refresh` for `config live`.");
+}
+
+fn expectConfigKill(result: cli.types.ParseResult, expected: bool) !void {
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .config => |opts| switch (opts) {
+                .kill => |kill_opts| try std.testing.expectEqual(expected, kill_opts.enabled),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given config kill on when parsing then auto-kill is enabled" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "kill", "on" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectConfigKill(result, true);
+}
+
+test "Scenario: Given config kill off when parsing then auto-kill is disabled" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "kill", "off" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectConfigKill(result, false);
+}
+
+test "Scenario: Given config kill invalid value when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "kill", "maybe" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .config, "`config kill` requires `on` or `off`.");
+}
+
+fn expectSwitchKill(result: cli.types.ParseResult, expected: ?bool) !void {
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| try std.testing.expectEqual(expected, opts.kill),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch without kill flag when parsing then kill override is unset" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectSwitchKill(result, null);
+}
+
+test "Scenario: Given switch with kill flag when parsing then kill override is true" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--kill" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectSwitchKill(result, true);
+}
+
+test "Scenario: Given switch with no-kill flag when parsing then kill override is false" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--no-kill" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectSwitchKill(result, false);
+}
+
+test "Scenario: Given switch target with kill flag when parsing then both are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "work", "--kill" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expectEqual(@as(?bool, true), opts.kill);
+                switch (opts.target) {
+                    .query => |query| try std.testing.expectEqualStrings("work", query),
+                    else => return error.TestExpectedEqual,
+                }
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch with duplicate kill flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--kill", "--kill" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "duplicate `--kill` for `switch`.");
+}
+
+test "Scenario: Given switch with conflicting kill flags when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--kill", "--no-kill" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "`--kill` cannot be combined with `--no-kill` for `switch`.");
 }
 
 test "Scenario: Given alias set when parsing then selector and alias are preserved" {
