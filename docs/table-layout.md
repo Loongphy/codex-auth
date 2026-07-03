@@ -58,7 +58,7 @@ Wide enough:
 ```text
 ACCOUNT                          PLAN      5H   WEEKLY  LAST ACTIVITY
 work-main                        Business  31%       42%           Now
-very-long-account-name@example.com Team     88%       71%           -
+very-long-account-name@example.com Business 88%       71%           -
 ```
 
 Medium:
@@ -66,7 +66,7 @@ Medium:
 ```text
 ACCOUNT          PLAN      5H    WEEKLY  LAST
 work-main        Business  31%   42%     Now
-very-l.mple.com   Team     88%   71%     -
+very-l.mple.com   Business 88%   71%     -
 ```
 
 Narrow:

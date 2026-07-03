@@ -19,6 +19,7 @@ pub const ForegroundUsagePoolInitFn = *const fn (
     n_jobs: usize,
 ) anyerror!void;
 const ForegroundUsageWorkerResult = struct {
+    requested: bool = false,
     status_code: ?u16 = null,
     error_code: ?usage_api.ResponseErrorCode = null,
     missing_auth: bool = false,
@@ -33,6 +34,12 @@ const ForegroundUsageWorkerResult = struct {
     }
 };
 
+pub const UsageRefreshMethod = enum {
+    none,
+    api,
+    local,
+};
+
 pub fn shouldRefreshChatGptUsageForAccount(rec: *const registry.AccountRecord) bool {
     return rec.auth_mode == null or rec.auth_mode.? != .apikey;
 }
@@ -43,11 +50,12 @@ fn skipsChatGptUsage(rec: *const registry.AccountRecord) bool {
 
 pub const ForegroundUsageOutcome = struct {
     attempted: bool = false,
+    method: UsageRefreshMethod = .none,
     status_code: ?u16 = null,
     error_code: ?usage_api.ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
-    has_usage_windows: bool = false,
+    received_snapshot: bool = false,
     updated: bool = false,
     unchanged: bool = false,
 };
@@ -299,8 +307,38 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
     if (!usage_api_enabled) {
         state.local_only_mode = true;
-        if (try refreshActiveUsageFromLocalSessions(allocator, codex_home, reg)) {
-            if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
+        const account_key = reg.active_account_key orelse return state;
+        const account_idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return state;
+        const outcome = &state.outcomes[account_idx];
+        outcome.attempted = true;
+        outcome.method = .local;
+        state.attempted += 1;
+
+        const refresh_result = refreshActiveUsageFromLocalSessions(allocator, codex_home, reg) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => {
+                outcome.error_name = @errorName(err);
+                state.failed += 1;
+                return state;
+            },
+        };
+
+        switch (refresh_result) {
+            .updated => {
+                outcome.received_snapshot = true;
+                outcome.updated = true;
+                state.updated += 1;
+                if (persist_registry) try registry.saveRegistry(allocator, codex_home, reg);
+            },
+            .unchanged => {
+                outcome.received_snapshot = true;
+                outcome.unchanged = true;
+                state.unchanged += 1;
+            },
+            .no_data => {
+                outcome.unchanged = true;
+                state.unchanged += 1;
+            },
         }
         return state;
     }
@@ -338,6 +376,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         for (fetch_account_indices.items, 0..) |account_idx, fetch_idx| {
             const account = &reg.accounts.items[account_idx];
             auth_paths[fetch_idx] = try registry.accountAuthPath(auth_path_arena, codex_home, account.account_key);
+            worker_results[account_idx].requested = true;
         }
 
         const batch_results = fetch_batch(
@@ -351,7 +390,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 const error_name = @errorName(err);
                 for (fetch_account_indices.items) |account_idx| {
                     const worker_result = &worker_results[account_idx];
-                    worker_result.* = .{ .error_name = error_name };
+                    worker_result.* = .{ .requested = true, .error_name = error_name };
                 }
                 break :batch_fetch;
             },
@@ -364,6 +403,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         for (batch_results, 0..) |*batch_result, fetch_idx| {
             const idx = fetch_account_indices.items[fetch_idx];
             worker_results[idx] = .{
+                .requested = true,
                 .status_code = batch_result.status_code,
                 .error_code = batch_result.error_code,
                 .missing_auth = batch_result.missing_auth,
@@ -407,13 +447,15 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             if (!std.mem.eql(u8, reg.accounts.items[idx].account_key, key)) continue;
         }
         const outcome = &state.outcomes[idx];
+        if (!worker_result.requested) continue;
         outcome.* = .{
             .attempted = true,
+            .method = .api,
             .status_code = worker_result.status_code,
             .error_code = worker_result.error_code,
             .missing_auth = worker_result.missing_auth,
             .error_name = worker_result.error_name,
-            .has_usage_windows = worker_result.snapshot != null,
+            .received_snapshot = worker_result.snapshot != null,
         };
         state.attempted += 1;
 
@@ -444,16 +486,22 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     return state;
 }
 
+const LocalUsageRefreshResult = enum {
+    no_data,
+    unchanged,
+    updated,
+};
+
 fn refreshActiveUsageFromLocalSessions(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     reg: *registry.Registry,
-) !bool {
+) !LocalUsageRefreshResult {
     const latest_usage = sessions.scanLatestUsageWithSource(allocator, codex_home) catch |err| switch (err) {
-        error.FileNotFound => return false,
+        error.FileNotFound => return .no_data,
         else => return err,
     };
-    if (latest_usage == null) return false;
+    if (latest_usage == null) return .no_data;
 
     var latest = latest_usage.?;
     var snapshot_consumed = false;
@@ -464,21 +512,21 @@ fn refreshActiveUsageFromLocalSessions(
         }
     }
 
-    const account_key = reg.active_account_key orelse return false;
+    const account_key = reg.active_account_key orelse return .no_data;
     const activated_at_ms = reg.active_account_activated_at_ms orelse 0;
-    if (latest.event_timestamp_ms < activated_at_ms) return false;
-    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return false;
+    if (latest.event_timestamp_ms < activated_at_ms) return .no_data;
+    const idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return .no_data;
 
     const signature: registry.RolloutSignature = .{
         .path = latest.path,
         .event_timestamp_ms = latest.event_timestamp_ms,
     };
-    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return false;
+    if (registry.rolloutSignaturesEqual(reg.accounts.items[idx].last_local_rollout, signature)) return .unchanged;
 
     registry.updateUsage(allocator, reg, account_key, latest.snapshot);
     snapshot_consumed = true;
     try registry.setAccountLastLocalRollout(allocator, &reg.accounts.items[idx], latest.path, latest.event_timestamp_ms);
-    return true;
+    return .updated;
 }
 
 pub fn initForegroundUsagePool(
@@ -596,21 +644,24 @@ fn foregroundUsageRefreshWorker(
         return;
     }
 
+    results[account_idx].requested = true;
+
     var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     const auth_path = registry.accountAuthPath(arena, codex_home, reg.accounts.items[account_idx].account_key) catch |err| {
-        results[account_idx] = .{ .error_name = @errorName(err) };
+        results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
 
     const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
-        results[account_idx] = .{ .error_name = @errorName(err) };
+        results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
 
     var result: ForegroundUsageWorkerResult = .{
+        .requested = true,
         .status_code = fetch_result.status_code,
         .error_code = fetch_result.error_code,
         .missing_auth = fetch_result.missing_auth,
@@ -619,6 +670,7 @@ fn foregroundUsageRefreshWorker(
     if (fetch_result.snapshot) |snapshot| {
         result.snapshot = registry.cloneRateLimitSnapshot(allocator, snapshot) catch |err| {
             results[account_idx] = .{
+                .requested = true,
                 .status_code = fetch_result.status_code,
                 .error_code = fetch_result.error_code,
                 .missing_auth = fetch_result.missing_auth,

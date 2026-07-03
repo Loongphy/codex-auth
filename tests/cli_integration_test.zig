@@ -2819,6 +2819,343 @@ test "Scenario: Given list with skip-api when running list then it does not requ
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
+test "Scenario: Given list json with skip-api when running list then stdout is one JSON document" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+    var cached_usage = makeUsageSnapshot(25.0, 40.0);
+    cached_usage.plan_type = .business;
+    cached_usage.credits = .{
+        .has_credits = false,
+        .unlimited = false,
+        .balance = null,
+    };
+    try setStoredUsageSnapshotForAccount(gpa, home_root, "alpha@example.com", cached_usage, 123, 0);
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "list", "--skip-api", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expectEqual(@as(i64, 1), root.get("schema_version").?.integer);
+    try std.testing.expectEqualStrings("list", root.get("command").?.string);
+    try std.testing.expectEqual(@as(usize, 2), root.get("accounts").?.array.items.len);
+    try std.testing.expectEqualStrings("alpha@example.com", root.get("accounts").?.array.items[0].object.get("email").?.string);
+    const active_account = root.get("accounts").?.array.items[0].object;
+    try std.testing.expectEqualStrings("business", active_account.get("plan").?.string);
+    const active_usage = active_account.get("usage").?.object;
+    try std.testing.expectEqualStrings("cache", active_usage.get("source").?.string);
+    try std.testing.expectEqual(@as(i64, 123), active_usage.get("updated_at").?.integer);
+    try std.testing.expectEqual(@as(i64, 25), active_usage.get("primary").?.object.get("used_percent").?.integer);
+    const credits = active_usage.get("credits").?.object;
+    try std.testing.expect(!credits.get("has_credits").?.bool);
+    try std.testing.expect(!credits.get("unlimited").?.bool);
+    try std.testing.expect(credits.get("balance").? == .null);
+    try std.testing.expect(active_usage.get("refresh").?.object.get("requested").?.bool);
+    try std.testing.expectEqualStrings("local", active_usage.get("refresh").?.object.get("method").?.string);
+    try std.testing.expectEqualStrings("no_data", active_usage.get("refresh").?.object.get("status").?.string);
+    try std.testing.expect(root.get("warnings") == null);
+}
+
+test "Scenario: Given backend Team and Business plans when listing json then the CLI returns final product plans" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+    });
+
+    const team_auth = try fixtures.authJsonWithEmailPlan(gpa, "alpha@example.com", "team");
+    defer gpa.free(team_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = team_auth });
+
+    const team_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "list", "--skip-api", "--json" },
+    );
+    defer gpa.free(team_result.stdout);
+    defer gpa.free(team_result.stderr);
+    try expectSuccess(team_result);
+    try std.testing.expectEqualStrings("", team_result.stderr);
+
+    var team_parsed = try std.json.parseFromSlice(std.json.Value, gpa, team_result.stdout, .{});
+    defer team_parsed.deinit();
+    try std.testing.expectEqualStrings(
+        "business",
+        team_parsed.value.object.get("accounts").?.array.items[0].object.get("plan").?.string,
+    );
+
+    const business_auth = try fixtures.authJsonWithEmailPlan(gpa, "alpha@example.com", "business");
+    defer gpa.free(business_auth);
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = business_auth });
+
+    const business_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "list", "--skip-api", "--json" },
+    );
+    defer gpa.free(business_result.stdout);
+    defer gpa.free(business_result.stderr);
+    try expectSuccess(business_result);
+    try std.testing.expectEqualStrings("", business_result.stderr);
+
+    var business_parsed = try std.json.parseFromSlice(std.json.Value, gpa, business_result.stdout, .{});
+    defer business_parsed.deinit();
+    try std.testing.expectEqualStrings(
+        "enterprise",
+        business_parsed.value.object.get("accounts").?.array.items[0].object.get("plan").?.string,
+    );
+}
+
+test "Scenario: Given cached usage when an API refresh fails then list json keeps the snapshot and reports refresh metadata" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+    });
+    var cached_usage = makeUsageSnapshot(37.0, 52.0);
+    cached_usage.plan_type = .enterprise;
+    cached_usage.credits = .{
+        .has_credits = false,
+        .unlimited = false,
+        .balance = null,
+    };
+    try setStoredUsageSnapshotForAccount(gpa, home_root, "alpha@example.com", cached_usage, 456, 0);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const account_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(account_key);
+    const account_auth_path = try registry.accountAuthPath(gpa, codex_home, account_key);
+    defer gpa.free(account_auth_path);
+    const account_auth = try fixtures.authJsonWithEmailPlan(gpa, "alpha@example.com", "business");
+    defer gpa.free(account_auth);
+    try fs.cwd().writeFile(.{ .sub_path = account_auth_path, .data = account_auth });
+
+    try writeFailingFakeCurl(gpa, tmp.dir, project_root);
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        path_override,
+        &[_][]const u8{ "list", "--active", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "usage refresh failed for alpha@example.com: RequestFailed") != null);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expect(root.get("warnings") == null);
+    const account = root.get("accounts").?.array.items[0].object;
+    try std.testing.expectEqualStrings("enterprise", account.get("plan").?.string);
+    const usage = account.get("usage").?.object;
+    try std.testing.expectEqualStrings("cache", usage.get("source").?.string);
+    try std.testing.expectEqual(@as(i64, 456), usage.get("updated_at").?.integer);
+    try std.testing.expectEqual(@as(i64, 37), usage.get("primary").?.object.get("used_percent").?.integer);
+    try std.testing.expect(!usage.get("credits").?.object.get("has_credits").?.bool);
+    const refresh = usage.get("refresh").?.object;
+    try std.testing.expect(refresh.get("requested").?.bool);
+    try std.testing.expectEqualStrings("api", refresh.get("method").?.string);
+    try std.testing.expectEqualStrings("error", refresh.get("status").?.string);
+    try std.testing.expect(refresh.get("http_status").? == .null);
+    try std.testing.expectEqualStrings("RequestFailed", refresh.get("error_code").?.string);
+}
+
+test "Scenario: Given list json with missing CODEX_HOME when running list then stdout is a JSON registry error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const missing_codex_home = try fs.path.join(gpa, &[_][]const u8{ home_root, "missing-codex-home" });
+    defer gpa.free(missing_codex_home);
+
+    const result = try runCliWithIsolatedHomeAndCodexHome(
+        gpa,
+        project_root,
+        home_root,
+        missing_codex_home,
+        &[_][]const u8{ "list", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        else => return error.TestUnexpectedResult,
+    }
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("registry_error", err.get("code").?.string);
+}
+
+test "Scenario: Given switch json query when running switch then active account changes and JSON is emitted" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+    const alpha_path = try registry.accountAuthPath(gpa, codex_home, alpha_key);
+    defer gpa.free(alpha_path);
+    const beta_path = try registry.accountAuthPath(gpa, codex_home, beta_key);
+    defer gpa.free(beta_path);
+    const alpha_auth = try fixtures.authJsonWithEmailPlan(gpa, "alpha@example.com", "pro");
+    defer gpa.free(alpha_auth);
+    const beta_auth = try fixtures.authJsonWithEmailPlan(gpa, "beta@example.com", "pro");
+    defer gpa.free(beta_auth);
+    try fs.cwd().writeFile(.{ .sub_path = alpha_path, .data = alpha_auth });
+    try fs.cwd().writeFile(.{ .sub_path = beta_path, .data = beta_auth });
+    try tmp.dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = alpha_auth });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "beta", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expectEqualStrings("switch", root.get("command").?.string);
+    try std.testing.expectEqualStrings("beta@example.com", root.get("switched_to").?.object.get("email").?.string);
+    try std.testing.expect(root.get("previous_active_account_key") == null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqualStrings(beta_key, loaded.active_account_key.?);
+}
+
+test "Scenario: Given switch json ambiguous query when running switch then candidates are returned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "team" },
+        .{ .email = "beta@example.com", .alias = "team" },
+    });
+
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const result = try runCliWithIsolatedHomeAndPath(
+        gpa,
+        project_root,
+        home_root,
+        empty_path,
+        &[_][]const u8{ "switch", "team", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("ambiguous_query", err.get("code").?.string);
+    try std.testing.expectEqual(@as(usize, 2), err.get("candidates").?.array.items.len);
+}
+
 test "Scenario: Given switch query with api flag when running switch then it returns a usage error" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -3898,7 +4235,7 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     defer gpa.free(codex_home);
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(gpa);
-    try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .team);
+    try appendCustomAccount(gpa, &reg, "user-a::acct-work", "alice@example.com", "work", .business);
     try appendCustomAccount(gpa, &reg, "user-b::acct-personal", "alice@example.com", "personal", .plus);
     reg.active_account_key = try gpa.dupe(u8, "user-a::acct-work");
     reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
@@ -4035,6 +4372,128 @@ test "Scenario: Given remove all when running remove then it clears all accounts
     try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
     try std.testing.expect(loaded.active_account_key == null);
     try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
+}
+
+test "Scenario: Given remove json selector then invalid flag when running remove then it exits with JSON usage error" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "remove", "alpha", "--bad", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 2), code),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("usage", err.get("code").?.string);
+    try std.testing.expect(std.mem.indexOf(u8, err.get("message").?.string, "unknown flag `--bad`") != null);
+}
+
+test "Scenario: Given ambiguous and missing remove selectors in json mode then every resolution is returned and nothing is deleted" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "keeper@example.com", &[_]SeedAccount{
+        .{ .email = "west@example.com", .alias = "ops-west" },
+        .{ .email = "east@example.com", .alias = "ops-east" },
+        .{ .email = "keeper@example.com", .alias = "keeper" },
+    });
+
+    const result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "remove", "ops", "missing", "--json" },
+    );
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("selector_resolution_failed", err.get("code").?.string);
+    const resolutions = err.get("resolutions").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), resolutions.len);
+    try std.testing.expectEqualStrings("ops", resolutions[0].object.get("selector").?.string);
+    try std.testing.expectEqualStrings("ambiguous", resolutions[0].object.get("status").?.string);
+    try std.testing.expect(resolutions[0].object.get("account_key").? == .null);
+    try std.testing.expectEqual(@as(usize, 2), resolutions[0].object.get("candidates").?.array.items.len);
+    try std.testing.expectEqualStrings("missing", resolutions[1].object.get("selector").?.string);
+    try std.testing.expectEqualStrings("not_found", resolutions[1].object.get("status").?.string);
+    try std.testing.expect(resolutions[1].object.get("account_key").? == .null);
+    try std.testing.expectEqual(@as(usize, 0), resolutions[1].object.get("candidates").?.array.items.len);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 3), loaded.accounts.items.len);
+    const keeper_key = try fixtures.accountKeyForEmailAlloc(gpa, "keeper@example.com");
+    defer gpa.free(keeper_key);
+    try std.testing.expectEqualStrings(keeper_key, loaded.active_account_key.?);
+}
+
+test "Scenario: Given remove all json when running remove then removed accounts are returned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "remove", "--all", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expectEqualStrings("remove", root.get("command").?.string);
+    try std.testing.expectEqual(@as(usize, 2), root.get("removed").?.array.items.len);
+    try std.testing.expect(root.get("new_active_account_key").? == .null);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), loaded.accounts.items.len);
 }
 
 test "Scenario: Given remove all with malformed auth json when running remove then registry is cleared but auth json is preserved" {

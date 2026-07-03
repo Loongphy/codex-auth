@@ -66,15 +66,19 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 | Command | Description |
 |---------|-------------|
-| [`codex-auth list [--live] [--active] [--api\|--skip-api]`](./docs/commands/list.md) | List stored accounts and usage state |
+| [`codex-auth list [--live] [--active] [--api\|--skip-api] [--json]`](./docs/commands/list.md) | List stored accounts and usage state |
 | [`codex-auth login [--device-auth]`](./docs/commands/login.md) | Run `codex login`, then add the current account |
 | [`codex-auth switch [--live] [--api\|--skip-api]`](./docs/commands/switch.md) | Switch the active account interactively |
 | [`codex-auth switch <query>`](./docs/commands/switch.md) | Switch directly by row number or account selector |
+| [`codex-auth switch <query> --json`](./docs/commands/switch.md) | Switch directly with JSON output |
 | [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
 | [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
+| [`codex-auth remove (<query> [<query>...]\|--all) --json`](./docs/commands/remove.md) | Remove accounts with JSON output |
 | [`codex-auth alias set <query> <alias>`](./docs/commands/alias.md) | Set an alias for an account |
 | [`codex-auth alias clear <query>`](./docs/commands/alias.md) | Clear the alias for an account |
+
+Machine-readable output for GUI integrations is documented in [docs/json-api.md](./docs/json-api.md).
 
 ### Import and Maintenance
 

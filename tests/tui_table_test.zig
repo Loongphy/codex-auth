@@ -113,7 +113,7 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .business);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Als's Workspace");
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
 
@@ -131,7 +131,7 @@ test "writeAccountsTable keeps usage headers short" {
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .business);
 
     var buffer: [2048]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
@@ -171,7 +171,7 @@ test "writeAccountsTable shows usage override statuses for failed refreshes" {
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .business);
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
 
     const usage_overrides = [_]?[]const u8{ null, "403" };
@@ -189,7 +189,7 @@ test "writeAccountsTable highlights usage override rows in red when color is ena
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .business);
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "user@example.com", "", .free);
 
     const usage_overrides = [_]?[]const u8{ null, "403" };
@@ -207,7 +207,7 @@ test "writeAccountsTable uses cyan headers green active rows and default normal 
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
 
-    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .business);
     try appendTestAccount(gpa, &reg, "user-1::acc-2", "normal@example.com", "", .free);
     reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
 
@@ -231,7 +231,7 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
         .primary = null,
         .secondary = null,
         .credits = null,
-        .plan_type = .team,
+        .plan_type = .business,
     };
 
     var buffer: [2048]u8 = undefined;

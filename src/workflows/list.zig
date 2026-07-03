@@ -5,6 +5,7 @@ const registry = @import("../registry/root.zig");
 const account_names = @import("account_names.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
+const results = @import("results.zig");
 const usage_refresh = @import("usage.zig");
 
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
@@ -18,6 +19,17 @@ const SwitchLiveRuntime = live_flow.SwitchLiveRuntime;
 const switchLiveRuntimeMaybeStartRefresh = live_flow.switchLiveRuntimeMaybeStartRefresh;
 const switchLiveRuntimeMaybeTakeUpdatedDisplay = live_flow.switchLiveRuntimeMaybeTakeUpdatedDisplay;
 const switchLiveRuntimeBuildStatusLine = live_flow.switchLiveRuntimeBuildStatusLine;
+
+const ListComputation = struct {
+    reg: registry.Registry,
+    usage_state: usage_refresh.ForegroundUsageRefreshState,
+
+    fn deinit(self: *ListComputation, allocator: std.mem.Allocator) void {
+        self.usage_state.deinit(allocator);
+        self.reg.deinit(allocator);
+        self.* = undefined;
+    }
+};
 
 pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !void {
     if (opts.live) {
@@ -62,8 +74,28 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         return;
     }
 
+    if (opts.json) {
+        var result = computeList(allocator, codex_home, opts) catch |err| return printJsonWorkflowError(err);
+        defer result.deinit(allocator);
+        for (result.warnings) |warning| std.log.warn("{s}", .{warning});
+        try cli.json_output.printListResult(&result);
+        return;
+    }
+
+    var computed = try computeListState(allocator, codex_home, opts);
+    defer computed.deinit(allocator);
+    try format.printAccountsWithUsageOverrides(&computed.reg, computed.usage_state.usage_overrides);
+}
+
+pub fn computeList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !results.ListResult {
+    var computed = try computeListState(allocator, codex_home, opts);
+    defer computed.deinit(allocator);
+    return try results.buildListResult(allocator, &computed.reg, &computed.usage_state);
+}
+
+fn computeListState(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !ListComputation {
     var reg = try registry.loadRegistry(allocator, codex_home);
-    defer reg.deinit(allocator);
+    errdefer reg.deinit(allocator);
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
         try registry.saveRegistry(allocator, codex_home, &reg);
     }
@@ -88,7 +120,7 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         usage_api_enabled,
         opts.active_only,
     );
-    defer usage_state.deinit(allocator);
+    errdefer usage_state.deinit(allocator);
     try maybeRefreshForegroundAccountNamesWithAccountApiEnabled(
         allocator,
         codex_home,
@@ -97,5 +129,26 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
         defaultAccountFetcher,
         account_api_enabled,
     );
-    try format.printAccountsWithUsageOverrides(&reg, usage_state.usage_overrides);
+    return .{
+        .reg = reg,
+        .usage_state = usage_state,
+    };
+}
+
+fn printJsonWorkflowError(err: anyerror) anyerror {
+    switch (err) {
+        error.OutOfMemory => return err,
+        error.CurlRequired => {
+            try cli.json_output.printError(
+                "curl_unavailable",
+                "curl is required for API-backed refresh. Install curl or use --skip-api.",
+                null,
+            );
+            return err;
+        },
+        else => {
+            try cli.json_output.printError("registry_error", @errorName(err), null);
+            return error.RegistryError;
+        },
+    }
 }

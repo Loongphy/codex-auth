@@ -36,7 +36,7 @@ const copyManagedFile = common.copyManagedFile;
 const copyFile = common.copyFile;
 const hardenSensitiveFile = common.hardenSensitiveFile;
 const normalizeEmailAlloc = common.normalizeEmailAlloc;
-const parsePlanType = parse.parsePlanType;
+const parseStoredPlanType = parse.parseStoredPlanType;
 const parseAuthMode = parse.parseAuthMode;
 const parseUsage = parse.parseUsage;
 const parseLiveConfig = parse.parseLiveConfig;
@@ -108,7 +108,7 @@ fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMa
 
     if (obj.get("plan")) |p| {
         switch (p) {
-            .string => |s| rec.plan = parsePlanType(s),
+            .string => |s| rec.plan = parseStoredPlanType(s, 2),
             else => {},
         }
     }
@@ -119,7 +119,7 @@ fn parseLegacyAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMa
         }
     }
     if (obj.get("last_usage")) |u| {
-        rec.last_usage = parseUsage(allocator, u);
+        rec.last_usage = parseUsage(allocator, u, 2);
     }
     return rec;
 }
@@ -292,7 +292,7 @@ fn loadLegacyRegistryV2(
                         else => continue,
                     };
                     if (obj.get("account_key") != null) {
-                        const rec = try parseAccountRecord(allocator, obj);
+                        const rec = try parseAccountRecord(allocator, obj, 2);
                         try upsertAccount(allocator, &reg, rec);
                     } else {
                         try legacy_accounts.append(allocator, try parseLegacyAccountRecord(allocator, obj));
@@ -312,7 +312,7 @@ fn loadLegacyRegistryV2(
     return reg;
 }
 
-fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !Registry {
+fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap, schema_version: u32) !Registry {
     if (root_obj.get("active_email") != null) return error.UnsupportedRegistryLayout;
 
     var reg = defaultRegistry();
@@ -343,7 +343,7 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
                         .object => |o| o,
                         else => continue,
                     };
-                    const rec = try parseAccountRecord(allocator, obj);
+                    const rec = try parseAccountRecord(allocator, obj, schema_version);
                     try upsertAccount(allocator, &reg, rec);
                 }
             },
@@ -453,7 +453,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3, 4 => try loadCurrentRegistry(allocator, root_obj),
+        3, 4 => try loadCurrentRegistry(allocator, root_obj, schema_version),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",

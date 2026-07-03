@@ -349,6 +349,39 @@ test "Scenario: Given list with api flag when parsing then forced api mode is pr
     }
 }
 
+test "Scenario: Given list with json flag when parsing then json mode is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--skip-api", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .list => |opts| {
+                try std.testing.expect(opts.json);
+                try std.testing.expectEqual(cli.types.ApiMode.skip_api, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given list with live and json flags when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "list", "--live", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "`--live` cannot be combined with `--json`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given login with removed no-login flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "login", "--no-login" };
@@ -409,7 +442,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Commands:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api] [--json]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
@@ -426,7 +459,7 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api]\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api] [--json]\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--active     Refresh only the active account before rendering.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
@@ -1050,6 +1083,72 @@ test "Scenario: Given switch dash when parsing then previous switch is selected"
     }
 }
 
+test "Scenario: Given switch json query when parsing then query target and json mode are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "user@example.com", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expect(opts.json);
+                switch (opts.target) {
+                    .query => |query| try std.testing.expectEqualStrings("user@example.com", query),
+                    else => return error.TestExpectedEqual,
+                }
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch dash with json when parsing then previous switching is rejected" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "-", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "previous-account switching is CLI-only") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch previous flag with json when parsing then the unsupported flag is rejected" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--previous", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "unknown flag `--previous`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch json without target when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "requires an explicit account query") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given switch query with skip-api flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "--skip-api", "02" };
@@ -1242,6 +1341,54 @@ test "Scenario: Given remove with all flag when parsing then all mode is preserv
     }
 }
 
+test "Scenario: Given remove all with json flag when parsing then all and json modes are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--all", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .remove_account => |opts| {
+                try std.testing.expect(opts.all);
+                try std.testing.expect(opts.json);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove json without selector when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "requires selectors or `--all`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given remove selector then invalid json flag when parsing then selector is released" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "remove", "alpha", "--bad", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "unknown flag `--bad`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given remove with multiple selectors when parsing then all selectors are preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "remove", "01", "b@example.com", "03" };
@@ -1414,8 +1561,8 @@ test "Scenario: Given singleton aliases from different emails when building remo
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .team);
-    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "work", .business);
 
     const indices = [_]usize{ 0, 1 };
     var labels = try cli.output.buildRemoveLabels(gpa, &reg, &indices);
@@ -1434,9 +1581,9 @@ test "Scenario: Given singleton account names from different emails when buildin
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "", .business);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Workspace");
-    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "", .business);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Workspace");
 
     const indices = [_]usize{ 0, 1 };

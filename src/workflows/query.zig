@@ -21,6 +21,10 @@ pub fn resolveSwitchQueryLocally(
     reg: *registry.Registry,
     query: []const u8,
 ) !SwitchQueryResolution {
+    if (registry.findAccountIndexByAccountKey(reg, query)) |account_idx| {
+        return .{ .direct = reg.accounts.items[account_idx].account_key };
+    }
+
     if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }

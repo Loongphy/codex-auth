@@ -10,21 +10,21 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 ## Current Policy
 
-- The latest binary supports every released schema. Right now that means:
-  - legacy `version = 2`
-  - current `schema_version = 4`
-- The current binary also accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them once to normalized `schema_version = 4`.
+- The current persisted format is `schema_version = 4`.
+- The compatibility guarantee for this release is migration from released schema `3` to the final schema `4` format.
+- The legacy `version = 2` loader remains available, but it is not the compatibility boundary for this change.
+- The current binary accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them to normalized `schema_version = 4`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- In the current code, supported automatic migration is `version = 2 -> schema_version = 4`; older current-layout schema `3` files are rewritten once as schema `4`.
-- Current-layout schema `4` files are also rewritten once when they are missing normalized current fields such as `previous_active_account_key`.
+- The guaranteed automatic migration is `schema_version = 3 -> schema_version = 4`.
+- The existing legacy `version = 2` loader also rewrites directly to schema `4`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
-## Released Schemas
+## Schema History
 
 - `version = 2`
   - Email-keyed account snapshots
@@ -43,6 +43,10 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Live refresh interval stored as top-level `interval_seconds`
   - Older `live.interval_seconds` and removed `auto_switch` blocks are omitted on rewrite
   - Adds top-level `previous_active_account_key` for `codex-auth -` and `codex-auth switch -`
+  - Persisted plans use final product semantics rather than backend identifiers
+  - Legacy `team` becomes `business`
+  - Legacy `business` becomes `enterprise`
+  - The same conversion applies to per-account `last_usage.plan_type`
 
 ## When To Bump `schema_version`
 

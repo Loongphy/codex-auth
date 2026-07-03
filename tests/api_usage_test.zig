@@ -56,7 +56,7 @@ test "parse usage api response maps live usage windows and plan" {
     const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
     defer registry.freeRateLimitSnapshot(gpa, &snapshot);
 
-    try std.testing.expectEqual(registry.PlanType.team, snapshot.plan_type.?);
+    try std.testing.expectEqual(registry.PlanType.business, snapshot.plan_type.?);
     try std.testing.expectEqual(@as(f64, 11.0), snapshot.primary.?.used_percent);
     try std.testing.expectEqual(@as(?i64, 300), snapshot.primary.?.window_minutes);
     try std.testing.expectEqual(@as(?i64, 10080), snapshot.secondary.?.window_minutes);
@@ -128,6 +128,27 @@ test "parse usage api response maps prolite plan" {
     defer registry.freeRateLimitSnapshot(gpa, &snapshot);
 
     try std.testing.expectEqual(registry.PlanType.prolite, snapshot.plan_type.?);
+}
+
+test "parse usage api response maps backend business to enterprise" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "plan_type": "business",
+        \\  "rate_limit": {
+        \\    "primary_window": {
+        \\      "used_percent": 1,
+        \\      "limit_window_seconds": 18000,
+        \\      "reset_at": 1773491460
+        \\    },
+        \\    "secondary_window": null
+        \\  }
+        \\}
+    ;
+
+    const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer registry.freeRateLimitSnapshot(gpa, &snapshot);
+    try std.testing.expectEqual(registry.PlanType.enterprise, snapshot.plan_type.?);
 }
 
 test "fetch usage for API key auth skips ChatGPT usage refresh without missing auth" {

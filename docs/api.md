@@ -79,49 +79,49 @@ That scope includes:
 
 `chatgpt_user_id` is the user identity for this flow. A single user may have multiple workspace `chatgpt_account_id` values, and those values can be legacy account ids or organization fallback ids.
 
-This means a `free`, `plus`, or `pro` record can still trigger a grouped Team-name refresh when it belongs to the same `chatgpt_user_id` as Team records.
+This means a personal-plan record can still participate in a grouped workspace-name refresh when it belongs to the same `chatgpt_user_id` as Business, Enterprise, or Edu workspace records.
 
 Account metadata refresh is attempted only when:
 
 - the scope contains more than one record
-- the scope contains at least one Team record
-- at least one Team record in that scope still has `account_name = null`
+- the scope contains at least one Business, Enterprise, or Edu workspace record
+- at least one workspace record in that scope still has `account_name = null`
 
 ## Apply Rules
 
 After a successful account metadata response:
 
 - returned entries are matched by `chatgpt_account_id`
-- matched records overwrite the stored `account_name`, even when a Team record already had an older value
-- in-scope Team records, or in-scope records that already had an `account_name`, are cleared back to `null` when they are not returned by the response
+- matched records overwrite the stored `account_name`, even when a workspace record already had an older value
+- in-scope workspace records, or in-scope records that already had an `account_name`, are cleared back to `null` when they are not returned by the response
 - records outside the scope are left unchanged
 
 ## Examples
 
 Example 1:
 
-- active record: `user@example.com / Team #1 / account_name = null`
-- same grouped scope: `user@example.com / Team #2 / account_name = null`
+- active record: `user@example.com / Business #1 / account_name = null`
+- same grouped scope: `user@example.com / Business #2 / account_name = null`
 
 Running `codex-auth list` should issue an account metadata request. If the API returns:
 
 - `team-1 -> "Workspace Alpha"`
 - `team-2 -> "Workspace Beta"`
 
-Then both grouped Team records are updated.
+Then both grouped Business workspace records are updated.
 
 Example 2:
 
 - active record: `user@example.com / Pro / account_name = null`
-- same grouped scope: `user@example.com / Team #1 / account_name = null`
-- same grouped scope: `user@example.com / Team #2 / account_name = "Old Workspace"`
+- same grouped scope: `user@example.com / Business #1 / account_name = null`
+- same grouped scope: `user@example.com / Business #2 / account_name = "Old Workspace"`
 
-Running `codex-auth list` should still issue an account metadata request, because the grouped scope still has missing Team names. If the API returns:
+Running `codex-auth list` should still issue an account metadata request, because the grouped scope still has missing workspace names. If the API returns:
 
 - `team-1 -> "Prod Workspace"`
 - `team-2 -> "Sandbox Workspace"`
 
 Then:
 
-- `Team #1` is filled with `Prod Workspace`
-- `Team #2` is overwritten from `Old Workspace` to `Sandbox Workspace`
+- `Business #1` is filled with `Prod Workspace`
+- `Business #2` is overwritten from `Old Workspace` to `Sandbox Workspace`

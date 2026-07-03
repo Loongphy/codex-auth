@@ -307,7 +307,7 @@ test "Scenario: Given alias, email, and account name queries when finding matchi
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "team-work", .team);
+    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "team-work", .business);
     try appendAccount(gpa, &reg, "user-Z9Y8X7W6V5U4::518a44d9-ba75-4bad-87e5-ae9377042960", "other@example.com", "", .plus);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Ops Workspace");
 
@@ -332,7 +332,7 @@ test "Scenario: Given account_id query when finding matching accounts then it is
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .team);
+    try appendAccount(gpa, &reg, "user-A1B2C3D4E5F6::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "user@example.com", "work", .business);
 
     var matches = try main_mod.findMatchingAccounts(gpa, &reg, "67fe2bbb");
     defer matches.deinit(gpa);
@@ -436,7 +436,7 @@ test "Scenario: Given switch query with one local match when resolving locally t
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "active@example.com", "primary", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "active@example.com", "primary", .business);
     try appendAccount(gpa, &reg, secondary_record_key, "backup@example.com", "secondary", .plus);
 
     var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "backup@");
@@ -453,10 +453,27 @@ test "Scenario: Given switch query with a display number when resolving locally 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .business);
     try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
 
     var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "02");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query with an exact account key when resolving locally then it wins directly" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "team-a", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "team-b", .business);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, secondary_record_key);
     defer resolution.deinit(gpa);
 
     switch (resolution) {
@@ -470,8 +487,8 @@ test "Scenario: Given switch query with multiple local matches when resolving lo
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "team-a", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "team-b", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "team-a", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "team-b", .business);
 
     var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "team");
     defer resolution.deinit(gpa);
@@ -524,7 +541,7 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
 
             if (std.mem.eql(u8, account_id, primary_account_id)) {
                 return .{
-                    .snapshot = snapshot(.team, 18, 39),
+                    .snapshot = snapshot(.business, 18, 39),
                     .status_code = 200,
                 };
             }
@@ -549,8 +566,8 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try appendAccount(gpa, &reg, tertiary_record_key, "user@example.com", "", .plus);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
 
@@ -583,9 +600,65 @@ test "Scenario: Given api usage refresh for list and switch when refreshing fore
     try std.testing.expectEqual(@as(?u16, 403), state.outcomes[1].status_code);
     try std.testing.expect(state.outcomes[2].unchanged);
 
-    try std.testing.expectEqual(@as(?registry.PlanType, .team), reg.accounts.items[0].last_usage.?.plan_type);
+    try std.testing.expectEqual(@as(?registry.PlanType, .business), reg.accounts.items[0].last_usage.?.plan_type);
     try std.testing.expectEqual(@as(f64, 18), reg.accounts.items[0].last_usage.?.primary.?.used_percent);
     try std.testing.expectEqual(@as(f64, 55), reg.accounts.items[2].last_usage.?.secondary.?.used_percent);
+}
+
+test "Scenario: Given cached usage and a local refresh error when listing then the cached snapshot remains available" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.writeFile(.{ .sub_path = "sessions", .data = "not a directory" });
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{
+            .used_percent = 25,
+            .window_minutes = 300,
+            .resets_at = 1773491460,
+        },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .business,
+    };
+    reg.accounts.items[0].last_usage_at = 123;
+
+    var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        null,
+        main_mod.initForegroundUsagePool,
+        false,
+        false,
+        false,
+        false,
+    );
+    defer state.deinit(gpa);
+
+    try std.testing.expect(state.local_only_mode);
+    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 1), state.failed);
+    try std.testing.expect(state.outcomes[0].attempted);
+    try std.testing.expect(state.outcomes[0].error_name != null);
+
+    var result = try main_mod.results.buildListResult(gpa, &reg, &state);
+    defer result.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), result.accounts.len);
+    try std.testing.expectEqual(main_mod.results.UsageSource.cache, result.accounts[0].usage.source);
+    try std.testing.expectEqual(@as(?i64, 123), result.accounts[0].usage.updated_at);
+    try std.testing.expectEqual(@as(f64, 25), result.accounts[0].usage.primary.?.used_percent);
+    try std.testing.expectEqual(main_mod.results.UsageRefreshStatus.error_status, result.accounts[0].usage.refresh.status);
+    try std.testing.expect(result.accounts[0].usage.refresh.error_code != null);
+    try std.testing.expectEqual(@as(usize, 1), result.warnings.len);
 }
 
 test "Scenario: Given active-only foreground usage refresh then only the active account is requested" {
@@ -623,7 +696,7 @@ test "Scenario: Given active-only foreground usage refresh then only the active 
             const results = try allocator.alloc(usage_api.BatchUsageFetchResult, auth_paths.len);
             for (results) |*result| {
                 result.* = .{
-                    .snapshot = snapshot(.team, 18, 40),
+                    .snapshot = snapshot(.business, 18, 40),
                     .status_code = 200,
                 };
             }
@@ -635,8 +708,8 @@ test "Scenario: Given active-only foreground usage refresh then only the active 
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, secondary_record_key);
 
     try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
@@ -700,13 +773,14 @@ test "Scenario: Given API key auth when refreshing foreground usage then overrid
     defer state.deinit(gpa);
 
     try std.testing.expect(!state.local_only_mode);
-    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.attempted);
     try std.testing.expectEqual(@as(usize, 0), state.updated);
     try std.testing.expectEqual(@as(usize, 0), state.failed);
-    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expectEqual(@as(usize, 0), state.unchanged);
     try std.testing.expect(state.usage_overrides[0] == null);
     try std.testing.expect(!state.outcomes[0].missing_auth);
-    try std.testing.expect(state.outcomes[0].unchanged);
+    try std.testing.expect(!state.outcomes[0].attempted);
+    try std.testing.expect(!state.outcomes[0].unchanged);
 }
 
 test "Scenario: Given API key registry record with stale snapshot when refreshing foreground usage then MissingAuth is not shown" {
@@ -734,12 +808,13 @@ test "Scenario: Given API key registry record with stale snapshot when refreshin
     var state = try main_mod.refreshForegroundUsageForDisplay(gpa, codex_home, &reg);
     defer state.deinit(gpa);
 
-    try std.testing.expectEqual(@as(usize, 1), state.attempted);
+    try std.testing.expectEqual(@as(usize, 0), state.attempted);
     try std.testing.expectEqual(@as(usize, 0), state.failed);
-    try std.testing.expectEqual(@as(usize, 1), state.unchanged);
+    try std.testing.expectEqual(@as(usize, 0), state.unchanged);
     try std.testing.expect(state.usage_overrides[0] == null);
     try std.testing.expect(!state.outcomes[0].missing_auth);
-    try std.testing.expect(state.outcomes[0].unchanged);
+    try std.testing.expect(!state.outcomes[0].attempted);
+    try std.testing.expect(!state.outcomes[0].unchanged);
 }
 
 test "Scenario: Given more than five foreground usage jobs when refreshing usage then pool init is capped at five workers" {
@@ -775,7 +850,7 @@ test "Scenario: Given more than five foreground usage jobs when refreshing usage
         defer gpa.free(account_id);
         const record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ user_id, account_id });
         defer gpa.free(record_key);
-        try appendAccount(gpa, &reg, record_key, email, "", .team);
+        try appendAccount(gpa, &reg, record_key, email, "", .business);
     }
 
     var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
@@ -821,7 +896,7 @@ test "Scenario: Given foreground usage returns response error code then status o
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
     try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
     var state = try main_mod.refreshForegroundUsageForDisplayWithApiFetcherWithPoolInit(
@@ -891,7 +966,7 @@ test "Scenario: Given thread pool init failure when refreshing foreground usage 
 
             if (std.mem.eql(u8, account_id, primary_account_id)) {
                 return .{
-                    .snapshot = snapshot(.team, 22, 41),
+                    .snapshot = snapshot(.business, 22, 41),
                     .status_code = 200,
                 };
             }
@@ -913,8 +988,8 @@ test "Scenario: Given thread pool init failure when refreshing foreground usage 
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
 
     try writeAccountSnapshotWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
@@ -946,8 +1021,8 @@ test "Scenario: Given list with missing team names when running foreground accou
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -975,8 +1050,8 @@ test "Scenario: Given switch with missing team names when running foreground acc
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -994,20 +1069,25 @@ test "Scenario: Given switch with missing team names when running foreground acc
     try std.testing.expectEqualStrings("Backup Workspace", loaded.accounts.items[1].account_name.?);
 }
 
-test "Scenario: Given team name fetch candidates when checking grouped-account policy then only ambiguous team users qualify" {
+test "Scenario: Given workspace name fetch candidates when checking grouped-account policy then Business and Enterprise users qualify" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "same-user@example.com", "", .team);
+    const enterprise_user_id = "user-enterprise";
+
+    try appendAccount(gpa, &reg, primary_record_key, "same-user@example.com", "", .business);
     try appendAccount(gpa, &reg, secondary_record_key, "same-user@example.com", "", .free);
-    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .team);
+    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .business);
     try appendAccount(gpa, &reg, "user-plus-only::acct-plus-a", "plus-only@example.com", "", .plus);
     try appendAccount(gpa, &reg, "user-plus-only::acct-plus-b", "plus-only-alt@example.com", "", .plus);
+    try appendAccount(gpa, &reg, enterprise_user_id ++ "::acct-enterprise", "enterprise@example.com", "", .enterprise);
+    try appendAccount(gpa, &reg, enterprise_user_id ++ "::acct-personal", "enterprise-personal@example.com", "", .plus);
 
-    try std.testing.expect(registry.shouldFetchTeamAccountNamesForUser(&reg, shared_user_id));
-    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
-    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, "user-plus-only"));
+    try std.testing.expect(registry.shouldFetchWorkspaceAccountNamesForUser(&reg, shared_user_id));
+    try std.testing.expect(!registry.shouldFetchWorkspaceAccountNamesForUser(&reg, standalone_team_user_id));
+    try std.testing.expect(!registry.shouldFetchWorkspaceAccountNamesForUser(&reg, "user-plus-only"));
+    try std.testing.expect(registry.shouldFetchWorkspaceAccountNamesForUser(&reg, enterprise_user_id));
 }
 
 test "Scenario: Given a standalone team account when building display rows and refreshing names then it keeps the email label and skips requests" {
@@ -1020,7 +1100,7 @@ test "Scenario: Given a standalone team account when building display rows and r
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .team);
+    try appendAccount(gpa, &reg, standalone_team_record_key, "solo-team@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, standalone_team_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "solo-team@example.com", "team", standalone_team_user_id, standalone_team_account_id);
 
@@ -1028,7 +1108,7 @@ test "Scenario: Given a standalone team account when building display rows and r
     defer rows.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), rows.rows.len);
     try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo-team@example.com"));
-    try std.testing.expect(!registry.shouldFetchTeamAccountNamesForUser(&reg, standalone_team_user_id));
+    try std.testing.expect(!registry.shouldFetchWorkspaceAccountNamesForUser(&reg, standalone_team_user_id));
 
     var info = try parseAuthInfoWithIds(gpa, "solo-team@example.com", "team", standalone_team_user_id, standalone_team_account_id);
     defer info.deinit(gpa);
@@ -1062,8 +1142,8 @@ test "Scenario: Given grouped team accounts with account api disabled when refre
     var reg = makeRegistry();
     defer reg.deinit(gpa);
     reg.api.account = false;
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -1092,8 +1172,8 @@ test "Scenario: Given login with missing account names when refreshing metadata 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
 
     var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
     defer info.deinit(gpa);
@@ -1117,8 +1197,8 @@ test "Scenario: Given switched account with missing account names when refreshin
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -1136,8 +1216,8 @@ test "Scenario: Given single-file import with missing account names when refresh
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
 
     var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
     defer info.deinit(gpa);
@@ -1153,8 +1233,8 @@ test "Scenario: Given directory import or purge when refreshing account names th
     var reg = makeRegistry();
     defer reg.deinit(gpa);
 
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
 
     var info = try parseAuthInfoWithIds(gpa, "user@example.com", "team", shared_user_id, primary_account_id);
     defer info.deinit(gpa);
@@ -1178,11 +1258,11 @@ test "Scenario: Given list refresh when only other users have missing account na
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
     reg.accounts.items[0].account_name = try gpa.dupe(u8, "Primary Workspace");
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Backup Workspace");
-    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .team);
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -1201,9 +1281,9 @@ test "Scenario: Given list refresh with missing active-user account names when r
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .team);
-    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .team);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, "user-OTHER::acct-OTHER", "other@example.com", "", .business);
     try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
     try writeActiveAuthWithIds(gpa, codex_home, "user@example.com", "team", shared_user_id, primary_account_id);
 
@@ -1230,8 +1310,8 @@ test "Scenario: Given list refresh with team names missing under the same user w
 
     var reg = makeRegistry();
     defer reg.deinit(gpa);
-    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ primary_account_id, "same-user@example.com", "", .team);
-    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ secondary_account_id, "same-user@example.com", "", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ primary_account_id, "same-user@example.com", "", .business);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ secondary_account_id, "same-user@example.com", "", .business);
     reg.accounts.items[1].account_name = try gpa.dupe(u8, "Old Backup Workspace");
     try appendAccount(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id, "same-user@example.com", "", .plus);
     try registry.setActiveAccountKey(gpa, &reg, shared_user_id ++ "::" ++ tertiary_account_id);
@@ -1267,7 +1347,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
     const gamma_key = try fixtures.accountKeyForEmailAlloc(gpa, "gamma@example.com");
     defer gpa.free(gamma_key);
     try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
-    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
+    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .business);
 
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     reg.accounts.items[0].last_usage = .{
@@ -1280,7 +1360,7 @@ test "Scenario: Given removed active account with remaining accounts when reconc
         .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
         .credits = null,
-        .plan_type = .team,
+        .plan_type = .business,
     };
 
     try writeSnapshot(gpa, codex_home, "alpha@example.com", "plus");
@@ -1320,7 +1400,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
     const gamma_key = try fixtures.accountKeyForEmailAlloc(gpa, "gamma@example.com");
     defer gpa.free(gamma_key);
     try appendAccount(gpa, &reg, alpha_key, "alpha@example.com", "", .plus);
-    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .team);
+    try appendAccount(gpa, &reg, gamma_key, "gamma@example.com", "", .business);
     reg.active_account_key = try gpa.dupe(u8, "user-stale::acct-stale");
     reg.active_account_activated_at_ms = 1;
 
@@ -1335,7 +1415,7 @@ test "Scenario: Given stale active key with remaining accounts when reconciling 
         .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
         .secondary = null,
         .credits = null,
-        .plan_type = .team,
+        .plan_type = .business,
     };
 
     try writeSnapshot(gpa, codex_home, "alpha@example.com", "plus");

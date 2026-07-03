@@ -115,7 +115,7 @@ pub fn maybeRefreshAccountNamesForAuthInfoWithAccountApiEnabled(
     account_api_enabled: bool,
 ) !bool {
     const chatgpt_user_id = info.chatgpt_user_id orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, account_api_enabled)) return false;
+    if (!shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, account_api_enabled)) return false;
     const access_token = info.access_token orelse return false;
     const chatgpt_account_id = info.chatgpt_account_id orelse return false;
 
@@ -166,7 +166,7 @@ pub fn refreshAccountNamesForActiveAuthWithAccountApiEnabled(
     account_api_enabled: bool,
 ) !bool {
     const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
+    if (!shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) return false;
 
     var info = (try loadActiveAuthInfoForAccountRefresh(allocator, codex_home)) orelse return false;
     defer info.deinit(allocator);
@@ -250,17 +250,17 @@ pub fn refreshAccountNamesForListWithAccountApiEnabled(
     );
 }
 
-pub fn shouldRefreshTeamAccountNamesForUserScope(reg: *registry.Registry, chatgpt_user_id: []const u8) bool {
-    return shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, reg.api.account);
+pub fn shouldRefreshWorkspaceAccountNamesForUserScope(reg: *registry.Registry, chatgpt_user_id: []const u8) bool {
+    return shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, reg.api.account);
 }
 
-pub fn shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(
+pub fn shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(
     reg: *registry.Registry,
     chatgpt_user_id: []const u8,
     account_api_enabled: bool,
 ) bool {
     if (!account_api_enabled) return false;
-    return registry.shouldFetchTeamAccountNamesForUser(reg, chatgpt_user_id);
+    return registry.shouldFetchWorkspaceAccountNamesForUser(reg, chatgpt_user_id);
 }
 
 pub fn refreshAccountNamesAfterImport(

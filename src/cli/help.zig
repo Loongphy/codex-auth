@@ -37,7 +37,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "help <command>", "Show command-specific help");
     try writeCommandSummary(out, use_color, "--version, -V", "Show version");
     try writeCommandSummary(out, use_color, "-", "Switch to the previous active account");
-    try writeCommandSummary(out, use_color, "list [--live] [--active] [--api|--skip-api]", "List available accounts");
+    try writeCommandSummary(out, use_color, "list [--live] [--active] [--api|--skip-api] [--json]", "List available accounts");
     try writeCommandSummary(out, use_color, "login [--device-auth]", "Login and add the current account");
     try writeCommandSummary(out, use_color, "import", "Import auth files or rebuild registry");
     try writeCommandDetail(out, use_color, "import <path> [--alias <alias>]");
@@ -48,10 +48,12 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "switch -");
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
+    try writeCommandDetail(out, use_color, "switch <query> --json");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
     try writeCommandDetail(out, use_color, "remove --all");
+    try writeCommandDetail(out, use_color, "remove (<selector>...|--all) --json");
     try writeCommandSummary(out, use_color, "alias", "Set or clear account aliases");
     try writeCommandDetail(out, use_color, "alias set <alias|email|display-number|query> <alias>");
     try writeCommandDetail(out, use_color, "alias clear <alias|email|display-number|query>");
@@ -193,7 +195,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
-        .list => try out.writeAll("  codex-auth list [--live] [--active] [--api|--skip-api]\n"),
+        .list => try out.writeAll("  codex-auth list [--live] [--active] [--api|--skip-api] [--json]\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
             try out.writeAll("  codex-auth login --device-auth\n");
@@ -211,11 +213,13 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch -\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
+            try out.writeAll("  codex-auth switch <query> --json\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth remove <alias|email|display-number|query>...\n");
             try out.writeAll("  codex-auth remove --all\n");
+            try out.writeAll("  codex-auth remove (<selector>...|--all) --json\n");
         },
         .alias => {
             try out.writeAll("  codex-auth alias set <alias|email|display-number|query> <alias>\n");
@@ -263,6 +267,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --active     Refresh only the active account before rendering.\n");
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+            try out.writeAll("  --json       Emit one machine-readable JSON document.\n");
         },
         .login => {
             try out.writeAll("  --device-auth   Run `codex login --device-auth` before adding the account.\n");
@@ -281,6 +286,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --live       Open the live switch UI.\n");
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
+            try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive switch.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
             try out.writeAll("  -            Switch to the previous active account.\n");
@@ -290,6 +296,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  --all        Remove every stored account.\n");
+            try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive remove.\n");
             try out.writeAll("  <alias|email|display-number|query>...\n");
             try out.writeAll("               Remove one or more matching accounts.\n");
         },

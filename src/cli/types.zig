@@ -8,6 +8,7 @@ pub const ListOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
     active_only: bool = false,
+    json: bool = false,
 };
 pub const LoginOptions = struct {
     device_auth: bool = false,
@@ -33,12 +34,14 @@ pub const SwitchOptions = struct {
     target: SwitchTarget = .picker,
     live: bool = false,
     api_mode: ApiMode = .default,
+    json: bool = false,
 };
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
     all: bool,
     live: bool = false,
     api_mode: ApiMode = .default,
+    json: bool = false,
 };
 pub const AliasSetOptions = struct {
     selector: []u8,
@@ -101,6 +104,7 @@ pub const Command = union(enum) {
 pub const UsageError = struct {
     topic: HelpTopic,
     message: []u8,
+    json: bool = false,
 };
 
 pub const ParseResult = union(enum) {
