@@ -1061,6 +1061,35 @@ test "Scenario: Given active usage at zero when picking a live auto-switch targe
     try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
 }
 
+test "Scenario: Given live auto-switch candidates with reset five hour windows when picking target then later weekly reset wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "active@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "short@example.com", "", .team);
+    try appendTestAccount(gpa, &reg, "user-1::acc-3", "long@example.com", "", .team);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-1");
+    reg.accounts.items[0].last_usage = testUsageSnapshotWithResets(now, 100, 20, 3600, 7 * 24 * 3600);
+    reg.accounts.items[1].last_usage = testUsageSnapshotWithResets(now, 80, 80, -1, 60);
+    reg.accounts.items[2].last_usage = testUsageSnapshotWithResets(now, 80, 20, -1, 86_400);
+
+    var rows = try buildSwitchRowsWithUsageOverrides(gpa, &reg, null);
+    defer rows.deinit(gpa);
+    try filterErroredRowsFromSelectableIndices(gpa, &rows);
+
+    const target_key = try maybeAutoSwitchTargetKeyAlloc(gpa, .{
+        .reg = &reg,
+        .usage_overrides = null,
+    }, &rows);
+    defer if (target_key) |value| gpa.free(value);
+
+    try std.testing.expect(target_key != null);
+    try std.testing.expectEqualStrings("user-1::acc-3", target_key.?);
+}
+
 test "Scenario: Given active usage above zero when picking a live auto-switch target then no target is chosen" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

@@ -4,6 +4,7 @@
 
 ```shell
 codex-auth switch -
+codex-auth switch --auto [--api|--skip-api]
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
@@ -26,6 +27,17 @@ codex-auth switch <query>
 - `q` quits without switching.
 - `--api` forces foreground remote refresh before rendering.
 - `--skip-api` renders from stored data and local-only active-account refresh where available.
+
+## Automatic One-Shot Switch
+
+`codex-auth switch --auto` switches once without opening a picker.
+
+- The command refreshes usage the same way as interactive switch unless `--skip-api` is set.
+- It selects an inactive account only when both 5h and weekly remaining limits are greater than `0%`.
+- When multiple inactive accounts are eligible, it chooses the account with the earliest 5h reset.
+- Accounts with foreground refresh errors are not eligible for that run.
+- The command exits after one successful switch and does not start a background process.
+- `--auto` cannot be combined with `--live`, `-`, or a query target.
 
 ## Live Switch
 

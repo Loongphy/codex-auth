@@ -250,6 +250,18 @@ pub fn printSwitchRequiresTtyError() !void {
     try out.flush();
 }
 
+pub fn printNoAutoSwitchCandidateError() !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" no inactive account has both 5h and weekly limits remaining.\n");
+    try writeHintPrefixTo(out, use_color);
+    try out.writeAll(" Run `codex-auth list --api` to refresh usage, or add another account with available limits.\n");
+    try out.flush();
+}
+
 pub fn printListRequiresTtyError() !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();

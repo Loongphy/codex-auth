@@ -410,7 +410,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     const help = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, help, "Commands:") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--auto|--live] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
@@ -474,7 +474,8 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch john@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch 02") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch work") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --auto       Switch once to an inactive account with both 5h and weekly limits remaining.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--live       Open the live switch UI.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "If a target is ambiguous") == null);
 }
@@ -1077,22 +1078,33 @@ test "Scenario: Given switch interactive with live flag when parsing then live m
     }
 }
 
-test "Scenario: Given switch with removed auto flag when parsing then usage error is returned" {
-    const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "--auto" };
-    var result = try cli.commands.parseArgs(gpa, &args);
-    defer cli.commands.freeParseResult(gpa, &result);
-
-    try expectUsageError(result, .switch_account, "unknown flag `--auto`");
-}
-
-test "Scenario: Given switch with removed auto flag without live when parsing then usage error is returned" {
+test "Scenario: Given switch auto when parsing then auto mode is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "--auto" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `--auto`");
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expect(opts.auto);
+                try std.testing.expect(!opts.live);
+                try std.testing.expectEqual(cli.types.SwitchTarget.picker, opts.target);
+                try std.testing.expectEqual(cli.types.ApiMode.default, opts.api_mode);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch auto with live when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "--auto" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "`--auto` cannot be combined with `--live`");
 }
 
 test "Scenario: Given switch query with live flag when parsing then usage error is returned" {
@@ -1176,13 +1188,13 @@ test "Scenario: Given switch dash with skip-api flag when parsing then usage err
     try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
 }
 
-test "Scenario: Given switch query with removed auto flag when parsing then usage error is returned" {
+test "Scenario: Given switch query with auto flag when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "switch", "--live", "--auto", "02" };
+    const args = [_][:0]const u8{ "codex-auth", "switch", "--auto", "02" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `--auto`");
+    try expectUsageError(result, .switch_account, "does not support `--auto`");
 }
 
 test "Scenario: Given switch with duplicate target when parsing then usage error is returned" {

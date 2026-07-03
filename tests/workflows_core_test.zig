@@ -1251,6 +1251,82 @@ test "Scenario: Given list refresh with team names missing under the same user w
     try std.testing.expectEqual(@as(usize, 0), mock_account_name_fetch_count);
 }
 
+test "Scenario: Given auto switch candidates when selecting by limits then positive windows and earliest five hour reset win" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "active@example.com", "active", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "blocked-5h@example.com", "blocked-5h", .team);
+    try appendAccount(gpa, &reg, tertiary_record_key, "blocked-weekly@example.com", "blocked-weekly", .plus);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::candidate-late", "late@example.com", "late", .plus);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::candidate-early", "early@example.com", "early", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    const now: i64 = 1_800_000_000;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 1, .window_minutes = 300, .resets_at = now + 30 },
+        .secondary = .{ .used_percent = 1, .window_minutes = 10080, .resets_at = now + 86_400 },
+        .credits = null,
+        .plan_type = .team,
+    };
+    reg.accounts.items[1].last_usage = .{
+        .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now + 60 },
+        .secondary = .{ .used_percent = 1, .window_minutes = 10080, .resets_at = now + 86_400 },
+        .credits = null,
+        .plan_type = .team,
+    };
+    reg.accounts.items[2].last_usage = .{
+        .primary = .{ .used_percent = 1, .window_minutes = 300, .resets_at = now + 30 },
+        .secondary = .{ .used_percent = 100, .window_minutes = 10080, .resets_at = now + 86_400 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[3].last_usage = .{
+        .primary = .{ .used_percent = 20, .window_minutes = 300, .resets_at = now + 3_600 },
+        .secondary = .{ .used_percent = 20, .window_minutes = 10080, .resets_at = now + 86_400 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[4].last_usage = .{
+        .primary = .{ .used_percent = 95, .window_minutes = 300, .resets_at = now + 120 },
+        .secondary = .{ .used_percent = 95, .window_minutes = 10080, .resets_at = now + 604_800 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+
+    const selected_idx = registry.selectAutoSwitchAccountIndexByLimitsAt(&reg, now) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 4), selected_idx);
+}
+
+test "Scenario: Given auto switch candidates with reset five hour windows when selecting by limits then later weekly reset wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "active@example.com", "active", .team);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::candidate-short-week", "short@example.com", "short", .plus);
+    try appendAccount(gpa, &reg, shared_user_id ++ "::candidate-long-week", "long@example.com", "long", .plus);
+    try registry.setActiveAccountKey(gpa, &reg, primary_record_key);
+
+    const now: i64 = 1_800_000_000;
+    reg.accounts.items[1].last_usage = .{
+        .primary = .{ .used_percent = 80, .window_minutes = 300, .resets_at = now - 1 },
+        .secondary = .{ .used_percent = 80, .window_minutes = 10080, .resets_at = now + 60 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+    reg.accounts.items[2].last_usage = .{
+        .primary = .{ .used_percent = 80, .window_minutes = 300, .resets_at = now - 1 },
+        .secondary = .{ .used_percent = 20, .window_minutes = 10080, .resets_at = now + 86_400 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+
+    const selected_idx = registry.selectAutoSwitchAccountIndexByLimitsAt(&reg, now) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 2), selected_idx);
+}
+
 test "Scenario: Given removed active account with remaining accounts when reconciling then the best usage account becomes active" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
