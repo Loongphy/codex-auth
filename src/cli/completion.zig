@@ -50,7 +50,7 @@ fn writeBashCompletion(out: *std.Io.Writer) !void {
         \\    fi
         \\    cword=$COMP_CWORD
         \\
-        \\    local commands="help list login import export switch remove alias clean completion config"
+        \\    local commands="help list login import export switch remove alias clean completion config app"
         \\    local global_flags="--help -h --version -V"
         \\
         \\    if (( cword == 1 )); then
@@ -78,7 +78,9 @@ fn writeBashCompletion(out: *std.Io.Writer) !void {
         \\            COMPREPLY=( $(compgen -W "--cpa" -- "$cur") )
         \\            ;;
         \\        switch)
-        \\            COMPREPLY=( $(compgen -W "--live --api --skip-api $( _codex_auth_switch_queries | cut -f1 ) $( _codex_auth_switch_queries | cut -f2 )" -- "$cur") )
+        \\            local _sw_targets
+        \\            _sw_targets="$(_codex_auth_switch_queries)"
+        \\            COMPREPLY=( $(compgen -W "--live --api --skip-api $(printf '%s\n' "$_sw_targets" | cut -f1) $(printf '%s\n' "$_sw_targets" | cut -f2)" -- "$cur") )
         \\            ;;
         \\        remove)
         \\            COMPREPLY=( $(compgen -W "--live --api --skip-api --all" -- "$cur") )
@@ -100,6 +102,9 @@ fn writeBashCompletion(out: *std.Io.Writer) !void {
         \\            else
         \\                COMPREPLY=( $(compgen -W "--interval" -- "$cur") )
         \\            fi
+        \\            ;;
+        \\        app)
+        \\            COMPREPLY=( $(compgen -W "--id --codex-cli-path --codex-home --platform --std" -- "$cur") )
         \\            ;;
         \\    esac
         \\}
@@ -153,12 +158,13 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
         \\        'alias[Set or clear account aliases]' \
         \\        'clean[Delete backup and stale files under accounts/]' \
         \\        'completion[Generate shell completion scripts]' \
-        \\        'config[Manage configuration]'
+        \\        'config[Manage configuration]' \
+        \\        'app[Launch Codex App with CLI overrides]'
         \\      ;;
         \\    args)
         \\      case $words[2] in
         \\        help)
-        \\          _values 'command' help list login import export switch remove alias clean completion config
+        \\          _values 'command' help list login import export switch remove alias clean completion config app
         \\          ;;
         \\        list)
         \\          _values 'flag' '--live[Open a live-updating table]' '--active[Refresh only the active account before rendering]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]'
@@ -196,6 +202,9 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
         \\            _values 'flag' '--interval[Set the live refresh interval in seconds]'
         \\          fi
         \\          ;;
+        \\        app)
+        \\          _values 'flag' '--id[Set the Windows package/AUMID or macOS bundle identifier]' '--codex-cli-path[Set CODEX_CLI_PATH for the app launch]' '--codex-home[Set CODEX_HOME for the app launch]' '--platform[Set app platform]' '--std[Attach stdout and stderr to this terminal]'
+        \\          ;;
         \\      esac
         \\      ;;
         \\  esac
@@ -212,7 +221,7 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
         \\end
         \\
         \\function __fish_codex_auth_needs_command
-        \\    not __fish_seen_subcommand_from help list login import export switch remove alias clean completion config
+        \\    not __fish_seen_subcommand_from help list login import export switch remove alias clean completion config app
         \\end
         \\
         \\function __fish_codex_auth_using_command
@@ -236,7 +245,8 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_needs_command' -a clean -d 'Delete backup and stale files under accounts/'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_needs_command' -a completion -d 'Generate shell completion scripts'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_needs_command' -a config -d 'Manage configuration'\n");
-    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command help' -a 'list login import export switch remove alias clean completion config'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_needs_command' -a app -d 'Launch Codex App with CLI overrides'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command help' -a 'list login import export switch remove alias clean completion config app'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l live -d 'Open a live-updating table'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l active -d 'Refresh only the active account before rendering'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l api -d 'Load usage and account data from APIs'\n");
@@ -262,6 +272,11 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command completion' -a 'bash zsh fish' -d 'Generate shell completions'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command config' -a live -d 'Manage live refresh settings'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_seen_subcommand_from config; and __fish_seen_subcommand_from live' -l interval -r -d 'Set the live refresh interval in seconds'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l id -r -d 'Set the app identifier'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l codex-cli-path -r -d 'Set CODEX_CLI_PATH'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l codex-home -r -d 'Set CODEX_HOME'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l platform -r -a 'win wsl mac' -d 'Set app platform'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l std -d 'Attach stdout and stderr to this terminal'\n");
 }
 
 fn writeSwitchQueryCompletion(out: *std.Io.Writer, allocator: std.mem.Allocator, codex_home: []const u8) !void {
