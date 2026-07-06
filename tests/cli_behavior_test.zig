@@ -616,9 +616,11 @@ test "Scenario: Given bash completion when rendering then commands and switch qu
     try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth completion query switch") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "complete -F _codex_auth_complete codex-auth") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "bash zsh fish") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "help list login import export switch remove alias clean completion config app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "- help list login import export switch remove alias clean completion config app") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "local _sw_targets") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_sw_targets=\"$(_codex_auth_switch_queries)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "print $1\":\"$2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "compgen -W \"- --live --api --skip-api") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "$( _codex_auth_switch_queries | cut") == null);
     try std.testing.expect(std.mem.indexOf(u8, script, "app)") != null);
 }
@@ -636,8 +638,12 @@ test "Scenario: Given zsh completion when rendering then commands and switch que
     try std.testing.expect(std.mem.indexOf(u8, script, "_values 'shell' bash zsh fish") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_codex_auth_switch_queries") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "'app[Launch Codex App with CLI overrides]'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "_values 'command' help list login import export switch remove alias clean completion config app") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "compadd -Q -l -- \"${emails[@]}\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "'-[Switch to the previous active account]'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "_values 'command' - help list login import export switch remove alias clean completion config app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "_values 'target' '-[Switch to the previous active account]'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "values+=(\"$value\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "descriptions+=(\"${description:-switch target}\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "compadd -Q -d descriptions -- \"${values[@]}\"") != null);
 }
 
 test "Scenario: Given fish completion when rendering then commands and flags are included" {
@@ -654,7 +660,8 @@ test "Scenario: Given fish completion when rendering then commands and flags are
     try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_using_command completion") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-a 'bash zsh fish' -d 'Generate shell completions'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-l device-auth -d 'Run codex login with device auth'") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_seen_subcommand_from help list login import export switch remove alias clean completion config app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_seen_subcommand_from - help list login import export switch remove alias clean completion config app") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-a '-' -d 'Switch to the previous active account'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-a app -d 'Launch Codex App with CLI overrides'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_using_command app") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_switch_queries)'") != null);

@@ -465,6 +465,23 @@ test "Scenario: Given switch query with a display number when resolving locally 
     }
 }
 
+test "Scenario: Given switch query with a display number and email label when resolving locally then it uses the display number" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .team);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "02:beta@example.com");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given switch query with multiple local matches when resolving locally then it keeps the local picker set" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
