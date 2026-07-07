@@ -315,8 +315,11 @@ fn writeUniqueCandidate(
     allocator: std.mem.Allocator,
 ) !void {
     if (value.len == 0) return;
-    const entry = try seen.getOrPut(value);
-    if (entry.found_existing) return;
-    entry.key_ptr.* = try allocator.dupe(u8, value);
+    if (seen.contains(value)) return;
+
+    const owned_value = try allocator.dupe(u8, value);
+    errdefer allocator.free(owned_value);
+
+    try seen.putNoClobber(owned_value, {});
     try out.print("{s}\t{s}\n", .{ value, description });
 }
