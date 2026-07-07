@@ -320,6 +320,6 @@ fn writeUniqueCandidate(
     const owned_value = try allocator.dupe(u8, value);
     errdefer allocator.free(owned_value);
 
-    try seen.putNoClobber(owned_value, {});
     try out.print("{s}\t{s}\n", .{ value, description });
+    try seen.putNoClobber(owned_value, {});
 }
