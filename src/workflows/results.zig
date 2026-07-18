@@ -241,7 +241,7 @@ fn buildAccountViewForKey(
     usage_state: ?*const usage_refresh.ForegroundUsageRefreshState,
     account_key: []const u8,
 ) !AccountView {
-    const account_idx = registry.findAccountIndexByAccountKey(@constCast(reg), account_key) orelse return error.AccountNotFound;
+    const account_idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return error.AccountNotFound;
     const selected = [_]usize{account_idx};
     const views = try buildAccountViewsForIndices(allocator, reg, usage_state, &selected);
     std.debug.assert(views.len == 1);

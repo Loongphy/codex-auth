@@ -224,8 +224,8 @@ fn handleSwitchQueryJson(
         },
     };
 
-    registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err, "switch");
-    registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err, "switch");
+    registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
+    registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
 
     var result = results.buildSwitchResult(
         allocator,
@@ -254,14 +254,12 @@ fn printJsonWorkflowError(err: anyerror) anyerror {
     }
 }
 
-fn printJsonMutationError(err: anyerror, operation: []const u8) anyerror {
+fn printJsonMutationError(err: anyerror) anyerror {
     if (err == error.OutOfMemory) return err;
-    const message = try std.fmt.allocPrint(
-        std.heap.page_allocator,
-        "the {s} operation could not be completed; stored state may have changed; run `list --json` before retrying",
-        .{operation},
+    try cli.json_output.printError(
+        "state_uncertain",
+        "the switch operation could not be completed; stored state may have changed; run `list --json` before retrying",
+        null,
     );
-    defer std.heap.page_allocator.free(message);
-    try cli.json_output.printError("state_uncertain", message, null);
     return error.StateUncertain;
 }

@@ -41,7 +41,7 @@ pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8)
     return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
 }
 
-pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
+pub fn findAccountIndexByAccountKey(reg: *const Registry, account_key: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
         if (std.mem.eql(u8, rec.account_key, account_key)) return i;
     }
