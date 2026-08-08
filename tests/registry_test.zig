@@ -366,7 +366,7 @@ test "setting same active account preserves previous active account key" {
     try std.testing.expectEqualStrings(alpha_key, reg.previous_active_account_key.?);
 }
 
-test "plan labels are human-readable while registry stores raw plan values" {
+test "plan labels are human-readable while registry stores canonical plan values" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -391,7 +391,7 @@ test "plan labels are human-readable while registry stores raw plan values" {
     try std.testing.expectEqualStrings("Free", registry.planLabel(.free));
     try std.testing.expectEqualStrings("Plus", registry.planLabel(.plus));
     try std.testing.expectEqualStrings("Pro Lite", registry.planLabel(.prolite));
-    try std.testing.expectEqualStrings("Business", registry.planLabel(.team));
+    try std.testing.expectEqualStrings("Business", registry.planLabel(.business));
 }
 
 test "resolveDisplayPlan prefers a usage snapshot plan over the stored auth plan" {
@@ -404,12 +404,21 @@ test "resolveDisplayPlan prefers a usage snapshot plan over the stored auth plan
         .primary = null,
         .secondary = null,
         .credits = null,
-        .plan_type = .team,
+        .plan_type = .business,
     };
     try reg.accounts.append(gpa, rec);
 
     try std.testing.expectEqual(registry.PlanType.plus, registry.resolvePlan(&reg.accounts.items[0]).?);
-    try std.testing.expectEqual(registry.PlanType.team, registry.resolveDisplayPlan(&reg.accounts.items[0]).?);
+    try std.testing.expectEqual(registry.PlanType.business, registry.resolveDisplayPlan(&reg.accounts.items[0]).?);
+}
+
+test "backend plan values normalize to final product plans" {
+    try std.testing.expectEqual(registry.PlanType.business, registry.normalizePlanType("team"));
+    try std.testing.expectEqual(registry.PlanType.business, registry.normalizePlanType("self_serve_business_usage_based"));
+    try std.testing.expectEqual(registry.PlanType.enterprise, registry.normalizePlanType("business"));
+    try std.testing.expectEqual(registry.PlanType.enterprise, registry.normalizePlanType("enterprise_cbp_usage_based"));
+    try std.testing.expectEqual(registry.PlanType.enterprise, registry.normalizePlanType("hc"));
+    try std.testing.expectEqual(registry.PlanType.go, registry.normalizePlanType("go"));
 }
 
 test "registry load defaults missing account_name field to null" {
@@ -511,6 +520,76 @@ test "registry load normalizes schema four without previous active account key" 
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
 }
 
+test "schema three registry plan values migrate to canonical product plans" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+    try tmp.dir.writeFile(.{
+        .sub_path = "accounts/registry.json",
+        .data =
+        \\{
+        \\  "schema_version": 3,
+        \\  "active_account_key": null,
+        \\  "active_account_activated_at_ms": null,
+        \\  "previous_active_account_key": null,
+        \\  "interval_seconds": 60,
+        \\  "accounts": [
+        \\    {
+        \\      "account_key": "user-a::account-a",
+        \\      "chatgpt_account_id": "account-a",
+        \\      "chatgpt_user_id": "user-a",
+        \\      "email": "business@example.com",
+        \\      "alias": "",
+        \\      "account_name": null,
+        \\      "plan": "team",
+        \\      "auth_mode": "chatgpt",
+        \\      "created_at": 1,
+        \\      "last_used_at": null,
+        \\      "last_usage": { "plan_type": "business" },
+        \\      "last_usage_at": 2,
+        \\      "last_local_rollout": null
+        \\    },
+        \\    {
+        \\      "account_key": "user-b::account-b",
+        \\      "chatgpt_account_id": "account-b",
+        \\      "chatgpt_user_id": "user-b",
+        \\      "email": "enterprise@example.com",
+        \\      "alias": "",
+        \\      "account_name": null,
+        \\      "plan": "business",
+        \\      "auth_mode": "chatgpt",
+        \\      "created_at": 1,
+        \\      "last_used_at": null,
+        \\      "last_usage": null,
+        \\      "last_usage_at": null,
+        \\      "last_local_rollout": null
+        \\    }
+        \\  ]
+        \\}
+        ,
+    });
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expectEqual(registry.PlanType.business, loaded.accounts.items[0].plan.?);
+    try std.testing.expectEqual(registry.PlanType.enterprise, loaded.accounts.items[0].last_usage.?.plan_type.?);
+    try std.testing.expectEqual(registry.PlanType.enterprise, loaded.accounts.items[1].plan.?);
+
+    var file = try tmp.dir.openFile("accounts/registry.json", .{});
+    defer file.close();
+    const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
+    defer gpa.free(contents);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"team\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"business\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"enterprise\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan_type\": \"enterprise\"") != null);
+}
+
 test "registry save/load round-trips account_name string" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -576,7 +655,7 @@ test "applyAccountNamesForUser updates same-user records across personal and tea
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
 
-    var team = try makeAccountRecord(gpa, "same@example.com", "", .team, .chatgpt, 1);
+    var team = try makeAccountRecord(gpa, "same@example.com", "", .business, .chatgpt, 1);
     try setRecordIds(gpa, &team, "user-shared", "acct-team");
     team.account_name = try gpa.dupe(u8, "Legacy Workspace");
     try reg.accounts.append(gpa, team);
@@ -585,7 +664,7 @@ test "applyAccountNamesForUser updates same-user records across personal and tea
     try setRecordIds(gpa, &plus, "user-shared", "acct-plus");
     try reg.accounts.append(gpa, plus);
 
-    var other = try makeAccountRecord(gpa, "other@example.com", "", .team, .chatgpt, 3);
+    var other = try makeAccountRecord(gpa, "other@example.com", "", .business, .chatgpt, 3);
     try setRecordIds(gpa, &other, "user-other", "acct-other");
     other.account_name = try gpa.dupe(u8, "Unrelated Workspace");
     try reg.accounts.append(gpa, other);
@@ -1298,7 +1377,7 @@ test "clean uses a whitelist and only removes non-current entries under accounts
 
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
-    const active_record = try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 1);
+    const active_record = try makeAccountRecord(gpa, "keep@example.com", "", .business, .chatgpt, 1);
     try reg.accounts.append(gpa, active_record);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
@@ -1353,7 +1432,7 @@ test "clean preserves account snapshots when registry is missing" {
 
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
-    const keep_record = try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 1);
+    const keep_record = try makeAccountRecord(gpa, "keep@example.com", "", .business, .chatgpt, 1);
     try reg.accounts.append(gpa, keep_record);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
@@ -1400,7 +1479,7 @@ test "remove accounts deletes matching snapshots and auth backups only for remov
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
     try reg.accounts.append(gpa, try makeAccountRecord(gpa, "remove@example.com", "", .plus, .chatgpt, 1));
-    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "keep@example.com", "", .team, .chatgpt, 2));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "keep@example.com", "", .business, .chatgpt, 2));
 
     const remove_account_key = try accountKeyForEmailAlloc(gpa, "remove@example.com");
     defer gpa.free(remove_account_key);
@@ -1453,7 +1532,7 @@ test "remove accounts clears previous active account when previous is removed" {
     var reg = makeEmptyRegistry();
     defer reg.deinit(gpa);
     try reg.accounts.append(gpa, try makeAccountRecord(gpa, "previous@example.com", "", .plus, .chatgpt, 1));
-    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "active@example.com", "", .team, .chatgpt, 2));
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "active@example.com", "", .business, .chatgpt, 2));
 
     const previous_key = try accountKeyForEmailAlloc(gpa, "previous@example.com");
     defer gpa.free(previous_key);

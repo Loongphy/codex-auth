@@ -369,15 +369,7 @@ fn parsePlanType(v: std.json.Value) ?registry.PlanType {
         else => return null,
     };
 
-    if (std.ascii.eqlIgnoreCase(plan_name, "free")) return .free;
-    if (std.ascii.eqlIgnoreCase(plan_name, "plus")) return .plus;
-    if (std.ascii.eqlIgnoreCase(plan_name, "prolite")) return .prolite;
-    if (std.ascii.eqlIgnoreCase(plan_name, "pro")) return .pro;
-    if (std.ascii.eqlIgnoreCase(plan_name, "team")) return .team;
-    if (std.ascii.eqlIgnoreCase(plan_name, "business")) return .business;
-    if (std.ascii.eqlIgnoreCase(plan_name, "enterprise")) return .enterprise;
-    if (std.ascii.eqlIgnoreCase(plan_name, "edu")) return .edu;
-    return .unknown;
+    return registry.normalizePlanType(plan_name);
 }
 
 fn ceilMinutes(seconds: i64) ?i64 {

@@ -6,7 +6,7 @@ const c_time = @cImport({
     @cInclude("time.h");
 });
 
-pub const PlanType = enum { free, plus, prolite, pro, team, business, enterprise, edu, unknown };
+pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
@@ -122,10 +122,10 @@ pub fn resolveDisplayPlan(rec: *const AccountRecord) ?PlanType {
 pub fn planLabel(plan: PlanType) []const u8 {
     return switch (plan) {
         .free => "Free",
+        .go => "Go",
         .plus => "Plus",
         .prolite => "Pro Lite",
         .pro => "Pro",
-        .team => "Business",
         .business => "Business",
         .enterprise => "Enterprise",
         .edu => "Edu",

@@ -2,6 +2,7 @@ pub const types = @import("types.zig");
 pub const commands = @import("commands/root.zig");
 pub const completion = @import("completion.zig");
 pub const help = @import("help.zig");
+pub const json_output = @import("json_output.zig");
 pub const output = @import("output.zig");
 pub const login = @import("login.zig");
 pub const picker = @import("picker.zig");

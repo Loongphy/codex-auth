@@ -20,7 +20,7 @@ const freeAccountRecord = common.freeAccountRecord;
 const freeRateLimitSnapshot = common.freeRateLimitSnapshot;
 const replaceOptionalStringAlloc = common.replaceOptionalStringAlloc;
 const cloneOptionalStringAlloc = common.cloneOptionalStringAlloc;
-const resolvePlan = common.resolvePlan;
+const resolveDisplayPlan = common.resolveDisplayPlan;
 const readFileIfExists = clean.readFileIfExists;
 const fileEqualsBytes = clean.fileEqualsBytes;
 const backupDir = clean.backupDir;
@@ -41,7 +41,7 @@ pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8)
     return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
 }
 
-pub fn findAccountIndexByAccountKey(reg: *Registry, account_key: []const u8) ?usize {
+pub fn findAccountIndexByAccountKey(reg: *const Registry, account_key: []const u8) ?usize {
     for (reg.accounts.items, 0..) |rec, i| {
         if (std.mem.eql(u8, rec.account_key, account_key)) return i;
     }
@@ -446,9 +446,12 @@ pub fn hasStoredAccountName(rec: *const AccountRecord) bool {
     return account_name.len != 0;
 }
 
-pub fn isTeamAccount(rec: *const AccountRecord) bool {
-    const plan = resolvePlan(rec) orelse return false;
-    return plan == .team;
+pub fn isWorkspaceAccount(rec: *const AccountRecord) bool {
+    const plan = resolveDisplayPlan(rec) orelse return false;
+    return switch (plan) {
+        .business, .enterprise, .edu => true,
+        else => false,
+    };
 }
 
 pub fn inAccountNameRefreshScope(reg: *const Registry, chatgpt_user_id: []const u8, rec: *const AccountRecord) bool {
@@ -459,29 +462,29 @@ pub fn inAccountNameRefreshScope(reg: *const Registry, chatgpt_user_id: []const 
 pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
     for (reg.accounts.items) |rec| {
         if (!inAccountNameRefreshScope(reg, chatgpt_user_id, &rec)) continue;
-        if (isTeamAccount(&rec) and !hasStoredAccountName(&rec)) return true;
+        if (isWorkspaceAccount(&rec) and !hasStoredAccountName(&rec)) return true;
     }
     return false;
 }
 
-pub fn shouldFetchTeamAccountNamesForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
+pub fn shouldFetchWorkspaceAccountNamesForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
     var account_count: usize = 0;
-    var has_team_account = false;
-    var has_missing_team_account_name = false;
+    var has_workspace_account = false;
+    var has_missing_workspace_account_name = false;
 
     for (reg.accounts.items) |rec| {
         if (!inAccountNameRefreshScope(reg, chatgpt_user_id, &rec)) continue;
 
         account_count += 1;
-        if (!isTeamAccount(&rec)) continue;
+        if (!isWorkspaceAccount(&rec)) continue;
 
-        has_team_account = true;
+        has_workspace_account = true;
         if (!hasStoredAccountName(&rec)) {
-            has_missing_team_account_name = true;
+            has_missing_workspace_account_name = true;
         }
     }
 
-    if (!has_team_account or !has_missing_team_account_name) return false;
+    if (!has_workspace_account or !has_missing_workspace_account_name) return false;
     return account_count > 1;
 }
 
@@ -510,7 +513,7 @@ pub fn applyAccountNamesForUser(
             break;
         }
 
-        if (!matched and !isTeamAccount(rec) and !hasStoredAccountName(rec)) continue;
+        if (!matched and !isWorkspaceAccount(rec) and !hasStoredAccountName(rec)) continue;
         if (try replaceOptionalStringAlloc(allocator, &rec.account_name, account_name)) {
             changed = true;
         }

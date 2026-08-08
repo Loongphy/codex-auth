@@ -11,10 +11,28 @@ pub fn usageErrorResult(
     comptime fmt: []const u8,
     args: anytype,
 ) !types.ParseResult {
+    return usageErrorResultWithJson(allocator, topic, false, fmt, args);
+}
+
+pub fn usageErrorResultWithJson(
+    allocator: std.mem.Allocator,
+    topic: types.HelpTopic,
+    json: bool,
+    comptime fmt: []const u8,
+    args: anytype,
+) !types.ParseResult {
     return .{ .usage_error = .{
         .topic = topic,
         .message = try std.fmt.allocPrint(allocator, fmt, args),
+        .json = json,
     } };
+}
+
+pub fn argsContainFlag(args: []const [:0]const u8, flag: []const u8) bool {
+    for (args) |raw_arg| {
+        if (std.mem.eql(u8, std.mem.sliceTo(raw_arg, 0), flag)) return true;
+    }
+    return false;
 }
 
 pub fn parseSimpleCommandArgs(

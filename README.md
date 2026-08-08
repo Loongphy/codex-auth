@@ -195,6 +195,10 @@ Verify with:
 codex exec "say hello"
 ```
 
+## Build a GUI with JSON
+
+If you are building a GUI on top of the current `codex-auth` client, use the supported `--json` command variants to receive machine-readable results. See the [JSON API documentation](./docs/json-api.md) for supported commands and the compatibility contract.
+
 ## Disclaimer
 
 This project is provided as-is and use is at your own risk.

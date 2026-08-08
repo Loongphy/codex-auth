@@ -28,6 +28,7 @@ const alias_workflow = @import("alias.zig");
 const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
 const usage_refresh = @import("usage.zig");
+pub const results = @import("results.zig");
 
 pub const nowMilliseconds = workflow_env.nowMilliseconds;
 pub const nowSeconds = workflow_env.nowSeconds;
@@ -55,7 +56,7 @@ const loadActiveAuthInfoForAccountRefresh = account_names.loadActiveAuthInfoForA
 pub const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogin;
 pub const refreshAccountNamesAfterSwitch = account_names.refreshAccountNamesAfterSwitch;
 pub const refreshAccountNamesForList = account_names.refreshAccountNamesForList;
-const shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled = account_names.shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled;
+const shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled = account_names.shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled;
 pub const refreshAccountNamesAfterImport = account_names.refreshAccountNamesAfterImport;
 const loadSingleFileImportAuthInfo = account_names.loadSingleFileImportAuthInfo;
 pub const reconcileActiveAuthAfterRemove = active_auth.reconcileActiveAuthAfterRemove;
@@ -122,7 +123,11 @@ fn runMain(init: std.process.Init.Minimal) !void {
     const cmd = switch (parsed) {
         .command => |command| command,
         .usage_error => |usage_err| {
-            try cli.output.printUsageError(&usage_err);
+            if (usage_err.json) {
+                try cli.json_output.printUsageError(usage_err.message);
+            } else {
+                try cli.output.printUsageError(&usage_err);
+            }
             return error.InvalidCliUsage;
         },
     };
@@ -136,7 +141,11 @@ fn runMain(init: std.process.Init.Minimal) !void {
         },
         else => true,
     };
-    const codex_home = if (needs_codex_home) try registry.resolveCodexHome(allocator) else null;
+    const json_requested = commandWantsJson(&cmd);
+    const codex_home = if (needs_codex_home)
+        registry.resolveCodexHome(allocator) catch |err| return printJsonStartupError(err, json_requested)
+    else
+        null;
     defer if (codex_home) |path| allocator.free(path);
 
     switch (cmd) {
@@ -157,6 +166,21 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
         .completion => |opts| try completion_workflow.handleCompletion(allocator, codex_home, opts),
     }
+}
+
+fn commandWantsJson(cmd: *const cli.types.Command) bool {
+    return switch (cmd.*) {
+        .list => |opts| opts.json,
+        .switch_account => |opts| opts.json,
+        .remove_account => |opts| opts.json,
+        else => false,
+    };
+}
+
+fn printJsonStartupError(err: anyerror, json_requested: bool) anyerror {
+    if (!json_requested or err == error.OutOfMemory) return err;
+    try cli.json_output.printError("registry_error", @errorName(err), null);
+    return error.RegistryError;
 }
 
 fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {

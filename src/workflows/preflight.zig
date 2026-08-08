@@ -11,13 +11,18 @@ const ForegroundUsageRefreshTarget = targets.ForegroundUsageRefreshTarget;
 const LiveTtyTarget = targets.LiveTtyTarget;
 const liveTtyPreflightError = targets.liveTtyPreflightError;
 const shouldRefreshForegroundUsage = targets.shouldRefreshForegroundUsage;
-const shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled = account_names.shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled;
+const shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled = account_names.shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled;
 const loadActiveAuthInfoForAccountRefresh = account_names.loadActiveAuthInfoForAccountRefresh;
 
 pub fn isHandledCliError(err: anyerror) bool {
     return err == error.AccountNotFound or
+        err == error.AmbiguousQuery or
+        err == error.AmbiguousSelector or
+        err == error.SelectorResolutionFailed or
+        err == error.StateUncertain or
         err == error.NoPreviousAccount or
         err == error.PreviousAccountUnavailable or
+        err == error.RegistryError or
         err == error.CodexLoginFailed or
         err == error.ListLiveRequiresTty or
         err == error.TuiOutputUnavailable or
@@ -83,7 +88,7 @@ pub fn shouldPreflightCurlForForegroundTargetWithApiEnabled(
     }
 
     const active_user_id = registry.activeChatgptUserId(reg) orelse return false;
-    if (!shouldRefreshTeamAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) {
+    if (!shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(reg, active_user_id, account_api_enabled)) {
         return false;
     }
 

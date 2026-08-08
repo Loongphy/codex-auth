@@ -7,12 +7,12 @@ const AccountRecord = common.AccountRecord;
 const freeAccountRecord = common.freeAccountRecord;
 const normalizeEmailAlloc = common.normalizeEmailAlloc;
 const parseAuthMode = parse.parseAuthMode;
-const parsePlanType = parse.parsePlanType;
+const parseStoredPlanType = parse.parseStoredPlanType;
 const parseRolloutSignature = parse.parseRolloutSignature;
 const parseUsage = parse.parseUsage;
 const readInt = parse.readInt;
 
-pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !AccountRecord {
+pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap, schema_version: u32) !AccountRecord {
     const account_key_val = obj.get("account_key") orelse return error.MissingAccountKey;
     const email_val = obj.get("email") orelse return error.MissingEmail;
     const alias_val = obj.get("alias") orelse return error.MissingAlias;
@@ -53,7 +53,7 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
 
     if (obj.get("plan")) |p| {
         switch (p) {
-            .string => |s| rec.plan = parsePlanType(s),
+            .string => |s| rec.plan = parseStoredPlanType(s, schema_version),
             else => {},
         }
     }
@@ -64,7 +64,7 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap)
         }
     }
     if (obj.get("last_usage")) |u| {
-        rec.last_usage = parseUsage(allocator, u);
+        rec.last_usage = parseUsage(allocator, u, schema_version);
     }
     if (obj.get("last_local_rollout")) |v| {
         rec.last_local_rollout = parseRolloutSignature(allocator, v);

@@ -7,6 +7,7 @@ codex-auth switch -
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
+codex-auth switch <query> --json
 ```
 
 ## Previous Switch
@@ -17,6 +18,7 @@ codex-auth switch <query>
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
 - `switch -` does not accept `--live`, `--api`, or `--skip-api`.
+- Previous-account switching is a human CLI convenience and cannot be combined with `--json`.
 
 ## Interactive Switch
 
@@ -49,6 +51,9 @@ Selectors can match:
 
 If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--api`, or `--skip-api`.
 
+With `--json`, query mode never opens the interactive picker. Ambiguous queries fail with a JSON error document that includes candidate accounts.
+The returned `switched_to.plan` is already normalized to the final product plan.
+
 ## Switch Effects
 
 When switching succeeds:
@@ -58,3 +63,5 @@ When switching succeeds:
 3. `active_account_key` is updated in `registry.json`.
 4. `previous_active_account_key` records the account that was active before the switch, when one exists.
 5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
+
+The previous-account pointer is internal CLI state and is not included in JSON responses.

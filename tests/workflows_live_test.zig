@@ -137,7 +137,7 @@ fn appendLiveMergeTestAccount(
         .email = try allocator.dupe(u8, email),
         .alias = try allocator.dupe(u8, alias),
         .account_name = null,
-        .plan = .team,
+        .plan = .business,
         .auth_mode = .chatgpt,
         .created_at = 1,
         .last_used_at = null,

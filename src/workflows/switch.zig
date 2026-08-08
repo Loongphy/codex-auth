@@ -4,6 +4,7 @@ const registry = @import("../registry/root.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
+const results = @import("results.zig");
 
 const ensureLiveTty = preflight.ensureLiveTty;
 const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
@@ -113,6 +114,8 @@ fn handleSwitchQuery(
     opts: cli.types.SwitchOptions,
     query: []const u8,
 ) !void {
+    if (opts.json) return handleSwitchQueryJson(allocator, codex_home, query);
+
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
     if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
@@ -155,6 +158,7 @@ fn handleSwitchPrevious(
     codex_home: []const u8,
     opts: cli.types.SwitchOptions,
 ) !void {
+    std.debug.assert(!opts.json);
     std.debug.assert(opts.api_mode == .default);
     std.debug.assert(!opts.live);
 
@@ -186,4 +190,76 @@ fn handleSwitchPrevious(
     try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
+}
+
+fn handleSwitchQueryJson(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    query: []const u8,
+) !void {
+    var reg = registry.loadRegistry(allocator, codex_home) catch |err| return printJsonWorkflowError(err);
+    defer reg.deinit(allocator);
+    if (registry.syncActiveAccountFromAuth(allocator, codex_home, &reg) catch |err| return printJsonWorkflowError(err)) {
+        registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonWorkflowError(err);
+    }
+
+    var resolution = resolveSwitchQueryLocally(allocator, &reg, query) catch |err| return printJsonWorkflowError(err);
+    defer resolution.deinit(allocator);
+
+    const selected_account_key = switch (resolution) {
+        .not_found => {
+            const message = try std.fmt.allocPrint(allocator, "no account matches \"{s}\"", .{query});
+            defer allocator.free(message);
+            try cli.json_output.printError("account_not_found", message, null);
+            return error.AccountNotFound;
+        },
+        .direct => |account_key| account_key,
+        .multiple => |matches| {
+            const candidates = try results.buildAccountViewsForIndices(allocator, &reg, null, matches.items);
+            defer results.deinitAccountViews(allocator, candidates);
+            const message = try std.fmt.allocPrint(allocator, "query \"{s}\" matches multiple accounts", .{query});
+            defer allocator.free(message);
+            try cli.json_output.printError("ambiguous_query", message, candidates);
+            return error.AmbiguousQuery;
+        },
+    };
+
+    registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
+    registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
+
+    var result = results.buildSwitchResult(
+        allocator,
+        &reg,
+        selected_account_key,
+    ) catch |err| return printJsonWorkflowError(err);
+    defer result.deinit(allocator);
+    try cli.json_output.printSwitchResult(&result);
+}
+
+fn printJsonWorkflowError(err: anyerror) anyerror {
+    switch (err) {
+        error.OutOfMemory => return err,
+        error.CurlRequired => {
+            try cli.json_output.printError(
+                "curl_unavailable",
+                "curl is required for API-backed refresh. Install curl or use --skip-api.",
+                null,
+            );
+            return err;
+        },
+        else => {
+            try cli.json_output.printError("registry_error", @errorName(err), null);
+            return error.RegistryError;
+        },
+    }
+}
+
+fn printJsonMutationError(err: anyerror) anyerror {
+    if (err == error.OutOfMemory) return err;
+    try cli.json_output.printError(
+        "state_uncertain",
+        "the switch operation could not be completed; stored state may have changed; run `list --json` before retrying",
+        null,
+    );
+    return error.StateUncertain;
 }

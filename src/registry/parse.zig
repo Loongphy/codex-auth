@@ -9,15 +9,33 @@ const RateLimitWindow = common.RateLimitWindow;
 const RolloutSignature = common.RolloutSignature;
 const CreditsSnapshot = common.CreditsSnapshot;
 
-pub fn parsePlanType(s: []const u8) ?PlanType {
-    if (std.mem.eql(u8, s, "free")) return .free;
-    if (std.mem.eql(u8, s, "plus")) return .plus;
-    if (std.mem.eql(u8, s, "prolite")) return .prolite;
-    if (std.mem.eql(u8, s, "pro")) return .pro;
-    if (std.mem.eql(u8, s, "team")) return .team;
-    if (std.mem.eql(u8, s, "business")) return .business;
-    if (std.mem.eql(u8, s, "enterprise")) return .enterprise;
-    if (std.mem.eql(u8, s, "edu")) return .edu;
+pub fn normalizePlanType(s: []const u8) PlanType {
+    if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
+    if (std.ascii.eqlIgnoreCase(s, "go")) return .go;
+    if (std.ascii.eqlIgnoreCase(s, "plus")) return .plus;
+    if (std.ascii.eqlIgnoreCase(s, "prolite")) return .prolite;
+    if (std.ascii.eqlIgnoreCase(s, "pro")) return .pro;
+    if (std.ascii.eqlIgnoreCase(s, "team") or
+        std.ascii.eqlIgnoreCase(s, "self_serve_business_usage_based")) return .business;
+    if (std.ascii.eqlIgnoreCase(s, "business") or
+        std.ascii.eqlIgnoreCase(s, "enterprise_cbp_usage_based") or
+        std.ascii.eqlIgnoreCase(s, "enterprise") or
+        std.ascii.eqlIgnoreCase(s, "hc")) return .enterprise;
+    if (std.ascii.eqlIgnoreCase(s, "education") or std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
+    return .unknown;
+}
+
+pub fn parseStoredPlanType(s: []const u8, schema_version: u32) PlanType {
+    if (schema_version < 4) return normalizePlanType(s);
+
+    if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
+    if (std.ascii.eqlIgnoreCase(s, "go")) return .go;
+    if (std.ascii.eqlIgnoreCase(s, "plus")) return .plus;
+    if (std.ascii.eqlIgnoreCase(s, "prolite")) return .prolite;
+    if (std.ascii.eqlIgnoreCase(s, "pro")) return .pro;
+    if (std.ascii.eqlIgnoreCase(s, "business")) return .business;
+    if (std.ascii.eqlIgnoreCase(s, "enterprise")) return .enterprise;
+    if (std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
     return .unknown;
 }
 
@@ -27,7 +45,7 @@ pub fn parseAuthMode(s: []const u8) ?AuthMode {
     return null;
 }
 
-pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSnapshot {
+pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_version: u32) ?RateLimitSnapshot {
     const obj = switch (v) {
         .object => |o| o,
         else => return null,
@@ -36,7 +54,7 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value) ?RateLimitSna
 
     if (obj.get("plan_type")) |p| {
         switch (p) {
-            .string => |s| snap.plan_type = parsePlanType(s),
+            .string => |s| snap.plan_type = parseStoredPlanType(s, schema_version),
             else => {},
         }
     }
