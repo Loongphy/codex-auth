@@ -12,6 +12,10 @@ Install with npm:
 npm install -g @loongphy/codex-auth
 ```
 
+Installed command:
+
+- `codex-auth`
+
 You can also run it without a global install:
 
 ```shell
@@ -92,6 +96,39 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
+| `codex-auth completion <bash|zsh|fish>` | Print a shell completion script |
+
+## Shell Completion
+
+Generate completions with:
+
+```shell
+codex-auth completion bash
+codex-auth completion zsh
+codex-auth completion fish
+```
+
+Install Fish completions with:
+
+```shell
+mkdir -p ~/.config/fish/completions
+codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish
+source ~/.config/fish/completions/codex-auth.fish
+```
+
+Install Bash completions with:
+
+```shell
+mkdir -p ~/.local/share/bash-completion/completions
+codex-auth completion bash > ~/.local/share/bash-completion/completions/codex-auth
+```
+
+Install Zsh completions with:
+
+```shell
+mkdir -p ~/.zsh/completions
+codex-auth completion zsh > ~/.zsh/completions/_codex-auth
+```
 
 ## Quick Examples
 

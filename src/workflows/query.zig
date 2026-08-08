@@ -83,12 +83,17 @@ pub fn findMatchingAccountsForRemove(
 }
 
 pub fn parseDisplayNumber(selector: []const u8) ?usize {
-    if (selector.len == 0) return null;
-    for (selector) |ch| {
+    const number = if (std.mem.indexOfScalar(u8, selector, ':')) |colon_idx|
+        selector[0..colon_idx]
+    else
+        selector;
+
+    if (number.len == 0) return null;
+    for (number) |ch| {
         if (ch < '0' or ch > '9') return null;
     }
 
-    const parsed = std.fmt.parseInt(usize, selector, 10) catch return null;
+    const parsed = std.fmt.parseInt(usize, number, 10) catch return null;
     if (parsed == 0) return null;
     return parsed;
 }
