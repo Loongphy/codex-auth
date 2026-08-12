@@ -68,6 +68,12 @@ For OpenAI API-key auth:
 - The raw API key is stored only in the managed auth snapshot, never in `registry.json`, snapshot filenames, or display labels.
 - API-key rows use a local `API key <fingerprint>` account label so multiple keys under the same email remain distinguishable.
 
+For MiniMax API-key auth:
+
+- `auth.json` includes `OPENAI_BASE_URL` set to `https://api.minimax.io/v1` or `https://api.minimaxi.com/v1`.
+- The key is verified with `GET <OPENAI_BASE_URL>/models` because MiniMax does not provide `/v1/me`.
+- The service host is used as the display/grouping label, while the key fingerprint remains the local account discriminator.
+
 ## Auth Parsing
 
 If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwise, ChatGPT auth requires:

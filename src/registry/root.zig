@@ -165,7 +165,7 @@ pub fn autoImportActiveAuth(allocator: std.mem.Allocator, codex_home: []const u8
     defer info.deinit(allocator);
     if (info.auth_mode == .apikey) {
         const api_key = info.openai_api_key orelse return false;
-        var me = me_api.fetchMeForApiKey(allocator, api_key) catch |err| switch (err) {
+        var me = me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
                 std.log.warn("auth.json API key import skipped: {s}", .{@errorName(err)});

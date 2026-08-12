@@ -33,6 +33,8 @@ pub fn isImportValidationError(err: anyerror) bool {
         error.MissingOpenAIUserId,
         error.InvalidOpenAIMeResponse,
         error.OpenAIMeRequestFailed,
+        error.InvalidMiniMaxModelsResponse,
+        error.MiniMaxModelsRequestFailed,
         error.MissingAccountId,
         error.MissingAccessToken,
         error.MissingIdToken,
