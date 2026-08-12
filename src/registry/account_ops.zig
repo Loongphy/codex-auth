@@ -220,7 +220,7 @@ fn syncActiveApiKeyAccountFromAuth(
         std.log.warn("auth.json missing OPENAI_API_KEY; skipping sync", .{});
         return false;
     };
-    var me = me_api.fetchMeForApiKey(allocator, api_key) catch |err| switch (err) {
+    var me = me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
             std.log.warn("auth.json API key sync skipped: {s}", .{@errorName(err)});

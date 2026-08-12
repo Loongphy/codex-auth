@@ -105,6 +105,17 @@ test "api key auth" {
     try std.testing.expect(info.auth_mode == .apikey);
 }
 
+test "API key auth preserves an explicit MiniMax base URL" {
+    const gpa = std.testing.allocator;
+    const info = try auth.parseAuthInfoData(
+        gpa,
+        "{\"OPENAI_API_KEY\":\"sk-test\",\"OPENAI_BASE_URL\":\"  https://api.minimax.io/v1/  \"}",
+    );
+    defer info.deinit(gpa);
+
+    try std.testing.expectEqualStrings("https://api.minimax.io/v1/", info.openai_base_url.?);
+}
+
 test "parse auth info does not leak duplicated tokens when id token is missing" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

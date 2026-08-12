@@ -42,7 +42,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
 
     if (info.auth_mode == .apikey) {
         const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
-        var me = try me_api.fetchMeForApiKey(allocator, api_key);
+        var me = try me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url);
         defer me.deinit(allocator);
 
         const record_key = try registry.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
