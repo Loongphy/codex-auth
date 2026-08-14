@@ -143,7 +143,37 @@ test "writeAccountsTable keeps usage headers short" {
     try std.testing.expect(std.mem.indexOf(u8, output, "USAGE") == null);
 }
 
-test "writeAccountsTable shows reset credits column" {
+test "writeAccountsTable shows integer credits balance column" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .plus);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = .{
+            .has_credits = true,
+            .unlimited = false,
+            .balance = try gpa.dupe(u8, "5.3900"),
+        },
+        .reset_credits = 2,
+        .plan_type = .plus,
+    };
+
+    var buffer: [2048]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTable(&writer, &reg, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "5.39") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "2") != null);
+}
+
+test "writeAccountsTable shows reset credits independently" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -162,8 +192,10 @@ test "writeAccountsTable shows reset credits column" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  -") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "2") != null);
 }
 
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
