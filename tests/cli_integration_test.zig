@@ -31,6 +31,59 @@ const SeedAccount = struct {
 const future_primary_reset_at: i64 = 4_102_444_800;
 const future_secondary_reset_at: i64 = 4_103_049_600;
 
+test "Scenario: Given two processes refresh one stale snapshot then only one rotates the refresh token" {
+    const allocator = std.testing.allocator;
+    const project_root = try projectRootAlloc(allocator);
+    defer allocator.free(project_root);
+    try buildCliBinary(allocator, project_root);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const codex_home_z = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", allocator);
+    defer allocator.free(codex_home_z);
+    const codex_home: []const u8 = codex_home_z;
+    try registry.ensureAccountsDir(allocator, codex_home);
+    const snapshot_path = try registry.accountAuthPath(allocator, codex_home, "acct");
+    defer allocator.free(snapshot_path);
+    try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{
+        .sub_path = snapshot_path,
+        .data = "{\"tokens\":{\"access_token\":\"e30.eyJleHAiOjB9.x\",\"refresh_token\":\"original\"},\"last_refresh\":\"1970-01-01T00:00:00Z\"}",
+    });
+    const marker_path = try std.fs.path.join(allocator, &.{ codex_home, "request.marker" });
+    defer allocator.free(marker_path);
+    const helper_path = try builtRefreshProcessPathAlloc(allocator, project_root);
+    defer allocator.free(helper_path);
+    const argv = &.{ helper_path, codex_home, marker_path };
+
+    var first = try std.process.spawn(fs.io(), .{
+        .argv = argv,
+        .cwd = .{ .path = project_root },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    errdefer first.kill(fs.io());
+    var second = try std.process.spawn(fs.io(), .{
+        .argv = argv,
+        .cwd = .{ .path = project_root },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    errdefer second.kill(fs.io());
+    const first_term = try first.wait(fs.io());
+    const second_term = try second.wait(fs.io());
+    switch (first_term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (second_term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.Io.Dir.cwd().access(app_runtime.io(), marker_path, .{});
+}
+
 fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
     const project_root = getEnvVarOwned(allocator, cli_integration_project_root_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
@@ -393,6 +446,17 @@ fn builtFakeCodexPathAlloc(allocator: std.mem.Allocator, project_root: []const u
 
     const prefix = install_prefix orelse return fs.path.join(allocator, &[_][]const u8{ project_root, "zig-out", "bin", exe_name });
     return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
+}
+
+fn builtRefreshProcessPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
+    const exe_name = if (builtin.os.tag == .windows) "refresh-process.exe" else "refresh-process";
+    const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (install_prefix) |dir| allocator.free(dir);
+    const prefix = install_prefix orelse return fs.path.join(allocator, &.{ project_root, "zig-out", "bin", exe_name });
+    return fs.path.join(allocator, &.{ prefix, "bin", exe_name });
 }
 
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
