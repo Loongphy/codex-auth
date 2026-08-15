@@ -92,6 +92,28 @@ fn fallbackStale(obj: std.json.ObjectMap, now_seconds: i64) bool {
 }
 
 pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8, active: bool, force: bool) !Outcome {
+    return refreshAccountWith(
+        allocator,
+        codex_home,
+        account_key,
+        active,
+        force,
+        std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
+        http.runPostJsonCommand,
+        lockExclusive,
+    );
+}
+
+pub fn refreshAccountWith(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    account_key: []const u8,
+    active: bool,
+    force: bool,
+    now: i64,
+    requester: anytype,
+    locker: anytype,
+) !Outcome {
     try registry.ensureAccountsDir(allocator, codex_home);
     const file_key = try registry.accountFileKey(allocator, account_key);
     defer allocator.free(file_key);
@@ -105,7 +127,7 @@ pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, acco
     defer allocator.free(observed);
     var lock_file = try std.Io.Dir.cwd().createFile(app_runtime.io(), lock_path, .{ .truncate = false, .permissions = sensitive_file.permissions });
     defer lock_file.close(app_runtime.io());
-    lock_file.lock(app_runtime.io(), .exclusive) catch |err| switch (err) {
+    locker(lock_file) catch |err| switch (err) {
         error.FileLocksUnsupported => return error.RefreshLockUnsupported,
         else => return err,
     };
@@ -114,10 +136,9 @@ pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, acco
     const before = try readFile(allocator, snapshot_path);
     defer allocator.free(before);
     if (!std.mem.eql(u8, observed, before)) return .fresh;
-    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     if (!force and !shouldRefreshAuthData(allocator, before, now)) return .fresh;
 
-    const updated = try requestAndApply(allocator, before, now);
+    const updated = try requestAndApply(allocator, before, now, requester);
     defer allocator.free(updated);
     if (active and try activeAuthMatchesAccount(allocator, codex_home, account_key)) {
         const active_path = try registry.activeAuthPath(allocator, codex_home);
@@ -126,6 +147,10 @@ pub fn refreshAccount(allocator: std.mem.Allocator, codex_home: []const u8, acco
     }
     try sensitive_file.writeAtomic(snapshot_path, updated);
     return .refreshed;
+}
+
+fn lockExclusive(file: std.Io.File) !void {
+    try file.lock(app_runtime.io(), .exclusive);
 }
 
 fn activeAuthMatchesAccount(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !bool {
@@ -142,7 +167,7 @@ fn activeAuthMatchesAccount(allocator: std.mem.Allocator, codex_home: []const u8
     return std.mem.eql(u8, record_key, account_key);
 }
 
-fn requestAndApply(allocator: std.mem.Allocator, data: []const u8, now: i64) ![]u8 {
+fn requestAndApply(allocator: std.mem.Allocator, data: []const u8, now: i64, requester: anytype) ![]u8 {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, data, .{});
     defer parsed.deinit();
     const obj = switch (parsed.value) {
@@ -161,7 +186,7 @@ fn requestAndApply(allocator: std.mem.Allocator, data: []const u8, now: i64) ![]
     var request_writer: std.Io.Writer.Allocating = .init(allocator);
     defer request_writer.deinit();
     try std.json.Stringify.value(.{ .client_id = client_id, .grant_type = "refresh_token", .refresh_token = refresh_token }, .{}, &request_writer.writer);
-    const response = http.runPostJsonCommand(allocator, token_endpoint, request_writer.written()) catch |err| switch (err) {
+    const response = requester(allocator, token_endpoint, request_writer.written()) catch |err| switch (err) {
         error.TimedOut, error.RequestFailed => return error.RefreshTransient,
         else => return err,
     };

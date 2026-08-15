@@ -61,11 +61,24 @@ pub fn build(b: *std.Build) void {
         .root_module = fake_codex_module,
     });
     const install_fake_codex = b.addInstallArtifact(fake_codex_exe, .{});
+    const refresh_process_module = b.createModule(.{
+        .root_source_file = b.path("tests/refresh_process.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "codex_auth", .module = package_module }},
+    });
+    const refresh_process_exe = b.addExecutable(.{
+        .name = "refresh-process",
+        .root_module = refresh_process_module,
+    });
+    const install_refresh_process = b.addInstallArtifact(refresh_process_exe, .{});
     const test_helpers_step = b.step("test-helpers", "Install test helper binaries");
     test_helpers_step.dependOn(b.getInstallStep());
     test_helpers_step.dependOn(&install_fake_curl.step);
     test_helpers_step.dependOn(&install_fake_curl_fail.step);
     test_helpers_step.dependOn(&install_fake_codex.step);
+    test_helpers_step.dependOn(&install_refresh_process.step);
 
     const run_cmd = b.addRunArtifact(exe);
     if (b.args) |args| {

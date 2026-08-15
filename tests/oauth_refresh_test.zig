@@ -3,6 +3,35 @@ const refresh = @import("codex_auth").auth.oauth_refresh;
 const sensitive_file = @import("codex_auth").core.sensitive_file;
 const app_runtime = @import("codex_auth").core.runtime;
 const builtin = @import("builtin");
+const http = @import("codex_auth").api.http;
+
+const ConcurrentRequester = struct {
+    var calls: std.atomic.Value(usize) = .init(0);
+
+    fn request(allocator: std.mem.Allocator, _: []const u8, _: []const u8) anyerror!http.HttpResult {
+        _ = calls.fetchAdd(1, .seq_cst);
+        const deadline = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds() + 100;
+        while (std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds() < deadline) {
+            std.Thread.yield() catch {};
+        }
+        return .{
+            .body = try allocator.dupe(u8, "{\"access_token\":\"e30.eyJleHAiOjQxMDI0NDQ4MDB9.x\",\"refresh_token\":\"rotated\"}"),
+            .status_code = 200,
+        };
+    }
+};
+
+fn lockExclusive(file: std.Io.File) anyerror!void {
+    try file.lock(app_runtime.io(), .exclusive);
+}
+
+fn unsupportedLock(_: std.Io.File) anyerror!void {
+    return error.FileLocksUnsupported;
+}
+
+fn unexpectedRequest(_: std.mem.Allocator, _: []const u8, _: []const u8) anyerror!http.HttpResult {
+    return error.UnexpectedRequest;
+}
 
 fn authWithExp(allocator: std.mem.Allocator, exp: i64) ![]u8 {
     const claims = try std.fmt.allocPrint(allocator, "{{\"exp\":{d}}}", .{exp});
@@ -76,4 +105,58 @@ test "sensitive atomic writes replace content and enforce POSIX owner-only permi
     const content = try reader.interface.allocRemaining(allocator, .limited(16));
     defer allocator.free(content);
     try std.testing.expectEqualStrings("second", content);
+}
+
+test "concurrent refresh callers collapse refresh token rotation to one request" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const codex_home_z = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", allocator);
+    defer allocator.free(codex_home_z);
+    const codex_home: []const u8 = codex_home_z;
+    try registryTestSnapshot(allocator, codex_home, "acct");
+    ConcurrentRequester.calls.store(0, .seq_cst);
+
+    const Runner = struct {
+        fn run(home: []const u8) void {
+            _ = refresh.refreshAccountWith(
+                std.heap.smp_allocator,
+                home,
+                "acct",
+                false,
+                false,
+                1,
+                ConcurrentRequester.request,
+                lockExclusive,
+            ) catch unreachable;
+        }
+    };
+    const first = try std.Thread.spawn(.{}, Runner.run, .{codex_home});
+    const second = try std.Thread.spawn(.{}, Runner.run, .{codex_home});
+    first.join();
+    second.join();
+    try std.testing.expectEqual(@as(usize, 1), ConcurrentRequester.calls.load(.seq_cst));
+}
+
+test "unsupported file locking fails closed before token transport" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const codex_home_z = try tmp.dir.realPathFileAlloc(app_runtime.io(), ".", allocator);
+    defer allocator.free(codex_home_z);
+    const codex_home: []const u8 = codex_home_z;
+    try registryTestSnapshot(allocator, codex_home, "acct");
+    try std.testing.expectError(
+        error.RefreshLockUnsupported,
+        refresh.refreshAccountWith(allocator, codex_home, "acct", false, true, 1, unexpectedRequest, unsupportedLock),
+    );
+}
+
+fn registryTestSnapshot(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) !void {
+    const registry = @import("codex_auth").registry;
+    try registry.ensureAccountsDir(allocator, codex_home);
+    const path = try registry.accountAuthPath(allocator, codex_home, account_key);
+    defer allocator.free(path);
+    try sensitive_file.writeAtomic(path, "{\"tokens\":{\"access_token\":\"e30.eyJleHAiOjB9.x\",\"refresh_token\":\"original\"},\"last_refresh\":\"1970-01-01T00:00:00Z\"}");
 }
