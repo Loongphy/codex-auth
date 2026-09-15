@@ -47,21 +47,6 @@ After that, you can use `codex-auth login`, or `codex-auth login --device-auth` 
 
 Detailed command documentation lives in [docs/commands/README.md](./docs/commands/README.md).
 
-> [!NOTE]
-> This documentation is based on **v0.3.x**. Some commands described here may not be available in the current release.
->
-> To try the latest features, please install the alpha version via:
->
-> ```bash
-> npm install -g @loongphy/codex-auth@next
-> ```
-> 
-> If you want to downgrade to **v0.2.x**, you may need to manually update the `~/.codex/accounts/registry.json`:
->
-> ```json
-> "schema_version": 3
-> ```
-
 ### Account Management
 
 | Command | Description |
