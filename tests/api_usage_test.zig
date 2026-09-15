@@ -67,7 +67,7 @@ test "parse usage api response maps live usage windows and plan" {
     try std.testing.expectEqual(@as(?i64, 3), snapshot.reset_credits);
 }
 
-test "parse usage api response without windows is ignored" {
+test "parse usage api response keeps numeric credits without windows" {
     const gpa = std.testing.allocator;
     const body =
         \\{
@@ -76,13 +76,33 @@ test "parse usage api response without windows is ignored" {
         \\  "credits": {
         \\    "has_credits": true,
         \\    "unlimited": false,
-        \\    "balance": "1.00"
+        \\    "balance": 1.00
         \\  }
         \\}
     ;
 
-    const snapshot = try usage_api.parseUsageResponse(gpa, body);
-    try std.testing.expect(snapshot == null);
+    const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer registry.freeRateLimitSnapshot(gpa, &snapshot);
+    try std.testing.expect(snapshot.primary == null);
+    try std.testing.expect(snapshot.secondary == null);
+    try std.testing.expectEqualStrings("1.00", snapshot.credits.?.balance.?);
+}
+
+test "parse usage api response keeps string credits without windows" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "credits": {
+        \\    "has_credits": true,
+        \\    "unlimited": false,
+        \\    "balance": "12.50"
+        \\  }
+        \\}
+    ;
+
+    const snapshot = (try usage_api.parseUsageResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer registry.freeRateLimitSnapshot(gpa, &snapshot);
+    try std.testing.expectEqualStrings("12.50", snapshot.credits.?.balance.?);
 }
 
 test "parse usage api response keeps reset credits without windows" {

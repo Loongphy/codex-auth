@@ -249,7 +249,7 @@ fn codeFromNestedObject(root_obj: std.json.ObjectMap, key: []const u8) ?[]const 
 }
 
 pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?registry.RateLimitSnapshot {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{ .parse_numbers = false });
     defer parsed.deinit();
 
     const root_obj = switch (parsed.value) {
@@ -288,7 +288,8 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
         }
     }
 
-    if (snapshot.primary == null and snapshot.secondary == null and snapshot.reset_credits == null) {
+    const has_credit_balance = if (snapshot.credits) |credits| credits.balance != null else false;
+    if (snapshot.primary == null and snapshot.secondary == null and snapshot.reset_credits == null and !has_credit_balance) {
         if (snapshot.credits) |*credits| {
             if (credits.balance) |balance| allocator.free(balance);
         }
@@ -303,10 +304,7 @@ fn parseResetCredits(v: std.json.Value) ?i64 {
         .object => |o| o,
         else => return null,
     };
-    return switch (obj.get("available_count") orelse return null) {
-        .integer => |i| i,
-        else => null,
-    };
+    return parseIntValue(obj.get("available_count") orelse return null);
 }
 
 fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
@@ -315,23 +313,17 @@ fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
         else => return null,
     };
 
-    const used_percent = if (obj.get("used_percent")) |used| switch (used) {
-        .float => |f| f,
-        .integer => |i| @as(f64, @floatFromInt(i)),
-        else => return null,
-    } else return null;
+    const used_percent = if (obj.get("used_percent")) |used| parseFloatValue(used) else null;
+    if (used_percent == null) return null;
 
-    const window_minutes = if (obj.get("limit_window_seconds")) |seconds| switch (seconds) {
-        .integer => |value| ceilMinutes(value),
-        else => null,
-    } else null;
-    const resets_at = if (obj.get("reset_at")) |reset_at| switch (reset_at) {
-        .integer => |value| value,
-        else => null,
-    } else null;
+    const window_minutes = if (obj.get("limit_window_seconds")) |seconds|
+        if (parseIntValue(seconds)) |value| ceilMinutes(value) else null
+    else
+        null;
+    const resets_at = if (obj.get("reset_at")) |reset_at| parseIntValue(reset_at) else null;
 
     return .{
-        .used_percent = used_percent,
+        .used_percent = used_percent.?,
         .window_minutes = window_minutes,
         .resets_at = resets_at,
     };
@@ -351,15 +343,40 @@ fn parseCredits(allocator: std.mem.Allocator, v: std.json.Value) !?registry.Cred
         .bool => |b| b,
         else => false,
     } else false;
-    const balance = if (obj.get("balance")) |value| switch (value) {
-        .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
-        else => null,
-    } else null;
+    const balance = if (obj.get("balance")) |value| try parseBalance(allocator, value) else null;
 
     return .{
         .has_credits = has_credits,
         .unlimited = unlimited,
         .balance = balance,
+    };
+}
+
+fn parseBalance(allocator: std.mem.Allocator, value: std.json.Value) !?[]u8 {
+    return switch (value) {
+        .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
+        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .float => |f| if (std.math.isFinite(f)) try std.fmt.allocPrint(allocator, "{d}", .{f}) else null,
+        .number_string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
+        else => null,
+    };
+}
+
+fn parseFloatValue(value: std.json.Value) ?f64 {
+    return switch (value) {
+        .float => |f| if (std.math.isFinite(f)) f else null,
+        .integer => |i| @as(f64, @floatFromInt(i)),
+        .number_string, .string => |s| std.fmt.parseFloat(f64, s) catch null,
+        else => null,
+    };
+}
+
+fn parseIntValue(value: std.json.Value) ?i64 {
+    return switch (value) {
+        .integer => |i| i,
+        .number_string, .string => |s| std.fmt.parseInt(i64, s, 10) catch null,
+        .float => |f| if (std.math.isFinite(f) and @floor(f) == f and f >= @as(f64, @floatFromInt(std.math.minInt(i64))) and f <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) @as(i64, @intFromFloat(f)) else null,
+        else => null,
     };
 }
 

@@ -17,7 +17,7 @@ codex-auth list --json
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Non-live output shows `ACCOUNT`, `PLAN`, `RESET CREDITS`, `5H`, `WEEKLY`, and `LAST ACTIVITY`.
+- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, and `LAST ACTIVITY`.
 
 ## Refresh Modes
 
@@ -36,7 +36,8 @@ When local-only refresh is active, only the active account can be updated from l
 - Singleton rows with both alias and account name render as `alias(account name, email)`.
 - Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
 - Usage cells show remaining percent and reset time when that data is known.
-- In non-live output, `RESET CREDITS` shows the stored reset-credit count when remote usage refresh provides it.
+- In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
+- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.
