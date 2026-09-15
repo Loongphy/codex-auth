@@ -30,7 +30,7 @@ JSON output, and several new account management commands.
 **API and data**
 
 - `--api` / `--skip-api` control remote refresh per command (API-backed refresh is the default), replacing the global `config api` toggle.
-- `list` shows a `RESET CREDITS` column.
+- `list` shows `CREDITS` (credit balance) and `RESET CREDITS` columns.
 - **`--json`** for `list`, `switch <query>`, and `remove` emits one machine-readable document under a `schema_version: 1` compatibility contract — suitable for building a GUI on top. See [docs/json-api.md](./docs/json-api.md).
 
 **Import**
