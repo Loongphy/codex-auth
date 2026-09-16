@@ -93,6 +93,71 @@ pub fn runBearerGetJsonCommand(
     return runCurlBearerGetJsonCommand(allocator, endpoint, access_token);
 }
 
+pub fn runPostJsonCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    json_body: []const u8,
+) !HttpResult {
+    const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
+    defer allocator.free(curl_executable);
+
+    var invocation = try buildPostJsonInvocation(allocator, curl_executable, endpoint, json_body);
+    defer invocation.deinit(allocator);
+
+    const result = runChildCaptureWithInputAndOutputLimit(
+        allocator,
+        invocation.argv.items,
+        invocation.stdin_config.items,
+        child_process_timeout_ms_value,
+        null,
+        default_max_output_bytes,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => return error.CurlRequired,
+        else => return err,
+    };
+    defer result.deinit(allocator);
+    if (result.timed_out) return error.TimedOut;
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            if (code == curl_timeout_exit_code) return error.TimedOut;
+            return error.RequestFailed;
+        },
+        else => return error.RequestFailed,
+    }
+    const parsed = try parseCurlHttpOutput(allocator, result.stdout);
+    return .{ .body = parsed.body, .status_code = parsed.status_code };
+}
+
+pub const CurlPostInvocation = struct {
+    argv: std.ArrayList([]const u8),
+    stdin_config: std.ArrayList(u8),
+
+    pub fn deinit(self: *CurlPostInvocation, allocator: std.mem.Allocator) void {
+        self.argv.deinit(allocator);
+        self.stdin_config.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+pub fn buildPostJsonInvocation(
+    allocator: std.mem.Allocator,
+    curl_executable: []const u8,
+    endpoint: []const u8,
+    json_body: []const u8,
+) !CurlPostInvocation {
+    var invocation: CurlPostInvocation = .{ .argv = .empty, .stdin_config = .empty };
+    errdefer invocation.deinit(allocator);
+    try appendCurlBaseArgs(allocator, &invocation.argv, curl_executable);
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "url", endpoint);
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "request", "POST");
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "header", "Content-Type: application/json");
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "header", "Accept: application/json");
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "header", "User-Agent: " ++ user_agent);
+    try appendCurlConfigLine(allocator, &invocation.stdin_config, "data", json_body);
+    return invocation;
+}
+
 pub fn runGetJsonBatchCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,

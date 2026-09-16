@@ -2,6 +2,7 @@ const std = @import("std");
 const registry = @import("../registry/root.zig");
 const sessions = @import("../session.zig");
 const usage_api = @import("../api/usage.zig");
+const oauth_refresh = @import("../auth/oauth_refresh.zig");
 
 const foreground_usage_refresh_concurrency: usize = 5;
 pub const max_usage_override_display_width: usize = 25;
@@ -368,6 +369,16 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 if (!std.mem.eql(u8, account.account_key, key)) continue;
             }
             if (skipsChatGptUsage(&account)) continue;
+            const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account.account_key) else false;
+            _ = oauth_refresh.refreshAccount(allocator, codex_home, account.account_key, is_active, false) catch |err| switch (err) {
+                error.RefreshLoginRequired, error.RefreshProtocolFailure, error.RefreshLockUnsupported => {
+                    worker_results[idx] = .{ .requested = true, .error_name = @errorName(err) };
+                    continue;
+                },
+                error.RefreshTransient, error.TimedOut, error.RequestFailed, error.CurlRequired => {},
+                error.OutOfMemory => return err,
+                else => {},
+            };
             try fetch_account_indices.append(auth_path_arena, idx);
         }
         if (fetch_account_indices.items.len == 0) break :batch_fetch;
@@ -402,6 +413,33 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
         for (batch_results, 0..) |*batch_result, fetch_idx| {
             const idx = fetch_account_indices.items[fetch_idx];
+            if (batch_result.status_code == 401 and batch_result.error_code != null and
+                std.mem.eql(u8, batch_result.error_code.?.text(), "token_expired"))
+            {
+                const account = &reg.accounts.items[idx];
+                const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account.account_key) else false;
+                const refreshed: ?oauth_refresh.Outcome = refresh_attempt: {
+                    break :refresh_attempt oauth_refresh.refreshAccount(allocator, codex_home, account.account_key, is_active, true) catch |err| switch (err) {
+                        error.RefreshLoginRequired, error.RefreshProtocolFailure, error.RefreshLockUnsupported => {
+                            batch_result.error_name = @errorName(err);
+                            break :refresh_attempt null;
+                        },
+                        error.OutOfMemory => return err,
+                        else => break :refresh_attempt null,
+                    };
+                };
+                if (refreshed != null and refreshed.? == .refreshed) {
+                    const replay = usage_fetcher(allocator, auth_paths[fetch_idx]) catch |err| {
+                        batch_result.error_name = @errorName(err);
+                        continue;
+                    };
+                    batch_result.snapshot = replay.snapshot;
+                    batch_result.status_code = replay.status_code;
+                    batch_result.error_code = replay.error_code;
+                    batch_result.missing_auth = replay.missing_auth;
+                    batch_result.error_name = null;
+                }
+            }
             worker_results[idx] = .{
                 .requested = true,
                 .status_code = batch_result.status_code,
@@ -655,10 +693,38 @@ fn foregroundUsageRefreshWorker(
         return;
     };
 
-    const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+    const account_key = reg.accounts.items[account_idx].account_key;
+    const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account_key) else false;
+    _ = oauth_refresh.refreshAccount(arena, codex_home, account_key, is_active, false) catch |err| switch (err) {
+        error.RefreshLoginRequired, error.RefreshProtocolFailure, error.RefreshLockUnsupported => {
+            results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+            return;
+        },
+        error.OutOfMemory => {
+            results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+            return;
+        },
+        else => {},
+    };
+
+    var fetch_result = usage_fetcher(arena, auth_path) catch |err| {
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
+    if (fetch_result.status_code == 401 and fetch_result.error_code != null and
+        std.mem.eql(u8, fetch_result.error_code.?.text(), "token_expired"))
+    {
+        const refresh_outcome = oauth_refresh.refreshAccount(arena, codex_home, account_key, is_active, true) catch |err| {
+            results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+            return;
+        };
+        if (refresh_outcome == .refreshed) {
+            fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+                results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
+                return;
+            };
+        }
+    }
 
     var result: ForegroundUsageWorkerResult = .{
         .requested = true,

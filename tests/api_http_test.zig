@@ -12,6 +12,22 @@ const runChildCaptureWithOutputLimit = http.runChildCaptureWithOutputLimit;
 const ensureExecutableAvailableAlloc = http.ensureExecutableAvailableAlloc;
 const resolveExecutablePathEntryForLaunchAlloc = http.resolveExecutablePathEntryForLaunchAlloc;
 
+test "POST JSON keeps sensitive body out of argv and carries it through stdin config" {
+    const allocator = std.testing.allocator;
+    const secret = "refresh-token-secret";
+    const body = "{\"refresh_token\":\"" ++ secret ++ "\"}";
+    var invocation = try http.buildPostJsonInvocation(allocator, "/usr/bin/curl", "https://auth.example/token", body);
+    defer invocation.deinit(allocator);
+
+    for (invocation.argv.items) |arg| {
+        try std.testing.expect(std.mem.indexOf(u8, arg, secret) == null);
+        try std.testing.expect(std.mem.indexOf(u8, arg, body) == null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, invocation.stdin_config.items, secret) != null);
+    try std.testing.expect(std.mem.indexOf(u8, invocation.stdin_config.items, body) == null);
+    try std.testing.expect(std.mem.indexOf(u8, invocation.stdin_config.items, "refresh_token") != null);
+}
+
 test "batch child output limit scales with request count" {
     try std.testing.expectEqual(default_max_output_bytes, computeBatchChildOutputLimitBytes(1));
     try std.testing.expectEqual(default_max_output_bytes * 2, computeBatchChildOutputLimitBytes(2));
