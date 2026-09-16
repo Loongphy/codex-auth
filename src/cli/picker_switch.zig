@@ -294,26 +294,26 @@ fn selectInteractiveFromIndices(
                     .move_up, .keyboard_up, .scroll_up, .page_up => {
                         if (rows.selectable_row_indices.len != 0 and idx > 0) {
                             idx -= 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .home => {
                         if (rows.selectable_row_indices.len != 0) {
                             idx = 0;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .move_down, .keyboard_down, .scroll_down, .page_down => {
                         if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                             idx += 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .end => {
                         if (rows.selectable_row_indices.len != 0) {
                             idx = rows.selectable_row_indices.len - 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .quit => return null,
                     .keyboard_enhancement_supported, .ignore => {},
@@ -499,26 +499,26 @@ fn selectInteractive(
                     .move_up, .keyboard_up, .scroll_up, .page_up => {
                         if (rows.selectable_row_indices.len != 0 and idx > 0) {
                             idx -= 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .home => {
                         if (rows.selectable_row_indices.len != 0) {
                             idx = 0;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .move_down, .keyboard_down, .scroll_down, .page_down => {
                         if (rows.selectable_row_indices.len != 0 and idx + 1 < rows.selectable_row_indices.len) {
                             idx += 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .end => {
                         if (rows.selectable_row_indices.len != 0) {
                             idx = rows.selectable_row_indices.len - 1;
-                            number_len = 0;
                         }
+                        number_len = 0;
                     },
                     .quit => return null,
                     .keyboard_enhancement_supported, .ignore => {},

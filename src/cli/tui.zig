@@ -229,12 +229,11 @@ else
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h");
-    try out.writeAll("\x1b[?u\x1b[>7u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l");
+    try out.writeAll("\x1b[?1007l\x1b[?25h\x1b[?1049l");
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
@@ -484,8 +483,8 @@ pub const TuiSession = struct {
                     tui_escape_sequence_timeout_ms,
                 );
                 switch (escape.action) {
-                    .move_up => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_up else .move_up),
-                    .move_down => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_down else .move_down),
+                    .move_up => appendTuiInputKey(keys, &key_count, .move_up),
+                    .move_down => appendTuiInputKey(keys, &key_count, .move_down),
                     .keyboard_up => appendTuiInputKey(keys, &key_count, .keyboard_up),
                     .keyboard_down => appendTuiInputKey(keys, &key_count, .keyboard_down),
                     .page_up => appendTuiInputKey(keys, &key_count, .page_up),
@@ -811,7 +810,7 @@ pub fn readTuiEscapeAction(
 
         switch (try pollTuiInput(tty, timeout_ms, poll_error_mask)) {
             .timeout => return .{
-                .action = if (seq_len == 0) .quit else .ignore,
+                .action = if (seq_len == 0 or (seq_len == 1 and seq[0] == 0x1b)) .quit else .ignore,
                 .buffered_bytes_consumed = buffered_bytes_consumed,
             },
             .closed => return .{

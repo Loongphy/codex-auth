@@ -15,6 +15,7 @@ const preflight = @import("preflight.zig");
 const live_flow = @import("live.zig");
 const help_workflow = @import("help.zig");
 const clean_workflow = @import("clean.zig");
+const completion_workflow = @import("completion.zig");
 const config_workflow = @import("config.zig");
 const app_workflow = @import("app.zig");
 const list_workflow = @import("list.zig");
@@ -134,6 +135,10 @@ fn runMain(init: std.process.Init.Minimal) !void {
     const needs_codex_home = switch (cmd) {
         .version => false,
         .help => false,
+        .completion => |opts| switch (opts) {
+            .shell => false,
+            .query => true,
+        },
         else => true,
     };
     const json_requested = commandWantsJson(&cmd);
@@ -159,6 +164,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
         .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
+        .completion => |opts| try completion_workflow.handleCompletion(allocator, codex_home, opts),
     }
 }
 
