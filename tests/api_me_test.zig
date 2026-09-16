@@ -23,6 +23,30 @@ test "parse OpenAI me response normalizes identity metadata" {
     try std.testing.expectEqualStrings("User Example", me.name.?);
 }
 
+test "MiniMax API key base URLs use the models endpoint" {
+    try std.testing.expectEqualStrings(
+        "https://api.minimax.io/v1/models",
+        me_api.miniMaxModelsEndpoint("https://api.minimax.io/v1").?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.minimaxi.com/v1/models",
+        me_api.miniMaxModelsEndpoint(" https://api.minimaxi.com/v1/ ").?,
+    );
+    try std.testing.expect(me_api.miniMaxModelsEndpoint("https://example.com/v1") == null);
+}
+
+test "parse MiniMax models response accepts an OpenAI-compatible model list" {
+    const gpa = std.testing.allocator;
+    try me_api.parseMiniMaxModelsResponse(
+        gpa,
+        "{\"object\":\"list\",\"data\":[{\"id\":\"MiniMax-M3\",\"object\":\"model\"}]}",
+    );
+    try std.testing.expectError(
+        error.InvalidMiniMaxModelsResponse,
+        me_api.parseMiniMaxModelsResponse(gpa, "{\"object\":\"list\",\"data\":{}}"),
+    );
+}
+
 test "API key account key includes user id and stable key fingerprint" {
     const gpa = std.testing.allocator;
 
