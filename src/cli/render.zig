@@ -434,7 +434,7 @@ pub fn renderListBody(
         break :blk count;
     };
     const number_width = idx_width + 1;
-    try details.writeHeader(allocator, writer.out, reg, number_width, max_cols);
+    try details.writeHeader(writer, reg, number_width, max_cols);
     var displayed_counter: usize = 0;
     for (rows) |row| {
         if (row.is_header) continue;
@@ -445,7 +445,7 @@ pub fn renderListBody(
         var number_buf: [32]u8 = undefined;
         const marker: []const u8 = if (row.has_error) "!" else if (row.is_active) "*" else " ";
         const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
-        try details.write(allocator, writer.out, account, .{
+        try details.write(allocator, writer, account, .{
             .number = number,
             .account = row.account,
             .plan = row.plan,

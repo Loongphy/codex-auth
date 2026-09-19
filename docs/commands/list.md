@@ -28,8 +28,10 @@ codex-auth list --json
 - `--live` keeps refreshing the terminal view and requires a TTY.
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
 - Live account details show the earliest future quota reset, access-token expiry,
-  and the expiry date for each reset-credit card returned by the server. The live
-  table uses compact local timestamps and card dates; the JSON output retains the
+  and the expiry timestamp for each reset-credit card returned by the server. The
+  `NEXT RESET LOCAL` and `ACCESS EXP LOCAL` columns use local time. Credit expiry
+  values include their timezone (`UTC` for the server's `Z` timestamps, or the
+  returned numeric offset). The JSON output retains the
   complete card records, including status, grant date, ID, type, and description.
 - Access-token expiry is shown in local time and is not the account or subscription
   expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable

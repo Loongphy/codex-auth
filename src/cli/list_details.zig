@@ -2,17 +2,18 @@ const std = @import("std");
 const registry = @import("../registry/root.zig");
 const app_runtime = @import("../core/runtime.zig");
 const rows = @import("rows.zig");
+const style = @import("style.zig");
 const table_layout = @import("table_layout.zig");
 
 const max_columns = 64;
-const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "NEXT RESET", "LAST", "ACCESS TOKEN EXP" };
+const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "NEXT RESET LOCAL", "LAST", "ACCESS EXP LOCAL" };
 const base_desired_widths = [_]usize{ 2, 18, 8, 12, 12, 16, 10, 16 };
 const base_minimum_widths = [_]usize{ 1, 8, 4, 4, 6, 10, 5, 10 };
 const base_column_count = base_headers.len;
-const credit_width: usize = 10;
+const credit_width: usize = 23;
 const separator_width: usize = 3;
 
-pub fn writeHeader(allocator: std.mem.Allocator, out: *std.Io.Writer, reg: *const registry.Registry, number_width: usize, max_cols: ?usize) !void {
+pub fn writeHeader(writer: *style.StyledWriter, reg: *const registry.Registry, number_width: usize, max_cols: ?usize) !void {
     const visible_base = visibleBaseColumns(max_cols, number_width);
     const card_count = visibleCardCount(maxCardCount(reg), max_cols, visible_base, number_width);
     var values: [max_columns][]const u8 = undefined;
@@ -34,13 +35,12 @@ pub fn writeHeader(allocator: std.mem.Allocator, out: *std.Io.Writer, reg: *cons
         minimums[count] = credit_width;
         count += 1;
     }
-    try writeAlignedRow(out, values[0..count], widths[0..count], minimums[0..count], max_cols, false);
-    _ = allocator;
+    try writeAlignedRow(writer, values[0..count], widths[0..count], minimums[0..count], max_cols, false, style.role.status, true);
 }
 
 pub fn write(
     allocator: std.mem.Allocator,
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     account: registry.AccountRecord,
     row: anytype,
     number_width: usize,
@@ -58,6 +58,9 @@ pub fn write(
     var values: [max_columns][]const u8 = undefined;
     var widths: [max_columns]usize = undefined;
     var minimums: [max_columns]usize = undefined;
+    var owned_expiries: [max_columns][]u8 = undefined;
+    var owned_expiry_count: usize = 0;
+    defer for (owned_expiries[0..owned_expiry_count]) |expiry| allocator.free(expiry);
     var count: usize = 0;
     const base_values = [_][]const u8{ number, row.account, row.plan, row.rate_5h, row.rate_week, next_reset, row.last, token_expiry };
     for (base_values, 0..) |value, index| {
@@ -68,12 +71,16 @@ pub fn write(
         count += 1;
     }
     for (0..card_count) |index| {
-        values[count] = creditExpiry(account.last_usage, index) orelse "-";
+        const expiry = try creditExpiryAlloc(allocator, account.last_usage, index);
+        owned_expiries[owned_expiry_count] = expiry;
+        owned_expiry_count += 1;
+        values[count] = expiry;
         widths[count] = credit_width;
         minimums[count] = credit_width;
         count += 1;
     }
-    try writeAlignedRow(out, values[0..count], widths[0..count], minimums[0..count], max_cols, true);
+    const row_style = if (number.len != 0 and number[0] == '!') style.role.error_text else if (number.len != 0 and number[0] == '*') style.role.success else "";
+    try writeAlignedRow(writer, values[0..count], widths[0..count], minimums[0..count], max_cols, true, row_style, false);
 }
 
 fn maxCardCount(reg: *const registry.Registry) usize {
@@ -126,12 +133,14 @@ fn minimumTableWidth(visible_base: [base_column_count]bool, card_count: usize, n
 }
 
 fn writeAlignedRow(
-    out: *std.Io.Writer,
+    writer: *style.StyledWriter,
     values: []const []const u8,
     desired: []const usize,
     minimums: []const usize,
     max_cols: ?usize,
     account_column: bool,
+    row_style: []const u8,
+    header: bool,
 ) !void {
     var widths: [max_columns]usize = undefined;
     for (desired, 0..) |width, index| widths[index] = width;
@@ -163,15 +172,22 @@ fn writeAlignedRow(
             if (total > limit) break;
         }
     }
+    try writer.writeStyle(row_style);
     for (values, 0..) |value, index| {
-        if (index != 0) try out.writeAll(" | ");
+        if (index != 0) {
+            if (!header and row_style.len == 0) try writer.writeStyle(style.role.secondary);
+            try writer.writeAll(" | ");
+            if (!header and row_style.len == 0) try writer.reset();
+            try writer.writeStyle(row_style);
+        }
         if (account_column and index == 1) {
-            try table_layout.writeAccountTruncatedPadded(out, value, widths[index]);
+            try table_layout.writeAccountTruncatedPadded(writer.out, value, widths[index]);
         } else {
-            try table_layout.writeTruncatedPadded(out, value, widths[index]);
+            try table_layout.writeTruncatedPadded(writer.out, value, widths[index]);
         }
     }
-    try out.writeAll("\n");
+    try writer.reset();
+    try writer.writeAll("\n");
 }
 
 fn minimumForWidths(widths: []const usize) usize {
@@ -194,10 +210,31 @@ fn nextResetText(allocator: std.mem.Allocator, snapshot: ?registry.RateLimitSnap
     return rows.formatTimestampAlloc(allocator, next);
 }
 
-fn creditExpiry(snapshot: ?registry.RateLimitSnapshot, index: usize) ?[]const u8 {
-    const usage = snapshot orelse return null;
-    const details = usage.reset_credit_details orelse return null;
-    if (index >= details.credits.len) return null;
-    const expiry = details.credits[index].expires_at orelse return null;
-    return if (expiry.len >= 10) expiry[0..10] else expiry;
+fn creditExpiryAlloc(allocator: std.mem.Allocator, snapshot: ?registry.RateLimitSnapshot, index: usize) ![]u8 {
+    const usage = snapshot orelse return allocator.dupe(u8, "-");
+    const details = usage.reset_credit_details orelse return allocator.dupe(u8, "-");
+    if (index >= details.credits.len) return allocator.dupe(u8, "-");
+    const expiry = details.credits[index].expires_at orelse return allocator.dupe(u8, "-");
+    if (expiry.len < 19 or expiry[10] != 'T') return std.fmt.allocPrint(allocator, "{s} TZ?", .{expiry});
+
+    var date_time: [19]u8 = undefined;
+    @memcpy(&date_time, expiry[0..19]);
+    date_time[10] = ' ';
+
+    var zone: []const u8 = "TZ?";
+    if (expiry.len > 19) {
+        if (expiry[expiry.len - 1] == 'Z' or expiry[expiry.len - 1] == 'z') {
+            zone = "UTC";
+        } else {
+            var offset_start: ?usize = null;
+            for (expiry[19..], 19..) |value, offset| {
+                if (value == '+' or value == '-') {
+                    offset_start = offset;
+                    break;
+                }
+            }
+            if (offset_start) |start| zone = expiry[start..];
+        }
+    }
+    return std.fmt.allocPrint(allocator, "{s} {s}", .{ date_time[0..], zone });
 }

@@ -1610,8 +1610,8 @@ test "live list details show reset-card expiry columns and scroll within the vie
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 100);
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "NEXT RESET", "2026-10-01" }) |expected| {
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "NEXT RESET LOCAL", "2026-10-01 00:00:00 UTC" }) |expected| {
         try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
     }
     try std.testing.expect(std.mem.indexOfScalar(u8, body.written(), 27) == null);
@@ -1621,7 +1621,7 @@ test "live list details show reset-card expiry columns and scroll within the vie
     const count = std.mem.count(u8, body.written(), "\n") - 1;
     var start: usize = count;
     var viewport = live_tui.listViewport(7, count, live_tui.listFixedLines("ready"), &start);
-    viewport.max_cols = 100;
+    viewport.max_cols = null;
     try cli.render.renderListBodyViewport(&styled_frame, body.written(), "ready", viewport);
     try std.testing.expect(std.mem.indexOf(u8, frame.written(), "2026-10-01") != null);
     try std.testing.expect(std.mem.indexOf(u8, frame.written(), "ACCOUNT") != null);
@@ -1632,6 +1632,13 @@ test "live list details show reset-card expiry columns and scroll within the vie
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40);
     var lines = std.mem.splitScalar(u8, body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 40);
+
+    var color_body: std.Io.Writer.Allocating = .init(gpa);
+    defer color_body.deinit();
+    var colored_writer = StyledWriter.init(&color_body.writer, true);
+    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
+    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), "\x1b[2m") != null);
 }
 
 test "live list keeps the active marker visible for double-digit accounts" {
