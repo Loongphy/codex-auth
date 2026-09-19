@@ -610,6 +610,7 @@ fn syncCurrentAuthBestEffort(
         }
         reg.accounts.items[idx].plan = info.plan;
         reg.accounts.items[idx].auth_mode = info.auth_mode;
+        reg.accounts.items[idx].auth_expires_at = info.access_token_expires_at;
     } else {
         var record = try accountFromAuth(allocator, "", &info);
         errdefer freeAccountRecord(allocator, &record);

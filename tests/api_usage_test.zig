@@ -67,6 +67,49 @@ test "parse usage api response maps live usage windows and plan" {
     try std.testing.expectEqual(@as(?i64, 3), snapshot.reset_credits);
 }
 
+test "parse reset credit details keeps every returned field" {
+    const gpa = std.testing.allocator;
+    const body =
+        \\{
+        \\  "available_count": 2,
+        \\  "total_earned_count": 4,
+        \\  "credits": [
+        \\    {
+        \\      "id": "credit-1",
+        \\      "reset_type": "codex_rate_limits",
+        \\      "status": "available",
+        \\      "granted_at": "2026-06-17T00:00:00Z",
+        \\      "expires_at": "2026-07-17T00:00:00Z",
+        \\      "title": "Full reset",
+        \\      "description": "Ready to redeem"
+        \\    },
+        \\    {
+        \\      "id": "credit-2",
+        \\      "reset_type": "future_reset_type",
+        \\      "status": "future_status",
+        \\      "granted_at": "2026-06-18T00:00:00Z",
+        \\      "expires_at": null,
+        \\      "title": null,
+        \\      "description": null
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const details = (try usage_api.parseResetCreditResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    defer {
+        for (details.credits) |credit| registry.freeRateLimitResetCredit(gpa, credit);
+        gpa.free(details.credits);
+    }
+
+    try std.testing.expectEqual(@as(i64, 2), details.available_count);
+    try std.testing.expectEqual(@as(?i64, 4), details.total_earned_count);
+    try std.testing.expectEqual(@as(usize, 2), details.credits.len);
+    try std.testing.expectEqualStrings("credit-1", details.credits[0].id);
+    try std.testing.expectEqualStrings("2026-07-17T00:00:00Z", details.credits[0].expires_at.?);
+    try std.testing.expect(details.credits[1].expires_at == null);
+}
+
 test "parse usage api response keeps numeric credits without windows" {
     const gpa = std.testing.allocator;
     const body =

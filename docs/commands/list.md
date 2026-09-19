@@ -26,6 +26,16 @@ codex-auth list --json
 - `--api` is accepted as an explicit equivalent to default mode.
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
+- In live tables, `*` before the number marks the active account and `!` marks a refresh error.
+- Live account details show the earliest future quota reset, access-token expiry,
+  and the expiry date for each reset-credit card returned by the server. The live
+  table uses compact local timestamps and card dates; the JSON output retains the
+  complete card records, including status, grant date, ID, type, and description.
+- Access-token expiry is shown in local time and is not the account or subscription
+  expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable
+  because the current data sources do not provide it. Server card lists may be
+  capped; compare `available_count` with the JSON `credits` length before treating
+  the list as exhaustive. After a refresh failure, details may be cached.
 - `--json` emits one machine-readable JSON document and cannot be combined with `--live`.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
@@ -38,6 +48,7 @@ When local-only refresh is active, only the active account can be updated from l
 - Usage cells show remaining percent and reset time when that data is known.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
+- JSON output includes the returned reset-credit details and `next_reset_at`; the latter is the earliest future 5-hour or weekly reset.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.

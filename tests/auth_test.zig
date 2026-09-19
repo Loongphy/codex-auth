@@ -24,13 +24,19 @@ test "parse auth info from jwt" {
     const p64 = try b64url(gpa, payload);
     defer gpa.free(p64);
 
+    const access_payload = "{\"exp\":1773491460}";
+    const access_p64 = try b64url(gpa, access_payload);
+    defer gpa.free(access_p64);
+    const access_jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", access_p64, ".sig" });
+    defer gpa.free(access_jwt);
+
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
     const json = try std.fmt.allocPrint(
         gpa,
-        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
-        .{ chatgpt_account_id, jwt },
+        "{{\"tokens\":{{\"access_token\":\"{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ access_jwt, chatgpt_account_id, jwt },
     );
     defer gpa.free(json);
 
@@ -53,7 +59,8 @@ test "parse auth info from jwt" {
     defer gpa.free(expected_record_key);
     try std.testing.expect(std.mem.eql(u8, info.record_key.?, expected_record_key));
     try std.testing.expect(info.access_token != null);
-    try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-user@example.com"));
+    try std.testing.expect(std.mem.eql(u8, info.access_token.?, access_jwt));
+    try std.testing.expectEqual(@as(?i64, 1773491460), info.access_token_expires_at);
 }
 
 test "parse auth info uses default organization when account id is missing" {
