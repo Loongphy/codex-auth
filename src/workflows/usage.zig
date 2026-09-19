@@ -25,6 +25,7 @@ const ForegroundUsageWorkerResult = struct {
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     snapshot: ?registry.RateLimitSnapshot = null,
+    auth_expires_at: ?i64 = null,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -409,6 +410,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 .missing_auth = batch_result.missing_auth,
                 .error_name = batch_result.error_name,
                 .snapshot = batch_result.snapshot,
+                .auth_expires_at = batch_result.auth_expires_at,
             };
             batch_result.snapshot = null;
         }
@@ -448,6 +450,12 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         }
         const outcome = &state.outcomes[idx];
         if (!worker_result.requested) continue;
+        if (worker_result.auth_expires_at) |expiry| {
+            if (reg.accounts.items[idx].auth_expires_at != expiry) {
+                reg.accounts.items[idx].auth_expires_at = expiry;
+                registry_changed = true;
+            }
+        }
         outcome.* = .{
             .attempted = true,
             .method = .api,
@@ -665,6 +673,7 @@ fn foregroundUsageRefreshWorker(
         .status_code = fetch_result.status_code,
         .error_code = fetch_result.error_code,
         .missing_auth = fetch_result.missing_auth,
+        .auth_expires_at = fetch_result.auth_expires_at,
     };
 
     if (fetch_result.snapshot) |snapshot| {
@@ -674,6 +683,7 @@ fn foregroundUsageRefreshWorker(
                 .status_code = fetch_result.status_code,
                 .error_code = fetch_result.error_code,
                 .missing_auth = fetch_result.missing_auth,
+                .auth_expires_at = fetch_result.auth_expires_at,
                 .error_name = @errorName(err),
             };
             return;

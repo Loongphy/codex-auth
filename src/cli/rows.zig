@@ -354,3 +354,16 @@ pub fn indexWidth(count: usize) usize {
     }
     return width;
 }
+
+pub fn formatTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8 {
+    var tm: c.struct_tm = undefined;
+    if (timestamp == null or !localtimeCompat(timestamp.?, &tm)) return allocator.dupe(u8, "unavailable");
+    const year: u32 = @intCast(tm.tm_year + 1900);
+    const month: u32 = @intCast(tm.tm_mon + 1);
+    const day: u32 = @intCast(tm.tm_mday);
+    const hour: u32 = @intCast(tm.tm_hour);
+    const minute: u32 = @intCast(tm.tm_min);
+    return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
+        year, month, day, hour, minute,
+    });
+}

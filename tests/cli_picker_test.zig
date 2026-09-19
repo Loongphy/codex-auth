@@ -1586,3 +1586,102 @@ test "Scenario: Given a usage snapshot plan when building switch rows then the d
 
     try std.testing.expectEqualStrings("Business", rows.items[0].plan);
 }
+
+test "live list details show reset-card expiry columns and scroll within the viewport" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":2,"credits":[
+        \\{"id":"first-card","reset_type":"codex_rate_limits","status":"used","granted_at":"2026-08-01T00:00:00Z","expires_at":null,"title":"First card"},
+        \\{"id":"last-card","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":"2026-10-01T00:00:00Z","title":"Last card","description":"Reset quota.\u001b[2J"}]}
+    );
+    reg.accounts.items[0].auth_expires_at = 1790000000;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 30, .window_minutes = 300, .resets_at = 1790000100 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credit_details = details,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "NEXT RESET LOCAL", "2026-10-01 00:00:00 UTC" }) |expected| {
+        try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+    }
+    try std.testing.expect(std.mem.indexOfScalar(u8, body.written(), 27) == null);
+    var frame: std.Io.Writer.Allocating = .init(gpa);
+    defer frame.deinit();
+    var styled_frame = StyledWriter.init(&frame.writer, false);
+    const count = std.mem.count(u8, body.written(), "\n") - 1;
+    var start: usize = count;
+    var viewport = live_tui.listViewport(7, count, live_tui.listFixedLines("ready"), &start);
+    viewport.max_cols = null;
+    try cli.render.renderListBodyViewport(&styled_frame, body.written(), "ready", viewport);
+    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "2026-10-01") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "ACCOUNT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "ready") != null);
+    try std.testing.expect(std.mem.count(u8, frame.written(), "\n") <= 7);
+
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40);
+    var lines = std.mem.splitScalar(u8, body.written(), '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 40);
+
+    var color_body: std.Io.Writer.Allocating = .init(gpa);
+    defer color_body.deinit();
+    var colored_writer = StyledWriter.init(&color_body.writer, true);
+    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
+    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), "\x1b[2m") != null);
+}
+
+test "live list keeps the active marker visible for double-digit accounts" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    for (1..11) |idx| try appendNumberedTestAccount(gpa, &reg, idx);
+    reg.active_account_key = try gpa.dupe(u8, "user-010::acc-010");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
+
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "*10") != null);
+}
+
+test "live list distinguishes unavailable reset details from an empty server list" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credit_details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+            \\{"available_count":0,"credits":[]}
+        ),
+    };
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+}

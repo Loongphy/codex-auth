@@ -10,18 +10,18 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 ## Current Policy
 
-- The current persisted format is `schema_version = 4`.
-- The compatibility guarantee for this release is migration from released schema `3` to the final schema `4` format.
+- The current persisted format is `schema_version = 5`.
+- The compatibility guarantee for this release is migration from released schema `4` to the final schema `5` format.
 - The legacy `version = 2` loader remains available, but it is not the compatibility boundary for this change.
-- The current binary accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them to normalized `schema_version = 4`.
+- The current binary accepts current-layout files that still use the old top-level key `version = 3`, or still carry the old global `last_attributed_rollout` shape, and rewrites them to normalized `schema_version = 5`.
 - If the binary sees a newer `schema_version` than it understands, it fails with `UnsupportedRegistryVersion` and must not write the file.
 
 ## Upgrade Behavior
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- The guaranteed automatic migration is `schema_version = 3 -> schema_version = 4`.
-- The existing legacy `version = 2` loader also rewrites directly to schema `4`.
+- The guaranteed automatic migration is `schema_version = 4 -> schema_version = 5`; older supported layouts are rewritten directly to schema `5`.
+- The existing legacy `version = 2` loader also rewrites directly to schema `5`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
 ## Schema History
@@ -47,6 +47,9 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
   - Legacy `team` becomes `business`
   - Legacy `business` becomes `enterprise`
   - The same conversion applies to per-account `last_usage.plan_type`
+- `schema_version = 5`
+  - Stores the access-token expiry timestamp for each account when the token exposes a JWT `exp` claim
+  - Stores reset-credit detail records returned by the reset-credit endpoint alongside the available count
 
 ## When To Bump `schema_version`
 

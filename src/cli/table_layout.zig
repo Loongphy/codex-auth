@@ -150,7 +150,7 @@ fn writePadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     try out.splatByteAll(' ', width - value.len);
 }
 
-fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
+pub fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     if (width == 0) return;
     if (value.len <= width) {
         try writePadded(out, value, width);
@@ -164,7 +164,7 @@ fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !v
     try out.writeAll(".");
 }
 
-fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
+pub fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     if (width == 0) return;
     if (value.len <= width) {
         try writePadded(out, value, width);
