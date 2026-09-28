@@ -78,6 +78,7 @@ pub fn purgeRegistryFromImportSourceWithSaver(
 
     var reg = defaultRegistry();
     reg.live = carry_forward.live;
+    reg.codex_daemon_restart = carry_forward.codex_daemon_restart;
     defer reg.deinit(allocator);
 
     var report = if (auth_path) |path|

@@ -6,6 +6,7 @@ const registry = @import("../registry/root.zig");
 pub fn handleConfig(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ConfigOptions) !void {
     switch (opts) {
         .live => |live_opts| try handleLiveCommand(allocator, codex_home, live_opts),
+        .daemon => |daemon_opts| try handleDaemonCommand(allocator, codex_home, daemon_opts),
     }
 }
 
@@ -19,5 +20,18 @@ fn handleLiveCommand(allocator: std.mem.Allocator, codex_home: []const u8, opts:
     stdout.init();
     const out = stdout.out();
     try out.print("Live refresh interval: {d}s\n", .{opts.interval_seconds});
+    try out.flush();
+}
+
+fn handleDaemonCommand(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.DaemonOptions) !void {
+    var reg = try registry.loadRegistry(allocator, codex_home);
+    defer reg.deinit(allocator);
+    reg.codex_daemon_restart = opts.restart;
+    try registry.saveRegistry(allocator, codex_home, &reg);
+
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.print("Codex daemon restart after switch: {s}\n", .{if (opts.restart) "on" else "off"});
     try out.flush();
 }

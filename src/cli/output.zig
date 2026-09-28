@@ -7,7 +7,6 @@ const types = @import("types.zig");
 const help = @import("help.zig");
 const style = @import("style.zig");
 const io = @import("io.zig");
-const app_runtime = @import("../core/runtime.zig");
 
 const UsageError = types.UsageError;
 
@@ -430,16 +429,8 @@ pub fn printRemoveSummary(labels: []const []const u8) !void {
     try out.flush();
 }
 
-fn codexDaemonRunning(allocator: std.mem.Allocator, codex_home: []const u8) bool {
-    const socket_path = std.fs.path.join(allocator, &[_][]const u8{ codex_home, "app-server-control", "app-server-control.sock" }) catch return false;
-    defer allocator.free(socket_path);
-    std.Io.Dir.cwd().access(app_runtime.io(), socket_path, .{}) catch return false;
-    return true;
-}
-
 pub fn printSwitchedAccount(
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
     reg: *registry.Registry,
     account_key: []const u8,
 ) !void {
@@ -456,9 +447,26 @@ pub fn printSwitchedAccount(
     if (use_color) try out.writeAll(style.ansi.green);
     try out.print("Switched to {s}\n", .{label});
     if (use_color) try out.writeAll(style.ansi.reset);
-    if (codexDaemonRunning(allocator, codex_home)) {
-        try writeHintPrefixTo(out, use_color);
-        try out.writeAll(" the Codex app-server daemon is still using the previous account. Run `codex app-server daemon restart` to apply the switch.\n");
+    try out.flush();
+}
+
+pub fn printCodexDaemonRestarted() !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.writeAll("Restarted the Codex app-server daemon; open Codex sessions reconnect with this account.\n");
+    try out.flush();
+}
+
+pub fn printCodexDaemonRestartHint(restart_failed: bool) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeHintPrefixTo(out, stdout.color_enabled);
+    if (restart_failed) {
+        try out.writeAll(" could not restart the Codex app-server daemon, so it still uses the previous account. Run `codex app-server daemon restart` to apply the switch.\n");
+    } else {
+        try out.writeAll(" the Codex app-server daemon still uses the previous account. Run `codex app-server daemon restart` to apply the switch, or `codex-auth config daemon --restart on` to do this automatically.\n");
     }
     try out.flush();
 }
