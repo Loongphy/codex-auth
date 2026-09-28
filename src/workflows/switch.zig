@@ -58,7 +58,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             if (selected_account_key == null) return;
             try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
-            try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
+            try cli.output.printSwitchedAccount(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             return;
         }
 
@@ -149,7 +149,7 @@ fn handleSwitchQuery(
     if (selected_account_key == null) return;
     try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
     try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
+    try cli.output.printSwitchedAccount(allocator, codex_home, &reg, selected_account_key.?);
     return;
 }
 
@@ -189,7 +189,7 @@ fn handleSwitchPrevious(
 
     try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
+    try cli.output.printSwitchedAccount(allocator, codex_home, &reg, previous_account_key);
 }
 
 fn handleSwitchQueryJson(

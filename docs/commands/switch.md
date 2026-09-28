@@ -63,5 +63,6 @@ When switching succeeds:
 3. `active_account_key` is updated in `registry.json`.
 4. `previous_active_account_key` records the account that was active before the switch, when one exists.
 5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
+6. When the Codex app-server daemon is running (`app-server-control/app-server-control.sock` under the Codex home resolves), a hint suggests `codex app-server daemon restart`, because the daemon keeps the previous account in memory until it restarts. The hint is not printed in `--live` or `--json` mode.
 
 The previous-account pointer is internal CLI state and is not included in JSON responses.
