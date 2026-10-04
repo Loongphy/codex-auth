@@ -431,6 +431,40 @@ test "Scenario: Given long account labels when rendering live rows then account 
     try std.testing.expect(std.mem.indexOf(u8, output, "child-name-too-long") == null);
 }
 
+test "Scenario: Given a Cyrillic account label when rendering live rows then truncation preserves UTF-8" {
+    var rows = [_]SwitchRow{
+        testHeaderRow("gorod.ged"),
+        .{
+            .account_index = 0,
+            .account = testMutableString("Рабочая область"),
+            .plan = "Business",
+            .rate_5h = testMutableString("99%"),
+            .rate_week = testMutableString("100%"),
+            .last = testMutableString("Now"),
+            .depth = 1,
+            .is_active = true,
+            .has_error = false,
+            .is_header = false,
+        },
+    };
+    var reg = makeTestRegistry();
+    defer reg.deinit(std.testing.allocator);
+
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try renderSwitchList(&writer, &reg, &rows, 2, .{
+        .email = 6,
+        .plan = 8,
+        .rate_5h = 3,
+        .rate_week = 4,
+        .last = 3,
+    }, null, false);
+
+    const output = writer.buffered();
+    try std.testing.expect(std.unicode.utf8ValidateSlice(output));
+    try std.testing.expect(std.mem.indexOf(u8, output, "Раб.") != null);
+}
+
 test "Scenario: Given a narrow live viewport when rendering then the account column truncates instead of wrapping" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

@@ -94,6 +94,13 @@ test "truncateAlloc respects max_len" {
     try std.testing.expect(out2.len == 1);
 }
 
+test "truncateAlloc preserves UTF-8 codepoint boundaries" {
+    const out = try truncateAlloc("Рабочая область", 5);
+    defer std.heap.page_allocator.free(out);
+    try std.testing.expectEqualStrings("Рабо.", out);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(out));
+}
+
 test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const window = registry.RateLimitWindow{
