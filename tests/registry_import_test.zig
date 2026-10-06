@@ -3,6 +3,13 @@ const app_runtime = @import("codex_auth").core.runtime;
 const registry = @import("codex_auth").registry;
 const fixtures = @import("support/fixtures.zig");
 
+// Keep warn-level std.log output out of stderr: the sync tests intentionally
+// hit warning paths, and the Zig build runner mislabels any stderr-producing
+// test step as "failed command" even when it succeeds.
+fn silenceLibraryLogs() void {
+    std.testing.log_level = .err;
+}
+
 const SyncBddContext = struct {
     allocator: std.mem.Allocator,
     tmp: std.testing.TmpDir,
@@ -10,6 +17,7 @@ const SyncBddContext = struct {
     reg: registry.Registry,
 
     fn givenCleanCodexHome(allocator: std.mem.Allocator) !SyncBddContext {
+        silenceLibraryLogs();
         const tmp = std.testing.tmpDir(.{});
         const codex_home = try app_runtime.realPathFileAlloc(allocator, tmp.dir, ".");
         return SyncBddContext{
