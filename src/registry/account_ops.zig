@@ -4,6 +4,7 @@ const account_api = @import("../api/account.zig");
 const me_api = @import("../api/me.zig");
 const common = @import("common.zig");
 const clean = @import("clean.zig");
+const daemon_nudge = @import("daemon_nudge.zig");
 
 const PlanType = common.PlanType;
 const RateLimitWindow = common.RateLimitWindow;
@@ -537,6 +538,7 @@ pub fn activateAccountByKey(
     try backupAuthIfChanged(allocator, codex_home, dest, src);
     try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKey(allocator, reg, account_key);
+    daemon_nudge.nudgeDaemonAuthReload(allocator, codex_home);
 }
 
 pub fn replaceActiveAuthWithAccountByKey(
@@ -555,6 +557,7 @@ pub fn replaceActiveAuthWithAccountByKey(
     try ensureAccountsDir(allocator, codex_home);
     try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKey(allocator, reg, account_key);
+    daemon_nudge.nudgeDaemonAuthReload(allocator, codex_home);
 }
 
 pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
@@ -573,6 +576,7 @@ pub fn replaceActiveAuthWithAccountByKeyPreservingPrevious(
     try ensureAccountsDir(allocator, codex_home);
     try replaceFilePreservingPermissions(src, dest);
     try setActiveAccountKeyPreservingPrevious(allocator, reg, account_key);
+    daemon_nudge.nudgeDaemonAuthReload(allocator, codex_home);
 }
 
 pub fn accountFromAuth(

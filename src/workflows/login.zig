@@ -4,6 +4,7 @@ const registry = @import("../registry/root.zig");
 const auth = @import("../auth/auth.zig");
 const me_api = @import("../api/me.zig");
 const account_names = @import("account_names.zig");
+const daemon_nudge = @import("../registry/daemon_nudge.zig");
 const app_runtime = @import("../core/runtime.zig");
 
 const defaultAccountFetcher = account_names.defaultAccountFetcher;
@@ -36,6 +37,7 @@ pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     const auth_path = try registry.activeAuthPath(allocator, codex_home);
     defer allocator.free(auth_path);
     try registry.copyManagedFile(login_auth_path, auth_path);
+    daemon_nudge.nudgeDaemonAuthReload(allocator, codex_home);
 
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
