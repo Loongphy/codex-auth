@@ -1,6 +1,7 @@
 const std = @import("std");
 const row_data = @import("rows.zig");
 const style = @import("style.zig");
+const text_width = @import("../tui/text_width.zig");
 
 pub const SwitchWidths = row_data.SwitchWidths;
 
@@ -146,13 +147,14 @@ fn growBoundedWidth(remaining: *usize, current: *usize, target: usize) void {
 
 fn writePadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     try out.writeAll(value);
-    if (value.len >= width) return;
-    try out.splatByteAll(' ', width - value.len);
+    const value_width = text_width.displayWidth(value);
+    if (value_width >= width) return;
+    try out.splatByteAll(' ', width - value_width);
 }
 
 fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     if (width == 0) return;
-    if (value.len <= width) {
+    if (text_width.displayWidth(value) <= width) {
         try writePadded(out, value, width);
         return;
     }
@@ -160,13 +162,14 @@ fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !v
         try out.writeAll(".");
         return;
     }
-    try out.writeAll(value[0 .. width - 1]);
+    try out.writeAll(value[0..text_width.prefixByteLength(value, width - 1)]);
     try out.writeAll(".");
 }
 
 fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     if (width == 0) return;
-    if (value.len <= width) {
+    const value_width = text_width.displayWidth(value);
+    if (value_width <= width) {
         try writePadded(out, value, width);
         return;
     }
@@ -181,11 +184,11 @@ fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: us
         return;
     }
 
-    const suffix_len = @min(max_suffix, @max(live_account_suffix_min_len, value.len - 1 - live_account_prefix_min_len));
+    const suffix_len = @min(max_suffix, @max(live_account_suffix_min_len, value_width - 1 - live_account_prefix_min_len));
     const prefix_len = width - suffix_len - 1;
-    try out.writeAll(value[0..prefix_len]);
+    try out.writeAll(value[0..text_width.prefixByteLength(value, prefix_len)]);
     try out.writeAll(".");
-    try out.writeAll(value[value.len - suffix_len ..]);
+    try out.writeAll(value[text_width.suffixStart(value, suffix_len)..]);
 }
 
 fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {

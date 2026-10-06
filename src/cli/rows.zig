@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const timefmt = @import("../time/relative.zig");
+const text_width = @import("../tui/text_width.zig");
 const c = @cImport({
     @cInclude("time.h");
 });
@@ -126,7 +127,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
                 .has_error = usage_override != null,
                 .is_header = false,
             };
-            widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
+            widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
             widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
             widths.rate_week = @max(widths.rate_week, rate_week_str.len);
@@ -144,7 +145,7 @@ pub fn buildSwitchRowsWithUsageOverrides(
                 .has_error = false,
                 .is_header = true,
             };
-            widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
+            widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
         }
     }
     if (widths.email > 32) widths.email = 32;
@@ -202,7 +203,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .has_error = usage_override != null,
                 .is_header = false,
             };
-            widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
+            widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
             widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
             widths.rate_week = @max(widths.rate_week, rate_week_str.len);
@@ -220,7 +221,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
                 .has_error = false,
                 .is_header = true,
             };
-            widths.email = @max(widths.email, display_row.account_cell.len + (@as(usize, display_row.depth) * 2));
+            widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
         }
     }
     if (widths.email > 32) widths.email = 32;

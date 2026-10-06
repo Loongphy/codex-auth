@@ -6,6 +6,7 @@ const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
 const rate_limit = @import("rate_limit.zig");
 const timefmt = @import("../time/relative.zig");
+const text_width = @import("text_width.zig");
 
 const resolveRateWindow = rate_limit.resolveRateWindow;
 const formatRateLimitUiAlloc = rate_limit.formatRateLimitUiAlloc;
@@ -139,7 +140,7 @@ pub fn writeAccountsTableWithUsageOverrides(
 
     for (display.rows) |row| {
         const indent: usize = @as(usize, row.depth) * 2;
-        widths[0] = @max(widths[0], row.account_cell.len + indent);
+        widths[0] = @max(widths[0], text_width.displayWidth(row.account_cell) + indent);
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = planDisplay(&rec, "-");
@@ -321,7 +322,8 @@ pub fn printTableRow(out: *std.Io.Writer, widths: []const usize, cells: []const 
     for (cells, 0..) |cell, idx| {
         try out.writeAll(" ");
         try out.print("{s}", .{cell});
-        const pad = if (cell.len >= widths[idx]) 0 else (widths[idx] - cell.len);
+        const cell_width = text_width.displayWidth(cell);
+        const pad = if (cell_width >= widths[idx]) 0 else (widths[idx] - cell_width);
         var i: usize = 0;
         while (i < pad) : (i += 1) {
             try out.writeAll(" ");
@@ -333,9 +335,10 @@ pub fn printTableRow(out: *std.Io.Writer, widths: []const usize, cells: []const 
 
 fn writePadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
     try out.writeAll(value);
-    if (value.len >= width) return;
+    const value_width = text_width.displayWidth(value);
+    if (value_width >= width) return;
     var i: usize = 0;
-    const pad = width - value.len;
+    const pad = width - value_width;
     while (i < pad) : (i += 1) {
         try out.writeAll(" ");
     }
@@ -514,10 +517,10 @@ fn terminalWidth() usize {
 }
 
 pub fn truncateAlloc(value: []const u8, max_len: usize) ![]u8 {
-    if (value.len <= max_len) return try std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{value});
+    if (text_width.displayWidth(value) <= max_len) return try std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{value});
     if (max_len == 0) return try std.fmt.allocPrint(std.heap.page_allocator, "", .{});
     if (max_len == 1) return try std.fmt.allocPrint(std.heap.page_allocator, ".", .{});
-    return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0 .. max_len - 1]});
+    return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0..text_width.prefixByteLength(value, max_len - 1)]});
 }
 
 fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
