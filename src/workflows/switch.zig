@@ -5,6 +5,7 @@ const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
 const results = @import("results.zig");
+const daemon = @import("codex_daemon.zig");
 
 const ensureLiveTty = preflight.ensureLiveTty;
 const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
@@ -56,9 +57,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
                 return err;
             };
             if (selected_account_key == null) return;
-            try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
-            try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
-            try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
+            try activateSelection(allocator, codex_home, &loaded.display.reg, selected_account_key.?, opts);
             return;
         }
 
@@ -114,7 +113,7 @@ fn handleSwitchQuery(
     opts: cli.types.SwitchOptions,
     query: []const u8,
 ) !void {
-    if (opts.json) return handleSwitchQueryJson(allocator, codex_home, query);
+    if (opts.json) return handleSwitchQueryJson(allocator, codex_home, query, opts);
 
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
@@ -147,9 +146,7 @@ fn handleSwitchQuery(
         },
     };
     if (selected_account_key == null) return;
-    try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
-    try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
+    try activateSelection(allocator, codex_home, &reg, selected_account_key.?, opts);
     return;
 }
 
@@ -187,15 +184,14 @@ fn handleSwitchPrevious(
         }
     }
 
-    try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
-    try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
+    try activateSelection(allocator, codex_home, &reg, previous_account_key, opts);
 }
 
 fn handleSwitchQueryJson(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
     query: []const u8,
+    opts: cli.types.SwitchOptions,
 ) !void {
     var reg = registry.loadRegistry(allocator, codex_home) catch |err| return printJsonWorkflowError(err);
     defer reg.deinit(allocator);
@@ -224,16 +220,45 @@ fn handleSwitchQueryJson(
         },
     };
 
-    registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
-    registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
+    try activateSelection(allocator, codex_home, &reg, selected_account_key, opts);
+}
 
-    var result = results.buildSwitchResult(
-        allocator,
-        &reg,
-        selected_account_key,
-    ) catch |err| return printJsonWorkflowError(err);
-    defer result.deinit(allocator);
-    try cli.json_output.printSwitchResult(&result);
+// One-shot picker, query, previous, and JSON routes share this boundary. Live,
+// login, import, and remove retain their existing activation behavior.
+fn activateSelection(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    account_key: []const u8,
+    opts: cli.types.SwitchOptions,
+) !void {
+    registry.activateAccountByKey(allocator, codex_home, reg, account_key) catch |err| {
+        return if (opts.json) printJsonMutationError(err) else err;
+    };
+    registry.saveRegistry(allocator, codex_home, reg) catch |err| {
+        return if (opts.json) printJsonMutationError(err) else err;
+    };
+    if (opts.json) {
+        var result = results.buildSwitchResult(allocator, reg, account_key) catch |err| return printJsonWorkflowError(err);
+        defer result.deinit(allocator);
+        try cli.json_output.printSwitchResult(&result);
+    } else {
+        try cli.output.printSwitchedAccount(allocator, reg, account_key);
+    }
+    var client = daemon.Client.init(allocator, codex_home) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        try cli.output.printCodexDaemonDiagnostic(codex_home, "codex", .unknown, opts.restart_daemon);
+        if (opts.restart_daemon) return error.CodexDaemonRestartFailed;
+        return;
+    };
+    defer client.deinit();
+    const outcome = if (opts.restart_daemon)
+        try client.restart(daemon.restart_timeout_ms)
+    else
+        try client.probe();
+    try cli.output.printCodexDaemonDiagnostic(codex_home, client.executable, outcome, opts.restart_daemon);
+    if (opts.restart_daemon and (outcome == .unknown or outcome == .restart_failed or outcome == .timed_out))
+        return error.CodexDaemonRestartFailed;
 }
 
 fn printJsonWorkflowError(err: anyerror) anyerror {

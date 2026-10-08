@@ -28,6 +28,7 @@ const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
 const usage_refresh = @import("usage.zig");
 pub const results = @import("results.zig");
+pub const codex_daemon = @import("codex_daemon.zig");
 
 pub const nowMilliseconds = workflow_env.nowMilliseconds;
 pub const nowSeconds = workflow_env.nowSeconds;

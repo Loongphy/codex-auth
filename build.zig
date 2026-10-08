@@ -94,6 +94,7 @@ pub fn build(b: *std.Build) void {
         "tests/tui_session_test.zig",
         "tests/tui_table_test.zig",
         "tests/workflows_core_test.zig",
+        "tests/workflows_daemon_test.zig",
         "tests/workflows_live_test.zig",
     };
 

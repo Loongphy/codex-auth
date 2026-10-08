@@ -8,6 +8,7 @@ codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
 codex-auth switch <query> --json
+codex-auth switch [<query>|-] --restart-daemon
 ```
 
 ## Previous Switch
@@ -65,3 +66,28 @@ When switching succeeds:
 5. The success message uses the same identity label as singleton rows, for example `Switched to me(test@example.com)`.
 
 The previous-account pointer is internal CLI state and is not included in JSON responses.
+
+## Applying a Switch to a Running Daemon
+
+Modern Codex clients can share a background app-server daemon that caches authentication. Updating `auth.json` alone may leave that daemon using the previous account, including when another terminal client connects.
+
+One-shot switches detect a responsive daemon and print a restart hint on stderr. Restarting is opt-in:
+
+```shell
+codex-auth switch personal --restart-daemon
+codex-auth switch - --restart-daemon
+codex-auth switch personal --json --restart-daemon
+```
+
+`--restart-daemon` requests a restart after account activation and registry persistence succeed. It also restarts when the selected credentials are already on disk, so it can repair stale daemon authentication or retry a failed restart. It can interrupt all attached sessions. Reconnect, verify the account, and resume work as needed.
+
+- The selected `CODEX_HOME` is passed to both lifecycle commands. The home’s managed executable is preferred, with supported legacy layouts and a PATH fallback.
+- Responsiveness is checked with `codex app-server daemon version`. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; an explicit request then fails without invoking restart.
+- The responsiveness check occurs immediately before restart. If the daemon disappears afterward, Codex’s supported restart command can start one; this race is accepted.
+- The restart helper has a fixed 120-second timeout. Failure or timeout preserves the selected files, reports an unconfirmed daemon account state, and returns exit code 1. Only the helper process is terminated and reaped on timeout; daemon shutdown/startup may already have begun. No automatic retry or credential rollback occurs.
+- Diagnostics and manual status/recovery commands are printed on stderr, with the selected home and executable. A successful version response proves responsiveness, not account identity.
+- In JSON mode, stdout remains the existing switch-selection document. It can accompany exit code 1 when the subsequent requested restart fails.
+- `--restart-daemon` is rejected with `--live`. Live switching, login, import, and remove retain their existing activation behavior and may also require manual daemon coordination.
+- Older installations without a daemon endpoint remain a successful no-op. Platforms outside Linux, macOS, and Windows receive an honest unsupported-coordination hint for explicit requests.
+
+No daemon-restart preference is persisted and the registry schema is unchanged.

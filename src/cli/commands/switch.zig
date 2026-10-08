@@ -11,6 +11,14 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     var opts: types.SwitchOptions = .{};
     for (args) |raw_arg| {
         const arg = std.mem.sliceTo(raw_arg, 0);
+        if (std.mem.eql(u8, arg, "--restart-daemon")) {
+            if (opts.restart_daemon) {
+                freeTarget(allocator, opts.target);
+                return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "duplicate `--restart-daemon` for `switch`.", .{});
+            }
+            opts.restart_daemon = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--live")) {
             if (opts.live) {
                 freeTarget(allocator, opts.target);
@@ -67,6 +75,10 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             .previous
         else
             .{ .query = try allocator.dupe(u8, arg) };
+    }
+    if (opts.live and opts.restart_daemon) {
+        freeTarget(allocator, opts.target);
+        return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` cannot be combined with `--live`.", .{});
     }
     if (opts.live and opts.json) {
         freeTarget(allocator, opts.target);

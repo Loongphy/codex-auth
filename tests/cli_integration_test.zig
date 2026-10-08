@@ -4,6 +4,7 @@ const fs = @import("codex_auth").core.compat_fs;
 const builtin = @import("builtin");
 const registry = @import("codex_auth").registry;
 const fixtures = @import("support/fixtures.zig");
+const fake_daemon = @import("support/codex_daemon.zig");
 
 const cli_integration_install_prefix_env = "CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX";
 const cli_integration_project_root_env = "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT";
@@ -749,6 +750,265 @@ fn seedRegistryWithAccounts(
     reg.active_account_key = active_key;
     reg.active_account_activated_at_ms = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
     try registry.saveRegistry(allocator, codex_home, &reg);
+}
+
+fn seedDaemonSwitchFixture(allocator: std.mem.Allocator, home_root: []const u8, unchanged: bool) ![]u8 {
+    try seedRegistryWithAccounts(allocator, home_root, if (unchanged) "beta@example.com" else "alpha@example.com", &.{
+        .{ .email = "alpha@example.com", .alias = "alpha" },
+        .{ .email = "beta@example.com", .alias = "beta" },
+    });
+    const home = try codexHomeAlloc(allocator, home_root);
+    errdefer allocator.free(home);
+    for ([_][]const u8{ "alpha@example.com", "beta@example.com" }) |email| {
+        const key = try fixtures.accountKeyForEmailAlloc(allocator, email);
+        defer allocator.free(key);
+        const path = try registry.accountAuthPath(allocator, home, key);
+        defer allocator.free(path);
+        const data = try fixtures.authJsonWithEmailPlan(allocator, email, "plus");
+        defer allocator.free(data);
+        try fs.cwd().writeFile(.{ .sub_path = path, .data = data });
+        if (std.mem.eql(u8, email, if (unchanged) "beta@example.com" else "alpha@example.com")) {
+            const active = try registry.activeAuthPath(allocator, home);
+            defer allocator.free(active);
+            try fs.cwd().writeFile(.{ .sub_path = active, .data = data });
+        }
+    }
+    return home;
+}
+
+test "Scenario: Given daemon-aware switching then explicit recovery preserves selection JSON and restart failures remain visible" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, previous: bool = false, attempts: usize = 1 }{
+        .{},
+        .{ .json = true },
+        .{ .unchanged = true },
+        .{ .previous = true },
+        .{ .unchanged = true, .requested = false },
+        .{ .requested = false },
+        .{ .fail = true },
+        .{ .fail = true, .json = true, .attempts = 2 },
+    };
+    for (cases) |case| {
+        var tmp = fs.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realpathAlloc(gpa, ".");
+        defer gpa.free(root);
+        const home = try seedDaemonSwitchFixture(gpa, root, case.unchanged);
+        defer gpa.free(home);
+        try tmp.dir.makePath("shell-home");
+        const shell_home = try tmp.dir.realpathAlloc(gpa, "shell-home");
+        defer gpa.free(shell_home);
+        var home_dir = try tmp.dir.openDir(".codex", .{});
+        defer home_dir.close();
+        const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+        defer gpa.free(beta_key);
+        if (case.previous) {
+            var reg = try registry.loadRegistry(gpa, home);
+            defer reg.deinit(gpa);
+            reg.previous_active_account_key = try gpa.dupe(u8, beta_key);
+            try registry.saveRegistry(gpa, home, &reg);
+        }
+        const body = try std.fmt.allocPrint(
+            gpa,
+            "{s}" ++
+                "[ \"$3\" = restart ] || exit 91\n" ++
+                "grep -F 'access-beta@example.com' \"$CODEX_HOME/auth.json\" >/dev/null || exit 92\n" ++
+                "grep -F '\"active_account_key\": \"{s}\"' \"$CODEX_HOME/accounts/registry.json\" >/dev/null || exit 93\n" ++
+                "printf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\nexit {d}\n",
+            .{ fake_daemon.running, beta_key, @as(u8, if (case.fail) 42 else 0) },
+        );
+        defer gpa.free(body);
+        try fake_daemon.install(home_dir, body);
+        for (0..case.attempts) |_| {
+            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "switch", "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
+            const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, args);
+            defer gpa.free(result.stdout);
+            defer gpa.free(result.stderr);
+            switch (result.term) {
+                .exited => |code| try std.testing.expectEqual(@as(u8, if (case.fail) 1 else 0), code),
+                else => return error.TestUnexpectedResult,
+            }
+            if (case.fail) try std.testing.expect(std.mem.indexOf(u8, result.stderr, "requested daemon restart failed") != null);
+            if (!case.requested) try std.testing.expect(std.mem.indexOf(u8, result.stderr, "--restart-daemon") != null);
+            if (case.json) {
+                var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+                defer parsed.deinit();
+                const doc = parsed.value.object;
+                try std.testing.expectEqual(@as(usize, 3), doc.count());
+                try std.testing.expectEqualStrings("switch", doc.get("command").?.string);
+                try std.testing.expectEqualStrings("beta@example.com", doc.get("switched_to").?.object.get("email").?.string);
+            }
+            var reg = try registry.loadRegistry(gpa, home);
+            defer reg.deinit(gpa);
+            try std.testing.expectEqualStrings(beta_key, reg.active_account_key.?);
+            const actual_auth = try fake_daemon.read(home_dir, "auth.json");
+            defer gpa.free(actual_auth);
+            const beta_auth = try fixtures.authJsonWithEmailPlan(gpa, "beta@example.com", "plus");
+            defer gpa.free(beta_auth);
+            try std.testing.expectEqualStrings(beta_auth, actual_auth);
+            try std.testing.expectEqual(@as(u32, 4), reg.schema_version);
+        }
+        const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
+        defer gpa.free(calls);
+        const expected = if (!case.requested) "version\n" else if (case.attempts == 2) "version\nrestart\nversion\nrestart\n" else "version\nrestart\n";
+        try std.testing.expectEqualStrings(expected, calls);
+        if (case.requested) {
+            const forwarded = try fake_daemon.read(home_dir, "restarted-home");
+            defer gpa.free(forwarded);
+            try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
+        }
+    }
+}
+
+test "Scenario: Given no managed executable then daemon restart resolves relative and empty PATH entries" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    const exe = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe);
+    for ([_][]const u8{ "./fallback", "" }) |path| {
+        var tmp = fs.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realpathAlloc(gpa, ".");
+        defer gpa.free(root);
+        const home = try seedDaemonSwitchFixture(gpa, root, false);
+        defer gpa.free(home);
+        var dir = try tmp.dir.openDir(".codex", .{});
+        defer dir.close();
+        try fake_daemon.install(dir, fake_daemon.succeed);
+        try tmp.dir.makePath("fallback");
+        try tmp.dir.rename(".codex/packages/app-server-daemon/current/bin/codex", if (path.len == 0) "codex" else "fallback/codex");
+        var env = try getEnvMap(gpa);
+        defer env.deinit();
+        try env.put("HOME", root);
+        try env.put("USERPROFILE", root);
+        try env.put("CODEX_HOME", home);
+        try env.put("PATH", path);
+        try env.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+        const result = try runCapture(gpa, root, &env, &.{ exe, "switch", "beta", "--restart-daemon" });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        try expectSuccess(result);
+        try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon restart completed") != null);
+        const calls = try fake_daemon.read(dir, "lifecycle-calls");
+        defer gpa.free(calls);
+        try std.testing.expectEqualStrings("version\nrestart\n", calls);
+        const forwarded = try fake_daemon.read(dir, "restarted-home");
+        defer gpa.free(forwarded);
+        try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
+    }
+}
+
+test "Scenario: Given a non-executable codex first in PATH then daemon restart uses the next executable" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root);
+    const home = try seedDaemonSwitchFixture(gpa, root, false);
+    defer gpa.free(home);
+    var dir = try tmp.dir.openDir(".codex", .{});
+    defer dir.close();
+    try fake_daemon.install(dir, fake_daemon.succeed);
+    try tmp.dir.makePath("fallback");
+    try tmp.dir.rename(".codex/packages/app-server-daemon/current/bin/codex", "fallback/codex");
+    try tmp.dir.makePath("decoy");
+    try tmp.dir.writeFile(.{ .sub_path = "decoy/codex", .data = "not executable" });
+    {
+        var file = try tmp.dir.openFile("decoy/codex", .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o600);
+    }
+    const decoy = try tmp.dir.realpathAlloc(gpa, "decoy");
+    defer gpa.free(decoy);
+    const fallback = try tmp.dir.realpathAlloc(gpa, "fallback");
+    defer gpa.free(fallback);
+    const path = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ decoy, fallback });
+    defer gpa.free(path);
+    const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, root, home, path, &.{ "switch", "beta", "--restart-daemon" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon restart completed") != null);
+    const calls = try fake_daemon.read(dir, "lifecycle-calls");
+    defer gpa.free(calls);
+    try std.testing.expectEqualStrings("version\nrestart\n", calls);
+    const forwarded = try fake_daemon.read(dir, "restarted-home");
+    defer gpa.free(forwarded);
+    try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
+}
+
+test "Scenario: Given absent or indeterminate daemons then switching never starts one" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    for ([_]bool{ false, true }) |stale| {
+        var tmp = fs.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realpathAlloc(gpa, ".");
+        defer gpa.free(root);
+        const home = try seedDaemonSwitchFixture(gpa, root, false);
+        defer gpa.free(home);
+        var dir = try tmp.dir.openDir(".codex", .{});
+        defer dir.close();
+        if (stale) try fake_daemon.install(dir, "exit 1\n");
+        const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "beta", "--restart-daemon", "--json" });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        switch (result.term) {
+            .exited => |code| try std.testing.expectEqual(@as(u8, if (stale) 1 else 0), code),
+            else => return error.TestUnexpectedResult,
+        }
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings("switch", parsed.value.object.get("command").?.string);
+        if (stale) {
+            try std.testing.expect(std.mem.indexOf(u8, result.stderr, "restart was not attempted") != null);
+            const calls = try fake_daemon.read(dir, "lifecycle-calls");
+            defer gpa.free(calls);
+            try std.testing.expectEqualStrings("version\n", calls);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, result.stderr, "no running Codex daemon") != null);
+            try std.testing.expectError(error.FileNotFound, dir.openFile("lifecycle-calls", .{}));
+        }
+    }
+}
+
+test "Scenario: Given failed account selection then daemon lifecycle commands are not invoked" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root);
+    const home = try seedDaemonSwitchFixture(gpa, root, false);
+    defer gpa.free(home);
+    var dir = try tmp.dir.openDir(".codex", .{});
+    defer dir.close();
+    try fake_daemon.install(dir, fake_daemon.succeed);
+    const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "missing", "--restart-daemon", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectFailure(result);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("account_not_found", parsed.value.object.get("error").?.object.get("code").?.string);
+    try std.testing.expectError(error.FileNotFound, dir.openFile("lifecycle-calls", .{}));
 }
 
 fn makeUsageSnapshot(primary_used_percent: f64, secondary_used_percent: f64) registry.RateLimitSnapshot {
@@ -2677,12 +2937,18 @@ test "Scenario: Given switch query with multiple matches when running switch the
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
 
+    if (builtin.os.tag != .windows) {
+        var daemon_dir = try tmp.dir.openDir(".codex", .{});
+        defer daemon_dir.close();
+        try fake_daemon.install(daemon_dir, fake_daemon.succeed);
+    }
+
     const result = try runCliWithIsolatedHomeAndPathAndStdin(
         gpa,
         project_root,
         home_root,
         empty_path,
-        &[_][]const u8{ "switch", "team" },
+        if (builtin.os.tag == .windows) &[_][]const u8{ "switch", "team" } else &[_][]const u8{ "switch", "team", "--restart-daemon" },
         "2\n",
     );
     defer gpa.free(result.stdout);
@@ -2694,7 +2960,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "solo@example.com") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to team-b(beta@example.com)") != null);
-    try std.testing.expectEqualStrings("", result.stderr);
+    try std.testing.expectEqualStrings(if (builtin.os.tag == .windows) "" else "Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(auth_after);
@@ -2704,6 +2970,13 @@ test "Scenario: Given switch query with multiple matches when running switch the
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, beta_key));
+    if (builtin.os.tag != .windows) {
+        const calls_path = try fs.path.join(gpa, &.{ codex_home, "lifecycle-calls" });
+        defer gpa.free(calls_path);
+        const calls = try fixtures.readFileAlloc(gpa, calls_path);
+        defer gpa.free(calls);
+        try std.testing.expectEqualStrings("version\nrestart\n", calls);
+    }
 }
 
 test "Scenario: Given switch query with no matches when running switch then it explains accepted target forms" {

@@ -35,6 +35,7 @@ pub const SwitchOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
     json: bool = false,
+    restart_daemon: bool = false,
 };
 pub const RemoveOptions = struct {
     selectors: [][]const u8,

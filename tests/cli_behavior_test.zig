@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("codex_auth").cli;
 const fs = @import("codex_auth").core.compat_fs;
 const registry = @import("codex_auth").registry;
@@ -510,6 +511,57 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "If a target is ambiguous") == null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "--restart-daemon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "unchanged-file recovery") != null);
+}
+
+test "Scenario: Given explicit restart on one-shot switch forms then parser preserves the request" {
+    const gpa = std.testing.allocator;
+    const cases = [_][]const [:0]const u8{
+        &.{ "codex-auth", "switch", "beta", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--restart-daemon", "beta", "--json" },
+        &.{ "codex-auth", "switch", "-", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--skip-api", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--api", "--restart-daemon" },
+    };
+    for (cases) |args| {
+        var result = try cli.commands.parseArgs(gpa, args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        switch (result) {
+            .command => |cmd| switch (cmd) {
+                .switch_account => |opts| try std.testing.expect(opts.restart_daemon),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        }
+    }
+}
+
+test "Scenario: Given live or duplicate explicit restart then parser rejects the combination" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { args: []const [:0]const u8, message: []const u8 }{
+        .{ .args = &.{ "codex-auth", "switch", "--live", "--restart-daemon" }, .message = "`--restart-daemon` cannot be combined with `--live`." },
+        .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon", "--restart-daemon", "--json" }, .message = "duplicate `--restart-daemon`" },
+    };
+    for (cases) |case| {
+        var result = try cli.commands.parseArgs(gpa, case.args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        try expectUsageError(result, .switch_account, case.message);
+    }
+}
+
+test "Scenario: Given daemon timeout then diagnostic distinguishes selected files and quotes recovery commands" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try cli.output.writeCodexDaemonDiagnosticTo(&aw.writer, "/tmp/home's space", "/tmp/bin's space/codex", .timed_out, true);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "Account files switched successfully") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "120 seconds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "account state is unconfirmed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "app-server daemon version") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "app-server daemon restart") != null);
+    const quoted_home = if (builtin.os.tag == .windows) "'/tmp/home''s space'" else "'/tmp/home'\\''s space'";
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), quoted_home) != null);
 }
 
 test "Scenario: Given remove command help when rendering then options explain live API all and target forms" {

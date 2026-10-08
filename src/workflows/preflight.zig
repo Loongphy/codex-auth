@@ -24,6 +24,7 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.PreviousAccountUnavailable or
         err == error.RegistryError or
         err == error.CodexLoginFailed or
+        err == error.CodexDaemonRestartFailed or
         err == error.ListLiveRequiresTty or
         err == error.TuiOutputUnavailable or
         err == error.CurlRequired or
