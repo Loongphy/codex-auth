@@ -4,6 +4,7 @@
 
 ```shell
 codex-auth config live --interval <seconds>
+codex-auth config daemon --restart on|off
 ```
 
 ## Live Refresh Config
@@ -12,6 +13,13 @@ codex-auth config live --interval <seconds>
 
 - Allowed range: `5` to `3600`.
 - Stored in `registry.json` as top-level `interval_seconds`.
+
+## Codex Daemon Restart
+
+`config daemon --restart on|off` controls whether `switch` restarts a running Codex app-server daemon so open Codex sessions pick up the new account. See [switch](./switch.md#switch-effects).
+
+- Default: `on`.
+- Stored in `registry.json` as top-level `codex_daemon_restart`.
 
 ## API Refresh
 

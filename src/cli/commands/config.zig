@@ -12,6 +12,9 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (std.mem.eql(u8, scope, "live")) {
         return parseLive(allocator, args[1..]);
     }
+    if (std.mem.eql(u8, scope, "daemon")) {
+        return parseDaemon(allocator, args[1..]);
+    }
     return common.usageErrorResult(allocator, .config, "unknown config section `{s}`.", .{scope});
 }
 
@@ -34,4 +37,26 @@ fn parseLive(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         return common.usageErrorResult(allocator, .config, "`--interval` must be an integer from 5 to 3600 seconds.", .{});
     }
     return .{ .command = .{ .config = .{ .live = .{ .interval_seconds = interval } } } };
+}
+
+fn parseDaemon(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    if (args.len == 1 and common.isHelpFlag(std.mem.sliceTo(args[0], 0))) {
+        return .{ .command = .{ .help = .config } };
+    }
+    if (args.len != 2) return common.usageErrorResult(allocator, .config, "`config daemon` requires `--restart on|off`.", .{});
+    const flag = std.mem.sliceTo(args[0], 0);
+    if (!std.mem.eql(u8, flag, "--restart")) {
+        if (std.mem.startsWith(u8, flag, "-")) {
+            return common.usageErrorResult(allocator, .config, "unknown flag `{s}` for `config daemon`.", .{flag});
+        }
+        return common.usageErrorResult(allocator, .config, "unknown argument `{s}` for `config daemon`.", .{flag});
+    }
+    const raw = std.mem.sliceTo(args[1], 0);
+    const restart = if (std.mem.eql(u8, raw, "on"))
+        true
+    else if (std.mem.eql(u8, raw, "off"))
+        false
+    else
+        return common.usageErrorResult(allocator, .config, "`--restart` must be `on` or `off`.", .{});
+    return .{ .command = .{ .config = .{ .daemon = .{ .restart = restart } } } };
 }

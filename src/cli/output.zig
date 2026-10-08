@@ -450,6 +450,27 @@ pub fn printSwitchedAccount(
     try out.flush();
 }
 
+pub fn printCodexDaemonRestarted() !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.writeAll("Restarted the Codex app-server daemon; open Codex sessions reconnect with this account.\n");
+    try out.flush();
+}
+
+pub fn printCodexDaemonRestartHint(restart_failed: bool) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeHintPrefixTo(out, stdout.color_enabled);
+    if (restart_failed) {
+        try out.writeAll(" could not restart the Codex app-server daemon, so it still uses the previous account. Run `codex app-server daemon restart` to apply the switch.\n");
+    } else {
+        try out.writeAll(" the Codex app-server daemon still uses the previous account. Run `codex app-server daemon restart` to apply the switch, or `codex-auth config daemon --restart on` to do this automatically.\n");
+    }
+    try out.flush();
+}
+
 pub fn writeCodexLoginLaunchFailureHintTo(out: *std.Io.Writer, err_name: []const u8, use_color: bool) !void {
     try writeErrorPrefixTo(out, use_color);
     if (std.mem.eql(u8, err_name, "FileNotFound")) {

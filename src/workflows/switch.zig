@@ -1,6 +1,7 @@
 const std = @import("std");
 const cli = @import("../cli/root.zig");
 const registry = @import("../registry/root.zig");
+const codex_daemon = @import("codex_daemon.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
@@ -56,9 +57,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
                 return err;
             };
             if (selected_account_key == null) return;
-            try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
-            try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
-            try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
+            try finishSwitch(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             return;
         }
 
@@ -147,9 +146,7 @@ fn handleSwitchQuery(
         },
     };
     if (selected_account_key == null) return;
-    try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
-    try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
+    try finishSwitch(allocator, codex_home, &reg, selected_account_key.?);
     return;
 }
 
@@ -187,9 +184,24 @@ fn handleSwitchPrevious(
         }
     }
 
-    try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
-    try registry.saveRegistry(allocator, codex_home, &reg);
-    try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
+    try finishSwitch(allocator, codex_home, &reg, previous_account_key);
+}
+
+fn finishSwitch(
+    allocator: std.mem.Allocator,
+    codex_home: []const u8,
+    reg: *registry.Registry,
+    account_key: []const u8,
+) !void {
+    try registry.activateAccountByKey(allocator, codex_home, reg, account_key);
+    try registry.saveRegistry(allocator, codex_home, reg);
+    try cli.output.printSwitchedAccount(allocator, reg, account_key);
+    switch (codex_daemon.restartIfRunning(allocator, codex_home, reg.codex_daemon_restart)) {
+        .not_running => {},
+        .restarted => try cli.output.printCodexDaemonRestarted(),
+        .disabled => try cli.output.printCodexDaemonRestartHint(false),
+        .failed => try cli.output.printCodexDaemonRestartHint(true),
+    }
 }
 
 fn handleSwitchQueryJson(
@@ -226,6 +238,7 @@ fn handleSwitchQueryJson(
 
     registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
     registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
+    _ = codex_daemon.restartIfRunning(allocator, codex_home, reg.codex_daemon_restart);
 
     var result = results.buildSwitchResult(
         allocator,

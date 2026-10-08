@@ -12,6 +12,7 @@ const parseLiveIntervalSeconds = parse.parseLiveIntervalSeconds;
 
 const PurgeCarryForwardConfig = struct {
     live: LiveConfig = defaultLiveConfig(),
+    codex_daemon_restart: bool = true,
 };
 
 pub fn loadPurgeCarryForwardConfig(allocator: std.mem.Allocator, codex_home: []const u8) !PurgeCarryForwardConfig {
@@ -46,6 +47,12 @@ fn parsePurgeCarryForwardConfig(allocator: std.mem.Allocator, data: []const u8) 
             if (obj.get("live")) |v| parseLiveConfig(&cfg.live, v);
             if (obj.get("interval_seconds")) |v| {
                 if (parseLiveIntervalSeconds(v)) |value| cfg.live.interval_seconds = value;
+            }
+            if (obj.get("codex_daemon_restart")) |v| {
+                switch (v) {
+                    .bool => |b| cfg.codex_daemon_restart = b,
+                    else => {},
+                }
             }
         },
         else => {},
