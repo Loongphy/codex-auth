@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const app_runtime = @import("codex_auth").core.runtime;
 const fs = @import("codex_auth").core.compat_fs;
 const account_api = @import("codex_auth").api.account;
@@ -423,6 +424,90 @@ test "Scenario: Given Windows GUI app launch when building script then environme
     try std.testing.expect(std.mem.indexOf(u8, script, "$env:CODEX_HOME='C:\\Users\\Loong\\.codext'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "Start-Process -FilePath $app -WorkingDirectory $wd") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "shell:AppsFolder") == null);
+}
+
+const codext_test_platform_suffix = if (builtin.cpu.arch == .aarch64) "linux-arm64" else "linux-x64";
+
+test "Scenario: Given codex-package archive when installing managed codext then package tree is preserved" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("cache");
+    try tmp.dir.makePath("extract/bin");
+    try tmp.dir.makePath("extract/codex-path");
+    try tmp.dir.writeFile(.{ .sub_path = "extract/codex-package.json", .data = "{\"version\":\"0.160.0-263fb4a\"}" });
+    try tmp.dir.writeFile(.{ .sub_path = "extract/bin/codex", .data = "codex" });
+    try tmp.dir.writeFile(.{ .sub_path = "extract/bin/codext", .data = "codex" });
+    try tmp.dir.writeFile(.{ .sub_path = "extract/bin/codex-code-mode-host", .data = "host" });
+    try tmp.dir.writeFile(.{ .sub_path = "extract/codex-path/rg", .data = "rg" });
+    try tmp.dir.writeFile(.{ .sub_path = "extract/codext.tar.gz", .data = "archive" });
+    try tmp.dir.writeFile(.{ .sub_path = "cache/codex-" ++ codext_test_platform_suffix, .data = "legacy" });
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
+    const cache_root = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
+    defer gpa.free(cache_root);
+    const extract_dir = try std.fs.path.join(gpa, &.{ root_dir, "extract" });
+    defer gpa.free(extract_dir);
+
+    try app_workflow.test_support.installManagedCodext(gpa, cache_root, extract_dir, .wsl);
+
+    const installed = try app_workflow.test_support.managedCodextExecutablePathAlloc(gpa, cache_root, .wsl);
+    defer gpa.free(installed);
+    const package_dir_name = "codex-" ++ codext_test_platform_suffix ++ "-package";
+    const expected = try std.fs.path.join(gpa, &.{ cache_root, package_dir_name, "bin", "codext" });
+    defer gpa.free(expected);
+    try std.testing.expectEqualStrings(expected, installed);
+    const manifest_stat = tmp.dir.statFile("cache/" ++ package_dir_name ++ "/codex-package.json") catch return error.TestExpectedEqual;
+    try std.testing.expect(manifest_stat.kind == .file);
+    const installed_stat = tmp.dir.statFile("cache/" ++ package_dir_name ++ "/bin/codex") catch return error.TestExpectedEqual;
+    try std.testing.expect(installed_stat.kind == .file);
+    const rg_stat = tmp.dir.statFile("cache/" ++ package_dir_name ++ "/codex-path/rg") catch return error.TestExpectedEqual;
+    try std.testing.expect(rg_stat.kind == .file);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile("cache/" ++ package_dir_name ++ "/codext.tar.gz"));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile("extract/codex-package.json"));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile("cache/codex-" ++ codext_test_platform_suffix));
+}
+
+test "Scenario: Given flat archive without codex-package.json when installing managed codext then install fails" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("cache");
+    try tmp.dir.makePath("extract");
+    try tmp.dir.writeFile(.{ .sub_path = "extract/codext", .data = "codex" });
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
+    const cache_root = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
+    defer gpa.free(cache_root);
+    const extract_dir = try std.fs.path.join(gpa, &.{ root_dir, "extract" });
+    defer gpa.free(extract_dir);
+
+    try std.testing.expectError(
+        error.CodextReleaseInstallFailed,
+        app_workflow.test_support.installManagedCodext(gpa, cache_root, extract_dir, .wsl),
+    );
+}
+
+test "Scenario: Given archive without codex binary when installing managed codext then install fails" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("cache");
+    try tmp.dir.makePath("extract");
+    const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(root_dir);
+    const cache_root = try std.fs.path.join(gpa, &.{ root_dir, "cache" });
+    defer gpa.free(cache_root);
+    const extract_dir = try std.fs.path.join(gpa, &.{ root_dir, "extract" });
+    defer gpa.free(extract_dir);
+
+    try std.testing.expectError(
+        error.CodextReleaseInstallFailed,
+        app_workflow.test_support.installManagedCodext(gpa, cache_root, extract_dir, .wsl),
+    );
 }
 
 test "Scenario: Given foreground usage refresh targets when checking refresh policy then list, switch, and remove refresh" {

@@ -610,6 +610,14 @@ pub const test_support = struct {
     pub fn updateDesktopWslSettingAlloc(allocator: std.mem.Allocator, data: []const u8, use_wsl: bool) ![]u8 {
         return updateDesktopWslSettingTomlAlloc(allocator, data, use_wsl);
     }
+
+    pub fn installManagedCodext(allocator: std.mem.Allocator, cache_root: []const u8, extract_dir: []const u8, platform: types.AppPlatform) !void {
+        return installManagedCodextExecutable(allocator, cache_root, extract_dir, platform);
+    }
+
+    pub fn managedCodextExecutablePathAlloc(allocator: std.mem.Allocator, cache_root: []const u8, platform: types.AppPlatform) ![]u8 {
+        return managedCodextExecutablePathInCache(allocator, cache_root, platform);
+    }
 };
 
 fn launchApp(
@@ -842,9 +850,27 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
 }
 
 fn managedCodextExecutablePath(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) ![]u8 {
-    const name = try managedCodextExecutableName(allocator, platform);
-    defer allocator.free(name);
-    return try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name, name });
+    const cache_root = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
+    defer allocator.free(cache_root);
+    return try managedCodextExecutablePathInCache(allocator, cache_root, platform);
+}
+
+fn managedCodextExecutablePathInCache(allocator: std.mem.Allocator, cache_root: []const u8, platform: types.AppPlatform) ![]u8 {
+    const package_dir_name = try managedCodextPackageDirName(allocator, platform);
+    defer allocator.free(package_dir_name);
+    const primary = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextReleaseExecutableName(platform) });
+    if (fileExists(primary)) return primary;
+    const alternate = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextExecutableName(platform) });
+    if (fileExists(alternate)) {
+        allocator.free(primary);
+        return alternate;
+    }
+    allocator.free(alternate);
+    return primary;
+}
+
+fn managedCodextPackageDirName(allocator: std.mem.Allocator, platform: types.AppPlatform) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "codex-{s}-package", .{codextPlatformCacheName(platform)});
 }
 
 fn ensureCodextAssetInstalled(
@@ -872,9 +898,7 @@ fn managedCodextAssetIsCurrent(
     platform: types.AppPlatform,
     asset: CodextAsset,
 ) !bool {
-    const executable_name = try managedCodextExecutableName(allocator, platform);
-    defer allocator.free(executable_name);
-    const executable_path = try std.fs.path.join(allocator, &.{ cache_root, executable_name });
+    const executable_path = try managedCodextExecutablePathInCache(allocator, cache_root, platform);
     defer allocator.free(executable_path);
     if (!fileExists(executable_path)) return false;
 
@@ -1094,26 +1118,33 @@ fn managedCodextExecutableName(allocator: std.mem.Allocator, platform: types.App
 }
 
 fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []const u8, extract_dir: []const u8, platform: types.AppPlatform) !void {
-    const source = try extractedCodextExecutablePath(allocator, extract_dir, platform);
-    defer allocator.free(source);
-    const target_name = try managedCodextExecutableName(allocator, platform);
-    defer allocator.free(target_name);
-    const target = try std.fs.path.join(allocator, &.{ cache_root, target_name });
-    defer allocator.free(target);
-    if (fileExists(target)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), target);
-    try std.Io.Dir.renameAbsolute(source, target, app_runtime.io());
-}
+    // Package-layout archives ship bin/, codex-path/, codex-resources/, and
+    // codex-package.json. Keep the whole tree: the app-server daemon only
+    // recognizes a CLI whose executable sits in a bin/ directory beside
+    // codex-package.json.
+    const metadata_path = try std.fs.path.join(allocator, &.{ extract_dir, "codex-package.json" });
+    defer allocator.free(metadata_path);
+    if (!fileExists(metadata_path)) return error.CodextReleaseInstallFailed;
 
-fn extractedCodextExecutablePath(allocator: std.mem.Allocator, extract_dir: []const u8, platform: types.AppPlatform) ![]u8 {
-    const primary = try std.fs.path.join(allocator, &.{ extract_dir, codextExecutableName(platform) });
-    if (fileExists(primary)) return primary;
-    allocator.free(primary);
+    const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
+    const archive_path = try std.fs.path.join(allocator, &.{ extract_dir, archive_name });
+    defer allocator.free(archive_path);
+    if (fileExists(archive_path)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), archive_path);
 
-    const release = try std.fs.path.join(allocator, &.{ extract_dir, codextReleaseExecutableName(platform) });
-    if (fileExists(release)) return release;
-    allocator.free(release);
+    const package_dir_name = try managedCodextPackageDirName(allocator, platform);
+    defer allocator.free(package_dir_name);
+    const package_dir = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name });
+    defer allocator.free(package_dir);
+    if (isDirectory(package_dir)) try std.Io.Dir.cwd().deleteTree(app_runtime.io(), package_dir);
+    try std.Io.Dir.renameAbsolute(extract_dir, package_dir, app_runtime.io());
 
-    return error.CodextReleaseInstallFailed;
+    // Drop the flat managed binary left by pre-package installs; resolution
+    // now only uses the package tree.
+    const legacy_name = try managedCodextExecutableName(allocator, platform);
+    defer allocator.free(legacy_name);
+    const legacy_path = try std.fs.path.join(allocator, &.{ cache_root, legacy_name });
+    defer allocator.free(legacy_path);
+    if (fileExists(legacy_path)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), legacy_path);
 }
 
 fn writeAppError(message: []const u8) !void {
