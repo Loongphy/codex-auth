@@ -9,6 +9,7 @@ pub const AuthInfo = struct {
     record_key: ?[]u8,
     access_token: ?[]u8,
     openai_api_key: ?[]u8 = null,
+    openai_base_url: ?[]u8 = null,
     last_refresh: ?[]u8,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
@@ -20,6 +21,7 @@ pub const AuthInfo = struct {
         if (self.record_key) |key| allocator.free(key);
         if (self.access_token) |token| allocator.free(token);
         if (self.openai_api_key) |key| allocator.free(key);
+        if (self.openai_base_url) |url| allocator.free(url);
         if (self.last_refresh) |value| allocator.free(value);
     }
 };
@@ -82,17 +84,29 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                 switch (key_val) {
                     .string => |s| {
                         const trimmed = std.mem.trim(u8, s, &std.ascii.whitespace);
-                        if (trimmed.len > 0) return AuthInfo{
-                            .email = null,
-                            .chatgpt_account_id = null,
-                            .chatgpt_user_id = null,
-                            .record_key = null,
-                            .access_token = null,
-                            .openai_api_key = try allocator.dupe(u8, trimmed),
-                            .last_refresh = null,
-                            .plan = null,
-                            .auth_mode = .apikey,
-                        };
+                        if (trimmed.len > 0) {
+                            const base_url = if (obj.get("OPENAI_BASE_URL")) |url_val| switch (url_val) {
+                                .string => |url| blk: {
+                                    const trimmed_url = std.mem.trim(u8, url, &std.ascii.whitespace);
+                                    break :blk if (trimmed_url.len > 0) try allocator.dupe(u8, trimmed_url) else null;
+                                },
+                                else => null,
+                            } else null;
+                            errdefer if (base_url) |url| allocator.free(url);
+
+                            return AuthInfo{
+                                .email = null,
+                                .chatgpt_account_id = null,
+                                .chatgpt_user_id = null,
+                                .record_key = null,
+                                .access_token = null,
+                                .openai_api_key = try allocator.dupe(u8, trimmed),
+                                .openai_base_url = base_url,
+                                .last_refresh = null,
+                                .plan = null,
+                                .auth_mode = .apikey,
+                            };
+                        }
                     },
                     else => {},
                 }
