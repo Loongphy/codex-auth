@@ -45,6 +45,12 @@ test "Scenario: Given keyboard enhancement responses and keys when classifying t
     try std.testing.expectEqual(TuiEscapeAction.keyboard_up, result.action);
 }
 
+test "Scenario: Given lone escape key when reading it then it quits" {
+    const result = try readTuiEscapeAction(std.Io.File.stdin(), "", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.quit, result.action);
+    try std.testing.expectEqual(@as(usize, 0), result.buffered_bytes_consumed);
+}
+
 test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {
     switch (classifyTuiEscapeSuffix("[6~")) {
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.page_down, direction),
@@ -93,9 +99,9 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
     try writeTuiExitTo(&aw.writer);
 
     try std.testing.expectEqualStrings(
-        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?u\x1b[>7u" ++
+        "\x1b[?1049h\x1b[?25l\x1b[?1007h" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l",
+            "\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007h") != null);
