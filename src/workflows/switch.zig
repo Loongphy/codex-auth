@@ -5,6 +5,7 @@ const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
 const query_mod = @import("query.zig");
 const results = @import("results.zig");
+const oauth_refresh = @import("../auth/oauth_refresh.zig");
 
 const ensureLiveTty = preflight.ensureLiveTty;
 const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
@@ -56,6 +57,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
                 return err;
             };
             if (selected_account_key == null) return;
+            if (opts.api_mode != .skip_api) try refreshSwitchTarget(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             try registry.activateAccountByKey(allocator, codex_home, &loaded.display.reg, selected_account_key.?);
             try registry.saveRegistry(allocator, codex_home, &loaded.display.reg);
             try cli.output.printSwitchedAccount(allocator, &loaded.display.reg, selected_account_key.?);
@@ -147,6 +149,7 @@ fn handleSwitchQuery(
         },
     };
     if (selected_account_key == null) return;
+    try refreshSwitchTarget(allocator, codex_home, &reg, selected_account_key.?);
     try registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key.?);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, selected_account_key.?);
@@ -187,6 +190,7 @@ fn handleSwitchPrevious(
         }
     }
 
+    try refreshSwitchTarget(allocator, codex_home, &reg, previous_account_key);
     try registry.activateAccountByKey(allocator, codex_home, &reg, previous_account_key);
     try registry.saveRegistry(allocator, codex_home, &reg);
     try cli.output.printSwitchedAccount(allocator, &reg, previous_account_key);
@@ -224,6 +228,7 @@ fn handleSwitchQueryJson(
         },
     };
 
+    refreshSwitchTarget(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
     registry.activateAccountByKey(allocator, codex_home, &reg, selected_account_key) catch |err| return printJsonMutationError(err);
     registry.saveRegistry(allocator, codex_home, &reg) catch |err| return printJsonMutationError(err);
 
@@ -234,6 +239,19 @@ fn handleSwitchQueryJson(
     ) catch |err| return printJsonWorkflowError(err);
     defer result.deinit(allocator);
     try cli.json_output.printSwitchResult(&result);
+}
+
+fn refreshSwitchTarget(allocator: std.mem.Allocator, codex_home: []const u8, reg: *registry.Registry, account_key: []const u8) !void {
+    const is_active = if (reg.active_account_key) |key| std.mem.eql(u8, key, account_key) else false;
+    _ = oauth_refresh.refreshAccount(allocator, codex_home, account_key, is_active, false) catch |err| switch (err) {
+        error.RefreshLoginRequired, error.RefreshProtocolFailure => return error.LoginRequired,
+        error.MissingRefreshToken, error.MissingTokens => return,
+        error.OutOfMemory => return err,
+        else => {
+            std.log.warn("OAuth refresh was unavailable; switching anyway so Codex can recover the login: {s}", .{@errorName(err)});
+            return;
+        },
+    };
 }
 
 fn printJsonWorkflowError(err: anyerror) anyerror {
