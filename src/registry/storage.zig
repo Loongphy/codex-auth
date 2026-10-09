@@ -209,6 +209,7 @@ fn migrateLegacyRecord(
         .account_name = null,
         .plan = info.plan orelse legacy.plan,
         .auth_mode = info.auth_mode,
+        .auth_expires_at = info.access_token_expires_at,
         .created_at = legacy.created_at,
         .last_used_at = legacy.last_used_at,
         .last_usage = legacy.last_usage,
@@ -453,7 +454,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
-        3, 4 => try loadCurrentRegistry(allocator, root_obj, schema_version),
+        3, 4, 5 => try loadCurrentRegistry(allocator, root_obj, schema_version),
         else => {
             std.log.err(
                 "registry schema_version {d} is older than the minimum supported {d}; use an intermediate codex-auth release or import --purge",

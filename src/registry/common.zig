@@ -8,7 +8,7 @@ const c_time = @cImport({
 
 pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
-pub const current_schema_version: u32 = 4;
+pub const current_schema_version: u32 = 5;
 pub const min_supported_schema_version: u32 = 2;
 pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
     .windows => .default_file,
@@ -64,11 +64,28 @@ pub const CreditsSnapshot = struct {
     balance: ?[]u8,
 };
 
+pub const RateLimitResetCredit = struct {
+    id: []u8,
+    reset_type: []u8,
+    status: []u8,
+    granted_at: []u8,
+    expires_at: ?[]u8,
+    title: ?[]u8,
+    description: ?[]u8,
+};
+
+pub const RateLimitResetCredits = struct {
+    available_count: i64,
+    total_earned_count: ?i64,
+    credits: []RateLimitResetCredit,
+};
+
 pub const RateLimitSnapshot = struct {
     primary: ?RateLimitWindow,
     secondary: ?RateLimitWindow,
     credits: ?CreditsSnapshot,
     reset_credits: ?i64 = null,
+    reset_credit_details: ?RateLimitResetCredits = null,
     plan_type: ?PlanType,
 };
 
@@ -99,6 +116,7 @@ pub const AccountRecord = struct {
     account_name: ?[]u8,
     plan: ?PlanType,
     auth_mode: ?AuthMode,
+    auth_expires_at: ?i64 = null,
     created_at: i64,
     last_used_at: ?i64,
     last_usage: ?RateLimitSnapshot,
@@ -177,6 +195,20 @@ pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const Rate
     if (snapshot.credits) |*c| {
         if (c.balance) |b| allocator.free(b);
     }
+    if (snapshot.reset_credit_details) |details| {
+        for (details.credits) |credit| freeRateLimitResetCredit(allocator, credit);
+        allocator.free(details.credits);
+    }
+}
+
+pub fn freeRateLimitResetCredit(allocator: std.mem.Allocator, credit: RateLimitResetCredit) void {
+    allocator.free(credit.id);
+    allocator.free(credit.reset_type);
+    allocator.free(credit.status);
+    allocator.free(credit.granted_at);
+    if (credit.expires_at) |value| allocator.free(value);
+    if (credit.title) |value| allocator.free(value);
+    if (credit.description) |value| allocator.free(value);
 }
 
 pub fn freeRolloutSignature(allocator: std.mem.Allocator, signature: *const RolloutSignature) void {
@@ -213,12 +245,60 @@ pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitS
         if (credits.balance) |balance| allocator.free(balance);
     };
 
+    var cloned_reset_credit_details: ?RateLimitResetCredits = null;
+    if (snapshot.reset_credit_details) |details| {
+        cloned_reset_credit_details = try cloneRateLimitResetCredits(allocator, details);
+    }
+
     return .{
         .primary = snapshot.primary,
         .secondary = snapshot.secondary,
         .credits = cloned_credits,
         .reset_credits = snapshot.reset_credits,
+        .reset_credit_details = cloned_reset_credit_details,
         .plan_type = snapshot.plan_type,
+    };
+}
+
+pub fn cloneRateLimitResetCredits(allocator: std.mem.Allocator, details: RateLimitResetCredits) !RateLimitResetCredits {
+    var cloned_credits_list = try allocator.alloc(RateLimitResetCredit, details.credits.len);
+    errdefer allocator.free(cloned_credits_list);
+    var cloned_count: usize = 0;
+    errdefer for (cloned_credits_list[0..cloned_count]) |credit| freeRateLimitResetCredit(allocator, credit);
+    for (details.credits, 0..) |credit, idx| {
+        cloned_credits_list[idx] = try cloneRateLimitResetCredit(allocator, credit);
+        cloned_count += 1;
+    }
+    return .{
+        .available_count = details.available_count,
+        .total_earned_count = details.total_earned_count,
+        .credits = cloned_credits_list,
+    };
+}
+
+fn cloneRateLimitResetCredit(allocator: std.mem.Allocator, credit: RateLimitResetCredit) !RateLimitResetCredit {
+    const id = try allocator.dupe(u8, credit.id);
+    errdefer allocator.free(id);
+    const reset_type = try allocator.dupe(u8, credit.reset_type);
+    errdefer allocator.free(reset_type);
+    const status = try allocator.dupe(u8, credit.status);
+    errdefer allocator.free(status);
+    const granted_at = try allocator.dupe(u8, credit.granted_at);
+    errdefer allocator.free(granted_at);
+    const expires_at = try cloneOptionalStringAlloc(allocator, credit.expires_at);
+    errdefer if (expires_at) |value| allocator.free(value);
+    const title = try cloneOptionalStringAlloc(allocator, credit.title);
+    errdefer if (title) |value| allocator.free(value);
+    const description = try cloneOptionalStringAlloc(allocator, credit.description);
+    errdefer if (description) |value| allocator.free(value);
+    return .{
+        .id = id,
+        .reset_type = reset_type,
+        .status = status,
+        .granted_at = granted_at,
+        .expires_at = expires_at,
+        .title = title,
+        .description = description,
     };
 }
 
@@ -264,7 +344,25 @@ pub fn rateLimitSnapshotEqual(a: RateLimitSnapshot, b: RateLimitSnapshot) bool {
         rateLimitWindowEqual(a.secondary, b.secondary) and
         creditsEqual(a.credits, b.credits) and
         a.reset_credits == b.reset_credits and
+        resetCreditDetailsEqual(a.reset_credit_details, b.reset_credit_details) and
         a.plan_type == b.plan_type;
+}
+
+pub fn resetCreditDetailsEqual(a: ?RateLimitResetCredits, b: ?RateLimitResetCredits) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    if (a.?.available_count != b.?.available_count or a.?.total_earned_count != b.?.total_earned_count) return false;
+    if (a.?.credits.len != b.?.credits.len) return false;
+    for (a.?.credits, b.?.credits) |left, right| {
+        if (!optionalStringEqual(left.id, right.id) or
+            !optionalStringEqual(left.reset_type, right.reset_type) or
+            !optionalStringEqual(left.status, right.status) or
+            !optionalStringEqual(left.granted_at, right.granted_at) or
+            !optionalStringEqual(left.expires_at, right.expires_at) or
+            !optionalStringEqual(left.title, right.title) or
+            !optionalStringEqual(left.description, right.description)) return false;
+    }
+    return true;
 }
 
 pub fn rateLimitWindowEqual(a: ?RateLimitWindow, b: ?RateLimitWindow) bool {

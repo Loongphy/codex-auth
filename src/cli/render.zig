@@ -189,27 +189,7 @@ pub fn renderSwitchListViewport(
     const visible = visibleRowRange(rows.len, viewport);
     var displayed_counter = dataRowCount(rows[0..visible.start]);
     for (rows[visible.start..visible.end]) |row| {
-        if (row.is_header) {
-            try table.writeGroupRow(writer, row.account);
-            continue;
-        }
-
-        const is_cursor = cursor != null and cursor.? == displayed_counter;
-        const is_active = row.is_active;
-        var prefix_buf: [64]u8 = undefined;
-        const prefix = liveTableIndexPrefix(
-            &prefix_buf,
-            activeRowMarker(is_cursor, is_active),
-            displayed_counter + 1,
-            idx_width,
-        );
-        try table.writeDataRow(
-            writer,
-            prefix,
-            liveAccountCells(row),
-            switchRowStyle(row, is_cursor, is_active),
-        );
-        displayed_counter += 1;
+        try writeSwitchRow(writer, &table, row, idx_width, cursor, &displayed_counter);
     }
 }
 
@@ -399,4 +379,103 @@ fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
         try out.splatByteAll('0', width - idx_str.len);
     }
     try out.writeAll(idx_str);
+}
+
+fn writeSwitchRow(
+    writer: *style.StyledWriter,
+    table: *const table_layout.LiveTable,
+    row: SwitchRow,
+    idx_width: usize,
+    cursor: ?usize,
+    displayed_counter: *usize,
+) !void {
+    if (row.is_header) {
+        try table.writeGroupRow(writer, row.account);
+        return;
+    }
+
+    const is_cursor = cursor != null and cursor.? == displayed_counter.*;
+    const is_active = row.is_active;
+    var prefix_buf: [64]u8 = undefined;
+    const prefix = liveTableIndexPrefix(
+        &prefix_buf,
+        activeRowMarker(is_cursor, is_active),
+        displayed_counter.* + 1,
+        idx_width,
+    );
+    try table.writeDataRow(
+        writer,
+        prefix,
+        liveAccountCells(row),
+        switchRowStyle(row, is_cursor, is_active),
+    );
+    displayed_counter.* += 1;
+}
+
+/// Render the compact live account table.
+pub fn renderListBody(
+    allocator: std.mem.Allocator,
+    writer: *style.StyledWriter,
+    reg: *const registry.Registry,
+    rows: []const SwitchRow,
+    idx_width: usize,
+    widths: SwitchWidths,
+    max_cols: ?usize,
+) !void {
+    _ = widths;
+    const details = @import("list_details.zig");
+    const max_cards = blk: {
+        var count: usize = 0;
+        for (reg.accounts.items) |account| {
+            if (account.last_usage) |usage| {
+                if (usage.reset_credit_details) |credits| count = @max(count, credits.credits.len);
+            }
+        }
+        break :blk count;
+    };
+    const number_width = idx_width + 1;
+    try details.writeHeader(writer, reg, number_width, max_cols);
+    var displayed_counter: usize = 0;
+    for (rows) |row| {
+        if (row.is_header) continue;
+        const idx = row.account_index orelse continue;
+        if (idx >= reg.accounts.items.len) continue;
+        displayed_counter += 1;
+        const account = reg.accounts.items[idx];
+        var number_buf: [32]u8 = undefined;
+        const marker: []const u8 = if (row.has_error) "!" else if (row.is_active) "*" else " ";
+        const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
+        try details.write(allocator, writer, account, .{
+            .number = number,
+            .account = row.account,
+            .plan = row.plan,
+            .rate_5h = row.rate_5h,
+            .rate_week = row.rate_week,
+            .last = row.last,
+        }, number_width, max_cards, max_cols);
+    }
+}
+
+pub fn renderListBodyViewport(
+    writer: *style.StyledWriter,
+    body: []const u8,
+    status_line: []const u8,
+    viewport: LiveListViewport,
+) !void {
+    var lines = std.mem.splitScalar(u8, body, '\n');
+    if (lines.next()) |header| {
+        try writer.print("{s}\n", .{header});
+    }
+    var index: usize = 0;
+    while (lines.next()) |line| : (index += 1) {
+        if (index < viewport.start_row) continue;
+        if (viewport.max_rows) |limit| {
+            if (index - viewport.start_row >= limit) break;
+        }
+        if (line.len != 0) try writer.print("{s}\n", .{line});
+    }
+    if (status_line.len != 0) {
+        try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
+    }
+    try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
 }

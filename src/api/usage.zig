@@ -2,14 +2,17 @@ const std = @import("std");
 const auth = @import("../auth/auth.zig");
 const chatgpt_http = @import("http.zig");
 const registry = @import("../registry/root.zig");
+const registry_parse = @import("../registry/parse.zig");
 
 pub const default_usage_endpoint = "https://chatgpt.com/backend-api/wham/usage";
+pub const default_reset_credits_endpoint = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
+    auth_expires_at: ?i64 = null,
 };
 
 pub const max_response_error_code_bytes: usize = 64;
@@ -29,6 +32,7 @@ pub const BatchUsageFetchResult = struct {
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
+    auth_expires_at: ?i64 = null,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -74,7 +78,9 @@ pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []
     const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
     const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
 
-    return try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+    var result = try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+    result.auth_expires_at = auth.accessTokenExpiresAt(allocator, access_token) catch null;
+    return result;
 }
 
 pub fn fetchUsageForAuthPathsDetailedBatch(
@@ -104,6 +110,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
             continue;
         };
         defer info.deinit(arena);
+        results[idx].auth_expires_at = info.access_token_expires_at;
 
         if (info.auth_mode == .apikey) {
             continue;
@@ -171,6 +178,32 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         }
     }
 
+    var has_snapshot = false;
+    for (results) |result| {
+        if (result.snapshot != null) {
+            has_snapshot = true;
+            break;
+        }
+    }
+    if (!has_snapshot) return results;
+
+    var reset_credit_http_results = chatgpt_http.runGetJsonBatchCommand(
+        allocator,
+        default_reset_credits_endpoint,
+        requests.items,
+        max_concurrency,
+    ) catch return results;
+    defer reset_credit_http_results.deinit(allocator);
+
+    for (request_indexes, 0..) |request_idx, result_idx| {
+        const unique_idx = request_idx orelse continue;
+        if (results[result_idx].snapshot == null) continue;
+        const http_result = reset_credit_http_results.items[unique_idx];
+        if (http_result.outcome != .ok or http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) continue;
+        const details = parseResetCreditResponse(allocator, http_result.body) catch null;
+        if (details) |value| results[result_idx].snapshot.?.reset_credit_details = value;
+    }
+
     return results;
 }
 
@@ -200,11 +233,29 @@ pub fn fetchUsageForTokenDetailed(
         return .{ .snapshot = null, .status_code = http_result.status_code, .error_code = error_code };
     }
 
+    var snapshot = try parseUsageResponse(allocator, http_result.body);
+    if (snapshot) |*value| {
+        errdefer registry.freeRateLimitSnapshot(allocator, value);
+        if (fetchResetCreditDetailsForToken(allocator, access_token, account_id) catch null) |details| {
+            value.reset_credit_details = details;
+        }
+    }
     return .{
-        .snapshot = try parseUsageResponse(allocator, http_result.body),
+        .snapshot = snapshot,
         .status_code = http_result.status_code,
         .error_code = error_code,
     };
+}
+
+fn fetchResetCreditDetailsForToken(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: []const u8,
+) !?registry.RateLimitResetCredits {
+    const http_result = try chatgpt_http.runGetJsonCommand(allocator, default_reset_credits_endpoint, access_token, account_id);
+    defer allocator.free(http_result.body);
+    if (http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) return null;
+    return try parseResetCreditResponse(allocator, http_result.body);
 }
 
 fn isNonSuccessStatus(status_code: ?u16) bool {
@@ -297,6 +348,12 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
     }
 
     return snapshot;
+}
+
+pub fn parseResetCreditResponse(allocator: std.mem.Allocator, body: []const u8) !?registry.RateLimitResetCredits {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{ .parse_numbers = false });
+    defer parsed.deinit();
+    return try registry_parse.parseResetCreditDetails(allocator, parsed.value);
 }
 
 fn parseResetCredits(v: std.json.Value) ?i64 {
