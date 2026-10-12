@@ -248,7 +248,7 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
     var start: usize = 0;
     var first = true;
     while (start < frame.len) {
-        const newline = std.mem.indexOfScalarPos(u8, frame, start, '\n') orelse frame.len;
+        const newline = std.mem.findScalarPos(u8, frame, start, '\n') orelse frame.len;
         const line = frame[start..newline];
         if (!first) try out.writeAll("\r\n");
         first = false;
@@ -419,8 +419,8 @@ pub const TuiSession = struct {
             var raw = saved_termios;
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
-            raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-            raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
+            raw.cc[@backingInt(std.c.V.MIN)] = 1;
+            raw.cc[@backingInt(std.c.V.TIME)] = 0;
             try std.posix.tcsetattr(input.handle, .FLUSH, raw);
             errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
 
@@ -695,7 +695,7 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                     if (final >= '@' and final <= '~') break :blk .ignore;
                     break :blk .incomplete;
                 }
-                const first_semicolon = std.mem.indexOfScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
+                const first_semicolon = std.mem.findScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
                 const button_code = std.fmt.parseInt(usize, seq[2 .. 2 + first_semicolon], 10) catch break :blk .ignore;
                 break :blk switch (button_code) {
                     64 => .{ .navigation = .scroll_up },

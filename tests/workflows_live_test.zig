@@ -127,7 +127,7 @@ fn appendLiveMergeTestAccount(
     email: []const u8,
     alias: []const u8,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, account_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = account_key[0..sep];
     const chatgpt_account_id = account_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{

@@ -368,7 +368,7 @@ pub fn buildRemoveLabels(
         const label = if (row.depth == 0 or current_header == null) blk: {
             const rec = &reg.accounts.items[row.account_index.?];
             break :blk try display_rows.buildAccountIdentityLabelAlloc(allocator, rec);
-        } else try std.fmt.allocPrint(allocator, "{s} / {s}", .{ current_header.?, row.account_cell });
+        } else try allocator.print("{s} / {s}", .{ current_header.?, row.account_cell });
         try labels.append(allocator, label);
     }
     return labels;

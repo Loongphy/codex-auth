@@ -99,13 +99,13 @@ fn resetCreditsCellAlloc(
 ) ![]u8 {
     if (usage_override) |value| return allocator.dupe(u8, value);
     const count = if (usage) |snapshot| snapshot.reset_credits else null;
-    return if (count) |value| std.fmt.allocPrint(allocator, "{d}", .{value}) else allocator.dupe(u8, "-");
+    return if (count) |value| allocator.print("{d}", .{value}) else allocator.dupe(u8, "-");
 }
 
 fn integerCreditBalanceAlloc(allocator: std.mem.Allocator, balance: []const u8) ![]u8 {
     // Do not round up the displayed balance (for example, 5.99 remains 5).
     const trimmed = std.mem.trim(u8, balance, " \t\r\n");
-    const dot = std.mem.indexOfScalar(u8, trimmed, '.') orelse return allocator.dupe(u8, trimmed);
+    const dot = std.mem.findScalar(u8, trimmed, '.') orelse return allocator.dupe(u8, trimmed);
     const integer_part = trimmed[0..dot];
     if (integer_part.len == 0 or
         (integer_part.len == 1 and (integer_part[0] == '+' or integer_part[0] == '-')))
@@ -517,15 +517,15 @@ fn terminalWidth() usize {
 }
 
 pub fn truncateAlloc(value: []const u8, max_len: usize) ![]u8 {
-    if (text_width.displayWidth(value) <= max_len) return try std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{value});
-    if (max_len == 0) return try std.fmt.allocPrint(std.heap.page_allocator, "", .{});
-    if (max_len == 1) return try std.fmt.allocPrint(std.heap.page_allocator, ".", .{});
-    return std.fmt.allocPrint(std.heap.page_allocator, "{s}.", .{value[0..text_width.prefixByteLength(value, max_len - 1)]});
+    if (text_width.displayWidth(value) <= max_len) return try std.heap.page_allocator.print("{s}", .{value});
+    if (max_len == 0) return try std.heap.page_allocator.print("", .{});
+    if (max_len == 1) return try std.heap.page_allocator.print(".", .{});
+    return std.heap.page_allocator.print("{s}.", .{value[0..text_width.prefixByteLength(value, max_len - 1)]});
 }
 
 fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
     var buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
+    const idx_str = std.mem.print(&buf, "{d}", .{idx}) catch "0";
     if (idx_str.len < width) {
         var pad: usize = width - idx_str.len;
         while (pad > 0) : (pad -= 1) {

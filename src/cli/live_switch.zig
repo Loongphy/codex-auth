@@ -101,7 +101,7 @@ pub fn runSwitchLiveActions(
                     replaceOptionalOwnedString(
                         allocator,
                         &action_message,
-                        try std.fmt.allocPrint(allocator, "Auto-switch failed: {s}", .{@errorName(err)}),
+                        try allocator.print("Auto-switch failed: {s}", .{@errorName(err)}),
                     );
                     replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                     number_len = 0;
@@ -252,7 +252,7 @@ pub fn runSwitchLiveActions(
                                     replaceOptionalOwnedString(
                                         allocator,
                                         &action_message,
-                                        try std.fmt.allocPrint(allocator, "Switch failed: {s}", .{@errorName(err)}),
+                                        try allocator.print("Switch failed: {s}", .{@errorName(err)}),
                                     );
                                     replaceOptionalOwnedString(allocator, &selected_account_key, try allocator.dupe(u8, target_key));
                                     number_len = 0;

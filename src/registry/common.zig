@@ -2,9 +2,6 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const account_api = @import("../api/account.zig");
-const c_time = @cImport({
-    @cInclude("time.h");
-});
 
 pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
@@ -20,15 +17,11 @@ pub const private_dir_permissions: std.Io.File.Permissions = switch (builtin.os.
 };
 
 pub fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return try app_runtime.currentEnviron().createMap(allocator);
+    return app_runtime.getEnvMap(allocator);
 }
 
 pub fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    var env_map = try getEnvMap(allocator);
-    defer env_map.deinit();
-
-    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
-    return try allocator.dupe(u8, value);
+    return app_runtime.getEnvVarOwned(allocator, name);
 }
 
 pub fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
@@ -40,7 +33,7 @@ pub fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u
 }
 
 pub fn realPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try app_runtime.realPathFileAbsoluteAlloc(allocator, path);
     }
     return try app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
@@ -362,10 +355,10 @@ pub fn resolveCodexHomeFromEnv(
         if (path.len != 0) return try resolveExistingCodexHomeOverride(allocator, path);
     }
     if (home) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.Io.Dir.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     if (user_profile) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.Io.Dir.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     return error.EnvironmentVariableNotFound;
 }
@@ -411,13 +404,13 @@ pub fn ensurePrivateDir(path: []const u8) !void {
 }
 
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    const accounts_dir = try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
     try ensurePrivateDir(accounts_dir);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
 }
 
 pub fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -456,7 +449,7 @@ pub fn accountSnapshotFileName(allocator: std.mem.Allocator, account_key: []cons
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
     const filename = try accountSnapshotFileName(allocator, account_key);
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8) ![]u8 {
@@ -464,11 +457,11 @@ pub fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u
     defer allocator.free(key);
     const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
 }
 
 pub fn copyFileWithPermissions(src: []const u8, dest: []const u8, permissions: ?std.Io.File.Permissions) !void {

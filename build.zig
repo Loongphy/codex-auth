@@ -3,11 +3,23 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const package_module = b.createModule(.{
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run tests matching these substrings") orelse &.{};
+    const c_time_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/c_time.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const c_time_module = c_time_translate.createModule();
+
+    const package_module = b.addModule("codex_auth", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .imports = &.{
+            .{ .name = "c_time", .module = c_time_module },
+        },
     });
 
     const main_module = b.createModule(.{
@@ -15,6 +27,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .imports = &.{
+            .{ .name = "codex_auth", .module = package_module },
+        },
     });
     const exe = b.addExecutable(.{
         .name = "codex-auth",
@@ -47,14 +62,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{
-            .{ .name = "app_runtime", .module = b.createModule(.{
-                .root_source_file = b.path("src/core/runtime.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-            }) },
-        },
     });
     const fake_codex_exe = b.addExecutable(.{
         .name = "fake-codex",
@@ -68,9 +75,7 @@ pub fn build(b: *std.Build) void {
     test_helpers_step.dependOn(&install_fake_codex.step);
 
     const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run codex-auth");
     run_step.dependOn(&run_cmd.step);
 
@@ -97,6 +102,10 @@ pub fn build(b: *std.Build) void {
         "tests/workflows_live_test.zig",
     };
 
+    const test_options = b.addOptions();
+    test_options.addOptionPathUntracked("zig_exe", .zig_exe);
+    test_options.addOptionPathUntracked("project_root", b.path("."));
+
     const test_step = b.step("test", "Run tests");
     for (test_files) |test_file| {
         const test_module = b.createModule(.{
@@ -108,11 +117,13 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "codex_auth", .module = package_module },
             },
         });
+        test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
             .root_module = test_module,
+            .filters = test_filters,
         });
         const run_test = b.addRunArtifact(test_artifact);
-        run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT", b.pathFromRoot("."));
+        run_test.setCwd(b.path("."));
         test_step.dependOn(&run_test.step);
     }
 }

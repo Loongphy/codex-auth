@@ -31,14 +31,14 @@ pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "apikey::{s}::{s}", .{ user_id, hex[0..] });
+    return allocator.print("apikey::{s}::{s}", .{ user_id, hex[0..] });
 }
 
 pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8) ![]u8 {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
+    return allocator.print("sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
 }
 
 pub fn findAccountIndexByAccountKey(reg: *const Registry, account_key: []const u8) ?usize {
@@ -366,7 +366,7 @@ pub fn deleteRemovedAccountBackups(
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         defer allocator.free(path);
 
         var info = @import("../auth/auth.zig").parseAuthInfo(allocator, path) catch continue;

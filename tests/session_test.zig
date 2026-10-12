@@ -20,8 +20,7 @@ const missing_primary_used_percent_line = "{" ++
     "\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"window_minutes\":300,\"resets_at\":123},\"secondary\":{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456},\"plan_type\":\"pro\"}}}";
 
 fn usageLineAlloc(allocator: std.mem.Allocator, timestamp: []const u8, used_percent: f64) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
+    return allocator.print(
         "{{\"timestamp\":\"{s}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{d:.1},\"window_minutes\":300,\"resets_at\":123}},\"secondary\":{{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456}},\"plan_type\":\"pro\"}}}}}}",
         .{ timestamp, used_percent },
     );
@@ -36,8 +35,7 @@ fn usageLineWithLargeBalanceAlloc(
     const balance = try allocator.alloc(u8, balance_len);
     defer allocator.free(balance);
     @memset(balance, '9');
-    return std.fmt.allocPrint(
-        allocator,
+    return allocator.print(
         "{{\"timestamp\":\"{s}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{d:.1},\"window_minutes\":300,\"resets_at\":123}},\"secondary\":{{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":456}},\"credits\":{{\"has_credits\":true,\"unlimited\":false,\"balance\":\"{s}\"}},\"plan_type\":\"pro\"}}}}}}",
         .{ timestamp, used_percent, balance },
     );
@@ -157,7 +155,7 @@ test "scan latest usage chooses newest valid event from the most recent rollout 
     defer for (paths[0..initialized]) |path| gpa.free(path);
 
     for (names, 0..) |name, idx| {
-        paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+        paths[idx] = try std.Io.Dir.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
         initialized = idx + 1;
     }
 
@@ -219,7 +217,7 @@ test "scan latest usage ignores rollout files beyond the most recent file" {
     defer for (paths[0..initialized]) |path| gpa.free(path);
 
     for (names, 0..) |name, idx| {
-        paths[idx] = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
+        paths[idx] = try std.Io.Dir.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", name });
         initialized = idx + 1;
     }
 
@@ -257,7 +255,7 @@ test "scan latest rollout event keeps newest token_count event even when rate_li
     var latest = (try sessions.scanLatestRolloutEventWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689601000), latest.event_timestamp_ms);
     try std.testing.expect(!latest.hasUsableWindows());
     try std.testing.expect(latest.snapshot == null);
@@ -274,7 +272,7 @@ test "scan latest usage keeps the last usable snapshot when a later token_count 
 
     const valid_line = try usageLineAlloc(gpa, "2025-01-01T00:00:09.000Z", 90.0);
     defer gpa.free(valid_line);
-    const file_contents = try std.fmt.allocPrint(gpa, "{s}\n{s}\n", .{ valid_line, null_rate_limits_line });
+    const file_contents = try gpa.print("{s}\n{s}\n", .{ valid_line, null_rate_limits_line });
     defer gpa.free(file_contents);
     try tmp.dir.writeFile(app_runtime.io(), .{
         .sub_path = "sessions/2025/01/01/rollout-a.jsonl",
@@ -284,7 +282,7 @@ test "scan latest usage keeps the last usable snapshot when a later token_count 
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689609000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 90.0), latest.snapshot.primary.?.used_percent);
@@ -306,7 +304,7 @@ test "scan latest usage streams rollout files larger than ten megabytes" {
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-large.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-large.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689611000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 42.0), latest.snapshot.primary.?.used_percent);
@@ -328,7 +326,7 @@ test "scan latest usage keeps final line without trailing newline" {
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-no-newline.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-no-newline.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689612000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 33.0), latest.snapshot.primary.?.used_percent);
@@ -348,7 +346,7 @@ test "scan latest rollout event cache tracks changes to the current rollout file
     const second_line = try usageLineAlloc(gpa, "2025-01-01T00:00:13.000Z", 44.0);
     defer gpa.free(second_line);
 
-    const rollout_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-cache.jsonl" });
+    const rollout_path = try std.Io.Dir.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-cache.jsonl" });
     defer gpa.free(rollout_path);
 
     try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = rollout_path, .data = first_line });
@@ -380,9 +378,9 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
     const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
     defer gpa.free(codex_home);
     try tmp.dir.createDirPath(app_runtime.io(), "sessions/2025/01/01");
-    const first_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
+    const first_path = try std.Io.Dir.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-a.jsonl" });
     defer gpa.free(first_path);
-    const second_path = try std.fs.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-b.jsonl" });
+    const second_path = try std.Io.Dir.path.join(gpa, &[_][]const u8{ codex_home, "sessions", "2025", "01", "01", "rollout-b.jsonl" });
     defer gpa.free(second_path);
 
     const first_line = try usageLineAlloc(gpa, "2025-01-01T00:00:14.000Z", 20.0);
@@ -399,19 +397,19 @@ test "scan latest rollout event cache rediscovers a newer rollout file on the ne
 
     var latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
-    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.Io.Dir.path.basename(latest.path));
 
     try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "sessions/2025/01/01/rollout-b.jsonl", .data = newer_line });
     try updateFileTimes(second_path, base_time + std.time.ns_per_s, base_time + std.time.ns_per_s);
 
     latest.deinit(gpa);
     latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqualStrings("rollout-a.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-a.jsonl", std.Io.Dir.path.basename(latest.path));
 
     cache.last_full_scan_at_ns = 0;
     latest.deinit(gpa);
     latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqualStrings("rollout-b.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-b.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689615000), latest.event_timestamp_ms);
 }
 
@@ -437,7 +435,7 @@ test "scan latest rollout event cache rescans immediately after an empty result"
 
     var latest = (try sessions.scanLatestRolloutEventWithCache(gpa, codex_home, &cache)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
-    try std.testing.expectEqualStrings("rollout-after-empty.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-after-empty.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689616000), latest.event_timestamp_ms);
 }
 
@@ -452,14 +450,14 @@ test "scan latest usage accepts valid token_count lines above one megabyte" {
 
     const large_line = try usageLineWithLargeBalanceAlloc(gpa, "2025-01-01T00:00:13.000Z", 27.0, 2 * 1024 * 1024);
     defer gpa.free(large_line);
-    const file_contents = try std.fmt.allocPrint(gpa, "{s}\n", .{large_line});
+    const file_contents = try gpa.print("{s}\n", .{large_line});
     defer gpa.free(file_contents);
     try tmp.dir.writeFile(app_runtime.io(), .{ .sub_path = "sessions/2025/01/01/rollout-large-line.jsonl", .data = file_contents });
 
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-large-line.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-large-line.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689613000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 27.0), latest.snapshot.primary.?.used_percent);
@@ -489,7 +487,7 @@ test "scan latest usage skips oversized malformed lines and keeps later valid ev
     var latest = (try sessions.scanLatestUsageWithSource(gpa, codex_home)) orelse return error.TestExpectedEqual;
     defer latest.deinit(gpa);
 
-    try std.testing.expectEqualStrings("rollout-oversized-line.jsonl", std.fs.path.basename(latest.path));
+    try std.testing.expectEqualStrings("rollout-oversized-line.jsonl", std.Io.Dir.path.basename(latest.path));
     try std.testing.expectEqual(@as(i64, 1735689614000), latest.event_timestamp_ms);
     try std.testing.expect(latest.snapshot.primary != null);
     try std.testing.expectEqual(@as(f64, 64.0), latest.snapshot.primary.?.used_percent);

@@ -207,17 +207,16 @@ pub const SwitchLiveRuntime = struct {
         else if (next_refresh_not_before_ms <= now_ms)
             try allocator.dupe(u8, "Refresh due")
         else
-            try std.fmt.allocPrint(allocator, "Refresh in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
+            try allocator.print("Refresh in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
         defer allocator.free(refresh_state);
 
         const error_suffix = if (refresh_error_name) |value|
-            try std.fmt.allocPrint(allocator, " | Error: {s}", .{value})
+            try allocator.print(" | Error: {s}", .{value})
         else
             try allocator.dupe(u8, "");
         defer allocator.free(error_suffix);
 
-        return std.fmt.allocPrint(
-            allocator,
+        return allocator.print(
             "Live refresh: {s} | {s}{s}",
             .{ mode_label, refresh_state, error_suffix },
         );
@@ -412,7 +411,7 @@ pub fn switchLiveRuntimeApplySelection(
 
     return .{
         .updated_display = updated_display,
-        .action_message = try std.fmt.allocPrint(allocator, "Switched to {s}", .{label}),
+        .action_message = try allocator.print("Switched to {s}", .{label}),
     };
 }
 

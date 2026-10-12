@@ -201,7 +201,7 @@ test "launch path resolution preserves symlink path" {
     const arena = arena_state.allocator();
 
     const entry = try app_runtime.realPathFileAlloc(arena, tmp_dir.dir, ".");
-    const curl_path = try std.fs.path.join(arena, &[_][]const u8{ entry, "curl" });
+    const curl_path = try std.Io.Dir.path.join(arena, &[_][]const u8{ entry, "curl" });
 
     try tmp_dir.dir.writeFile(app_runtime.io(), .{
         .sub_path = "curl-real",

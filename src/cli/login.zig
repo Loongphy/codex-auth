@@ -95,7 +95,7 @@ fn resolvePathEntryCandidateAlloc(
     entry: []const u8,
     candidate_name: []const u8,
 ) !?[]u8 {
-    const candidate = try std.fs.path.join(allocator, &[_][]const u8{ entry, candidate_name });
+    const candidate = try std.Io.Dir.path.join(allocator, &[_][]const u8{ entry, candidate_name });
     errdefer allocator.free(candidate);
 
     if (!accessPath(candidate)) {
@@ -172,7 +172,7 @@ fn collectWindowsCodexPathEntriesAlloc(
 }
 
 fn accessPath(path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         std.Io.Dir.accessAbsolute(app_runtime.io(), path, .{}) catch return false;
         return true;
     }
@@ -187,7 +187,7 @@ fn resolveWindowsCodexPathValueAlloc(
     native_candidates: *WindowsCodexPathList,
     ps1_candidates: *WindowsCodexPathList,
 ) !void {
-    var path_it = std.mem.splitScalar(u8, path_value, std.fs.path.delimiter);
+    var path_it = std.mem.splitScalar(u8, path_value, std.Io.Dir.path.delimiter);
     while (path_it.next()) |entry| {
         if (entry.len == 0) continue;
         try appendWindowsCodexPathEntryCandidatesAlloc(allocator, native_candidates, ps1_candidates, entry);
@@ -385,11 +385,11 @@ fn shouldRetryWindowsCodexLaunch(err: std.process.SpawnError, kind: WindowsCodex
 
 fn launchUsesWindowsPowerShellHost(launch: *const CodexLaunch) bool {
     if (launch.argv_len == 0) return false;
-    return std.ascii.eqlIgnoreCase(std.fs.path.basename(launch.argv_storage[0]), "powershell.exe");
+    return std.ascii.eqlIgnoreCase(std.Io.Dir.path.basename(launch.argv_storage[0]), "powershell.exe");
 }
 
 pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
-    var env_map = try app_runtime.currentEnviron().createMap(std.heap.page_allocator);
+    var env_map = try app_runtime.getEnvMap(std.heap.page_allocator);
     defer env_map.deinit();
     try env_map.put("CODEX_HOME", codex_home);
 

@@ -93,28 +93,20 @@ const removeSelectedAccountsAndPersist = live_flow.removeSelectedAccountsAndPers
 pub const switchLiveRuntimeApplySelection = live_flow.switchLiveRuntimeApplySelection;
 pub const removeLiveRuntimeApplySelection = live_flow.removeLiveRuntimeApplySelection;
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var exit_code: u8 = 0;
+pub fn main(init: std.process.Init) !u8 {
+    app_runtime.initRuntime(init);
+    defer app_runtime.deinitRuntime();
     runMain(init) catch |err| {
-        if (err == error.InvalidCliUsage) {
-            exit_code = 2;
-        } else if (isHandledCliError(err)) {
-            exit_code = 1;
-        } else {
-            return err;
-        }
+        if (err == error.InvalidCliUsage) return 2;
+        if (isHandledCliError(err)) return 1;
+        return err;
     };
-    if (exit_code != 0) std.process.exit(exit_code);
+    return 0;
 }
 
-fn runMain(init: std.process.Init.Minimal) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
-
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const args = try init.args.toSlice(arena_state.allocator());
+fn runMain(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     var parsed = try cli.commands.parseArgs(allocator, args);
     defer cli.commands.freeParseResult(allocator, &parsed);

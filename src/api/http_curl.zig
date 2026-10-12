@@ -116,7 +116,7 @@ fn runCurlBearerGetJsonCommand(
     endpoint: []const u8,
     access_token: []const u8,
 ) !HttpResult {
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print("Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
 
     return try runCurlJsonCommand(allocator, endpoint, &[_][]const u8{authorization});
@@ -141,9 +141,9 @@ fn runCurlGetJsonCommandWithExecutable(
     access_token: []const u8,
     account_id: []const u8,
 ) !HttpResult {
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print("Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
-    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    const account_header = try allocator.print("ChatGPT-Account-Id: {s}", .{account_id});
     defer allocator.free(account_header);
 
     return try runCurlJsonCommandWithExecutable(allocator, curl_executable, endpoint, &[_][]const u8{ authorization, account_header });
@@ -406,7 +406,7 @@ fn appendCurlConfigQuotedValue(
 
 fn parseCurlHttpOutput(allocator: std.mem.Allocator, output: []const u8) !CurlHttpOutput {
     const trimmed = std.mem.trimEnd(u8, output, "\r\n");
-    const status_idx = std.mem.lastIndexOfScalar(u8, trimmed, '\n') orelse return error.CommandFailed;
+    const status_idx = std.mem.findScalarLast(u8, trimmed, '\n') orelse return error.CommandFailed;
     const status_slice = std.mem.trim(u8, trimmed[status_idx + 1 ..], " \r\t");
     const status = std.fmt.parseInt(u16, status_slice, 10) catch return error.CommandFailed;
     const body = try allocator.dupe(u8, trimmed[0..status_idx]);

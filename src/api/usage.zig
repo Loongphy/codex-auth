@@ -355,8 +355,8 @@ fn parseCredits(allocator: std.mem.Allocator, v: std.json.Value) !?registry.Cred
 fn parseBalance(allocator: std.mem.Allocator, value: std.json.Value) !?[]u8 {
     return switch (value) {
         .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
-        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .float => |f| if (std.math.isFinite(f)) try std.fmt.allocPrint(allocator, "{d}", .{f}) else null,
+        .integer => |i| try allocator.print("{d}", .{i}),
+        .float => |f| if (std.math.isFinite(f)) try allocator.print("{d}", .{f}) else null,
         .number_string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
         else => null,
     };

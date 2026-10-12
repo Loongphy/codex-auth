@@ -23,7 +23,7 @@ pub fn usageErrorResultWithJson(
 ) !types.ParseResult {
     return .{ .usage_error = .{
         .topic = topic,
-        .message = try std.fmt.allocPrint(allocator, fmt, args),
+        .message = try allocator.print(fmt, args),
         .json = json,
     } };
 }

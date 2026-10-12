@@ -219,7 +219,7 @@ pub fn runRemoveLiveActions(
                                     replaceOptionalOwnedString(
                                         allocator,
                                         &action_message,
-                                        try std.fmt.allocPrint(allocator, "Delete failed: {s}", .{@errorName(err)}),
+                                        try allocator.print("Delete failed: {s}", .{@errorName(err)}),
                                     );
                                     needs_render = true;
                                     break;

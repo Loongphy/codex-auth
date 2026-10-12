@@ -286,7 +286,7 @@ fn jsonValueDataAlloc(allocator: std.mem.Allocator, value: std.json.Value) ![]u8
 fn defaultCpaImportPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ home, ".cli-proxy-api" });
 }
 
 fn importCpaFile(
@@ -483,7 +483,7 @@ fn importCpaDirectory(
     std.sort.insertion([]u8, names.items, {}, importFileNameLessThan);
 
     for (names.items) |name| {
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);
@@ -526,7 +526,7 @@ fn importAuthDirectory(
     errdefer report.deinit(allocator);
     report.source_label = try allocator.dupe(u8, dir_path);
     for (names.items) |name| {
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, name });
+        const file_path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir_path, name });
         defer allocator.free(file_path);
         const label = try importDisplayLabelFromName(allocator, name);
         defer allocator.free(label);

@@ -2,9 +2,7 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const common = @import("common.zig");
-const c_time = @cImport({
-    @cInclude("time.h");
-});
+const c_time = @import("c_time");
 
 const Registry = common.Registry;
 const accountSnapshotFileName = common.accountSnapshotFileName;
@@ -56,7 +54,7 @@ pub fn fileEqualsBytes(allocator: std.mem.Allocator, path: []const u8, bytes: []
 }
 
 pub fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
 }
 
 pub fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
@@ -86,7 +84,7 @@ pub fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
 pub fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
     var tm: c_time.struct_tm = undefined;
     if (!localtimeCompat(ts, &tm)) {
-        return std.fmt.allocPrint(allocator, "{d}", .{ts});
+        return allocator.print("{d}", .{ts});
     }
 
     const year: u32 = @intCast(tm.tm_year + 1900);
@@ -95,7 +93,7 @@ pub fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
     const hour: u32 = @intCast(tm.tm_hour);
     const minute: u32 = @intCast(tm.tm_min);
     const second: u32 = @intCast(tm.tm_sec);
-    return std.fmt.allocPrint(allocator, "{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
+    return allocator.print("{d:0>4}{d:0>2}{d:0>2}-{d:0>2}{d:0>2}{d:0>2}", .{
         year,
         month,
         day,
@@ -108,7 +106,7 @@ pub fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
 pub fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: []const u8) ![]u8 {
     const timestamp = try formatBackupTimestamp(allocator, std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds());
     defer allocator.free(timestamp);
-    const base = try std.fmt.allocPrint(allocator, "{s}.bak.{s}", .{ base_name, timestamp });
+    const base = try allocator.print("{s}.bak.{s}", .{ base_name, timestamp });
     defer allocator.free(base);
 
     var attempt: usize = 0;
@@ -116,9 +114,9 @@ pub fn makeBackupPath(allocator: std.mem.Allocator, dir: []const u8, base_name: 
         const name = if (attempt == 0)
             try allocator.dupe(u8, base)
         else
-            try std.fmt.allocPrint(allocator, "{s}.{d}", .{ base, attempt });
+            try allocator.print("{s}.{d}", .{ base, attempt });
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir, name });
+        const path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir, name });
         allocator.free(name);
 
         if (std.Io.Dir.cwd().openFile(app_runtime.io(), path, .{})) |file| {

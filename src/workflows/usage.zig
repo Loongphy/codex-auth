@@ -722,10 +722,10 @@ pub fn formatStatusOverrideAlloc(
 
     const max_code_len = max_usage_override_display_width - status_text.len - 1;
     if (code.len <= max_code_len) {
-        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, code });
+        return allocator.print("{s} {s}", .{ status_text, code });
     }
     if (max_code_len <= 3) {
-        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, "..."[0..max_code_len] });
+        return allocator.print("{s} {s}", .{ status_text, "..."[0..max_code_len] });
     }
-    return std.fmt.allocPrint(allocator, "{s} {s}...", .{ status_text, code[0 .. max_code_len - 3] });
+    return allocator.print("{s} {s}...", .{ status_text, code[0 .. max_code_len - 3] });
 }
