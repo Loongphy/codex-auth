@@ -119,6 +119,109 @@ test "run child capture preserves partial stdout when child times out" {
     }
 }
 
+test "run child capture frees first output buffer when second result dupe fails" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script_name = switch (builtin.os.tag) {
+        .windows => "emit-output.ps1",
+        else => "emit-output.sh",
+    };
+    const script_data = switch (builtin.os.tag) {
+        .windows =>
+        \\[Console]::Out.Write("stdout-data")
+        \\[Console]::Error.Write("stderr-data")
+        ,
+        else =>
+        \\#!/bin/sh
+        \\printf 'stdout-data'
+        \\printf 'stderr-data' >&2
+        ,
+    };
+
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = script_name,
+        .data = script_data,
+    });
+
+    if (builtin.os.tag != .windows) {
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
+    }
+
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
+    defer allocator.free(script_path);
+
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
+        else => &[_][]const u8{script_path},
+    };
+
+    var failing_allocator = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 1 });
+    try std.testing.expectError(
+        error.OutOfMemory,
+        runChildCapture(failing_allocator.allocator(), argv, child_process_timeout_ms_value, null),
+    );
+    try std.testing.expect(failing_allocator.has_induced_failure);
+    try std.testing.expectEqual(failing_allocator.allocated_bytes, failing_allocator.freed_bytes);
+}
+
+test "run child capture frees first output buffer when timeout result dupe fails" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const script_name = switch (builtin.os.tag) {
+        .windows => "stall-output.ps1",
+        else => "stall-output.sh",
+    };
+    const script_data = switch (builtin.os.tag) {
+        .windows =>
+        \\[Console]::Out.Write("stdout-data")
+        \\[Console]::Out.Flush()
+        \\[Console]::Error.Write("stderr-data")
+        \\[Console]::Error.Flush()
+        \\Start-Sleep -Seconds 30
+        ,
+        else =>
+        \\#!/bin/sh
+        \\printf 'stdout-data'
+        \\printf 'stderr-data' >&2
+        \\sleep 30
+        ,
+    };
+
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = script_name,
+        .data = script_data,
+    });
+
+    if (builtin.os.tag != .windows) {
+        var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
+        defer script_file.close(app_runtime.io());
+        try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
+    }
+
+    const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
+    defer allocator.free(script_path);
+
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
+        else => &[_][]const u8{script_path},
+    };
+    const timeout_ms: u64 = if (builtin.os.tag == .windows) 3000 else 1000;
+
+    var failing_allocator = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 1 });
+    try std.testing.expectError(
+        error.OutOfMemory,
+        runChildCapture(failing_allocator.allocator(), argv, timeout_ms, null),
+    );
+    try std.testing.expect(failing_allocator.has_induced_failure);
+    try std.testing.expectEqual(failing_allocator.allocated_bytes, failing_allocator.freed_bytes);
+}
+
 test "run child capture accepts larger custom output limits for batched payloads" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
@@ -201,7 +304,7 @@ test "launch path resolution preserves symlink path" {
     const arena = arena_state.allocator();
 
     const entry = try app_runtime.realPathFileAlloc(arena, tmp_dir.dir, ".");
-    const curl_path = try std.fs.path.join(arena, &[_][]const u8{ entry, "curl" });
+    const curl_path = try std.Io.Dir.path.join(arena, &[_][]const u8{ entry, "curl" });
 
     try tmp_dir.dir.writeFile(app_runtime.io(), .{
         .sub_path = "curl-real",

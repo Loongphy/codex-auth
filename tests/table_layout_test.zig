@@ -87,11 +87,11 @@ test "Scenario: Given a narrow table when rendering then account identity and us
 
     const output = writer.buffered();
     try expectLinesWithin(output, 33);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Business") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Now") == null);
+    try std.testing.expect(std.mem.find(u8, output, "very-l.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "100%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "42%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Business") == null);
+    try std.testing.expect(std.mem.find(u8, output, "Now") == null);
 }
 
 test "Scenario: Given remaining table width when rendering then status plan and last expand before account becomes complete" {
@@ -117,12 +117,12 @@ test "Scenario: Given remaining table width when rendering then status plan and 
 
     const output = writer.buffered();
     try expectLinesWithin(output, 50);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.mple.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Now") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-long-account-name@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, "very-l.mple.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Business") != null);
+    try std.testing.expect(std.mem.find(u8, output, "100%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "42%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Now") != null);
+    try std.testing.expect(std.mem.find(u8, output, "very-long-account-name@example.com") == null);
 }
 
 test "Scenario: Given an alias-sized account label when rendering a narrow table then the alias remains complete" {
@@ -148,7 +148,7 @@ test "Scenario: Given an alias-sized account label when rendering a narrow table
 
     const output = writer.buffered();
     try expectLinesWithin(output, 33);
-    try std.testing.expect(std.mem.indexOf(u8, output, "work-main") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "31%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "work-main") != null);
+    try std.testing.expect(std.mem.find(u8, output, "31%") != null);
+    try std.testing.expect(std.mem.find(u8, output, "42%") != null);
 }

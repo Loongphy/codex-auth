@@ -450,6 +450,7 @@ pub fn loadSwitchSelectionDisplay(
         initial_policy.account_api_enabled,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
+        error.Canceled => return err,
         else => {
             if (strict_refresh) return err;
             refreshed.deinit(allocator);
@@ -469,6 +470,7 @@ pub fn loadSwitchSelectionDisplay(
         false,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
+        error.Canceled => return err,
         else => {
             if (strict_refresh) return err;
             refreshed.deinit(allocator);
@@ -487,6 +489,7 @@ pub fn loadSwitchSelectionDisplay(
         false,
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
+        error.Canceled => return err,
         else => {
             if (strict_refresh) return err;
             usage_state.deinit(allocator);

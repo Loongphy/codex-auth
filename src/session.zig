@@ -163,7 +163,7 @@ pub fn scanLatestUsableUsageInFile(
 }
 
 pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestRolloutEvent {
-    const sessions_root = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
+    const sessions_root = try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "sessions" });
     defer allocator.free(sessions_root);
 
     var latest_candidate: ?RolloutCandidate = null;
@@ -184,7 +184,7 @@ pub fn scanLatestRolloutEventWithSource(allocator: std.mem.Allocator, codex_home
         if (latest_candidate) |candidate| {
             if (mtime <= candidate.mtime) continue;
         }
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
+        const path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ sessions_root, entry.path });
         errdefer allocator.free(path);
         if (latest_candidate) |candidate| {
             allocator.free(candidate.path);
@@ -333,7 +333,7 @@ fn scanUsageEventSliceBackwards(
     var line_end = contents.len;
 
     while (line_end > 0) {
-        const maybe_newline = std.mem.lastIndexOfScalar(u8, contents[0..line_end], '\n');
+        const maybe_newline = std.mem.findScalarLast(u8, contents[0..line_end], '\n');
         const line_start = if (maybe_newline) |idx| idx + 1 else 0;
         const line = std.mem.trim(u8, contents[line_start..line_end], " \r\t");
         if (line.len != 0 and line.len <= max_rollout_line_bytes) {
@@ -423,10 +423,10 @@ fn parseUsageEventLine(allocator: std.mem.Allocator, line: []const u8) ?ParsedUs
 }
 
 fn looksLikeUsageEventLine(line: []const u8) bool {
-    return std.mem.indexOf(u8, line, "\"event_msg\"") != null and
-        std.mem.indexOf(u8, line, "\"token_count\"") != null and
-        std.mem.indexOf(u8, line, "\"rate_limits\"") != null and
-        std.mem.indexOf(u8, line, "\"timestamp\"") != null;
+    return std.mem.find(u8, line, "\"event_msg\"") != null and
+        std.mem.find(u8, line, "\"token_count\"") != null and
+        std.mem.find(u8, line, "\"rate_limits\"") != null and
+        std.mem.find(u8, line, "\"timestamp\"") != null;
 }
 
 fn parseRateLimits(allocator: std.mem.Allocator, parsed: UsageRateLimitsJson) ?registry.RateLimitSnapshot {
@@ -531,6 +531,6 @@ fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
 
 fn isRolloutFile(path: []const u8) bool {
     if (!std.mem.endsWith(u8, path, ".jsonl")) return false;
-    const base = std.fs.path.basename(path);
+    const base = std.Io.Dir.path.basename(path);
     return std.mem.startsWith(u8, base, "rollout-");
 }

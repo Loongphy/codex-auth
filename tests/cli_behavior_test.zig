@@ -28,7 +28,7 @@ fn appendAccount(
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, record_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -63,7 +63,7 @@ fn expectUsageError(result: cli.types.ParseResult, topic: cli.types.HelpTopic, c
         .usage_error => |usage_err| {
             try std.testing.expectEqual(topic, usage_err.topic);
             if (contains) |needle| {
-                try std.testing.expect(std.mem.indexOf(u8, usage_err.message, needle) != null);
+                try std.testing.expect(std.mem.find(u8, usage_err.message, needle) != null);
             }
         },
         else => return error.TestExpectedEqual,
@@ -376,7 +376,7 @@ test "Scenario: Given list with live and json flags when parsing then json usage
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "`--live` cannot be combined with `--json`") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "`--live` cannot be combined with `--json`") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -441,12 +441,12 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try cli.help.writeHelp(&aw.writer, false);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Commands:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api] [--json]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
+    try std.testing.expect(std.mem.find(u8, help, "Commands:") != null);
+    try std.testing.expect(std.mem.find(u8, help, "list [--live] [--active] [--api|--skip-api] [--json]") != null);
+    try std.testing.expect(std.mem.find(u8, help, "switch [--live] [--api|--skip-api]") != null);
+    try std.testing.expect(std.mem.find(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "config live --interval <seconds>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "auto enable") == null);
 }
 
 test "Scenario: Given simple command help when rendering then examples are omitted" {
@@ -457,13 +457,13 @@ test "Scenario: Given simple command help when rendering then examples are omitt
     try cli.help.writeCommandHelp(&aw.writer, false, .list);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth list") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "List available accounts.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api] [--json]\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--active     Refresh only the active account before rendering.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Examples:") == null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth list") != null);
+    try std.testing.expect(std.mem.find(u8, help, "List available accounts.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Usage:\n  codex-auth list [--live] [--active] [--api|--skip-api] [--json]\n") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Options:\n  --live") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--active     Refresh only the active account before rendering.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--skip-api   Load usage and account data from local data only (may be inaccurate).") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Examples:") == null);
 }
 
 test "Scenario: Given command help with color when rendering then section titles use header style" {
@@ -474,8 +474,8 @@ test "Scenario: Given command help with color when rendering then section titles
     try cli.help.writeCommandHelp(&aw.writer, true, .switch_account);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, ansi.cyan ++ "Usage:" ++ ansi.reset ++ "\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, ansi.cyan ++ "Examples:" ++ ansi.reset ++ "\n") != null);
+    try std.testing.expect(std.mem.find(u8, help, ansi.cyan ++ "Usage:" ++ ansi.reset ++ "\n") != null);
+    try std.testing.expect(std.mem.find(u8, help, ansi.cyan ++ "Examples:" ++ ansi.reset ++ "\n") != null);
 }
 
 test "Scenario: Given complex command help when rendering then examples are shown" {
@@ -486,12 +486,12 @@ test "Scenario: Given complex command help when rendering then examples are show
     try cli.help.writeCommandHelp(&aw.writer, false, .import_auth);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth import") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  <path>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Uses `~/.cli-proxy-api` when omitted.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--purge [<path>] Rebuild `registry.json` from auth files.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth import") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Usage:\n  codex-auth import <path> [--alias <alias>]") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Options:\n  <path>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Uses `~/.cli-proxy-api` when omitted.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--purge [<path>] Rebuild `registry.json` from auth files.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Examples:\n  codex-auth import /path/to/auth.json --alias personal\n") != null);
 }
 
 test "Scenario: Given switch command help when rendering then target forms and multi-match behavior are shown" {
@@ -502,14 +502,14 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try cli.help.writeCommandHelp(&aw.writer, false, .switch_account);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch <alias|email|display-number|query>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch personal") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch john@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch 02") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth switch work") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Switch directly when the target resolves to one account.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "If a target is ambiguous") == null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth switch <alias|email|display-number|query>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth switch personal") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth switch john@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth switch 02") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth switch work") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Switch directly when the target resolves to one account.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "If a target is ambiguous") == null);
 }
 
 test "Scenario: Given remove command help when rendering then options explain live API all and target forms" {
@@ -520,10 +520,10 @@ test "Scenario: Given remove command help when rendering then options explain li
     try cli.help.writeCommandHelp(&aw.writer, false, .remove_account);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --live       Open the live remove UI.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--api        Load usage and account data from APIs.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "--all        Remove every stored account.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Remove one or more matching accounts.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Options:\n  --live       Open the live remove UI.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--api        Load usage and account data from APIs.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--all        Remove every stored account.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Remove one or more matching accounts.") != null);
 }
 
 test "Scenario: Given alias command help when rendering then set and clear examples are shown" {
@@ -534,10 +534,10 @@ test "Scenario: Given alias command help when rendering then set and clear examp
     try cli.help.writeCommandHelp(&aw.writer, false, .alias);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias set <alias|email|display-number|query> <alias>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias clear <alias|email|display-number|query>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth alias set 02 work") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "New aliases cannot be empty or only digits.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth alias set <alias|email|display-number|query> <alias>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth alias clear <alias|email|display-number|query>") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth alias set 02 work") != null);
+    try std.testing.expect(std.mem.find(u8, help, "New aliases cannot be empty or only digits.") != null);
 }
 
 test "Scenario: Given config help when rendering then live mode is explained" {
@@ -548,10 +548,10 @@ test "Scenario: Given config help when rendering then live mode is explained" {
     try cli.help.writeCommandHelp(&config_aw.writer, false, .config);
 
     const config_help = config_aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval <seconds>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 60") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config_help, "auto") == null);
+    try std.testing.expect(std.mem.find(u8, config_help, "codex-auth config live --interval <seconds>") != null);
+    try std.testing.expect(std.mem.find(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
+    try std.testing.expect(std.mem.find(u8, config_help, "codex-auth config live --interval 60") != null);
+    try std.testing.expect(std.mem.find(u8, config_help, "auto") == null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -570,8 +570,7 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
 
     try cli.output.writeImportReport(&stdout_aw.writer, &stderr_aw.writer, &report);
 
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning ./tokens/...\n" ++
             "  imported  token_ryan.taylor.alpha@email.com.json\n" ++
             "  updated   token_jane.smith.alpha@email.com.json\n" ++
@@ -581,8 +580,7 @@ test "Scenario: Given scanned import report when rendering then stdout and stder
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, stdout_aw.written());
 
-    const expected_stderr = try std.fmt.allocPrint(
-        gpa,
+    const expected_stderr = try gpa.print(
         "  skipped   token_invalid.json: InvalidJSON\n",
         .{},
     );
@@ -607,8 +605,7 @@ test "Scenario: Given single-file skipped import report when rendering then summ
         "Import Summary: 0 imported, 1 skipped\n",
         stdout_aw.written(),
     );
-    const expected_stderr = try std.fmt.allocPrint(
-        gpa,
+    const expected_stderr = try gpa.print(
         "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n",
         .{},
     );
@@ -661,10 +658,10 @@ test "Scenario: Given color import report when rendering then success and errors
 
     try cli.output.writeImportReportWithColor(&stdout_aw.writer, &stderr_aw.writer, &report, true, true);
 
-    try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), ansi.green ++ "  updated   token_carol.three@example.com.json") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), ansi.red ++ "  skipped   token_invalid.json: InvalidJSON") != null);
-    try std.testing.expect(std.mem.indexOf(u8, stdout_aw.written(), "✓") == null);
-    try std.testing.expect(std.mem.indexOf(u8, stderr_aw.written(), "✗") == null);
+    try std.testing.expect(std.mem.find(u8, stdout_aw.written(), ansi.green ++ "  updated   token_carol.three@example.com.json") != null);
+    try std.testing.expect(std.mem.find(u8, stderr_aw.written(), ansi.red ++ "  skipped   token_invalid.json: InvalidJSON") != null);
+    try std.testing.expect(std.mem.find(u8, stdout_aw.written(), "✓") == null);
+    try std.testing.expect(std.mem.find(u8, stderr_aw.written(), "✗") == null);
 }
 
 test "Scenario: Given removed top-level auto command when parsing then usage error is returned" {
@@ -824,9 +821,9 @@ test "Scenario: Given codex login access denied when rendering then plain Englis
     try cli.output.writeCodexLoginLaunchFailureHintTo(&aw.writer, "AccessDenied", false);
 
     const hint = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, hint, "failed to launch the `codex login` process.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "Try running `codex login` manually, then retry your command.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "AccessDenied") == null);
+    try std.testing.expect(std.mem.find(u8, hint, "failed to launch the `codex login` process.") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "Try running `codex login` manually, then retry your command.") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "AccessDenied") == null);
 }
 
 test "Scenario: Given codex login client missing when rendering then detection hint is included" {
@@ -837,8 +834,8 @@ test "Scenario: Given codex login client missing when rendering then detection h
     try cli.output.writeCodexLoginLaunchFailureHintTo(&aw.writer, "FileNotFound", false);
 
     const hint = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, hint, "the `codex` executable was not found in your PATH.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "Ensure the Codex CLI is installed and available in your environment.") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "the `codex` executable was not found in your PATH.") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "Ensure the Codex CLI is installed and available in your environment.") != null);
 }
 
 test "Scenario: Given PowerShell is missing for the codex ps1 launcher when rendering then the hint names PowerShell" {
@@ -849,9 +846,9 @@ test "Scenario: Given PowerShell is missing for the codex ps1 launcher when rend
     try cli.output.writeCodexLoginLaunchFailureHintTo(&aw.writer, "PowerShellNotFound", false);
 
     const hint = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, hint, "the `codex.ps1` launcher requires PowerShell") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "Install PowerShell, or use a Codex CLI installation that provides `codex.exe`, `codex.cmd`, or `codex.bat`, then retry your command.") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "the `codex` executable was not found in your PATH.") == null);
+    try std.testing.expect(std.mem.find(u8, hint, "the `codex.ps1` launcher requires PowerShell") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "Install PowerShell, or use a Codex CLI installation that provides `codex.exe`, `codex.cmd`, or `codex.bat`, then retry your command.") != null);
+    try std.testing.expect(std.mem.find(u8, hint, "the `codex` executable was not found in your PATH.") == null);
 }
 
 test "Scenario: Given login help when rendering then device auth usage is included" {
@@ -862,8 +859,8 @@ test "Scenario: Given login help when rendering then device auth usage is includ
     try cli.help.writeCommandHelp(&aw.writer, false, .login);
 
     const help = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, help, "codex-auth login --device-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "Options:\n  --device-auth   Run `codex login --device-auth` before adding the account.") != null);
+    try std.testing.expect(std.mem.find(u8, help, "codex-auth login --device-auth") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Options:\n  --device-auth   Run `codex login --device-auth` before adding the account.") != null);
 }
 
 test "Scenario: Given login options when building codex argv then device auth is forwarded" {
@@ -885,9 +882,9 @@ test "Scenario: Given winget and npm Windows launchers when resolving then PATH 
     try tmp.dir.writeFile(.{ .sub_path = "npm-bin/codex.ps1", .data = "exit 0\n" });
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const winget_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "winget-bin" });
+    const winget_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "winget-bin" });
     defer gpa.free(winget_dir);
-    const npm_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
+    const npm_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
     defer gpa.free(npm_dir);
 
     var exe_first = (try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{ winget_dir, npm_dir })) orelse return error.TestUnexpectedResult;
@@ -913,7 +910,7 @@ test "Scenario: Given exe cmd bat and ps1 in one Windows directory when resolvin
     try tmp.dir.writeFile(.{ .sub_path = "mixed-bin/codex.ps1", .data = "exit 0\n" });
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const mixed_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "mixed-bin" });
+    const mixed_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "mixed-bin" });
     defer gpa.free(mixed_dir);
 
     var resolved = (try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{mixed_dir})) orelse return error.TestUnexpectedResult;
@@ -934,7 +931,7 @@ test "Scenario: Given only a batch Windows launcher when resolving then bat is u
 
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const npm_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
+    const npm_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
     defer gpa.free(npm_dir);
 
     var resolved = (try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{npm_dir})) orelse return error.TestUnexpectedResult;
@@ -953,7 +950,7 @@ test "Scenario: Given only the bare npm shell launcher on Windows when resolving
 
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const npm_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
+    const npm_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
     defer gpa.free(npm_dir);
 
     try std.testing.expect((try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{npm_dir})) == null);
@@ -972,9 +969,9 @@ test "Scenario: Given an earlier PowerShell launcher and a later native Windows 
 
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const npm_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
+    const npm_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
     defer gpa.free(npm_dir);
-    const winget_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "winget-bin" });
+    const winget_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "winget-bin" });
     defer gpa.free(winget_dir);
 
     var resolved = (try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{ npm_dir, winget_dir })) orelse return error.TestUnexpectedResult;
@@ -995,7 +992,7 @@ test "Scenario: Given only PowerShell Windows launcher when resolving then ps1 i
 
     const root_dir = try tmp.dir.realpathAlloc(gpa, ".");
     defer gpa.free(root_dir);
-    const npm_dir = try std.fs.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
+    const npm_dir = try std.Io.Dir.path.join(gpa, &[_][]const u8{ root_dir, "npm-bin" });
     defer gpa.free(npm_dir);
 
     var resolved = (try cli.login.resolveWindowsCodexPathEntriesAlloc(gpa, &[_][]const u8{npm_dir})) orelse return error.TestUnexpectedResult;
@@ -1113,7 +1110,7 @@ test "Scenario: Given switch dash with json when parsing then previous switching
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "previous-account switching is CLI-only") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "previous-account switching is CLI-only") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1128,7 +1125,7 @@ test "Scenario: Given switch previous flag with json when parsing then the unsup
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "unknown flag `--previous`") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "unknown flag `--previous`") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1143,7 +1140,7 @@ test "Scenario: Given switch json without target when parsing then json usage er
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "requires an explicit account query") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "requires an explicit account query") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1368,7 +1365,7 @@ test "Scenario: Given remove json without selector when parsing then json usage 
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "requires selectors or `--all`") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "requires selectors or `--all`") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1383,7 +1380,7 @@ test "Scenario: Given remove selector then invalid json flag when parsing then s
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.indexOf(u8, usage_err.message, "unknown flag `--bad`") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "unknown flag `--bad`") != null);
         },
         else => return error.TestExpectedEqual,
     }

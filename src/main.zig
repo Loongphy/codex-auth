@@ -1,8 +1,6 @@
 const std = @import("std");
-const codex_auth = @import("root.zig");
+const codex_auth = @import("codex_auth");
 
-pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer std.debug.assert(gpa.deinit() == .ok);
+pub fn main(init: std.process.Init) !u8 {
     return codex_auth.workflows.main(init);
 }

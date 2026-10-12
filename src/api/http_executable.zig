@@ -25,7 +25,7 @@ pub fn ensureExecutableAvailableAlloc(allocator: std.mem.Allocator, executable: 
 }
 
 fn resolveExecutableForLaunchAlloc(allocator: std.mem.Allocator, executable: []const u8) !?[]u8 {
-    if (std.fs.path.isAbsolute(executable) or std.mem.indexOfAny(u8, executable, "/\\") != null) {
+    if (std.Io.Dir.path.isAbsolute(executable) or std.mem.findAny(u8, executable, "/\\") != null) {
         if (!accessPath(executable)) return null;
         return try allocator.dupe(u8, executable);
     }
@@ -36,7 +36,7 @@ fn resolveExecutableForLaunchAlloc(allocator: std.mem.Allocator, executable: []c
     };
     defer allocator.free(path_value);
 
-    var path_it = std.mem.splitScalar(u8, path_value, std.fs.path.delimiter);
+    var path_it = std.mem.splitScalar(u8, path_value, std.Io.Dir.path.delimiter);
     while (path_it.next()) |entry| {
         if (entry.len == 0) continue;
         if (try resolveExecutablePathEntryForLaunchAlloc(allocator, entry, executable)) |resolved| return resolved;
@@ -50,14 +50,14 @@ pub fn resolveExecutablePathEntryForLaunchAlloc(
     entry: []const u8,
     executable: []const u8,
 ) !?[]u8 {
-    const candidate = try std.fs.path.join(allocator, &[_][]const u8{ entry, executable });
+    const candidate = try std.Io.Dir.path.join(allocator, &[_][]const u8{ entry, executable });
     defer allocator.free(candidate);
 
     if (accessPath(candidate)) {
         return try allocator.dupe(u8, candidate);
     }
 
-    if (builtin.os.tag == .windows and std.fs.path.extension(executable).len == 0) {
+    if (builtin.os.tag == .windows and std.Io.Dir.path.extension(executable).len == 0) {
         const path_ext = getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => try allocator.dupe(u8, ".COM;.EXE;.BAT;.CMD"),
             else => return err,
@@ -70,7 +70,7 @@ pub fn resolveExecutablePathEntryForLaunchAlloc(
             const ext = std.mem.trim(u8, raw_ext, " \t");
             if (ext.len == 0) continue;
 
-            const ext_candidate = try std.fmt.allocPrint(allocator, "{s}{s}", .{ candidate, ext });
+            const ext_candidate = try allocator.print("{s}{s}", .{ candidate, ext });
             defer allocator.free(ext_candidate);
 
             if (accessPath(ext_candidate)) {
@@ -82,7 +82,7 @@ pub fn resolveExecutablePathEntryForLaunchAlloc(
     return null;
 }
 fn accessPath(path: []const u8) bool {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         std.Io.Dir.accessAbsolute(app_runtime.io(), path, .{}) catch return false;
         return true;
     }

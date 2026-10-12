@@ -71,7 +71,7 @@ This document describes the repository's CI, preview package publishing, and tag
 
 - Branch and pull request validation runs in `.github/workflows/ci.yml`.
 - The `build-test` matrix runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`.
-- CI installs Zig [`0.16.0`](https://ziglang.org/download/) and runs `zig build test`; if Zig is missing locally, download the matching `0.16.0` build from that page.
+- CI installs Zig [`0.17.0`](https://ziglang.org/download/) and runs `zig build test`; if Zig is missing locally, download the matching `0.17.0` build from that page.
 
 ## Preview Packages for Pull Requests
 

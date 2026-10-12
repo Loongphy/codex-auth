@@ -62,5 +62,5 @@ test "API key auth record uses /v1/me email for list grouping" {
     try std.testing.expect(std.mem.startsWith(u8, rec.account_key, "apikey::user_123::"));
     try std.testing.expect(rec.account_name != null);
     try std.testing.expect(std.mem.startsWith(u8, rec.account_name.?, "sk-"));
-    try std.testing.expect(std.mem.indexOf(u8, rec.account_name.?, "***") != null);
+    try std.testing.expect(std.mem.find(u8, rec.account_name.?, "***") != null);
 }

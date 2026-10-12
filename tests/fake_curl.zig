@@ -9,7 +9,7 @@ pub fn main(init: std.process.Init) !void {
     var stdin_reader = std.Io.File.stdin().reader(init.io, &read_buffer);
     const config = try stdin_reader.interface.allocRemaining(init.gpa, .limited(64 * 1024));
     defer init.gpa.free(config);
-    const body = if (std.mem.indexOf(u8, config, "/v1/me") != null) me_body else usage_body;
+    const body = if (std.mem.find(u8, config, "/v1/me") != null) me_body else usage_body;
 
     var buffer: [4096]u8 = undefined;
     var writer = std.Io.File.stdout().writer(init.io, &buffer);

@@ -208,7 +208,7 @@ fn handleSwitchQueryJson(
 
     const selected_account_key = switch (resolution) {
         .not_found => {
-            const message = try std.fmt.allocPrint(allocator, "no account matches \"{s}\"", .{query});
+            const message = try allocator.print("no account matches \"{s}\"", .{query});
             defer allocator.free(message);
             try cli.json_output.printError("account_not_found", message, null);
             return error.AccountNotFound;
@@ -217,7 +217,7 @@ fn handleSwitchQueryJson(
         .multiple => |matches| {
             const candidates = try results.buildAccountViewsForIndices(allocator, &reg, null, matches.items);
             defer results.deinitAccountViews(allocator, candidates);
-            const message = try std.fmt.allocPrint(allocator, "query \"{s}\" matches multiple accounts", .{query});
+            const message = try allocator.print("query \"{s}\" matches multiple accounts", .{query});
             defer allocator.free(message);
             try cli.json_output.printError("ambiguous_query", message, candidates);
             return error.AmbiguousQuery;

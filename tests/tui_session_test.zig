@@ -98,10 +98,10 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
             "\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007h") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1007l") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1000h") == null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?1006h") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1007h") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1007l") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1000h") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1006h") == null);
 }
 
 test "Scenario: Given shared TUI frame redraw when writing it then it clears only the alternate screen frame instead of appending full screens" {
@@ -112,7 +112,7 @@ test "Scenario: Given shared TUI frame redraw when writing it then it clears onl
     try writeTuiResetFrameTo(&aw.writer);
 
     try std.testing.expectEqualStrings("\x1b[H\x1b[J", aw.written());
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2J\x1b[H") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[2J\x1b[H") == null);
 }
 
 test "Scenario: Given live TUI frame output when writing it then redraw moves home without pre-clearing the screen" {
@@ -124,10 +124,10 @@ test "Scenario: Given live TUI frame output when writing it then redraw moves ho
 
     try std.testing.expectEqual(@as(usize, 2), line_count);
     try std.testing.expect(std.mem.startsWith(u8, aw.written(), "\x1b[?2026h\x1b[H"));
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[H\x1b[J") == null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "abc\x1b[K\r\ndef\x1b[K") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "def\x1b[K\r\n\x1b[K") == null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\r\n\x1b[2K") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[H\x1b[J") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "abc\x1b[K\r\ndef\x1b[K") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "def\x1b[K\r\n\x1b[K") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\r\n\x1b[2K") != null);
     try std.testing.expect(std.mem.endsWith(u8, aw.written(), "\x1b[?2026l"));
 }
 
