@@ -233,6 +233,7 @@ fn runCurlGetJsonBatchCommand(
     if (requests.len == 0) return .{ .items = items };
 
     const curl_executable = resolveCurlExecutableForLaunchAlloc(allocator) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         switch (err) {
             error.OutOfMemory => return err,
             else => {
@@ -245,7 +246,7 @@ fn runCurlGetJsonBatchCommand(
 
     const worker_count = @min(requests.len, @max(@as(usize, 1), max_concurrency));
     if (worker_count <= 1) {
-        runCurlGetJsonBatchSerially(allocator, curl_executable, endpoint, requests, items);
+        try runCurlGetJsonBatchSerially(allocator, curl_executable, endpoint, requests, items);
         return .{ .items = items };
     }
 
@@ -276,6 +277,7 @@ fn runCurlGetJsonBatchCommand(
     }
 
     queue.run();
+    if (queue.canceled.load(.monotonic)) return error.Canceled;
     return .{ .items = items };
 }
 
@@ -286,12 +288,18 @@ const CurlBatchWorkerQueue = struct {
     requests: []const BatchRequest,
     items: []BatchItemResult,
     next_index: std.atomic.Value(usize) = .init(0),
+    canceled: std.atomic.Value(bool) = .init(false),
 
     fn run(self: *CurlBatchWorkerQueue) void {
-        while (true) {
+        while (!self.canceled.load(.monotonic)) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.requests.len) return;
-            runCurlBatchItem(self.allocator, self.curl_executable, self.endpoint, self.requests[idx], &self.items[idx]);
+            runCurlBatchItem(self.allocator, self.curl_executable, self.endpoint, self.requests[idx], &self.items[idx]) catch |err| switch (err) {
+                error.Canceled => {
+                    self.canceled.store(true, .monotonic);
+                    return;
+                },
+            };
         }
     }
 };
@@ -302,9 +310,9 @@ fn runCurlGetJsonBatchSerially(
     endpoint: []const u8,
     requests: []const BatchRequest,
     items: []BatchItemResult,
-) void {
+) error{Canceled}!void {
     for (requests, 0..) |request, idx| {
-        runCurlBatchItem(allocator, curl_executable, endpoint, request, &items[idx]);
+        try runCurlBatchItem(allocator, curl_executable, endpoint, request, &items[idx]);
     }
 }
 
@@ -314,7 +322,7 @@ fn runCurlBatchItem(
     endpoint: []const u8,
     request: BatchRequest,
     item: *BatchItemResult,
-) void {
+) error{Canceled}!void {
     const result = runCurlGetJsonCommandWithExecutable(
         allocator,
         curl_executable,
@@ -322,6 +330,7 @@ fn runCurlBatchItem(
         request.access_token,
         request.account_id,
     ) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         item.* = curlBatchErrorItem(allocator, err);
         return;
     };

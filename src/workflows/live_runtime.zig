@@ -41,7 +41,7 @@ pub const SwitchLiveRuntime = struct {
     strict_refresh: bool,
     io_impl: std.Io.Threaded,
     mutex: std.Io.Mutex = .init,
-    refresh_task: ?std.Io.Future(void) = null,
+    refresh_task: ?std.Io.Future(error{Canceled}!void) = null,
     updated_display: ?cli.live.OwnedSwitchSelectionDisplay = null,
     in_flight: bool = false,
     display_generation: u64 = 0,
@@ -90,14 +90,14 @@ pub const SwitchLiveRuntime = struct {
 
     fn cancelRefresh(self: *@This()) void {
         const io = self.io_impl.io();
-        var future: ?std.Io.Future(void) = null;
+        var future: ?std.Io.Future(error{Canceled}!void) = null;
         self.mutex.lockUncancelable(io);
         if (self.refresh_task) |task| {
             future = task;
             self.refresh_task = null;
         }
         self.mutex.unlock(io);
-        if (future) |*task| task.cancel(io);
+        if (future) |*task| task.cancel(io) catch {};
     }
 
     fn maybeStartRefresh(self: *@This()) void {
@@ -142,7 +142,7 @@ pub const SwitchLiveRuntime = struct {
 
     fn maybeTakeUpdatedDisplay(self: *@This()) ?cli.live.OwnedSwitchSelectionDisplay {
         const io = self.io_impl.io();
-        var future: ?std.Io.Future(void) = null;
+        var future: ?std.Io.Future(error{Canceled}!void) = null;
         var display: ?cli.live.OwnedSwitchSelectionDisplay = null;
 
         self.mutex.lockUncancelable(io);
@@ -156,7 +156,7 @@ pub const SwitchLiveRuntime = struct {
         }
         self.mutex.unlock(io);
 
-        if (future) |*task| task.await(io);
+        if (future) |*task| task.await(io) catch {};
         return display;
     }
 
@@ -223,7 +223,7 @@ pub const SwitchLiveRuntime = struct {
     }
 };
 
-pub fn runSwitchLiveRefreshRound(task_ctx: SwitchLiveRefreshTaskContext) void {
+pub fn runSwitchLiveRefreshRound(task_ctx: SwitchLiveRefreshTaskContext) error{Canceled}!void {
     const runtime = task_ctx.runtime;
     const io = runtime.io_impl.io();
     const started_ms = nowMilliseconds();
@@ -233,23 +233,31 @@ pub fn runSwitchLiveRefreshRound(task_ctx: SwitchLiveRefreshTaskContext) void {
         runtime.api_mode,
         runtime.target,
         runtime.strict_refresh,
-    ) catch |err| {
-        const finished_ms = nowMilliseconds();
-        const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
+    ) catch |err| switch (err) {
+        error.Canceled => {
+            runtime.mutex.lockUncancelable(io);
+            defer runtime.mutex.unlock(io);
+            runtime.in_flight = false;
+            return error.Canceled;
+        },
+        else => {
+            const finished_ms = nowMilliseconds();
+            const error_name = runtime.allocator.dupe(u8, @errorName(err)) catch null;
 
-        runtime.mutex.lockUncancelable(io);
-        defer runtime.mutex.unlock(io);
-        if (task_ctx.display_generation == runtime.display_generation) {
-            if (runtime.last_refresh_error_name) |name| runtime.allocator.free(name);
-            runtime.last_refresh_error_name = error_name;
-        } else if (error_name) |name| {
-            runtime.allocator.free(name);
-        }
-        runtime.last_refresh_finished_at_ms = finished_ms;
-        runtime.last_refresh_duration_ms = finished_ms - (runtime.last_refresh_started_at_ms orelse started_ms);
-        runtime.next_refresh_not_before_ms = finished_ms + runtime.refresh_interval_ms;
-        runtime.in_flight = false;
-        return;
+            runtime.mutex.lockUncancelable(io);
+            defer runtime.mutex.unlock(io);
+            if (task_ctx.display_generation == runtime.display_generation) {
+                if (runtime.last_refresh_error_name) |name| runtime.allocator.free(name);
+                runtime.last_refresh_error_name = error_name;
+            } else if (error_name) |name| {
+                runtime.allocator.free(name);
+            }
+            runtime.last_refresh_finished_at_ms = finished_ms;
+            runtime.last_refresh_duration_ms = finished_ms - (runtime.last_refresh_started_at_ms orelse started_ms);
+            runtime.next_refresh_not_before_ms = finished_ms + runtime.refresh_interval_ms;
+            runtime.in_flight = false;
+            return;
+        },
     };
 
     const finished_ms = nowMilliseconds();

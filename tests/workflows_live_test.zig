@@ -162,8 +162,8 @@ fn writeLiveActionTestSnapshot(
     try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = auth_path, .data = auth_json });
 }
 
-fn sleepLiveRefreshTask(io: std.Io) void {
-    std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
+fn sleepLiveRefreshTask(io: std.Io) error{Canceled}!void {
+    try std.Io.sleep(io, .fromMilliseconds(800), .awake);
 }
 
 test "live refresh interval uses the shared live config cadence" {

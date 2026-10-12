@@ -818,6 +818,70 @@ test "Scenario: Given active-only foreground usage refresh then only the active 
     try std.testing.expect(reg.accounts.items[1].last_usage != null);
 }
 
+test "Scenario: Given canceled per-account usage fetch when refreshing foreground usage then cancellation propagates" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestUsageFetcher = struct {
+        fn fetch(allocator: std.mem.Allocator, auth_path: []const u8) !usage_api.UsageFetchResult {
+            _ = allocator;
+            _ = auth_path;
+            return error.Canceled;
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "user@example.com", "", .business);
+
+    try std.testing.expectError(error.Canceled, main_mod.refreshForegroundUsageForDisplayWithApiFetcher(
+        gpa,
+        codex_home,
+        &reg,
+        TestUsageFetcher.fetch,
+    ));
+}
+
+test "Scenario: Given canceled batch usage fetch when refreshing foreground usage then cancellation propagates" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    const TestBatchFetcher = struct {
+        fn fetch(allocator: std.mem.Allocator, auth_paths: []const []const u8, max_concurrency: usize) ![]usage_api.BatchUsageFetchResult {
+            _ = allocator;
+            _ = auth_paths;
+            _ = max_concurrency;
+            return error.Canceled;
+        }
+    };
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .business);
+
+    try std.testing.expectError(error.Canceled, main_mod.refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnabledAndPersistAndActiveOnly(
+        gpa,
+        codex_home,
+        &reg,
+        usage_api.fetchUsageForAuthPathDetailed,
+        TestBatchFetcher.fetch,
+        main_mod.initForegroundUsagePool,
+        true,
+        false,
+        false,
+        false,
+    ));
+}
+
 test "Scenario: Given API key auth when refreshing foreground usage then overrides stay empty and rows remain placeholder-driven" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});

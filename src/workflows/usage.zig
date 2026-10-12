@@ -316,6 +316,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
         const refresh_result = refreshActiveUsageFromLocalSessions(allocator, codex_home, reg) catch |err| switch (err) {
             error.OutOfMemory => return err,
+            error.Canceled => return err,
             else => {
                 outcome.error_name = @errorName(err);
                 state.failed += 1;
@@ -385,6 +386,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             @min(fetch_account_indices.items.len, foreground_usage_refresh_concurrency),
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
+            error.Canceled => return err,
             else => {
                 if (batch_fetch_failures_are_fatal) return err;
                 const error_name = @errorName(err);
@@ -421,6 +423,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 @min(refresh_job_count, foreground_usage_refresh_concurrency),
             ) catch |err| switch (err) {
                 error.OutOfMemory => return err,
+                error.Canceled => return err,
                 else => use_concurrent_usage_refresh = false,
             };
         }
@@ -436,7 +439,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 active_only,
             );
         } else {
-            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, active_account_key, active_only);
+            try runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, active_account_key, active_only);
         }
     }
 
@@ -546,9 +549,10 @@ const ForegroundUsageWorkerQueue = struct {
     active_account_key: ?[]const u8,
     active_only: bool,
     next_index: std.atomic.Value(usize) = .init(0),
+    canceled: std.atomic.Value(bool) = .init(false),
 
     fn run(self: *ForegroundUsageWorkerQueue) void {
-        while (true) {
+        while (!self.canceled.load(.monotonic)) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.reg.accounts.items.len) return;
             if (self.active_only) {
@@ -563,7 +567,12 @@ const ForegroundUsageWorkerQueue = struct {
                 idx,
                 self.usage_fetcher,
                 self.results,
-            );
+            ) catch |err| switch (err) {
+                error.Canceled => {
+                    self.canceled.store(true, .monotonic);
+                    return;
+                },
+            };
         }
     }
 };
@@ -579,7 +588,7 @@ fn runForegroundUsageRefreshWorkersConcurrently(
 ) !void {
     const worker_count = @min(if (active_only) 1 else reg.accounts.items.len, foreground_usage_refresh_concurrency);
     if (worker_count <= 1) {
-        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, active_account_key, active_only);
+        try runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, active_account_key, active_only);
         return;
     }
 
@@ -611,6 +620,7 @@ fn runForegroundUsageRefreshWorkersConcurrently(
     }
 
     queue.run();
+    if (queue.canceled.load(.monotonic)) return error.Canceled;
 }
 
 fn runForegroundUsageRefreshWorkersSerially(
@@ -621,13 +631,13 @@ fn runForegroundUsageRefreshWorkersSerially(
     results: []ForegroundUsageWorkerResult,
     active_account_key: ?[]const u8,
     active_only: bool,
-) void {
+) error{Canceled}!void {
     for (reg.accounts.items, 0..) |account, idx| {
         if (active_only) {
             const key = active_account_key.?;
             if (!std.mem.eql(u8, account.account_key, key)) continue;
         }
-        foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
+        try foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
     }
 }
 
@@ -638,7 +648,7 @@ fn foregroundUsageRefreshWorker(
     account_idx: usize,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
-) void {
+) error{Canceled}!void {
     if (skipsChatGptUsage(&reg.accounts.items[account_idx])) {
         results[account_idx] = .{};
         return;
@@ -651,11 +661,13 @@ fn foregroundUsageRefreshWorker(
     const arena = arena_state.allocator();
 
     const auth_path = registry.accountAuthPath(arena, codex_home, reg.accounts.items[account_idx].account_key) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
 
     const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
@@ -669,6 +681,7 @@ fn foregroundUsageRefreshWorker(
 
     if (fetch_result.snapshot) |snapshot| {
         result.snapshot = registry.cloneRateLimitSnapshot(allocator, snapshot) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
             results[account_idx] = .{
                 .requested = true,
                 .status_code = fetch_result.status_code,

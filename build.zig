@@ -124,6 +124,14 @@ pub fn build(b: *std.Build) void {
         });
         const run_test = b.addRunArtifact(test_artifact);
         run_test.setCwd(b.path("."));
+        if (std.mem.eql(u8, test_file, "tests/cli_integration_test.zig")) {
+            run_test.addFileInput(exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_fail_exe.getEmittedBin());
+            run_test.addFileInput(fake_codex_exe.getEmittedBin());
+            run_test.addFileInput(b.path("build.zig"));
+            run_test.addFileInput(b.path("build.zig.zon"));
+        }
         test_step.dependOn(&run_test.step);
     }
 }

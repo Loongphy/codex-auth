@@ -100,6 +100,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     for (auth_paths, 0..) |auth_path, idx| {
         var info = auth.parseAuthInfo(arena, auth_path) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
             results[idx].error_name = @errorName(err);
             continue;
         };
