@@ -173,11 +173,19 @@ pub fn writeAccountsTableWithUsageOverrides(
     defer std.heap.page_allocator.free(h0);
     const h1 = try truncateAlloc(headers[1], widths[1]);
     defer std.heap.page_allocator.free(h1);
-    const h2 = try truncateAlloc(headers[2], widths[2]);
+    const header_credits = if (widths[2] >= headers[2].len) headers[2] else "CR";
+    const h2 = try truncateAlloc(header_credits, widths[2]);
     defer std.heap.page_allocator.free(h2);
-    const h3 = try truncateAlloc(headers[3], widths[3]);
+    const header_reset_credits = if (widths[3] >= headers[3].len)
+        headers[3]
+    else if (widths[3] >= "RESET".len)
+        "RESET"
+    else
+        "RC";
+    const h3 = try truncateAlloc(header_reset_credits, widths[3]);
     defer std.heap.page_allocator.free(h3);
-    const h4 = try truncateAlloc(headers[4], widths[4]);
+    const header_5h = if (widths[4] >= headers[4].len) headers[4] else "5";
+    const h4 = try truncateAlloc(header_5h, widths[4]);
     defer std.heap.page_allocator.free(h4);
     const header_week = if (widths[5] >= "WEEKLY".len) "WEEKLY" else if (widths[5] >= "WEEK".len) "WEEK" else "W";
     const h5 = try truncateAlloc(header_week, widths[5]);
@@ -366,9 +374,9 @@ fn adjustListWidths(widths: *[7]usize, prefix_len: usize, sep_len: usize) void {
 
     const min_email: usize = 10;
     const min_plan: usize = 4;
-    const min_credits: usize = 1;
-    const min_reset_credits: usize = 1;
-    const min_rate: usize = 1;
+    const min_credits: usize = 2;
+    const min_reset_credits: usize = 2;
+    const min_rate: usize = 4;
     const min_last: usize = 4;
 
     var over = total - term_cols;
