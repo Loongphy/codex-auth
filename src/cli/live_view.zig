@@ -9,6 +9,7 @@ const style = @import("style.zig");
 const picker = @import("picker.zig");
 const tui_mod = @import("tui.zig");
 const live_tui = @import("live_tui.zig");
+const reset_credits_panel = @import("reset_credits_panel.zig");
 
 pub const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
 pub const OwnedSwitchSelectionDisplay = selection.OwnedSwitchSelectionDisplay;
@@ -259,6 +260,10 @@ pub fn viewAccountsWithLiveUpdates(
 
     var body: std.Io.Writer.Allocating = .init(allocator);
     defer body.deinit();
+    var credits_panel: std.Io.Writer.Allocating = .init(allocator);
+    defer credits_panel.deinit();
+    var credits_cursor: usize = 0;
+    var credits_expanded: bool = false;
 
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
@@ -279,7 +284,34 @@ pub fn viewAccountsWithLiveUpdates(
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
             try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)), rows.widths, tui.terminalCols());
-            rendered_row_count = std.mem.count(u8, body.written(), "\n") - 1;
+            var body_text: []const u8 = body.written();
+            var spliced_panel: ?[]u8 = null;
+            defer if (spliced_panel) |panel_buf| allocator.free(panel_buf);
+            const data_rows = std.mem.count(u8, body_text, "\n") -| 1;
+            if (credits_cursor >= data_rows) credits_cursor = if (data_rows == 0) 0 else data_rows - 1;
+            if (credits_expanded and data_rows > 0) {
+                const cursor_row = rows.items[credits_cursor];
+                if (cursor_row.account_index) |account_idx| {
+                    if (account_idx < current_display.reg.accounts.items.len) {
+                        credits_panel.clearRetainingCapacity();
+                        _ = try reset_credits_panel.render(
+                            allocator,
+                            &credits_panel.writer,
+                            &current_display.reg.accounts.items[account_idx],
+                            tui.terminalCols(),
+                            now_second,
+                        );
+                        spliced_panel = try reset_credits_panel.spliceAfterDataLine(
+                            allocator,
+                            body_text,
+                            credits_cursor,
+                            credits_panel.written(),
+                        );
+                        body_text = spliced_panel.?;
+                    }
+                }
+            }
+            rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
             const viewport = live_tui.listViewport(
@@ -295,7 +327,7 @@ pub fn viewAccountsWithLiveUpdates(
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
             render.renderListBodyViewport(
                 &styled_frame,
-                body.written(),
+                body_text,
                 status_line,
                 bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
@@ -326,6 +358,21 @@ pub fn viewAccountsWithLiveUpdates(
                             .redraw => needs_render = true,
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
+                                if (ch == 'c') {
+                                    credits_expanded = !credits_expanded;
+                                    needs_render = true;
+                                    continue;
+                                }
+                                if (ch == 'j') {
+                                    if (credits_cursor + 1 < rendered_row_count) credits_cursor += 1;
+                                    needs_render = true;
+                                    continue;
+                                }
+                                if (ch == 'k') {
+                                    if (credits_cursor > 0) credits_cursor -= 1;
+                                    needs_render = true;
+                                    continue;
+                                }
                             },
                             else => {},
                         }
