@@ -36,6 +36,8 @@ pub fn switchLiveUsageFieldsEqual(
     maybe_a: ?*const registry.AccountRecord,
     maybe_b: ?*const registry.AccountRecord,
 ) bool {
+    if ((if (maybe_a) |rec| rec.auth_expires_at else null) !=
+        (if (maybe_b) |rec| rec.auth_expires_at else null)) return false;
     const a_usage = if (maybe_a) |rec| rec.last_usage else null;
     const b_usage = if (maybe_b) |rec| rec.last_usage else null;
     if (!registry.rateLimitSnapshotsEqual(a_usage, b_usage)) return false;
@@ -82,6 +84,7 @@ pub fn applySwitchLiveUsageDeltaToLatest(
     const latest_rec = &latest.accounts.items[latest_idx];
     if (!switchLiveUsageFieldsEqual(base_rec, latest_rec)) return false;
 
+    latest_rec.auth_expires_at = refreshed_rec.auth_expires_at;
     if (refreshed_rec.last_usage) |snapshot| {
         const cloned_snapshot = try registry.cloneRateLimitSnapshot(allocator, snapshot);
         registry.updateUsage(allocator, latest, refreshed_rec.account_key, cloned_snapshot);
@@ -211,6 +214,7 @@ pub fn cloneAccountRecord(allocator: std.mem.Allocator, rec: *const registry.Acc
         .account_name = account_name,
         .plan = rec.plan,
         .auth_mode = rec.auth_mode,
+        .auth_expires_at = rec.auth_expires_at,
         .created_at = rec.created_at,
         .last_used_at = rec.last_used_at,
         .last_usage = last_usage,

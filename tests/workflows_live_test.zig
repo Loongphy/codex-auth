@@ -268,6 +268,7 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
     defer refreshed.deinit(gpa);
     try appendLiveMergeTestAccount(gpa, &refreshed, "user-alpha::acct-alpha", "alpha@example.com", "alpha");
     refreshed.accounts.items[0].account_name = try gpa.dupe(u8, "Alpha Workspace");
+    refreshed.accounts.items[0].auth_expires_at = 1790000000;
 
     var latest: registry.Registry = .{
         .schema_version = registry.current_schema_version,
@@ -287,6 +288,7 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
     const alpha_idx = findAccountIndexByAccountKeyConst(&latest, "user-alpha::acct-alpha") orelse return error.TestExpectedEqual;
     const beta_idx = findAccountIndexByAccountKeyConst(&latest, "user-beta::acct-beta") orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("Alpha Workspace", latest.accounts.items[alpha_idx].account_name.?);
+    try std.testing.expectEqual(@as(?i64, 1790000000), latest.accounts.items[alpha_idx].auth_expires_at);
     try std.testing.expect(latest.accounts.items[beta_idx].account_name == null);
 
     const usage_overrides = try gpa.alloc(?[]const u8, refreshed.accounts.items.len);

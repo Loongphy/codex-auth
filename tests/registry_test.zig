@@ -516,7 +516,7 @@ test "registry load normalizes schema four without previous active account key" 
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"previous_active_account_key\": null") != null);
 }
 
@@ -583,7 +583,7 @@ test "schema three registry plan values migrate to canonical product plans" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"team\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"business\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"plan\": \"enterprise\"") != null);
@@ -825,7 +825,7 @@ test "legacy schema registry with legacy rollout attribution rewrites to normali
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"active_account_activated_at_ms\": 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"last_attributed_rollout\"") == null);
 }
@@ -857,7 +857,7 @@ test "legacy current-layout registry version field rewrites to schema_version" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"interval_seconds\": 60") != null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"live\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, contents, "\"version\"") == null);
@@ -946,7 +946,7 @@ test "v2 registry migrates active email records to current schema" {
     defer file.close();
     const contents = try file.readToEndAlloc(gpa, 10 * 1024 * 1024);
     defer gpa.free(contents);
-    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, contents, "\"schema_version\": 5") != null);
     const active_expect = try std.fmt.allocPrint(gpa, "\"active_account_key\": \"{s}\"", .{expected_account_id});
     defer gpa.free(active_expect);
     try std.testing.expect(std.mem.indexOf(u8, contents, active_expect) != null);

@@ -10,6 +10,7 @@ pub const AuthInfo = struct {
     access_token: ?[]u8,
     openai_api_key: ?[]u8 = null,
     last_refresh: ?[]u8,
+    access_token_expires_at: ?i64 = null,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
 
@@ -90,6 +91,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                             .access_token = null,
                             .openai_api_key = try allocator.dupe(u8, trimmed),
                             .last_refresh = null,
+                            .access_token_expires_at = null,
                             .plan = null,
                             .auth_mode = .apikey,
                         };
@@ -193,6 +195,10 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                             const chatgpt_account_id = try resolveChatGptAccountId(token_chatgpt_account_id, jwt_chatgpt_account_id);
                                             const chatgpt_user_id_value = chatgpt_user_id orelse return error.MissingChatgptUserId;
                                             const record_key = try recordKeyAlloc(allocator, chatgpt_user_id_value, chatgpt_account_id);
+                                            const access_token_expires_at = if (access_token) |token|
+                                                jwtExpiryClaim(allocator, token) catch null
+                                            else
+                                                null;
 
                                             const info = AuthInfo{
                                                 .email = email,
@@ -202,6 +208,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 .access_token = access_token,
                                                 .openai_api_key = null,
                                                 .last_refresh = last_refresh,
+                                                .access_token_expires_at = access_token_expires_at,
                                                 .plan = plan,
                                                 .auth_mode = .chatgpt,
                                             };
@@ -238,6 +245,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
         .access_token = null,
         .openai_api_key = null,
         .last_refresh = null,
+        .access_token_expires_at = null,
         .plan = null,
         .auth_mode = .chatgpt,
     };
@@ -315,6 +323,27 @@ pub fn decodeJwtPayload(allocator: std.mem.Allocator, jwt: []const u8) ![]u8 {
 
     const decoded = try base64UrlNoPadDecode(allocator, payload_b64);
     return decoded;
+}
+
+fn jwtExpiryClaim(allocator: std.mem.Allocator, jwt: []const u8) !?i64 {
+    const payload = try decodeJwtPayload(allocator, jwt);
+    defer allocator.free(payload);
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+    const obj = switch (parsed.value) {
+        .object => |value| value,
+        else => return null,
+    };
+    const value = obj.get("exp") orelse return null;
+    return switch (value) {
+        .integer => |number| number,
+        .number_string, .string => |text| std.fmt.parseInt(i64, text, 10) catch null,
+        else => null,
+    };
+}
+
+pub fn accessTokenExpiresAt(allocator: std.mem.Allocator, jwt: []const u8) !?i64 {
+    return try jwtExpiryClaim(allocator, jwt);
 }
 
 fn base64UrlNoPadDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
