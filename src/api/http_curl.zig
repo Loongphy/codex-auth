@@ -122,6 +122,66 @@ fn runCurlBearerGetJsonCommand(
     return try runCurlJsonCommand(allocator, endpoint, &[_][]const u8{authorization});
 }
 
+pub fn runCurlPostJsonCommand(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    access_token: []const u8,
+    account_id: []const u8,
+    body_json: []const u8,
+) !HttpResult {
+    const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
+    defer allocator.free(curl_executable);
+
+    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    defer allocator.free(authorization);
+    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    defer allocator.free(account_header);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try appendCurlBaseArgs(allocator, &argv, curl_executable);
+
+    var curl_config = std.ArrayList(u8).empty;
+    defer curl_config.deinit(allocator);
+    try appendCurlConfigLine(allocator, &curl_config, "url", endpoint);
+    try appendCurlConfigLine(allocator, &curl_config, "header", "User-Agent: " ++ user_agent);
+    try appendCurlConfigLine(allocator, &curl_config, "header", "Accept: application/json");
+    try appendCurlConfigLine(allocator, &curl_config, "header", authorization);
+    try appendCurlConfigLine(allocator, &curl_config, "header", account_header);
+    try appendCurlConfigLine(allocator, &curl_config, "header", "Content-Type: application/json");
+    try appendCurlConfigLine(allocator, &curl_config, "data", body_json);
+
+    const result = runChildCaptureWithInputAndOutputLimit(
+        allocator,
+        argv.items,
+        curl_config.items,
+        child_process_timeout_ms_value,
+        null,
+        default_max_output_bytes,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.FileNotFound => return error.CurlRequired,
+        else => return err,
+    };
+    defer result.deinit(allocator);
+
+    if (result.timed_out) return error.TimedOut;
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            if (code == curl_timeout_exit_code) return error.TimedOut;
+            return error.RequestFailed;
+        },
+        else => return error.RequestFailed,
+    }
+
+    const parsed = try parseCurlHttpOutput(allocator, result.stdout);
+    return .{
+        .body = parsed.body,
+        .status_code = parsed.status_code,
+    };
+}
+
 fn runCurlGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,

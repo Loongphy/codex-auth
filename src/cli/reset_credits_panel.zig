@@ -4,70 +4,78 @@ const rows = @import("rows.zig");
 
 const available_status = "available";
 
-const Card = struct {
+pub const AvailableCard = struct {
+    id: []const u8,
     title: ?[]const u8,
     expires_at: ?[]const u8,
     epoch: ?i64,
 };
 
-/// Renders the interactive RESET CREDITS detail block for one account and returns
-/// the number of lines written. Lines are bounded to `max_cols` and terminated
-/// with '\n'. Read-only: this view never redeems; redemption happens inside a
-/// codex session when a rate limit is hit.
+/// Available (unconsumed) cards for one account, sorted by expiry ascending
+/// (no-expiry last). `consumed_ids` filters cards already used in this session.
+pub fn collectAvailable(
+    allocator: std.mem.Allocator,
+    account: *const registry.AccountRecord,
+    consumed_ids: []const []const u8,
+) ![]AvailableCard {
+    var cards: std.ArrayList(AvailableCard) = .empty;
+    errdefer cards.deinit(allocator);
+
+    const usage = account.last_usage orelse return cards.toOwnedSlice(allocator);
+    const details = usage.reset_credit_details orelse return cards.toOwnedSlice(allocator);
+
+    for (details.credits) |credit| {
+        if (!std.mem.eql(u8, credit.status, available_status)) continue;
+        var consumed = false;
+        for (consumed_ids) |used| {
+            if (std.mem.eql(u8, used, credit.id)) {
+                consumed = true;
+                break;
+            }
+        }
+        if (consumed) continue;
+        try cards.append(allocator, .{
+            .id = credit.id,
+            .title = credit.title,
+            .expires_at = credit.expires_at,
+            .epoch = parseIsoEpoch(credit.expires_at orelse ""),
+        });
+    }
+    std.mem.sort(AvailableCard, cards.items, {}, cardLessThan);
+    return cards.toOwnedSlice(allocator);
+}
+
+/// Renders the read-only RESET CREDITS detail block. Lines are bounded to
+/// `max_cols` and '\n'-terminated. `card_cursor` marks the selected credit
+/// (cursor ▸ + a status/granted detail line); `confirm_pending` asks for the
+/// second ⏎; `status_line` surfaces the result of the last action.
 pub fn render(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
-    account: *const registry.AccountRecord,
+    cards: []const AvailableCard,
     max_cols: usize,
     now: i64,
+    card_cursor: usize,
+    confirm_pending: bool,
+    status_line: ?[]const u8,
 ) !usize {
-    var cards: std.ArrayList(Card) = .empty;
-    defer cards.deinit(allocator);
-    var available: usize = 0;
-    var has_details = false;
-
-    if (account.last_usage) |usage| {
-        if (usage.reset_credit_details) |details| {
-            has_details = true;
-            for (details.credits) |credit| {
-                if (!std.mem.eql(u8, credit.status, available_status)) continue;
-                available += 1;
-                try cards.append(allocator, .{
-                    .title = credit.title,
-                    .expires_at = credit.expires_at,
-                    .epoch = parseIsoEpoch(credit.expires_at orelse ""),
-                });
-            }
-        }
-    }
-    if (!has_details) available = 0;
-    if (account.last_usage) |usage| {
-        if (has_details) {
-            if (usage.reset_credits) |count| available = @intCast(@max(0, count));
-        }
-    }
-
-    std.mem.sort(Card, cards.items, {}, cardLessThan);
-
     var lines: usize = 0;
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "RESET CREDITS · {d} available", .{available}) catch "RESET CREDITS";
+    const header = std.fmt.bufPrint(&header_buf, "RESET CREDITS · {d} available", .{cards.len}) catch "RESET CREDITS";
     try writeRule(writer, "┌ ", header, max_cols, true);
     try writer.writeByte('\n');
     lines += 1;
 
-    if (!has_details) {
-        try writeBounded(writer, "│ no reset-credit data · run `codex-auth list --api` to refresh", max_cols);
-        try writer.writeByte('\n');
-        lines += 1;
-    } else if (cards.items.len == 0) {
-        try writeBounded(writer, "│ no available reset credits", max_cols);
+    if (cards.len == 0) {
+        try writeBounded(writer, "│ no available reset credits · run `codex-auth list --api` to refresh", max_cols);
         try writer.writeByte('\n');
         lines += 1;
     } else {
-        for (cards.items) |card| {
+        for (cards, 0..) |card, index| {
+            const selected = index == card_cursor;
             var line: std.Io.Writer.Allocating = .init(allocator);
             defer line.deinit();
+            if (selected) try line.writer.writeAll("▸ ");
             try line.writer.writeAll(card.title orelse "(untitled)");
             if (card.expires_at) |expiry| {
                 if (parseIsoEpoch(expiry)) |epoch| {
@@ -82,14 +90,32 @@ pub fn render(
             } else {
                 try line.writer.writeAll(" · no expiry");
             }
+            if (selected and confirm_pending) try line.writer.writeAll(" · ⏎ again to use it");
             try writer.writeAll("│ ");
             try writeBounded(writer, line.written(), max_cols);
             try writer.writeByte('\n');
             lines += 1;
+            if (selected) {
+                var detail: std.Io.Writer.Allocating = .init(allocator);
+                defer detail.deinit();
+                try detail.writer.writeAll("    status available");
+                if (selected and confirm_pending) try detail.writer.writeAll(" · redeeming this resets the 5h/weekly windows");
+                try writer.writeAll("│ ");
+                try writeBounded(writer, detail.written(), max_cols);
+                try writer.writeByte('\n');
+                lines += 1;
+            }
         }
     }
 
-    try writeRule(writer, "└ ", "⏎ collapse", max_cols, false);
+    if (status_line) |message| {
+        try writer.writeAll("│ ");
+        try writeBounded(writer, message, max_cols);
+        try writer.writeByte('\n');
+        lines += 1;
+    }
+
+    try writeRule(writer, "└ ", "⏎ use · c collapse", max_cols, false);
     lines += 1;
     return lines;
 }
@@ -112,7 +138,7 @@ pub fn spliceAfterDataLine(allocator: std.mem.Allocator, body: []const u8, data_
     return allocator.dupe(u8, out.written());
 }
 
-fn cardLessThan(_: void, a: Card, b: Card) bool {
+fn cardLessThan(_: void, a: AvailableCard, b: AvailableCard) bool {
     const a_epoch = a.epoch orelse std.math.maxInt(i64);
     const b_epoch = b.epoch orelse std.math.maxInt(i64);
     return a_epoch < b_epoch;
