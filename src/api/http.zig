@@ -23,6 +23,7 @@ pub const ChildCaptureResult = types.ChildCaptureResult;
 pub const runGetJsonCommand = curl.runGetJsonCommand;
 pub const runBearerGetJsonCommand = curl.runBearerGetJsonCommand;
 pub const runGetJsonBatchCommand = curl.runGetJsonBatchCommand;
+pub const runPostJsonCommand = curl.runCurlPostJsonCommand;
 pub const ensureCurlExecutableAvailable = curl.ensureCurlExecutableAvailable;
 pub const resolveCurlExecutableAlloc = curl.resolveCurlExecutableAlloc;
 
