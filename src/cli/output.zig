@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const daemon = @import("../workflows/codex_daemon.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
@@ -9,6 +11,61 @@ const style = @import("style.zig");
 const io = @import("io.zig");
 
 const UsageError = types.UsageError;
+
+pub fn printCodexDaemonDiagnostic(home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    try writeCodexDaemonDiagnosticTo(stderr.out(), home, executable, outcome, requested);
+    try stderr.out().flush();
+}
+
+pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+    switch (outcome) {
+        .not_running => {
+            if (requested) try out.writeAll("Account files switched successfully; no running Codex daemon was found, so no restart was attempted.\n");
+            return;
+        },
+        .restarted => {
+            try out.writeAll("Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n");
+            return;
+        },
+        .running => try out.writeAll("A running Codex daemon may still use cached credentials. Use `switch --restart-daemon` to apply the selection or repair stale authentication. Restarting can interrupt attached sessions.\n"),
+        .unknown => try out.writeAll(if (requested)
+            "Account files switched successfully; daemon responsiveness could not be confirmed. The requested restart was not attempted.\n"
+        else
+            "Account files switched successfully; daemon responsiveness could not be confirmed. Its account state is unconfirmed.\n"),
+        .restart_failed => try out.writeAll("Account files switched successfully; requested daemon restart failed. The daemon may be stopping or starting; its account state is unconfirmed.\n"),
+        .timed_out => try out.writeAll("Account files switched successfully; daemon restart did not complete within 120 seconds. The daemon may still be stopping or starting; its account state is unconfirmed.\n"),
+        .unsupported => {
+            if (!requested) return;
+            try out.writeAll("Account files switched successfully; automatic daemon coordination is unsupported on this platform. Check which lifecycle commands your Codex installation supports.\n");
+        },
+    }
+    try out.writeAll("Check daemon status before retrying (a version response does not verify account identity):\n  ");
+    try writeDaemonCommandTo(out, home, executable, "version");
+    try out.writeAll("\nIf a restart is needed:\n  ");
+    try writeDaemonCommandTo(out, home, executable, "restart");
+    try out.writeAll("\n");
+}
+
+fn writeDaemonCommandTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, command: []const u8) !void {
+    try out.writeAll(if (builtin.os.tag == .windows) "$env:CODEX_HOME = " else "CODEX_HOME=");
+    try writeShellArgumentTo(out, home);
+    try out.writeAll(if (builtin.os.tag == .windows) "; & " else " ");
+    try writeShellArgumentTo(out, executable);
+    try out.print(" app-server daemon {s}", .{command});
+}
+
+fn writeShellArgumentTo(out: *std.Io.Writer, arg: []const u8) !void {
+    try out.writeAll("'");
+    var parts = std.mem.splitScalar(u8, arg, '\'');
+    try out.writeAll(parts.first());
+    while (parts.next()) |part| {
+        try out.writeAll(if (builtin.os.tag == .windows) "''" else "'\\''");
+        try out.writeAll(part);
+    }
+    try out.writeAll("'");
+}
 
 fn importReportStyle(outcome: registry.ImportOutcome) []const u8 {
     return switch (outcome) {

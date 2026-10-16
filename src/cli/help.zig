@@ -49,6 +49,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
     try writeCommandDetail(out, use_color, "switch <query> --json");
+    try writeCommandDetail(out, use_color, "switch <query> --restart-daemon");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
@@ -214,6 +215,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
             try out.writeAll("  codex-auth switch <query> --json\n");
+            try out.writeAll("  codex-auth switch [<query>|-] --restart-daemon\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
@@ -287,6 +289,9 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive switch.\n");
+            try out.writeAll("  --restart-daemon\n");
+            try out.writeAll("               Restart a responsive daemon after switching, including unchanged-file recovery.\n");
+            try out.writeAll("               Can interrupt attached sessions; cannot be combined with --live.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
             try out.writeAll("  -            Switch to the previous active account.\n");
@@ -365,6 +370,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
             try out.writeAll("  codex-auth switch personal\n");
+            try out.writeAll("  codex-auth switch personal --restart-daemon\n");
             try out.writeAll("  codex-auth switch john@example.com\n");
             try out.writeAll("  codex-auth switch 02\n");
             try out.writeAll("  codex-auth switch work\n");
