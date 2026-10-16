@@ -352,6 +352,12 @@ fn loadCurrentRegistry(allocator: std.mem.Allocator, root_obj: std.json.ObjectMa
     }
 
     parseRegistryLiveConfig(&reg.live, root_obj);
+    if (root_obj.get("codex_daemon_restart")) |v| {
+        switch (v) {
+            .bool => |b| reg.codex_daemon_restart = b,
+            else => {},
+        }
+    }
 
     return reg;
 }

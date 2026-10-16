@@ -61,7 +61,10 @@ pub const CleanOptions = struct {
 pub const LiveOptions = struct {
     interval_seconds: u16,
 };
-pub const ConfigOptions = union(enum) { live: LiveOptions };
+pub const DaemonOptions = struct {
+    restart: bool,
+};
+pub const ConfigOptions = union(enum) { live: LiveOptions, daemon: DaemonOptions };
 pub const AppAction = enum { launch };
 pub const AppPlatform = enum { win, wsl, mac };
 pub const AppOptions = struct {

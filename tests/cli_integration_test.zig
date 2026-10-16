@@ -4786,6 +4786,177 @@ test "Scenario: Given config live interval when running command then registry st
     try std.testing.expect(std.mem.indexOf(u8, data, "\"live\"") == null);
 }
 
+test "Scenario: Given config daemon restart off when running command then registry stores the setting" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const config_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "config", "daemon", "--restart", "off" });
+    defer gpa.free(config_result.stdout);
+    defer gpa.free(config_result.stderr);
+    try expectSuccess(config_result);
+    try std.testing.expectEqualStrings("Codex daemon restart after switch: off\n", config_result.stdout);
+    try std.testing.expectEqualStrings("", config_result.stderr);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    try std.testing.expect(!loaded.codex_daemon_restart);
+
+    const registry_path = try registry.registryPath(gpa, codex_home);
+    defer gpa.free(registry_path);
+    const data = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(data);
+    try std.testing.expect(std.mem.indexOf(u8, data, "\"codex_daemon_restart\": false") != null);
+}
+
+fn seedActiveAndBackupAccounts(gpa: std.mem.Allocator, dir: fs.Dir, home_root: []const u8) !void {
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const active_snapshot_path = try registry.accountAuthPath(gpa, codex_home, active_key);
+    defer gpa.free(active_snapshot_path);
+    const backup_snapshot_path = try registry.accountAuthPath(gpa, codex_home, backup_key);
+    defer gpa.free(backup_snapshot_path);
+
+    const active_auth = try fixtures.authJsonWithEmailPlan(gpa, "active@example.com", "team");
+    defer gpa.free(active_auth);
+    const backup_auth = try fixtures.authJsonWithEmailPlan(gpa, "backup@example.com", "plus");
+    defer gpa.free(backup_auth);
+
+    try dir.writeFile(.{ .sub_path = ".codex/auth.json", .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = active_snapshot_path, .data = active_auth });
+    try fs.cwd().writeFile(.{ .sub_path = backup_snapshot_path, .data = backup_auth });
+}
+
+// Stands in for a running Codex app-server daemon: its control socket and the managed binary.
+fn writeFakeCodexDaemon(dir: fs.Dir, exit_code: u8) !void {
+    try dir.makePath(".codex/app-server-control");
+    try dir.writeFile(.{ .sub_path = ".codex/app-server-control/app-server-control.sock", .data = "" });
+    try dir.makePath(".codex/packages/app-server-daemon/current/bin");
+
+    var script_buf: [160]u8 = undefined;
+    const script = try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/fake-daemon-argv.txt\"\nprintf '%s\\n' \"$CODEX_HOME\" >> \"$HOME/fake-daemon-argv.txt\"\nexit {d}\n", .{exit_code});
+    const sub_path = ".codex/packages/app-server-daemon/current/bin/codex";
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+    var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o755);
+}
+
+test "Scenario: Given a running Codex daemon when switching then the daemon is restarted" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try seedActiveAndBackupAccounts(gpa, tmp.dir, home_root);
+    try writeFakeCodexDaemon(tmp.dir, 0);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "switch", "backup@" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings(
+        "Switched to backup(backup@example.com)\nRestarted the Codex app-server daemon; open Codex sessions reconnect with this account.\n",
+        result.stdout,
+    );
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-daemon-argv.txt" });
+    defer gpa.free(argv_path);
+    const argv_data = try fixtures.readFileAlloc(gpa, argv_path);
+    defer gpa.free(argv_data);
+    const expected_argv = try std.fmt.allocPrint(gpa, "app-server daemon restart\n{s}\n", .{codex_home});
+    defer gpa.free(expected_argv);
+    try std.testing.expectEqualStrings(expected_argv, argv_data);
+}
+
+test "Scenario: Given daemon restart is off when switching then the daemon is left running with a hint" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try seedActiveAndBackupAccounts(gpa, tmp.dir, home_root);
+    try writeFakeCodexDaemon(tmp.dir, 0);
+
+    const config_result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "config", "daemon", "--restart", "off" });
+    defer gpa.free(config_result.stdout);
+    defer gpa.free(config_result.stderr);
+    try expectSuccess(config_result);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "switch", "backup@" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.startsWith(u8, result.stdout, "Switched to backup(backup@example.com)\nhint: the Codex app-server daemon still uses the previous account."));
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "`codex-auth config daemon --restart on`") != null);
+
+    const argv_path = try fs.path.join(gpa, &[_][]const u8{ home_root, "fake-daemon-argv.txt" });
+    defer gpa.free(argv_path);
+    try std.testing.expectError(error.FileNotFound, fs.cwd().access(argv_path, .{}));
+}
+
+test "Scenario: Given the daemon restart fails when switching then the switch succeeds with a hint" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    try seedActiveAndBackupAccounts(gpa, tmp.dir, home_root);
+    try writeFakeCodexDaemon(tmp.dir, 1);
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "switch", "backup@" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.startsWith(u8, result.stdout, "Switched to backup(backup@example.com)\nhint: could not restart the Codex app-server daemon"));
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, backup_key));
+}
+
 test "Scenario: Given default api usage when listing accounts then no warning is printed" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

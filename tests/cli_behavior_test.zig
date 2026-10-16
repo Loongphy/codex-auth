@@ -551,6 +551,7 @@ test "Scenario: Given config help when rendering then live mode is explained" {
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "live --interval <seconds>\n                    Set the live TUI refresh interval from 5 to 3600 seconds.") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config live --interval 60") != null);
+    try std.testing.expect(std.mem.indexOf(u8, config_help, "codex-auth config daemon --restart on|off") != null);
     try std.testing.expect(std.mem.indexOf(u8, config_help, "auto") == null);
 }
 
@@ -695,6 +696,7 @@ test "Scenario: Given config live interval when parsing then interval is preserv
         .command => |cmd| switch (cmd) {
             .config => |opts| switch (opts) {
                 .live => |live_opts| try std.testing.expectEqual(@as(u16, 30), live_opts.interval_seconds),
+                else => return error.TestExpectedEqual,
             },
             else => return error.TestExpectedEqual,
         },
@@ -718,6 +720,47 @@ test "Scenario: Given config live unknown flag when parsing then usage error is 
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .config, "unknown flag `--refresh` for `config live`.");
+}
+
+test "Scenario: Given config daemon restart when parsing then the setting is preserved" {
+    const gpa = std.testing.allocator;
+    for ([_]struct { raw: [:0]const u8, expected: bool }{
+        .{ .raw = "on", .expected = true },
+        .{ .raw = "off", .expected = false },
+    }) |case| {
+        const args = [_][:0]const u8{ "codex-auth", "config", "daemon", "--restart", case.raw };
+        var result = try cli.commands.parseArgs(gpa, &args);
+        defer cli.commands.freeParseResult(gpa, &result);
+
+        switch (result) {
+            .command => |cmd| switch (cmd) {
+                .config => |opts| switch (opts) {
+                    .daemon => |daemon_opts| try std.testing.expectEqual(case.expected, daemon_opts.restart),
+                    else => return error.TestExpectedEqual,
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        }
+    }
+}
+
+test "Scenario: Given config daemon invalid value when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "daemon", "--restart", "yes" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .config, "`--restart` must be `on` or `off`.");
+}
+
+test "Scenario: Given config daemon unknown flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "daemon", "--kill", "on" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .config, "unknown flag `--kill` for `config daemon`.");
 }
 
 test "Scenario: Given alias set when parsing then selector and alias are preserved" {

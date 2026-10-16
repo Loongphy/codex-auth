@@ -61,6 +61,7 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "clean background");
     try writeCommandSummary(out, use_color, "config", "Manage configuration");
     try writeCommandDetail(out, use_color, "config live --interval <seconds>");
+    try writeCommandDetail(out, use_color, "config daemon --restart on|off");
     try writeCommandSummary(out, use_color, "app", "Launch Codex App with CLI overrides");
 
     try out.writeAll("\n");
@@ -151,7 +152,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
-        .config => "Manage live refresh configuration.",
+        .config => "Manage live refresh and Codex daemon configuration.",
         .app => "Launch Codex App with CLI overrides.",
     };
 }
@@ -231,6 +232,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval <seconds>\n");
+            try out.writeAll("  codex-auth config daemon --restart on|off\n");
         },
         .app => {
             try out.writeAll("  codex-auth app [--id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]\n");
@@ -309,6 +311,8 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .config => {
             try out.writeAll("  live --interval <seconds>\n");
             try out.writeAll("                    Set the live TUI refresh interval from 5 to 3600 seconds.\n");
+            try out.writeAll("  daemon --restart on|off\n");
+            try out.writeAll("                    Restart a running Codex app-server daemon after switching (default: on).\n");
         },
         .app => {
             try out.writeAll("  --id <id>          Windows package/AUMID or macOS bundle identifier.\n");
@@ -391,6 +395,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         },
         .config => {
             try out.writeAll("  codex-auth config live --interval 60\n");
+            try out.writeAll("  codex-auth config daemon --restart off\n");
         },
         .app => {
             try out.writeAll("  codex-auth app\n");

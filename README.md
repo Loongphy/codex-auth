@@ -77,6 +77,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
+| [`codex-auth config daemon --restart on\|off`](./docs/commands/config.md) | Restart the Codex app-server daemon after switching (default: on) |
 
 ## Quick Examples
 
