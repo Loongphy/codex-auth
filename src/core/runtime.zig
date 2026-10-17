@@ -1,45 +1,51 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-var io_init_mutex: std.Io.Mutex = .init;
-var io_instance: std.Io.Threaded = undefined;
-var io_initialized = false;
+var runtime_init: ?std.process.Init = null;
+
+pub fn initRuntime(init: std.process.Init) void {
+    std.debug.assert(runtime_init == null);
+    runtime_init = init;
+}
+
+pub fn deinitRuntime() void {
+    runtime_init = null;
+}
 
 pub fn currentEnviron() std.process.Environ {
-    const env_block: std.process.Environ.Block = switch (builtin.os.tag) {
-        .windows => .global,
-        else => blk: {
-            const c_environ = std.c.environ;
-            var env_count: usize = 0;
-            while (c_environ[env_count] != null) : (env_count += 1) {}
-            break :blk .{ .slice = c_environ[0..env_count :null] };
-        },
+    if (runtime_init) |init| return init.minimal.environ;
+    if (builtin.is_test) return std.testing.environ;
+    @panic("app_runtime.initRuntime must be called during startup");
+}
+
+pub fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
+    if (runtime_init) |init| return init.environ_map.clone(allocator);
+    return currentEnviron().createMap(allocator);
+}
+
+pub fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    if (runtime_init) |init| {
+        const value = init.environ_map.get(name) orelse return error.EnvironmentVariableNotFound;
+        return allocator.dupe(u8, value);
+    }
+    return currentEnviron().getAlloc(allocator, name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => error.EnvironmentVariableNotFound,
+        else => err,
     };
-    return .{ .block = env_block };
 }
 
-fn bootstrapIo() std.Io {
-    return std.Io.Threaded.global_single_threaded.io();
-}
-
-fn ensureIoInitialized() void {
-    if (@atomicLoad(bool, &io_initialized, .acquire)) return;
-
-    const bootstrap_io = bootstrapIo();
-    io_init_mutex.lockUncancelable(bootstrap_io);
-    defer io_init_mutex.unlock(bootstrap_io);
-
-    if (@atomicLoad(bool, &io_initialized, .acquire)) return;
-
-    io_instance = std.Io.Threaded.init(std.heap.page_allocator, .{
-        .environ = currentEnviron(),
-    });
-    @atomicStore(bool, &io_initialized, true, .release);
+pub fn envHasValue(comptime name: []const u8) bool {
+    if (runtime_init) |init| {
+        const value = init.environ_map.get(name) orelse return false;
+        return value.len != 0;
+    }
+    return currentEnviron().containsUnemptyConstant(name);
 }
 
 pub fn io() std.Io {
-    ensureIoInitialized();
-    return io_instance.io();
+    if (runtime_init) |init| return init.io;
+    if (builtin.is_test) return std.testing.io;
+    @panic("app_runtime.initRuntime must be called during startup");
 }
 
 pub fn dupeOwnedNoSentinel(allocator: std.mem.Allocator, z_bytes: [:0]u8) ![]u8 {

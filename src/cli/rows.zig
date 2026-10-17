@@ -5,9 +5,7 @@ const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const timefmt = @import("../time/relative.zig");
 const text_width = @import("../tui/text_width.zig");
-const c = @cImport({
-    @cInclude("time.h");
-});
+const c = @import("c_time");
 
 pub const SwitchWidths = struct {
     email: usize,
@@ -244,20 +242,20 @@ pub fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallb
 }
 
 fn formatRateLimitSwitchAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(allocator, "-", .{});
+    if (window == null) return try allocator.print("-", .{});
+    if (window.?.resets_at == null) return try allocator.print("-", .{});
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(allocator, "100%", .{});
+        return try allocator.print("100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
     var parts = try resetPartsAlloc(allocator, reset_at, now);
     defer parts.deinit(allocator);
     if (parts.same_day) {
-        return std.fmt.allocPrint(allocator, "{d}% ({s})", .{ remaining, parts.time });
+        return allocator.print("{d}% ({s})", .{ remaining, parts.time });
     }
-    return std.fmt.allocPrint(allocator, "{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
+    return allocator.print("{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
 }
 
 const ResetParts = struct {
@@ -300,16 +298,16 @@ fn resetPartsAlloc(allocator: std.mem.Allocator, reset_at: i64, now: i64) !Reset
     var tm: c.struct_tm = undefined;
     if (!localtimeCompat(reset_at, &tm)) {
         return ResetParts{
-            .time = try std.fmt.allocPrint(allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(allocator, "-", .{}),
+            .time = try allocator.print("-", .{}),
+            .date = try allocator.print("-", .{}),
             .same_day = true,
         };
     }
     var now_tm: c.struct_tm = undefined;
     if (!localtimeCompat(now, &now_tm)) {
         return ResetParts{
-            .time = try std.fmt.allocPrint(allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(allocator, "-", .{}),
+            .time = try allocator.print("-", .{}),
+            .date = try allocator.print("-", .{}),
             .same_day = true,
         };
     }
@@ -334,8 +332,8 @@ fn resetPartsAlloc(allocator: std.mem.Allocator, reset_at: i64, now: i64) !Reset
     };
     const month_idx: usize = if (tm.tm_mon < 0) 0 else @min(@as(usize, @intCast(tm.tm_mon)), months.len - 1);
     return ResetParts{
-        .time = try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}", .{ hour, min }),
-        .date = try std.fmt.allocPrint(allocator, "{d} {s}", .{ day, months[month_idx] }),
+        .time = try allocator.print("{d:0>2}:{d:0>2}", .{ hour, min }),
+        .date = try allocator.print("{d} {s}", .{ day, months[month_idx] }),
         .same_day = same_day,
     };
 }

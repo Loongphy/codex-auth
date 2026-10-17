@@ -394,7 +394,7 @@ fn liveTableRemovePrefix(
 
 fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
     var buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
+    const idx_str = std.mem.print(&buf, "{d}", .{idx}) catch "0";
     if (idx_str.len < width) {
         try out.splatByteAll('0', width - idx_str.len);
     }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const test_options = @import("test_options");
 const app_runtime = @import("codex_auth").core.runtime;
 const fs = @import("codex_auth").core.compat_fs;
 const builtin = @import("builtin");
@@ -12,15 +13,11 @@ var cli_build_ready = false;
 var cli_build_mutex: std.Io.Mutex = .init;
 
 fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return try app_runtime.currentEnviron().createMap(allocator);
+    return app_runtime.getEnvMap(allocator);
 }
 
 fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    var env_map = try getEnvMap(allocator);
-    defer env_map.deinit();
-
-    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
-    return try allocator.dupe(u8, value);
+    return app_runtime.getEnvVarOwned(allocator, name);
 }
 
 const SeedAccount = struct {
@@ -37,9 +34,7 @@ fn projectRootAlloc(allocator: std.mem.Allocator) ![]u8 {
         else => return err,
     };
     if (project_root) |path| return path;
-    const tests_dir = std.fs.path.dirname(@src().file) orelse return error.FileNotFound;
-    const repo_root = std.fs.path.dirname(tests_dir) orelse return error.FileNotFound;
-    return try allocator.dupe(u8, repo_root);
+    return fs.realpathAlloc(allocator, test_options.project_root);
 }
 
 fn runCapture(
@@ -105,7 +100,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
     try env_map.put(cli_integration_install_prefix_env, install_prefix);
 
-    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ "zig", "build", "-p", install_prefix, "test-helpers" });
+    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ test_options.zig_exe, "build", "-p", install_prefix, "test-helpers" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
@@ -157,9 +152,9 @@ fn fakeBareWindowsCodexPath() []const u8 {
 fn writeFailingFakeCodex(dir: fs.Dir, exit_code: u8) !void {
     var script_buf: [128]u8 = undefined;
     const script = if (builtin.os.tag == .windows)
-        try std.fmt.bufPrint(&script_buf, "@echo off\r\n>\"%HOME%\\fake-codex-argv.txt\" echo %*\r\nexit /b {d}\r\n", .{exit_code})
+        try std.mem.print(&script_buf, "@echo off\r\n>\"%HOME%\\fake-codex-argv.txt\" echo %*\r\nexit /b {d}\r\n", .{exit_code})
     else
-        try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\nexit {d}\n", .{exit_code});
+        try std.mem.print(&script_buf, "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\nexit {d}\n", .{exit_code});
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
@@ -316,7 +311,7 @@ fn writeFailingFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root:
     }
 
     var script_buf: [160]u8 = undefined;
-    const script = try std.fmt.bufPrint(&script_buf, "#!/bin/sh\nexit 1\n", .{});
+    const script = try std.mem.print(&script_buf, "#!/bin/sh\nexit 1\n", .{});
     const sub_path = fakeCurlCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
@@ -339,8 +334,7 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     const me_body = "{\"id\":\"user_api_e2e\",\"email\":\"apikey-flow@example.com\",\"name\":\"API Flow\"}";
     const usage_body = "{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":12,\"limit_window_seconds\":18000,\"reset_at\":4102444800},\"secondary_window\":{\"used_percent\":34,\"limit_window_seconds\":604800,\"reset_at\":4103049600}}}";
 
-    const script = try std.fmt.allocPrint(
-        allocator,
+    const script = try allocator.print(
         "#!/bin/sh\n" ++
             "config=$(cat)\n" ++
             "case \"$config\" in\n" ++
@@ -400,7 +394,7 @@ fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
-    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
+    return try allocator.print("{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
 }
 
 fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
@@ -726,7 +720,7 @@ fn countAuthBackups(dir: fs.Dir, rel_path: []const u8) !usize {
 fn legacySnapshotNameForEmail(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
     const encoded = try fixtures.b64url(allocator, email);
     defer allocator.free(encoded);
-    return try std.fmt.allocPrint(allocator, "{s}.auth.json", .{encoded});
+    return try allocator.print("{s}.auth.json", .{encoded});
 }
 
 fn seedRegistryWithAccounts(
@@ -797,8 +791,7 @@ fn writeLocalRolloutUsage(
     primary_used_percent: f64,
     secondary_used_percent: f64,
 ) !void {
-    const contents = try std.fmt.allocPrint(
-        std.testing.allocator,
+    const contents = try std.testing.allocator.print(
         "{{\"timestamp\":\"2025-01-01T00:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":{d:.1},\"window_minutes\":300,\"resets_at\":{d}}},\"secondary\":{{\"used_percent\":{d:.1},\"window_minutes\":10080,\"resets_at\":{d}}},\"plan_type\":\"pro\"}}}}}}\n",
         .{
             primary_used_percent,
@@ -819,7 +812,7 @@ fn appendCustomAccount(
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, record_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -882,7 +875,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     defer gpa.free(argv_path);
     const argv_data = try fixtures.readFileAlloc(gpa, argv_path);
     defer gpa.free(argv_data);
-    try std.testing.expect(std.mem.indexOf(u8, argv_data, "login --device-auth") != null);
+    try std.testing.expect(std.mem.find(u8, argv_data, "login --device-auth") != null);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -893,7 +886,7 @@ test "Scenario: Given device auth login when running login then it forwards the 
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
     try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expect(std.mem.find(u8, fake_codex_home, "login-") != null);
     try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -965,7 +958,7 @@ test "Scenario: Given strict codex login when running login then scratch CODEX_H
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
     try std.testing.expect(!std.mem.eql(u8, fake_codex_home, codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expect(std.mem.find(u8, fake_codex_home, "login-") != null);
     try std.testing.expectError(error.FileNotFound, fs.cwd().access(fake_codex_home, .{}));
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -1193,7 +1186,7 @@ test "Scenario: Given an earlier PowerShell launcher and a later exe launcher wh
     defer gpa.free(exe_bin_path);
     const exe_then_inherited_path = try prependPathEntryAlloc(gpa, exe_bin_path);
     defer gpa.free(exe_then_inherited_path);
-    const path_override = try std.fmt.allocPrint(gpa, "{s}{c}{s}", .{
+    const path_override = try gpa.print("{s}{c}{s}", .{
         ps1_bin_path,
         fs.path.delimiter,
         exe_then_inherited_path,
@@ -1335,7 +1328,7 @@ test "Scenario: Given CODEX_HOME override when running login then it stores auth
     defer gpa.free(fake_codex_home_data);
     const fake_codex_home = std.mem.trim(u8, fake_codex_home_data, " \r\n");
     try std.testing.expect(!std.mem.eql(u8, fake_codex_home, custom_codex_home));
-    try std.testing.expect(std.mem.indexOf(u8, fake_codex_home, "login-") != null);
+    try std.testing.expect(std.mem.find(u8, fake_codex_home, "login-") != null);
 
     const default_auth_path = try authJsonPathAlloc(gpa, home_root);
     defer gpa.free(default_auth_path);
@@ -1389,7 +1382,7 @@ test "Scenario: Given failed device auth login with existing auth json when runn
     defer gpa.free(argv_path);
     const argv_data = try fixtures.readFileAlloc(gpa, argv_path);
     defer gpa.free(argv_data);
-    try std.testing.expect(std.mem.indexOf(u8, argv_data, "login --device-auth") != null);
+    try std.testing.expect(std.mem.find(u8, argv_data, "login --device-auth") != null);
 
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile(".codex/accounts/registry.json", .{}));
 
@@ -1430,7 +1423,7 @@ test "Scenario: Given first-time use on v0.2 with an existing auth.json and no a
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, email) != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, email) != null);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
     defer gpa.free(codex_home);
@@ -1515,8 +1508,8 @@ test "Scenario: Given upgrade from v0.1.x to v0.2 with legacy accounts data when
 
     try expectSuccess(result);
     try std.testing.expect(
-        std.mem.indexOf(u8, result.stdout, email) != null or
-            std.mem.indexOf(u8, result.stdout, "legacy") != null,
+        std.mem.find(u8, result.stdout, email) != null or
+            std.mem.find(u8, result.stdout, "legacy") != null,
     );
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
@@ -1614,8 +1607,8 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     logRunResultIfFailed("api key import", import_result);
     try expectSuccess(import_result);
-    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "imported") != null);
-    try std.testing.expect(std.mem.indexOf(u8, import_result.stdout, "api-key") != null);
+    try std.testing.expect(std.mem.find(u8, import_result.stdout, "imported") != null);
+    try std.testing.expect(std.mem.find(u8, import_result.stdout, "api-key") != null);
     try std.testing.expectEqualStrings("", import_result.stderr);
 
     const codex_home = try codexHomeAlloc(gpa, home_root);
@@ -1633,13 +1626,13 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
     defer gpa.free(api_snapshot_path);
     const api_snapshot = try fixtures.readFileAlloc(gpa, api_snapshot_path);
     defer gpa.free(api_snapshot);
-    try std.testing.expect(std.mem.indexOf(u8, api_snapshot, api_key) != null);
+    try std.testing.expect(std.mem.find(u8, api_snapshot, api_key) != null);
 
     const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
     defer gpa.free(registry_path);
     const registry_data = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(registry_data);
-    try std.testing.expect(std.mem.indexOf(u8, registry_data, api_key) == null);
+    try std.testing.expect(std.mem.find(u8, registry_data, api_key) == null);
 
     registry.updateUsage(gpa, &loaded, api_account_key, makeUsageSnapshot(88, 66));
     const api_idx = registry.findAccountIndexByAccountKey(&loaded, api_account_key) orelse return error.TestExpectedEqual;
@@ -1669,10 +1662,10 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     logRunResultIfFailed("api key list before stale snapshot", first_list);
     try expectSuccess(first_list);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "apikey-flow@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "API_KEY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, first_list.stdout, "MissingAuth") == null);
+    try std.testing.expect(std.mem.find(u8, first_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, first_list.stdout, "chatgpt-flow@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, first_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.find(u8, first_list.stdout, "MissingAuth") == null);
     try std.testing.expectEqualStrings("", first_list.stderr);
 
     var refreshed = try registry.loadRegistry(gpa, codex_home);
@@ -1698,9 +1691,9 @@ test "Scenario: Given API key import when listing with api refresh then stale sn
 
     logRunResultIfFailed("api key list after stale snapshot", second_list);
     try expectSuccess(second_list);
-    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "apikey-flow@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "API_KEY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, second_list.stdout, "MissingAuth") == null);
+    try std.testing.expect(std.mem.find(u8, second_list.stdout, "apikey-flow@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, second_list.stdout, "API_KEY") != null);
+    try std.testing.expect(std.mem.find(u8, second_list.stdout, "MissingAuth") == null);
     try std.testing.expectEqualStrings("", second_list.stderr);
 
     var refreshed_again = try registry.loadRegistry(gpa, codex_home);
@@ -1737,13 +1730,12 @@ test "Scenario: Given single-file import missing email when running import then 
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("Import Summary: 0 imported, 1 skipped\n", result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(
-        gpa,
+    const expected_stderr = try gpa.print(
         "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n",
         .{},
     );
     defer gpa.free(expected_stderr);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, expected_stderr) != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, expected_stderr) != null);
 }
 
 test "Scenario: Given purge with no recoverable active auth when running import then it activates the first rebuilt account and backs up auth json" {
@@ -1786,7 +1778,7 @@ test "Scenario: Given purge with no recoverable active auth when running import 
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Import Summary: 2 imported, 0 updated, 0 skipped (total 2 files)\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Import Summary: 2 imported, 0 updated, 0 skipped (total 2 files)\n") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const active_auth_path = try authJsonPathAlloc(gpa, home_root);
@@ -1881,8 +1873,7 @@ test "Scenario: Given directory import with new updated and invalid files when r
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning {s}...\n" ++
             "  updated   token_jane.smith.alpha@email.com.json\n" ++
             "  imported  token_john.doe.alpha@email.com.json\n" ++
@@ -1893,8 +1884,7 @@ test "Scenario: Given directory import with new updated and invalid files when r
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(
-        gpa,
+    const expected_stderr = try gpa.print(
         "  skipped   token_alice.brown.alpha@email.com.json: MissingChatgptUserId\n" ++
             "  skipped   token_bob.wilson.alpha@email.com.json: MissingEmail\n" ++
             "  skipped   token_invalid.json: InvalidJSON\n",
@@ -1931,7 +1921,7 @@ test "Scenario: Given directory import with regular files and array files when r
     defer gpa.free(first_array_auth);
     const second_array_auth = try fixtures.authJsonWithEmailPlan(gpa, "frank.array@example.com", "team");
     defer gpa.free(second_array_auth);
-    const array_auth = try std.fmt.allocPrint(gpa, "[{s},{s}]", .{ first_array_auth, second_array_auth });
+    const array_auth = try gpa.print("[{s},{s}]", .{ first_array_auth, second_array_auth });
     defer gpa.free(array_auth);
     try tmp.dir.writeFile(.{ .sub_path = "imports/tokens_array.json", .data = array_auth });
 
@@ -1939,7 +1929,7 @@ test "Scenario: Given directory import with regular files and array files when r
     defer gpa.free(mixed_valid_auth);
     const mixed_invalid_auth = try fixtures.authJsonWithoutEmail(gpa);
     defer gpa.free(mixed_invalid_auth);
-    const mixed_array_auth = try std.fmt.allocPrint(gpa, "[{s},{s}]", .{ mixed_valid_auth, mixed_invalid_auth });
+    const mixed_array_auth = try gpa.print("[{s},{s}]", .{ mixed_valid_auth, mixed_invalid_auth });
     defer gpa.free(mixed_array_auth);
     try tmp.dir.writeFile(.{ .sub_path = "imports/tokens_array_mixed.json", .data = mixed_array_auth });
 
@@ -1953,8 +1943,7 @@ test "Scenario: Given directory import with regular files and array files when r
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning {s}...\n" ++
             "  imported  another_token_file.json\n" ++
             "  imported  one_token_file.json\n" ++
@@ -2001,8 +1990,7 @@ test "Scenario: Given directory import with an empty json file when running impo
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning {s}...\n" ++
             "  imported  valid.json\n" ++
             "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
@@ -2010,7 +1998,7 @@ test "Scenario: Given directory import with an empty json file when running impo
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   empty.json: InvalidJSON\n", .{});
+    const expected_stderr = try gpa.print("  skipped   empty.json: InvalidJSON\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 
@@ -2050,8 +2038,7 @@ test "Scenario: Given directory import with a broken symlink when running import
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning {s}...\n" ++
             "  imported  valid.json\n" ++
             "Import Summary: 1 imported, 0 updated, 1 skipped (total 2 files)\n",
@@ -2059,7 +2046,7 @@ test "Scenario: Given directory import with a broken symlink when running import
     );
     defer gpa.free(expected_stdout);
     try std.testing.expectEqualStrings(expected_stdout, result.stdout);
-    const expected_stderr = try std.fmt.allocPrint(gpa, "  skipped   broken.json: FileNotFound\n", .{});
+    const expected_stderr = try gpa.print("  skipped   broken.json: FileNotFound\n", .{});
     defer gpa.free(expected_stderr);
     try std.testing.expectEqualStrings(expected_stderr, result.stderr);
 
@@ -2099,8 +2086,7 @@ test "Scenario: Given cpa directory in default location when running import cpa 
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    const expected_stdout = try std.fmt.allocPrint(
-        gpa,
+    const expected_stdout = try gpa.print(
         "Scanning ~/.cli-proxy-api...\n" ++
             "  imported  first.json\n" ++
             "  imported  no-refresh.json\n" ++
@@ -2174,8 +2160,8 @@ test "Scenario: Given cpa file import when running import cpa then it stores a s
     defer gpa.free(snapshot_path);
     const snapshot_data = try fixtures.readFileAlloc(gpa, snapshot_path);
     defer gpa.free(snapshot_data);
-    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"tokens\": {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, snapshot_data, "\"refresh_token\": \"refresh-single-file-cpa@example.com\"") != null);
+    try std.testing.expect(std.mem.find(u8, snapshot_data, "\"tokens\": {") != null);
+    try std.testing.expect(std.mem.find(u8, snapshot_data, "\"refresh_token\": \"refresh-single-file-cpa@example.com\"") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -2199,10 +2185,10 @@ test "Scenario: Given default api usage when rendering help then skip-api note s
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "codex-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Usage API:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Account API:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "API-backed refresh is the default") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "codex-auth") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Usage API:") == null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Account API:") == null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "API-backed refresh is the default") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -2622,7 +2608,7 @@ test "Scenario: Given alias set with duplicate alias when running alias then it 
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "alias 'ACTIVE' is already used by active@example.com.") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "alias 'ACTIVE' is already used by active@example.com.") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -2689,11 +2675,11 @@ test "Scenario: Given switch query with multiple matches when running switch the
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "alpha@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "solo@example.com") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to team-b(beta@example.com)") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Select account to activate:") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "beta@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "solo@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Switched to team-b(beta@example.com)") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -2744,8 +2730,8 @@ test "Scenario: Given switch query with no matches when running switch then it e
             "hint: Switch accepts one target: alias, email, display number, or partial query.\n",
         result.stderr,
     );
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "main.zig") == null);
 }
 
 test "Scenario: Given list default mode when running list then it requires api refresh executables" {
@@ -2778,7 +2764,7 @@ test "Scenario: Given list default mode when running list then it requires api r
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given list with skip-api when running list then it does not require api refresh executables" {
@@ -2813,9 +2799,9 @@ test "Scenario: Given list with skip-api when running list then it does not requ
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "alpha@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "beta@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "beta@example.com") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -2995,7 +2981,7 @@ test "Scenario: Given cached usage when an API refresh fails then list json keep
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "usage refresh failed for alpha@example.com: RequestFailed") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "usage refresh failed for alpha@example.com: RequestFailed") != null);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
     defer parsed.deinit();
@@ -3189,7 +3175,7 @@ test "Scenario: Given switch query with api flag when running switch then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch query with skip-api flag when running switch then it returns a usage error" {
@@ -3225,7 +3211,7 @@ test "Scenario: Given switch query with skip-api flag when running switch then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "does not support `--live`, `--api`, or `--skip-api`") != null);
 }
 
 test "Scenario: Given switch without api flags when running interactively then it requires api refresh executables by default" {
@@ -3261,7 +3247,7 @@ test "Scenario: Given switch without api flags when running interactively then i
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given switch with skip-api when running interactively then it does not require api refresh executables" {
@@ -3328,8 +3314,8 @@ test "Scenario: Given switch with skip-api when running interactively then it do
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select account to activate:") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Switched to backup(backup@example.com)") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Select account to activate:") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Switched to backup(backup@example.com)") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
@@ -3439,7 +3425,7 @@ test "Scenario: Given remove with account key selector when running remove then 
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "robot09@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "robot09@example.com") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -3525,7 +3511,7 @@ test "Scenario: Given remove query with api flag when running remove then it ret
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
 }
 
 test "Scenario: Given remove query with skip-api flag when running remove then it returns a usage error" {
@@ -3561,7 +3547,7 @@ test "Scenario: Given remove query with skip-api flag when running remove then i
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "`remove <alias|email|display-number|query>...` and `remove --all` do not support") != null);
 }
 
 test "Scenario: Given interactive remove with api flag when running remove then it requires api refresh executables" {
@@ -3598,7 +3584,7 @@ test "Scenario: Given interactive remove with api flag when running remove then 
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove without api flags when running remove then it requires api refresh executables by default" {
@@ -3635,7 +3621,7 @@ test "Scenario: Given remove without api flags when running remove then it requi
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove without selectors in default mode when running remove then it requires api refresh executables" {
@@ -3671,7 +3657,7 @@ test "Scenario: Given remove without selectors in default mode when running remo
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "curl is required") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "curl is required") != null);
 }
 
 test "Scenario: Given remove with skip-api when running remove then it does not require api refresh executables" {
@@ -3707,7 +3693,7 @@ test "Scenario: Given remove with skip-api when running remove then it does not 
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Select accounts to delete:") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -4025,8 +4011,8 @@ test "Scenario: Given auth json already points at another registry account when 
     defer gpa.free(list_result.stderr);
 
     try expectSuccess(list_result);
-    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "alpha@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, list_result.stdout, "beta@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, list_result.stdout, "alpha@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, list_result.stdout, "beta@example.com") == null);
 
     var loaded_after_list = try registry.loadRegistry(gpa, codex_home);
     defer loaded_after_list.deinit(gpa);
@@ -4061,8 +4047,8 @@ test "Scenario: Given remove query with no matches when running remove then it e
             "hint: Remove accepts one or more aliases, emails, display numbers, or partial queries.\n",
         result.stderr,
     );
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "main.zig") == null);
 }
 
 test "Scenario: Given multiple remove queries with no matches when running remove then it reports all missing selectors together" {
@@ -4098,8 +4084,8 @@ test "Scenario: Given multiple remove queries with no matches when running remov
             "hint: Remove accepts one or more aliases, emails, display numbers, or partial queries.\n",
         result.stderr,
     );
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "AccountNotFound") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "main.zig") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "AccountNotFound") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "main.zig") == null);
 }
 
 test "Scenario: Given non-tty remove with invalid selection input when running remove then it fails without deleting accounts" {
@@ -4124,8 +4110,8 @@ test "Scenario: Given non-tty remove with invalid selection input when running r
     defer gpa.free(result.stderr);
 
     try expectFailure(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
     try std.testing.expectEqualStrings(
         "error: invalid remove selection input.\n" ++
             "hint: Use numbers separated by commas or spaces, for example `1 2` or `1,2`.\n",
@@ -4327,10 +4313,10 @@ test "Scenario: Given non-tty stdin when running interactive remove then it fall
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Select accounts to delete:\n\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\x1b[2J\x1b[H") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Keys: ↑/↓ or j/k move") == null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Select accounts to delete:\n\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Enter account numbers (comma/space separated, empty to cancel): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "\x1b[2J\x1b[H") == null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Keys: ↑/↓ or j/k move") == null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -4364,7 +4350,7 @@ test "Scenario: Given remove all when running remove then it clears all accounts
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Removed 2 account(s): ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -4400,7 +4386,7 @@ test "Scenario: Given remove json selector then invalid flag when running remove
     defer parsed.deinit();
     const err = parsed.value.object.get("error").?.object;
     try std.testing.expectEqualStrings("usage", err.get("code").?.string);
-    try std.testing.expect(std.mem.indexOf(u8, err.get("message").?.string, "unknown flag `--bad`") != null);
+    try std.testing.expect(std.mem.find(u8, err.get("message").?.string, "unknown flag `--bad`") != null);
 }
 
 test "Scenario: Given ambiguous and missing remove selectors in json mode then every resolution is returned and nothing is deleted" {
@@ -4524,7 +4510,7 @@ test "Scenario: Given remove all with malformed auth json when running remove th
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Removed 2 account(s): ") != null);
     try std.testing.expectEqualStrings("warning: auth.json missing email; skipping sync\n", result.stderr);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -4576,7 +4562,7 @@ test "Scenario: Given remove all with tracked auth json and no active key when r
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Removed 2 account(s): ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -4625,7 +4611,7 @@ test "Scenario: Given remove all with tracked auth json and stale active key whe
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Removed 2 account(s): ") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "Removed 2 account(s): ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
@@ -4782,8 +4768,8 @@ test "Scenario: Given config live interval when running command then registry st
     defer gpa.free(registry_path);
     const data = try fixtures.readFileAlloc(gpa, registry_path);
     defer gpa.free(data);
-    try std.testing.expect(std.mem.indexOf(u8, data, "\"interval_seconds\": 45") != null);
-    try std.testing.expect(std.mem.indexOf(u8, data, "\"live\"") == null);
+    try std.testing.expect(std.mem.find(u8, data, "\"interval_seconds\": 45") != null);
+    try std.testing.expect(std.mem.find(u8, data, "\"live\"") == null);
 }
 
 test "Scenario: Given default api usage when listing accounts then no warning is printed" {
@@ -4803,7 +4789,7 @@ test "Scenario: Given default api usage when listing accounts then no warning is
     defer gpa.free(result.stderr);
 
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "ACCOUNT") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -4836,8 +4822,8 @@ test "Scenario: Given unsupported native host when launching app then command fa
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "Environment Configuration") == null);
 }
 
 test "Scenario: Given unsupported native host when launching app then managed CLI is not downloaded" {
@@ -4867,8 +4853,8 @@ test "Scenario: Given unsupported native host when launching app then managed CL
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "Environment Configuration") == null);
 
     var codex_home_dir = try tmp.dir.openDir(".codex", .{});
     defer codex_home_dir.close();
@@ -4903,8 +4889,8 @@ test "Scenario: Given unsupported native host with missing explicit codex CLI pa
 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) == null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "app launch is supported only from the Windows or macOS codex-auth executable.\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, missing_cli_path) == null);
+    try std.testing.expect(std.mem.find(u8, result.stderr, "Environment Configuration") == null);
 }

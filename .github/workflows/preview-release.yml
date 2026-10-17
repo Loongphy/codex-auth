@@ -40,7 +40,8 @@ jobs:
       - name: Setup Zig
         uses: Loongphy/setup-zig@node24-lts-runtime
         with:
-          version: 0.16.0
+          version: 0.17.0
+          cache-key: ${{ matrix.zig_target }}
 
       - name: Build binary
         run: zig build -Dtarget=${{ matrix.zig_target }} -Doptimize=ReleaseSafe

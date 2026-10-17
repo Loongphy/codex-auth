@@ -46,7 +46,7 @@ pub fn importAccountsSnapshotDirectory(
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!isPurgeImportAuthFile(entry.name)) continue;
 
-        const file_path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const file_path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         var file_path_owned = true;
         errdefer if (file_path_owned) allocator.free(file_path);
 

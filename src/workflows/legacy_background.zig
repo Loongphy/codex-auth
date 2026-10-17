@@ -43,7 +43,7 @@ fn cleanupLinuxUnit(allocator: std.mem.Allocator, unit_name: []const u8, summary
 fn linuxUnitPath(allocator: std.mem.Allocator, unit_name: []const u8) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", unit_name });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ home, ".config", "systemd", "user", unit_name });
 }
 
 fn cleanMac(allocator: std.mem.Allocator) !CleanSummary {
@@ -58,7 +58,7 @@ fn cleanMac(allocator: std.mem.Allocator) !CleanSummary {
 fn macPlistPath(allocator: std.mem.Allocator) ![]u8 {
     const home = try registry.resolveUserHome(allocator);
     defer allocator.free(home);
-    return try std.fs.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", mac_label ++ ".plist" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ home, "Library", "LaunchAgents", mac_label ++ ".plist" });
 }
 
 fn cleanWindows(allocator: std.mem.Allocator) !CleanSummary {

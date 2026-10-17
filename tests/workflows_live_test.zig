@@ -127,7 +127,7 @@ fn appendLiveMergeTestAccount(
     email: []const u8,
     alias: []const u8,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, account_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = account_key[0..sep];
     const chatgpt_account_id = account_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -162,8 +162,8 @@ fn writeLiveActionTestSnapshot(
     try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = auth_path, .data = auth_json });
 }
 
-fn sleepLiveRefreshTask(io: std.Io) void {
-    std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
+fn sleepLiveRefreshTask(io: std.Io) error{Canceled}!void {
+    try std.Io.sleep(io, .fromMilliseconds(800), .awake);
 }
 
 test "live refresh interval uses the shared live config cadence" {

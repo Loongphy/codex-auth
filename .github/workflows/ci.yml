@@ -46,7 +46,7 @@ jobs:
       - name: Setup Zig
         uses: Loongphy/setup-zig@node24-lts-runtime
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Zig test
         if: ${{ matrix.os != 'windows-latest' }}

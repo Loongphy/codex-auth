@@ -182,7 +182,7 @@ fn groupedAccountCellAlloc(
     const fallback = if (total_same <= 1)
         try allocator.dupe(u8, base)
     else
-        try std.fmt.allocPrint(allocator, "{s} #{d}", .{ base, ordinal });
+        try allocator.print("{s} #{d}", .{ base, ordinal });
     defer allocator.free(fallback);
 
     return buildPreferredAccountLabelAlloc(allocator, rec, fallback);
@@ -201,7 +201,7 @@ pub fn buildPreferredAccountLabelAlloc(
         defer if (api_key_label) |value| allocator.free(value);
 
         if (alias != null and api_key_label != null) {
-            return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, api_key_label.? });
+            return allocator.print("{s}({s})", .{ alias.?, api_key_label.? });
         }
         if (alias != null) return allocator.dupe(u8, alias.?);
         if (api_key_label != null) return allocator.dupe(u8, api_key_label.?);
@@ -209,7 +209,7 @@ pub fn buildPreferredAccountLabelAlloc(
         return allocator.dupe(u8, fallback);
     }
     if (alias != null and account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, account_name.? });
+        return allocator.print("{s}({s})", .{ alias.?, account_name.? });
     }
     if (alias != null) return allocator.dupe(u8, alias.?);
     if (account_name != null) return allocator.dupe(u8, account_name.?);
@@ -224,13 +224,13 @@ pub fn buildAccountIdentityLabelAlloc(
     const account_name = normalizedAccountName(rec);
 
     if (alias != null and account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s}({s}, {s})", .{ alias.?, account_name.?, rec.email });
+        return allocator.print("{s}({s}, {s})", .{ alias.?, account_name.?, rec.email });
     }
     if (alias != null) {
-        return std.fmt.allocPrint(allocator, "{s}({s})", .{ alias.?, rec.email });
+        return allocator.print("{s}({s})", .{ alias.?, rec.email });
     }
     if (account_name != null) {
-        return std.fmt.allocPrint(allocator, "{s}({s})", .{ account_name.?, rec.email });
+        return allocator.print("{s}({s})", .{ account_name.?, rec.email });
     }
     return allocator.dupe(u8, rec.email);
 }
@@ -243,10 +243,10 @@ fn normalizedAccountName(rec: *const registry.AccountRecord) ?[]const u8 {
 
 fn apiKeyLabelFromAccountKeyAlloc(allocator: std.mem.Allocator, account_key: []const u8) !?[]u8 {
     if (!std.mem.startsWith(u8, account_key, "apikey::")) return null;
-    const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return null;
+    const sep = std.mem.findLast(u8, account_key, "::") orelse return null;
     const fingerprint = account_key[sep + 2 ..];
     if (fingerprint.len < 9) return null;
-    const label = try std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{
+    const label = try allocator.print("sk-{s}***{s}", .{
         fingerprint[0..5],
         fingerprint[fingerprint.len - 4 ..],
     });

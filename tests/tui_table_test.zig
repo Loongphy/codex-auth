@@ -33,7 +33,7 @@ fn appendTestAccount(
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, record_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -129,8 +129,8 @@ test "writeAccountsTable shows zero-padded row numbers for selectable accounts" 
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "01   Als's Workspace") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "02   Free") != null);
+    try std.testing.expect(std.mem.find(u8, output, "01   Als's Workspace") != null);
+    try std.testing.expect(std.mem.find(u8, output, "02   Free") != null);
 }
 
 test "writeAccountsTable keeps usage headers short" {
@@ -145,9 +145,9 @@ test "writeAccountsTable keeps usage headers short" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "5H") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "WEEKLY") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "USAGE") == null);
+    try std.testing.expect(std.mem.find(u8, output, "5H") != null);
+    try std.testing.expect(std.mem.find(u8, output, "WEEKLY") != null);
+    try std.testing.expect(std.mem.find(u8, output, "USAGE") == null);
 }
 
 test "writeAccountsTable shows integer credits balance column" {
@@ -173,11 +173,11 @@ test "writeAccountsTable shows integer credits balance column" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  5") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "5.39") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "2") != null);
+    try std.testing.expect(std.mem.find(u8, output, "CREDITS") != null);
+    try std.testing.expect(std.mem.find(u8, output, "RESET CREDITS") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Plus  5") != null);
+    try std.testing.expect(std.mem.find(u8, output, "5.39") == null);
+    try std.testing.expect(std.mem.find(u8, output, "2") != null);
 }
 
 test "writeAccountsTable shows reset credits independently" {
@@ -199,10 +199,10 @@ test "writeAccountsTable shows reset credits independently" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  -") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "2") != null);
+    try std.testing.expect(std.mem.find(u8, output, "CREDITS") != null);
+    try std.testing.expect(std.mem.find(u8, output, "RESET CREDITS") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Plus  -") != null);
+    try std.testing.expect(std.mem.find(u8, output, "2") != null);
 }
 
 test "writeAccountsTable shows usage override statuses for failed refreshes" {
@@ -238,7 +238,7 @@ test "writeAccountsTable highlights usage override rows in red when color is ena
     try writeAccountsTableWithUsageOverrides(&writer, &reg, true, &usage_overrides);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.red) != null);
 }
 
 test "writeAccountsTable uses cyan headers green active rows and default normal rows" {
@@ -255,9 +255,9 @@ test "writeAccountsTable uses cyan headers green active rows and default normal 
     try writeAccountsTable(&writer, &reg, true);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "* 01 active@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m  02 normal@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ "* 01 active@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\x1b[2m  02 normal@example.com") == null);
 }
 
 test "writeAccountsTable prefers usage snapshot plan labels over stored auth plan" {
@@ -278,8 +278,8 @@ test "writeAccountsTable prefers usage snapshot plan labels over stored auth pla
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Plus") == null);
+    try std.testing.expect(std.mem.find(u8, output, "Business") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Plus") == null);
 }
 
 test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
@@ -294,6 +294,6 @@ test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
     try writeAccountsTable(&writer, &reg, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "user@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "API_KEY") != null);
+    try std.testing.expect(std.mem.find(u8, output, "user@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "API_KEY") != null);
 }

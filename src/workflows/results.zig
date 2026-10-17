@@ -408,8 +408,7 @@ fn buildUsageWarnings(
         if (idx >= reg.accounts.items.len) continue;
         try warnings.append(
             allocator,
-            try std.fmt.allocPrint(
-                allocator,
+            try allocator.print(
                 "usage refresh failed for {s}: {s}",
                 .{ reg.accounts.items[idx].email, outcome.error_name.? },
             ),
