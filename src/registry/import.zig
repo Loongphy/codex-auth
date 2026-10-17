@@ -402,7 +402,7 @@ fn importApiKeyAuthData(
     auth_data: []const u8,
 ) !ImportOutcome {
     const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
-    var me = try me_api.fetchMeForApiKey(allocator, api_key);
+    var me = try me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url);
     defer me.deinit(allocator);
 
     const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
@@ -430,7 +430,7 @@ fn importApiKeyAuthFile(
     info: *const @import("../auth/auth.zig").AuthInfo,
 ) !ImportOutcome {
     const api_key = info.openai_api_key orelse return error.MissingOpenAIAPIKey;
-    var me = try me_api.fetchMeForApiKey(allocator, api_key);
+    var me = try me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url);
     defer me.deinit(allocator);
 
     const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
@@ -628,7 +628,7 @@ fn syncCurrentApiKeyAuthBestEffort(
     info: *const @import("../auth/auth.zig").AuthInfo,
 ) !?ImportOutcome {
     const api_key = info.openai_api_key orelse return null;
-    var me = me_api.fetchMeForApiKey(allocator, api_key) catch return null;
+    var me = me_api.fetchMeForApiKeyWithBaseUrl(allocator, api_key, info.openai_base_url) catch return null;
     defer me.deinit(allocator);
 
     const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
