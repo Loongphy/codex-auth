@@ -22,9 +22,9 @@ pub fn collectAvailable(
     errdefer cards.deinit(allocator);
 
     const usage = account.last_usage orelse return cards.toOwnedSlice(allocator);
-    const details = usage.reset_credit_details orelse return cards.toOwnedSlice(allocator);
+    const details = usage.reset_credit orelse return cards.toOwnedSlice(allocator);
 
-    for (details.credits) |credit| {
+    for (details) |credit| {
         if (!std.mem.eql(u8, credit.status, available_status)) continue;
         var consumed = false;
         for (consumed_ids) |used| {
