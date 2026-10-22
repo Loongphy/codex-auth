@@ -183,7 +183,18 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
         }
     }
 
-    const widths = table_layout.boundColumnWidths(content_widths, prefix_len, term_cols);
+    var columns: [table_layout.plain_columns.len]table_layout.ColumnSpec = undefined;
+    for (table_layout.plain_columns, 0..) |id, index| {
+        columns[index] = table_layout.columnSpec(id, content_widths[index]);
+    }
+    var widths = [_]usize{0} ** 7;
+    table_layout.allocateColumns(.{
+        .columns = &columns,
+        .first_order = &table_layout.plain_first_order,
+        .grow_order = &table_layout.plain_grow_order,
+        .prefix_width = prefix_len,
+        .separator_width = sep_len,
+    }, term_cols, &widths);
     var visible: [7]bool = undefined;
     var header_cells: [7][]const u8 = undefined;
     for (widths, 0..) |width, index| {

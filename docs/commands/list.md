@@ -29,7 +29,7 @@ codex-auth list --json
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
 - Live account details show the access-token expiry and, per account, the
   available reset-credit count with the earliest card expiry. The
-  `ACCESS EXPIRE` and `RESET CREDITS` columns render in local time; the
+  `AUTH EXPIRE` and `RESET CREDITS` columns render in local time; the
   available reset credits are also expandable per account in the live view.
 - Access-token expiry is shown in local time and is not the account or subscription
   expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable

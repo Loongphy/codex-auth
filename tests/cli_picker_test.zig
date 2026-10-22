@@ -1774,3 +1774,46 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
+
+test "live list details keep the responsive column order and complete percentages" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "", .pro);
+    reg.accounts.items[0].access_token_expires_at = 4102444800;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = 4102444800 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = 4103049600 },
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 3,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var width: usize = 20;
+    while (width <= 140) : (width += 1) {
+        var body: std.Io.Writer.Allocating = .init(gpa);
+        defer body.deinit();
+        var writer = StyledWriter.init(&body.writer, false);
+        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width);
+
+        var lines = std.mem.splitScalar(u8, body.written(), '\n');
+        const header = lines.next() orelse "";
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            try std.testing.expect(line.len <= width);
+        }
+        if (std.mem.indexOf(u8, header, "5H") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, body.written(), "100%") != null);
+        }
+        if (width == 140) {
+            var last_index: usize = 0;
+            for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" }) |token| {
+                const index = std.mem.indexOf(u8, header, token) orelse return error.TestUnexpectedResult;
+                try std.testing.expect(index >= last_index);
+                last_index = index;
+            }
+        }
+    }
+}
