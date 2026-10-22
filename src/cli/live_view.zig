@@ -277,6 +277,8 @@ pub fn viewAccountsWithLiveUpdates(
     var panel_status: ?[]u8 = null;
     var selected_credit_id: ?[]u8 = null;
     var selected_account_key: ?[]u8 = null;
+    var redeem_key: ?[]u8 = null;
+    var redeem_credit_id: ?[]u8 = null;
     var available_count_cache: usize = 0;
     var consumed_ids: std.ArrayList([]u8) = .empty;
     defer {
@@ -285,6 +287,8 @@ pub fn viewAccountsWithLiveUpdates(
         if (panel_status) |status| allocator.free(status);
         if (selected_credit_id) |id| allocator.free(id);
         if (selected_account_key) |key| allocator.free(key);
+        if (redeem_key) |key| allocator.free(key);
+        if (redeem_credit_id) |id| allocator.free(id);
     }
 
     while (true) {
@@ -450,29 +454,81 @@ pub fn viewAccountsWithLiveUpdates(
                     if (pending_consume) {
                         pending_consume = false;
                         if (selected_credit_id != null and selected_account_key != null) {
-                            var result: reset_credits_api.ConsumeResult = blk: {
-                                const codex_home = registry.resolveCodexHome(allocator) catch |err| {
-                                    break :blk reset_credits_api.ConsumeResult{ .ok = false, .error_name = try allocator.dupe(u8, @errorName(err)) };
+                            // Reuse the idempotency key while retrying the same
+                            // credit: the backend deduplicates repeated redeems.
+                            if (redeem_credit_id == null or !std.mem.eql(u8, redeem_credit_id.?, selected_credit_id.?)) {
+                                if (redeem_key) |key| allocator.free(key);
+                                if (redeem_credit_id) |id| allocator.free(id);
+                                redeem_key = reset_credits_api.generateIdempotencyKeyAlloc(allocator) catch null;
+                                redeem_credit_id = allocator.dupe(u8, selected_credit_id.?) catch null;
+                            }
+                            if (redeem_key) |key| {
+                                var result: reset_credits_api.ConsumeResult = blk: {
+                                    const codex_home = registry.resolveCodexHome(allocator) catch |err| {
+                                        break :blk reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
+                                    };
+                                    defer allocator.free(codex_home);
+                                    break :blk reset_credits_api.consumeCreditForAccount(
+                                        allocator,
+                                        codex_home,
+                                        selected_account_key.?,
+                                        key,
+                                        selected_credit_id.?,
+                                    ) catch |err| reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
                                 };
-                                defer allocator.free(codex_home);
-                                break :blk reset_credits_api.consumeCreditForAccount(
-                                    allocator,
-                                    codex_home,
-                                    selected_account_key.?,
-                                    selected_credit_id.?,
-                                ) catch |err| reset_credits_api.ConsumeResult{ .ok = false, .error_name = try allocator.dupe(u8, @errorName(err)) };
-                            };
-                            defer result.deinit(allocator);
-                            if (result.ok) {
-                                const id_copy = try allocator.dupe(u8, selected_credit_id.?);
-                                try consumed_ids.append(allocator, id_copy);
-                                try setPanelStatus(allocator, &panel_status, "✓ reset credit used · windows reset on next refresh");
-                            } else if (result.status_code) |code| {
-                                const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d})", .{code});
-                                defer allocator.free(text);
-                                try setPanelStatus(allocator, &panel_status, text);
+                                defer result.deinit(allocator);
+                                switch (result.outcome) {
+                                    .reset, .already_redeemed, .no_credit => {
+                                        var already_consumed = false;
+                                        for (consumed_ids.items) |id| {
+                                            if (std.mem.eql(u8, id, selected_credit_id.?)) {
+                                                already_consumed = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!already_consumed) {
+                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                            try consumed_ids.append(allocator, id_copy);
+                                        }
+                                        if (redeem_key) |k| allocator.free(k);
+                                        redeem_key = null;
+                                        if (redeem_credit_id) |c| allocator.free(c);
+                                        redeem_credit_id = null;
+                                        const message = switch (result.outcome) {
+                                            .reset => "✓ reset credit used · windows reset on next refresh",
+                                            .already_redeemed => "✓ reset credit was already used · windows reset on next refresh",
+                                            .no_credit => "✗ reset credit is no longer available · refresh to see current resets",
+                                            else => unreachable,
+                                        };
+                                        try setPanelStatus(allocator, &panel_status, message);
+                                    },
+                                    .nothing_to_reset => {
+                                        try setPanelStatus(allocator, &panel_status, "reset not needed — usage does not need a reset right now");
+                                    },
+                                    .unexpected_response => {
+                                        if (result.status_code) |code| {
+                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d}, unexpected response)", .{code});
+                                            defer allocator.free(text);
+                                            try setPanelStatus(allocator, &panel_status, text);
+                                        } else {
+                                            try setPanelStatus(allocator, &panel_status, "✗ use failed (unexpected response)");
+                                        }
+                                    },
+                                    .http_error => {
+                                        if (result.status_code) |code| {
+                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d})", .{code});
+                                            defer allocator.free(text);
+                                            try setPanelStatus(allocator, &panel_status, text);
+                                        } else {
+                                            try setPanelStatus(allocator, &panel_status, "use failed");
+                                        }
+                                    },
+                                    .request_error => {
+                                        try setPanelStatus(allocator, &panel_status, result.error_name orelse "use failed");
+                                    },
+                                }
                             } else {
-                                try setPanelStatus(allocator, &panel_status, result.error_name orelse "use failed");
+                                try setPanelStatus(allocator, &panel_status, "✗ use failed (idempotency key unavailable)");
                             }
                             needs_render = true;
                         }
