@@ -5277,9 +5277,9 @@ test "Scenario: Given reset credits when running reset then it consumes the soon
 
     logRunResultIfFailed("reset", result);
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "used reset credit for reset-user@example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "used \"Full reset (Weekly + 5 hr)\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"Full reset (Weekly + 5 hr)\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Remaining reset credits for reset-user@example.com (1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "remaining: 1 \u{00b7} next: Later card") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Later card") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }

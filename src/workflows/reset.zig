@@ -58,7 +58,7 @@ pub fn handleReset(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
             else
                 null;
             defer if (expires_local) |text| allocator.free(text);
-            try cli.output.printResetConsumed(rec.email, card.title, expires_local, result.outcome == .already_redeemed);
+            try cli.output.printResetConsumed(card.title, expires_local, result.outcome == .already_redeemed);
 
             var remaining = std.ArrayList(cli.output.ResetRemainingEntry).empty;
             defer {
@@ -77,7 +77,7 @@ pub fn handleReset(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
                     .expires_local = remaining_expiry,
                 });
             }
-            try cli.output.printResetRemaining(rec.email, remaining.items);
+            try cli.output.printResetRemaining(remaining.items);
         },
         .no_credit => {
             try cli.output.printResetError("reset credit is no longer available; run `codex-auth list --api` to refresh.", .{});

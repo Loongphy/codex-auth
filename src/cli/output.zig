@@ -415,15 +415,15 @@ pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
     try out.flush();
 }
 
-/// Prints the consumed reset credit (title and local expiry).
-pub fn printResetConsumed(email: []const u8, title: ?[]const u8, expires_local: ?[]const u8, already_used: bool) !void {
+/// Prints the consumed reset credit as one compact line.
+pub fn printResetConsumed(title: ?[]const u8, expires_local: ?[]const u8, already_used: bool) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
     if (already_used) {
-        try out.print("reset credit was already used for {s}: \"{s}\"", .{ email, title orelse "(untitled)" });
+        try out.print("already used \"{s}\"", .{title orelse "(untitled)"});
     } else {
-        try out.print("used reset credit for {s}: \"{s}\"", .{ email, title orelse "(untitled)" });
+        try out.print("used \"{s}\"", .{title orelse "(untitled)"});
     }
     if (expires_local) |expiry| {
         try out.print(" \u{00b7} expires {s}", .{expiry});
@@ -432,22 +432,23 @@ pub fn printResetConsumed(email: []const u8, title: ?[]const u8, expires_local: 
     try out.flush();
 }
 
-/// Prints the reset credits that remain after the consume call.
-pub fn printResetRemaining(email: []const u8, entries: []const ResetRemainingEntry) !void {
+/// Prints a one-line summary of the remaining reset credits: the count and
+/// the card that expires next (title plus local expiry).
+pub fn printResetRemaining(entries: []const ResetRemainingEntry) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try out.print("Remaining reset credits for {s} ({d}):\n", .{ email, entries.len });
     if (entries.len == 0) {
-        try out.writeAll("  (none)\n");
+        try out.writeAll("remaining: 0\n");
     } else {
-        for (entries) |entry| {
-            try out.print("  \u{00b7} {s}", .{entry.title orelse "(untitled)"});
-            if (entry.expires_local) |expiry| {
-                try out.print(" \u{00b7} expires {s}", .{expiry});
-            }
-            try out.writeAll("\n");
+        const next = entries[0];
+        try out.print("remaining: {d} \u{00b7} next: {s}", .{ entries.len, next.title orelse "(untitled)" });
+        if (next.expires_local) |expiry| {
+            try out.print(" \u{00b7} {s}", .{expiry});
+        } else {
+            try out.writeAll(" \u{00b7} no expiry");
         }
+        try out.writeAll("\n");
     }
     try out.flush();
 }
