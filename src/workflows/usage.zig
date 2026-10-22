@@ -689,7 +689,15 @@ fn setForegroundUsageOverrideForOutcome(
     outcome: ForegroundUsageOutcome,
 ) !bool {
     if (outcome.error_name) |error_name| {
-        slot.* = try allocator.dupe(u8, error_name);
+        if (error_name.len > max_usage_override_display_width) {
+            slot.* = try std.fmt.allocPrint(
+                allocator,
+                "{s}...",
+                .{error_name[0 .. max_usage_override_display_width - 3]},
+            );
+        } else {
+            slot.* = try allocator.dupe(u8, error_name);
+        }
         return true;
     }
     if (outcome.missing_auth) {

@@ -101,6 +101,43 @@ pub fn accountTable(widths: SwitchWidths, prefix_width: usize) LiveTable {
     };
 }
 
+pub const list_column_count = 7;
+
+/// Two-pass budget allocation for the plain `list` table (ACCOUNT, PLAN,
+/// CREDITS, RESET CREDITS, 5H, WEEKLY, LAST). The first pass reserves each
+/// column's target width by priority (account identity first, then the
+/// usage windows, then the smaller metadata columns); the second pass grows
+/// columns toward their content width while budget remains. Columns that
+/// receive zero width are meant to be skipped by the caller.
+pub fn boundListWidths(widths: [list_column_count]usize, prefix_len: usize, max_cols: ?usize) [list_column_count]usize {
+    const cols = max_cols orelse return widths;
+    const separator_width = 2 * (list_column_count - 1);
+    var bounded = [_]usize{0} ** list_column_count;
+    if (cols <= prefix_len + separator_width) return bounded;
+
+    var remaining = cols - prefix_len - separator_width;
+
+    // First pass: priority targets.
+    growBoundedWidth(&remaining, &bounded[0], @min(widths[0], live_account_ident_width)); // ACCOUNT
+    growBoundedWidth(&remaining, &bounded[4], @min(widths[4], @max(4, "5H".len))); // 5H
+    growBoundedWidth(&remaining, &bounded[5], @min(widths[5], "WEEKLY".len)); // WEEKLY
+    growBoundedWidth(&remaining, &bounded[2], @min(widths[2], 2)); // CREDITS
+    growBoundedWidth(&remaining, &bounded[1], @min(widths[1], "PLAN".len)); // PLAN
+    growBoundedWidth(&remaining, &bounded[3], @min(widths[3], 2)); // RESET CREDITS
+    growBoundedWidth(&remaining, &bounded[6], @min(widths[6], 4)); // LAST
+
+    // Second pass: grow toward content width while budget remains.
+    growBoundedWidth(&remaining, &bounded[0], widths[0]);
+    growBoundedWidth(&remaining, &bounded[4], widths[4]);
+    growBoundedWidth(&remaining, &bounded[5], widths[5]);
+    growBoundedWidth(&remaining, &bounded[2], widths[2]);
+    growBoundedWidth(&remaining, &bounded[1], widths[1]);
+    growBoundedWidth(&remaining, &bounded[3], widths[3]);
+    growBoundedWidth(&remaining, &bounded[6], widths[6]);
+
+    return bounded;
+}
+
 pub fn boundWidths(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) SwitchWidths {
     const cols = max_cols orelse return widths;
     const separator_width = 2 * (column_count - 1);

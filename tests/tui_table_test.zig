@@ -9,6 +9,7 @@ const truncateAlloc = format.truncateAlloc;
 const formatRateLimitFullAlloc = format.formatRateLimitFullAlloc;
 const writeAccountsTable = format.writeAccountsTable;
 const writeAccountsTableWithUsageOverrides = format.writeAccountsTableWithUsageOverrides;
+const writeAccountsTableWithUsageOverridesForCols = format.writeAccountsTableWithUsageOverridesForCols;
 const ansi = struct {
     const red = "\x1b[31m";
     const green = "\x1b[32m";
@@ -296,4 +297,68 @@ test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "user@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "API_KEY") != null);
+}
+
+fn appendTestAccountWithUsage(allocator: std.mem.Allocator, reg: *registry.Registry, email: []const u8) !void {
+    const sep = std.mem.indexOf(u8, email, "@").?;
+    const record_key = try std.fmt.allocPrint(allocator, "user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
+    defer allocator.free(record_key);
+    try appendTestAccount(allocator, reg, record_key, email, email[0..sep], .pro);
+    reg.accounts.items[reg.accounts.items.len - 1].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = 1800000000 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = 1799000000 },
+        .credits = null,
+        .plan_type = .pro,
+    };
+}
+
+test "writeAccountsTableForCols: wide terminal keeps full headers and complete values" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccountWithUsage(gpa, &reg, "very-long-account-name@example.com");
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
+    const output = writer.buffered();
+    for ([_][]const u8{ "ACCOUNT", "PLAN", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY", "100%" }) |expected| {
+        try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+    }
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(std.mem.indexOf(u8, line, "  .") == null);
+    }
+}
+
+test "writeAccountsTableForCols: narrow terminal never overflows and keeps percentages" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccountWithUsage(gpa, &reg, "very-long-account-name@example.com");
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 60);
+    const output = writer.buffered();
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(line.len <= 60);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null or std.mem.indexOf(u8, output, "CREDITS") != null);
+}
+
+test "writeAccountsTableForCols: very narrow terminal hides low-priority columns" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccountWithUsage(gpa, &reg, "very-long-account-name@example.com");
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 40);
+    const output = writer.buffered();
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        try std.testing.expect(line.len <= 40);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
 }
