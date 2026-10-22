@@ -12,6 +12,59 @@ const live_tui = @import("live_tui.zig");
 const reset_credits_panel = @import("reset_credits_panel.zig");
 const reset_credits_api = @import("../api/reset_credits.zig");
 const registry = @import("../registry/root.zig");
+const api_usage = @import("../api/usage.zig");
+
+/// Indentation of the account column in the rendered table, so the reset
+/// credits rail nests under the row it belongs to.
+fn panelIndentForBody(body: []const u8) usize {
+    const line_end = std.mem.indexOfScalar(u8, body, '\n') orelse body.len;
+    const header = body[0..line_end];
+    var column: usize = 0;
+    var index: usize = 0;
+    while (index < header.len) {
+        if (header[index] == 0x1b) {
+            // Skip a CSI escape sequence so the scan counts display columns.
+            index += 1;
+            if (index < header.len and header[index] == '[') {
+                index += 1;
+                while (index < header.len and (header[index] < 0x40 or header[index] > 0x7e)) : (index += 1) {}
+                if (index < header.len) index += 1;
+            }
+            continue;
+        }
+        if (header[index] == '|') return column + 2;
+        column += 1;
+        index += 1;
+    }
+    return 0;
+}
+
+/// Refreshes one account's usage snapshot after a successful consume so the
+/// 5H/WEEKLY cells and the remaining card list reflect the reset immediately.
+fn refreshAccountUsageAfterReset(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    codex_home: []const u8,
+    account_key: []const u8,
+) void {
+    const account_idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return;
+    const auth_path = registry.accountAuthPath(allocator, codex_home, account_key) catch return;
+    defer allocator.free(auth_path);
+    const fetched = api_usage.fetchUsageForAuthPathDetailed(allocator, auth_path) catch return;
+    const snapshot = fetched.snapshot orelse return;
+    const rec = &reg.accounts.items[account_idx];
+    if (rec.last_usage) |*old| registry.freeRateLimitSnapshot(allocator, old);
+    rec.last_usage = snapshot;
+    rec.last_usage_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    if (fetched.access_token_expires_at) |expires_at| rec.access_token_expires_at = expires_at;
+}
+
+fn alreadyConsumed(consumed_ids: []const []u8, credit_id: []const u8) bool {
+    for (consumed_ids) |id| {
+        if (std.mem.eql(u8, id, credit_id)) return true;
+    }
+    return false;
+}
 
 fn setPanelStatus(allocator: std.mem.Allocator, slot: *?[]u8, text: []const u8) !void {
     if (slot.*) |old| allocator.free(old);
@@ -339,6 +392,7 @@ pub fn viewAccountsWithLiveUpdates(
                             card_cursor,
                             confirm_pending,
                             panel_status,
+                            panelIndentForBody(body_text),
                         );
                         spliced_panel = try reset_credits_panel.spliceAfterDataLine(
                             allocator,
@@ -472,22 +526,22 @@ pub fn viewAccountsWithLiveUpdates(
                                 redeem_credit_id = allocator.dupe(u8, selected_credit_id.?) catch null;
                             }
                             if (redeem_key) |key| {
-                                var result: reset_credits_api.ConsumeResult = blk: {
-                                    const codex_home = registry.resolveCodexHome(allocator) catch |err| {
-                                        break :blk reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
-                                    };
-                                    defer allocator.free(codex_home);
-                                    break :blk reset_credits_api.consumeCreditForAccount(
-                                        allocator,
-                                        codex_home,
-                                        selected_account_key.?,
-                                        key,
-                                        selected_credit_id.?,
-                                    ) catch |err| reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
+                                const codex_home = registry.resolveCodexHome(allocator) catch |err| {
+                                    try setPanelStatus(allocator, &panel_status, @errorName(err));
+                                    needs_render = true;
+                                    continue;
                                 };
+                                defer allocator.free(codex_home);
+                                var result = reset_credits_api.consumeCreditForAccount(
+                                    allocator,
+                                    codex_home,
+                                    selected_account_key.?,
+                                    key,
+                                    selected_credit_id.?,
+                                ) catch |err| reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
                                 defer result.deinit(allocator);
                                 switch (result.outcome) {
-                                    .reset, .already_redeemed, .no_credit => {
+                                    .reset, .already_redeemed => {
                                         var already_consumed = false;
                                         for (consumed_ids.items) |id| {
                                             if (std.mem.eql(u8, id, selected_credit_id.?)) {
@@ -503,13 +557,21 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        const message = switch (result.outcome) {
-                                            .reset => "✓ reset credit used · windows reset on next refresh",
-                                            .already_redeemed => "✓ reset credit was already used · windows reset on next refresh",
-                                            .no_credit => "✗ reset credit is no longer available · refresh to see current resets",
-                                            else => unreachable,
-                                        };
-                                        try setPanelStatus(allocator, &panel_status, message);
+                                        try setPanelStatus(allocator, &panel_status, "✓ reset credit used");
+                                        refreshAccountUsageAfterReset(allocator, &current_display.reg, codex_home, selected_account_key.?);
+                                        registry.saveRegistry(allocator, codex_home, &current_display.reg) catch {};
+                                        rows_cache.invalidate(allocator);
+                                    },
+                                    .no_credit => {
+                                        if (!alreadyConsumed(consumed_ids.items, selected_credit_id.?)) {
+                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                            try consumed_ids.append(allocator, id_copy);
+                                        }
+                                        if (redeem_key) |k| allocator.free(k);
+                                        redeem_key = null;
+                                        if (redeem_credit_id) |c| allocator.free(c);
+                                        redeem_credit_id = null;
+                                        try setPanelStatus(allocator, &panel_status, "✗ reset credit is no longer available · refresh to see current resets");
                                     },
                                     .nothing_to_reset => {
                                         try setPanelStatus(allocator, &panel_status, "reset not needed — usage does not need a reset right now");

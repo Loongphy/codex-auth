@@ -41,8 +41,9 @@ codex-auth list --json
 ## Live Reset Credits
 
 - With `--live`, `c` expands or collapses the reset-credit block under the cursor row.
-- The block header reads `Remaining N · ⏎ select · esc close`.
+- The block header reads `Available N · ⏎ select · esc close`.
 - `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). `esc` closes the block without redeeming.
+- A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round.
 - Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.

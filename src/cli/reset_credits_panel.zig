@@ -58,17 +58,20 @@ pub fn render(
     card_cursor: usize,
     confirm_pending: bool,
     status_line: ?[]const u8,
+    indent: usize,
 ) !usize {
     var lines: usize = 0;
-    const budget = if (max_cols > 2) max_cols - 2 else max_cols;
+    const budget = if (max_cols > indent + 2) max_cols - indent - 2 else 0;
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "Remaining {d} · ⏎ select · esc close", .{cards.len}) catch "Remaining";
+    const header = std.fmt.bufPrint(&header_buf, "Available {d} · ⏎ select · esc close", .{cards.len}) catch "Available";
+    try writeIndent(writer, indent);
     try writer.writeAll("┌ ");
     try writeBounded(writer, header, budget);
     try writer.writeByte('\n');
     lines += 1;
 
     if (cards.len == 0) {
+        try writeIndent(writer, indent);
         try writer.writeAll("│ ");
         try writeBounded(writer, "no available reset credits · run `codex-auth list --api` to refresh", budget);
         try writer.writeByte('\n');
@@ -91,6 +94,7 @@ pub fn render(
                 try line.writer.writeAll(" · -");
             }
             if (selected and confirm_pending) try line.writer.writeAll(" · ⏎ again to use");
+            try writeIndent(writer, indent);
             try writer.writeAll("│ ");
             try writeBounded(writer, line.written(), budget);
             try writer.writeByte('\n');
@@ -99,15 +103,24 @@ pub fn render(
     }
 
     if (status_line) |message| {
+        try writeIndent(writer, indent);
         try writer.writeAll("│ ");
         try writeBounded(writer, message, budget);
         try writer.writeByte('\n');
         lines += 1;
     }
 
+    try writeIndent(writer, indent);
     try writer.writeAll("└\n");
     lines += 1;
     return lines;
+}
+
+fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
+    var index: usize = 0;
+    while (index < indent) : (index += 1) {
+        try writer.writeByte(' ');
+    }
 }
 
 /// Splices `panel` into `body` (a '\n'-separated table render: line 0 is the

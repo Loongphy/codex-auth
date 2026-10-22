@@ -1713,10 +1713,10 @@ test "reset credits panel renders the remaining rail and compact rows" {
     };
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used");
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used", 6);
     const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "┌ Remaining 2 · ⏎ select · esc close") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "│ ▸ Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      ┌ Available 2 · ⏎ select · esc close") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      │ ▸ Full reset (Weekly + 5 hr) · ") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · ⏎ again to use") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "│   (untitled) · -") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "│ ✓ used") != null);
