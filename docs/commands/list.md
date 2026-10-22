@@ -47,7 +47,7 @@ When local-only refresh is active, only the active account can be updated from l
 - Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
 - Usage cells show remaining percent and reset time when that data is known.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
-- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
+- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. The cell appends the earliest available credit expiry as `N (exp MMM-DD)`, or `N (-)` when no available credit has an expiry.
 - JSON output includes the returned reset-credit details.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.

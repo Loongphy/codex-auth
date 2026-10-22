@@ -446,7 +446,7 @@ pub fn printResetRemaining(entries: []const ResetRemainingEntry) !void {
         if (next.expires_local) |expiry| {
             try out.print(" \u{00b7} {s}", .{expiry});
         } else {
-            try out.writeAll(" \u{00b7} no expiry");
+            try out.writeAll(" \u{00b7} -");
         }
         try out.writeAll("\n");
     }

@@ -89,7 +89,7 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
         defer allocator.free(local);
         if (local.len >= 10) return std.fmt.allocPrint(allocator, "{d} (exp {s})", .{ value, local[5..10] });
     }
-    return std.fmt.allocPrint(allocator, "{d}", .{value});
+    return std.fmt.allocPrint(allocator, "{d} (-)", .{value});
 }
 
 fn visibleBaseColumns(max_cols: ?usize, number_width: usize) [base_column_count]bool {

@@ -17,7 +17,7 @@ codex-auth reset <alias|email|display-number|query>
 
   ```text
   used "Full reset (Weekly + 5 hr)" · expires 2026-11-01 08:00
-  remaining: 1 · next: (untitled) · no expiry
+  remaining: 1 · next: (untitled) · -
   ```
 - The registry file is not rewritten by this command. The consumed credit disappears from the account list on the next `codex-auth list --api` refresh; run that refresh when the backend state changed elsewhere.
 - Exit code is `0` after a successful consume (including the backend reporting `already_redeemed`) and `1` when the account has no available credits, the backend reports `no_credit` or `nothing_to_reset`, or the request fails.
