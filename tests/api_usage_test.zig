@@ -96,18 +96,16 @@ test "parse reset credit details keeps every returned field" {
         \\}
     ;
 
-    const details = (try usage_api.parseResetCreditResponse(gpa, body)) orelse return error.TestExpectedEqual;
+    const cards = (try usage_api.parseResetCreditResponse(gpa, body)) orelse return error.TestExpectedEqual;
     defer {
-        for (details.credits) |credit| registry.freeRateLimitResetCredit(gpa, credit);
-        gpa.free(details.credits);
+        for (cards) |card| registry.freeResetCreditCard(gpa, card);
+        gpa.free(cards);
     }
 
-    try std.testing.expectEqual(@as(i64, 2), details.available_count);
-    try std.testing.expectEqual(@as(?i64, 4), details.total_earned_count);
-    try std.testing.expectEqual(@as(usize, 2), details.credits.len);
-    try std.testing.expectEqualStrings("credit-1", details.credits[0].id);
-    try std.testing.expectEqualStrings("2026-07-17T00:00:00Z", details.credits[0].expires_at.?);
-    try std.testing.expect(details.credits[1].expires_at == null);
+    try std.testing.expectEqual(@as(usize, 2), cards.len);
+    try std.testing.expectEqualStrings("credit-1", cards[0].id);
+    try std.testing.expectEqualStrings("2026-07-17T00:00:00Z", cards[0].expires_at.?);
+    try std.testing.expect(cards[1].expires_at == null);
 }
 
 test "parse usage api response keeps numeric credits without windows" {

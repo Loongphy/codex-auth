@@ -9,7 +9,7 @@ const RateLimitWindow = common.RateLimitWindow;
 const RolloutSignature = common.RolloutSignature;
 const CreditsSnapshot = common.CreditsSnapshot;
 const RateLimitResetCredit = common.RateLimitResetCredit;
-const RateLimitResetCredits = common.RateLimitResetCredits;
+const ResetCreditCard = common.ResetCreditCard;
 
 pub fn normalizePlanType(s: []const u8) PlanType {
     if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
@@ -52,7 +52,7 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
         .object => |o| o,
         else => return null,
     };
-    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .reset_credit_details = null, .plan_type = null };
+    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .reset_credit = null, .plan_type = null };
 
     if (obj.get("plan_type")) |p| {
         switch (p) {
@@ -64,45 +64,58 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
     if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
     if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
     snap.reset_credits = readInt(obj.get("reset_credits"));
-    if (obj.get("reset_credit_details")) |details| {
-        snap.reset_credit_details = parseResetCreditDetails(allocator, details) catch null;
+    if (obj.get("reset_credit")) |details| {
+        snap.reset_credit = parseResetCreditList(allocator, details) catch null;
     }
     return snap;
 }
 
-pub fn parseResetCreditDetails(allocator: std.mem.Allocator, v: std.json.Value) !?RateLimitResetCredits {
+pub fn parseResetCreditList(allocator: std.mem.Allocator, v: std.json.Value) !?[]ResetCreditCard {
     const obj = switch (v) {
         .object => |o| o,
         else => return null,
     };
-    const available_count = readInt(obj.get("available_count")) orelse return null;
-    const total_earned_count = readInt(obj.get("total_earned_count"));
-    var credits = std.ArrayList(RateLimitResetCredit).empty;
+    const credits_value = obj.get("credits") orelse return null;
+    const items = switch (credits_value) {
+        .array => |array| array.items,
+        else => return null,
+    };
+    var cards = std.ArrayList(ResetCreditCard).empty;
     errdefer {
-        for (credits.items) |credit| common.freeRateLimitResetCredit(allocator, credit);
-        credits.deinit(allocator);
+        for (cards.items) |card| common.freeResetCreditCard(allocator, card);
+        cards.deinit(allocator);
     }
-    if (obj.get("credits")) |credits_value| {
-        const items = switch (credits_value) {
-            .array => |array| array.items,
-            else => return null,
+    for (items) |item| {
+        const item_obj = switch (item) {
+            .object => |item_obj| item_obj,
+            else => continue,
         };
-        for (items) |item| {
-            const item_obj = switch (item) {
-                .object => |item_obj| item_obj,
-                else => continue,
-            };
-            const credit = try parseResetCredit(allocator, item_obj) orelse continue;
-            credits.append(allocator, credit) catch |err| {
-                common.freeRateLimitResetCredit(allocator, credit);
-                return err;
-            };
-        }
+        const card = try parseResetCreditCard(allocator, item_obj) orelse continue;
+        cards.append(allocator, card) catch |err| {
+            common.freeResetCreditCard(allocator, card);
+            return err;
+        };
     }
+    return try cards.toOwnedSlice(allocator);
+}
+
+fn parseResetCreditCard(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?ResetCreditCard {
+    const id = try requiredStringAlloc(allocator, obj.get("id")) orelse return null;
+    errdefer allocator.free(id);
+    const status = try requiredStringAlloc(allocator, obj.get("status")) orelse {
+        allocator.free(id);
+        return null;
+    };
+    errdefer allocator.free(status);
+    const expires_at = optionalStringAlloc(allocator, obj.get("expires_at"));
+    errdefer if (expires_at) |value| allocator.free(value);
+    const title = optionalStringAlloc(allocator, obj.get("title"));
+    errdefer if (title) |value| allocator.free(value);
     return .{
-        .available_count = available_count,
-        .total_earned_count = total_earned_count,
-        .credits = try credits.toOwnedSlice(allocator),
+        .id = id,
+        .status = status,
+        .expires_at = expires_at,
+        .title = title,
     };
 }
 
@@ -142,6 +155,15 @@ fn parseResetCredit(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?Rat
         .title = title,
         .description = description,
     };
+}
+
+fn optionalStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) ?[]u8 {
+    const text = switch (value orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (text.len == 0) return null;
+    return allocator.dupe(u8, text) catch null;
 }
 
 fn requiredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {

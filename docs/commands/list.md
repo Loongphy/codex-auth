@@ -27,12 +27,10 @@ codex-auth list --json
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
-- Live account details show the earliest future quota reset, access-token expiry,
-  and the expiry timestamp for each reset-credit card returned by the server. The
-  `NEXT RESET LOCAL` and `ACCESS EXP LOCAL` columns use local time. Credit expiry
-  values include their timezone (`UTC` for the server's `Z` timestamps, or the
-  returned numeric offset). The JSON output retains the
-  complete card records, including status, grant date, ID, type, and description.
+- Live account details show the access-token expiry and, per account, the
+  available reset-credit count with the earliest card expiry. The
+  `ACCESS EXPIRE` and `RESET CREDITS` columns render in local time; the
+  available reset credits are also expandable per account in the live view.
 - Access-token expiry is shown in local time and is not the account or subscription
   expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable
   because the current data sources do not provide it. Server card lists may be
@@ -50,7 +48,7 @@ When local-only refresh is active, only the active account can be updated from l
 - Usage cells show remaining percent and reset time when that data is known.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
-- JSON output includes the returned reset-credit details and `next_reset_at`; the latter is the earliest future 5-hour or weekly reset.
+- JSON output includes the returned reset-credit details.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.

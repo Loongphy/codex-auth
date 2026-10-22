@@ -46,7 +46,7 @@ shortcut and is rejected when combined with `--json`.
   "account_name": null,
   "plan": "business",
   "auth_mode": "chatgpt",
-  "auth_expires_at": null,
+  "access_token_expires_at": null,
   "active": true,
   "created_at": 1730000000,
   "last_used_at": 1730001000,
@@ -65,8 +65,7 @@ shortcut and is rejected when combined with `--json`.
       "balance": null
     },
     "reset_credits": null,
-    "reset_credit_details": null,
-    "next_reset_at": 1730010000,
+    "reset_credit": null,
     "refresh": {
       "requested": true,
       "method": "api",
@@ -79,12 +78,10 @@ shortcut and is rejected when combined with `--json`.
 ```
 
 `reset_credits` remains the backward-compatible available-count field.
-`reset_credit_details`, when present, contains the backend's returned reset
-credit records, including each record's `id`, `reset_type`, `status`,
-`granted_at`, optional `expires_at`, `title`, and `description`. The backend
-may cap the returned list; compare `available_count` with `credits.length`
-before presenting it as exhaustive. `next_reset_at` is the earliest future
-reset timestamp from `primary.resets_at` and `secondary.resets_at`.
+`reset_credit`, when present, lists the available reset-credit cards with
+their `id`, `status`, `expires_at`, and `title`. The backend may cap the
+returned list, so treat it as non-exhaustive. All expiry timestamps in the
+terminal views render in local time.
 
 The API currently does not expose a verifiable subscription-plan expiration
 timestamp, so the JSON contract intentionally does not label token expiry as
@@ -94,7 +91,7 @@ plan expiry.
 an ephemeral display selector valid only for the ordering returned by the
 current invocation. Empty aliases and account names are `null`.
 
-`auth_expires_at` is the Unix timestamp when the stored access token expires.
+`access_token_expires_at` is the Unix timestamp when the stored access token expires.
 It describes credential lifetime only; it is not a subscription or account
 entitlement expiration timestamp.
 

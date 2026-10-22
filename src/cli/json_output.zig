@@ -166,8 +166,8 @@ fn writeAccount(jw: *std.json.Stringify, account: *const results.AccountView) !v
     try writeOptionalText(jw, planName(account.plan));
     try jw.objectField("auth_mode");
     try writeOptionalText(jw, authModeName(account.auth_mode));
-    try jw.objectField("auth_expires_at");
-    try jw.write(account.auth_expires_at);
+    try jw.objectField("access_token_expires_at");
+    try jw.write(account.access_token_expires_at);
     try jw.objectField("active");
     try jw.write(account.active);
     try jw.objectField("created_at");
@@ -193,50 +193,35 @@ fn writeUsage(jw: *std.json.Stringify, usage: *const results.UsageView) !void {
     try writeCredits(jw, usage.credits);
     try jw.objectField("reset_credits");
     try jw.write(usage.reset_credits);
-    try jw.objectField("reset_credit_details");
-    try writeResetCreditDetails(jw, usage.reset_credit_details);
-    try jw.objectField("next_reset_at");
-    try jw.write(usage.next_reset_at);
+    try jw.objectField("reset_credit");
+    try writeResetCreditList(jw, usage.reset_credit);
     try jw.objectField("refresh");
     try writeUsageRefresh(jw, &usage.refresh);
     try jw.endObject();
 }
 
-fn writeResetCreditDetails(
+fn writeResetCreditList(
     jw: *std.json.Stringify,
-    details: ?registry.RateLimitResetCredits,
+    details: ?[]registry.ResetCreditCard,
 ) !void {
     const value = details orelse {
         try jw.write(null);
         return;
     };
-    try jw.beginObject();
-    try jw.objectField("available_count");
-    try jw.write(value.available_count);
-    try jw.objectField("total_earned_count");
-    try jw.write(value.total_earned_count);
-    try jw.objectField("credits");
     try jw.beginArray();
-    for (value.credits) |credit| {
+    for (value) |card| {
         try jw.beginObject();
         try jw.objectField("id");
-        try jw.write(credit.id);
-        try jw.objectField("reset_type");
-        try jw.write(credit.reset_type);
+        try jw.write(card.id);
         try jw.objectField("status");
-        try jw.write(credit.status);
-        try jw.objectField("granted_at");
-        try jw.write(credit.granted_at);
+        try jw.write(card.status);
         try jw.objectField("expires_at");
-        try jw.write(credit.expires_at);
+        try jw.write(card.expires_at);
         try jw.objectField("title");
-        try jw.write(credit.title);
-        try jw.objectField("description");
-        try jw.write(credit.description);
+        try jw.write(card.title);
         try jw.endObject();
     }
     try jw.endArray();
-    try jw.endObject();
 }
 
 fn usageSourceName(source: results.UsageSource) []const u8 {

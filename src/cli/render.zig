@@ -424,17 +424,9 @@ pub fn renderListBody(
 ) !void {
     _ = widths;
     const details = @import("list_details.zig");
-    const max_cards = blk: {
-        var count: usize = 0;
-        for (reg.accounts.items) |account| {
-            if (account.last_usage) |usage| {
-                if (usage.reset_credit_details) |credits| count = @max(count, credits.credits.len);
-            }
-        }
-        break :blk count;
-    };
+
     const number_width = idx_width + 1;
-    try details.writeHeader(writer, reg, number_width, max_cols);
+    try details.writeHeader(writer, number_width, max_cols);
     var displayed_counter: usize = 0;
     for (rows) |row| {
         if (row.is_header) continue;
@@ -452,7 +444,7 @@ pub fn renderListBody(
             .rate_5h = row.rate_5h,
             .rate_week = row.rate_week,
             .last = row.last,
-        }, number_width, max_cards, max_cols);
+        }, number_width, max_cols);
     }
 }
 

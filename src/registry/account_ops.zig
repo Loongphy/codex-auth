@@ -192,10 +192,10 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
         changed = true;
     }
     reg.accounts.items[idx].auth_mode = info.auth_mode;
-    if (reg.accounts.items[idx].auth_expires_at != info.access_token_expires_at) {
+    if (reg.accounts.items[idx].access_token_expires_at != info.access_token_expires_at) {
         changed = true;
     }
-    reg.accounts.items[idx].auth_expires_at = info.access_token_expires_at;
+    reg.accounts.items[idx].access_token_expires_at = info.access_token_expires_at;
 
     const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
     defer allocator.free(dest);
@@ -605,7 +605,7 @@ pub fn accountFromAuth(
         .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
-        .auth_expires_at = info.access_token_expires_at,
+        .access_token_expires_at = info.access_token_expires_at,
         .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
@@ -643,7 +643,7 @@ pub fn accountFromApiKeyMe(
         .account_name = owned_account_name,
         .plan = null,
         .auth_mode = .apikey,
-        .auth_expires_at = null,
+        .access_token_expires_at = null,
         .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
