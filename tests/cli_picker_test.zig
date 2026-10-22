@@ -1612,7 +1612,7 @@ test "live list details show reset credits cell and scroll within the viewport" 
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "ACCESS EXPIRE", "RESET CREDITS", "1 (exp 10-01)" }) |expected| {
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "AUTH EXPIRE", "RESET CREDITS", "1 (exp 10-01)" }) |expected| {
         try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
     }
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "00:00:00 UTC") == null);

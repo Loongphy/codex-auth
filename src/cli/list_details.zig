@@ -4,7 +4,7 @@ const rows = @import("rows.zig");
 const style = @import("style.zig");
 const table_layout = @import("table_layout.zig");
 
-const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "ACCESS EXPIRE", "RESET CREDITS" };
+const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" };
 const base_desired_widths = [_]usize{ 2, 18, 8, 12, 12, 10, 16, 14 };
 const base_minimum_widths = [_]usize{ 1, 8, 4, 4, 6, 5, 10, 8 };
 const base_column_count = base_headers.len;

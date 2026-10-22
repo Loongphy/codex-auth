@@ -97,7 +97,18 @@ pub fn parseResetCreditCards(allocator: std.mem.Allocator, items: []std.json.Val
             return err;
         };
     }
+    // Persist in ascending expires_at order — soonest first, cards without an
+    // expiry last (upstream's picker sorts the same way). Storage order is
+    // render order.
+    std.mem.sort(ResetCreditCard, cards.items, {}, cardByExpiryLessThan);
     return try cards.toOwnedSlice(allocator);
+}
+
+fn cardByExpiryLessThan(_: void, a: ResetCreditCard, b: ResetCreditCard) bool {
+    // Backend ISO-8601 strings compare chronologically as bytes (uniform Z form).
+    if (a.expires_at == null) return false;
+    if (b.expires_at == null) return true;
+    return std.mem.order(u8, a.expires_at.?, b.expires_at.?) == .lt;
 }
 
 fn parseResetCreditCard(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?ResetCreditCard {

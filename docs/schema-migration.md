@@ -20,7 +20,7 @@ This document defines how `codex-auth` versions the on-disk `~/.codex/accounts/r
 
 - User-visible behavior is always “upgrade directly to the latest supported schema”.
 - Internally, migrations are implemented as a chain of `Vn -> Vn+1` steps.
-- The guaranteed automatic migration is `schema_version = 3 -> schema_version = 4`; older supported layouts are rewritten directly to schema `4`.
+- The guaranteed automatic migration is `schema_version = 3 -> schema_version = 4`.
 - The existing legacy `version = 2` loader also rewrites directly to schema `4`.
 - Users are not expected to install intermediate `codex-auth` versions.
 
