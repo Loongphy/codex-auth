@@ -71,13 +71,14 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
 }
 
 pub fn parseResetCreditList(allocator: std.mem.Allocator, v: std.json.Value) !?[]ResetCreditCard {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return null,
-    };
-    const credits_value = obj.get("credits") orelse return null;
-    const items = switch (credits_value) {
+    // Accepts both shapes: the persisted flat array (registry.json) and the
+    // backend wire object (`{"credits": [...]}`).
+    const items = switch (v) {
         .array => |array| array.items,
+        .object => |o| switch (o.get("credits") orelse return null) {
+            .array => |array| array.items,
+            else => return null,
+        },
         else => return null,
     };
     var cards = std.ArrayList(ResetCreditCard).empty;
@@ -116,44 +117,6 @@ fn parseResetCreditCard(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !
         .status = status,
         .expires_at = expires_at,
         .title = title,
-    };
-}
-
-fn parseResetCredit(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?RateLimitResetCredit {
-    const id = try requiredStringAlloc(allocator, obj.get("id")) orelse return null;
-    errdefer allocator.free(id);
-    const reset_type = try requiredStringAlloc(allocator, obj.get("reset_type")) orelse {
-        allocator.free(id);
-        return null;
-    };
-    errdefer allocator.free(reset_type);
-    const status = try requiredStringAlloc(allocator, obj.get("status")) orelse {
-        allocator.free(id);
-        allocator.free(reset_type);
-        return null;
-    };
-    errdefer allocator.free(status);
-    const granted_at = try requiredStringAlloc(allocator, obj.get("granted_at")) orelse {
-        allocator.free(id);
-        allocator.free(reset_type);
-        allocator.free(status);
-        return null;
-    };
-    errdefer allocator.free(granted_at);
-    const expires_at = try parseOptionalStoredStringAlloc(allocator, obj.get("expires_at"));
-    errdefer if (expires_at) |value| allocator.free(value);
-    const title = try parseOptionalStoredStringAlloc(allocator, obj.get("title"));
-    errdefer if (title) |value| allocator.free(value);
-    const description = try parseOptionalStoredStringAlloc(allocator, obj.get("description"));
-    errdefer if (description) |value| allocator.free(value);
-    return .{
-        .id = id,
-        .reset_type = reset_type,
-        .status = status,
-        .granted_at = granted_at,
-        .expires_at = expires_at,
-        .title = title,
-        .description = description,
     };
 }
 
