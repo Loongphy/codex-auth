@@ -362,3 +362,59 @@ test "writeAccountsTableForCols: very narrow terminal hides low-priority columns
     }
     try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
 }
+
+test "formatFutureDateAlloc renders only future dates" {
+    const allocator = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+
+    const missing = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, null, now);
+    defer allocator.free(missing);
+    try std.testing.expectEqualStrings("-", missing);
+
+    const expired = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now - 1, now);
+    defer allocator.free(expired);
+    try std.testing.expectEqualStrings("-", expired);
+
+    const boundary = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now, now);
+    defer allocator.free(boundary);
+    try std.testing.expectEqualStrings("-", boundary);
+
+    const future = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now + 86400, now);
+    defer allocator.free(future);
+    try std.testing.expectEqual(@as(usize, 10), future.len);
+    try std.testing.expectEqual(@as(u8, '-'), future[4]);
+    try std.testing.expectEqual(@as(u8, '-'), future[7]);
+}
+
+test "writeAccountsTable shows plan expiry for future data and hides expired data" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .plus);
+
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    const expected = try codex_auth.cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
+    var output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+
+    const expired_at = now - 30 * 86400;
+    const expired_text = try codex_auth.cli.rows.formatTimestampAlloc(gpa, expired_at);
+    defer gpa.free(expired_text);
+    reg.accounts.items[0].plan_expires_at = expired_at;
+
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
+    output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    if (expired_text.len >= 10) {
+        try std.testing.expect(std.mem.indexOf(u8, output, expired_text[0..10]) == null);
+    }
+}

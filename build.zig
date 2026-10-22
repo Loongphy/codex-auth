@@ -89,6 +89,7 @@ pub fn build(b: *std.Build) void {
         "tests/registry_test.zig",
         "tests/session_test.zig",
         "tests/time_relative_test.zig",
+        "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
         "tests/tui_display_test.zig",
         "tests/tui_session_test.zig",

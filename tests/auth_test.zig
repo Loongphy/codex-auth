@@ -400,3 +400,47 @@ test "convert standard auth json to cpa derives account id from id token" {
     try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
     try std.testing.expect(std.mem.indexOf(u8, converted, "stale-account-id") == null);
 }
+
+fn authJsonWithSubscriptionUntil(allocator: std.mem.Allocator, claim_literal: []const u8) ![]u8 {
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "{{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"acc\",\"chatgpt_user_id\":\"user\",\"user_id\":\"user\",\"chatgpt_plan_type\":\"plus\",\"chatgpt_subscription_active_until\":{s}}}}}",
+        .{claim_literal},
+    );
+    defer allocator.free(payload);
+
+    const h64 = try b64url(allocator, header);
+    defer allocator.free(h64);
+    const p64 = try b64url(allocator, payload);
+    defer allocator.free(p64);
+    const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
+    defer allocator.free(jwt);
+
+    return try std.fmt.allocPrint(
+        allocator,
+        "{{\"tokens\":{{\"access_token\":\"access\",\"account_id\":\"acc\",\"id_token\":\"{s}\"}}}}",
+        .{jwt},
+    );
+}
+
+test "parse auth info reads plan expiry from the id token subscription claim" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct {
+        claim: []const u8,
+        expected: ?i64,
+    }{
+        .{ .claim = "\"2026-07-29T12:09:00Z\"", .expected = 1785326940 },
+        .{ .claim = "\"2026-08-25T09:36:13.284171+00:00\"", .expected = 1787650573 },
+        .{ .claim = "1785326940000", .expected = 1785326940 },
+        .{ .claim = "null", .expected = null },
+    };
+
+    for (cases) |case| {
+        const json = try authJsonWithSubscriptionUntil(gpa, case.claim);
+        defer gpa.free(json);
+        const info = try auth.parseAuthInfoData(gpa, json);
+        defer info.deinit(gpa);
+        try std.testing.expectEqual(case.expected, info.plan_expires_at);
+    }
+}

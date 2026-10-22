@@ -1,12 +1,14 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const registry = @import("../registry/root.zig");
 const rows = @import("rows.zig");
 const style = @import("style.zig");
 const table_layout = @import("table_layout.zig");
+const timestamp = @import("../time/timestamp.zig");
 
-const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" };
-const base_desired_widths = [_]usize{ 2, 18, 8, 12, 12, 10, 16, 14 };
-const base_minimum_widths = [_]usize{ 1, 8, 4, 4, 6, 5, 10, 8 };
+const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" };
+const base_desired_widths = [_]usize{ 2, 18, 8, 11, 12, 12, 10, 16, 14 };
+const base_minimum_widths = [_]usize{ 1, 8, 4, 8, 4, 6, 5, 10, 8 };
 const base_column_count = base_headers.len;
 const available_status = "available";
 const separator_width: usize = 3;
@@ -36,8 +38,11 @@ pub fn write(
     max_cols: ?usize,
 ) !void {
     const visible_base = visibleBaseColumns(max_cols, number_width);
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const token_expiry = try rows.formatTimestampAlloc(allocator, account.access_token_expires_at);
     defer allocator.free(token_expiry);
+    const plan_expiry = try rows.formatFutureDateAlloc(allocator, account.plan_expires_at, now);
+    defer allocator.free(plan_expiry);
     const reset_credits_cell = try resetCreditsCell(allocator, account);
     defer allocator.free(reset_credits_cell);
 
@@ -46,7 +51,7 @@ pub fn write(
     var widths: [base_column_count]usize = undefined;
     var minimums: [base_column_count]usize = undefined;
     var count: usize = 0;
-    const base_values = [_][]const u8{ number, row.account, row.plan, row.rate_5h, row.rate_week, row.last, token_expiry, reset_credits_cell };
+    const base_values = [_][]const u8{ number, row.account, row.plan, plan_expiry, row.rate_5h, row.rate_week, row.last, token_expiry, reset_credits_cell };
     for (base_values, 0..) |value, index| {
         if (!visible_base[index]) continue;
         values[count] = value;
@@ -79,7 +84,7 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
     if (usage.reset_credit) |cards| {
         for (cards) |card| {
             if (!std.mem.eql(u8, card.status, "available")) continue;
-            if (parseIsoEpoch(card.expires_at orelse "")) |epoch| {
+            if (timestamp.parseIso8601(card.expires_at orelse "")) |epoch| {
                 if (earliest == null or epoch < earliest.?) earliest = epoch;
             }
         }
@@ -96,7 +101,7 @@ fn visibleBaseColumns(max_cols: ?usize, number_width: usize) [base_column_count]
     var visible: [base_column_count]bool = undefined;
     for (&visible) |*value| value.* = true;
     const limit = max_cols orelse return visible;
-    const drop_order = [_]usize{ 7, 6, 5, 2 };
+    const drop_order = [_]usize{ 8, 7, 6, 3, 5, 2 };
     while (minimumTableWidth(visible, number_width) > limit) {
         var changed = false;
         for (drop_order) |index| {
@@ -184,44 +189,4 @@ fn minimumForWidths(widths: []const usize) usize {
     var total: usize = 0;
     for (widths) |width| total += width;
     return total + (widths.len - 1) * separator_width;
-}
-
-/// Minimal ISO-8601 parser for the backend shape `YYYY-MM-DDTHH:MM:SS` with an
-/// optional trailing zone (`Z` or `±HH:MM`). Returns epoch seconds, or null.
-fn parseIsoEpoch(value: []const u8) ?i64 {
-    if (value.len < 19 or value[4] != '-' or value[7] != '-' or value[10] != 'T' or
-        value[13] != ':' or value[16] != ':') return null;
-    const year = std.fmt.parseInt(i64, value[0..4], 10) catch return null;
-    const month = std.fmt.parseInt(i64, value[5..7], 10) catch return null;
-    const day = std.fmt.parseInt(i64, value[8..10], 10) catch return null;
-    const hour = std.fmt.parseInt(i64, value[11..13], 10) catch return null;
-    const minute = std.fmt.parseInt(i64, value[14..16], 10) catch return null;
-    const second = std.fmt.parseInt(i64, value[17..19], 10) catch return null;
-    if (month < 1 or month > 12 or day < 1 or day > 31) return null;
-
-    var epoch = daysFromCivil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second;
-    if (value.len > 19) {
-        const zone_marker = value[19];
-        if (zone_marker == '+' or zone_marker == '-') {
-            if (value.len >= 25 and value[22] == ':') {
-                const zone_hour = std.fmt.parseInt(i64, value[20..22], 10) catch 0;
-                const zone_minute = std.fmt.parseInt(i64, value[23..25], 10) catch 0;
-                const offset = zone_hour * 3600 + zone_minute * 60;
-                epoch += if (zone_marker == '+') -offset else offset;
-            }
-        }
-    }
-    return epoch;
-}
-
-/// Howard Hinnant's days_from_civil algorithm.
-fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
-    var y = year;
-    if (month <= 2) y -= 1;
-    const era = @divFloor(y, 400);
-    const yoe = y - era * 400;
-    const mp = @mod(month + 9, 12);
-    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
-    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-    return era * 146097 + doe - 719468;
 }

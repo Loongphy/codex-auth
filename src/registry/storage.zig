@@ -210,6 +210,7 @@ fn migrateLegacyRecord(
         .plan = info.plan orelse legacy.plan,
         .auth_mode = info.auth_mode,
         .access_token_expires_at = info.access_token_expires_at,
+        .plan_expires_at = info.plan_expires_at,
         .created_at = legacy.created_at,
         .last_used_at = legacy.last_used_at,
         .last_usage = legacy.last_usage,

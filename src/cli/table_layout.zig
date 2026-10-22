@@ -12,7 +12,7 @@ pub const LiveListViewport = struct {
 };
 
 pub const live_column_count = 5;
-pub const column_count = 7;
+pub const column_count = 8;
 const live_account_ident_width: usize = 10;
 const account_min_width: usize = 2;
 const live_account_suffix_min_width: usize = 10;
@@ -116,6 +116,7 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
 
 const first_pass_order = [_]usize{ 0, 4, 5, 2, 1, 3, 6 };
 const grow_pass_order = [_]usize{ 2, 4, 5, 1, 3, 6, 0 };
+const deferred_column_index: usize = 7;
 const column_target_widths = [_]usize{
     live_account_ident_width, // ACCOUNT
     "PLAN".len, // PLAN
@@ -124,6 +125,7 @@ const column_target_widths = [_]usize{
     @max(4, "5H".len), // 5H
     "WEEKLY".len, // WEEKLY
     4, // LAST
+    10, // PLAN EXPIRE
 };
 
 /// Shared responsive column allocator for every table view.
@@ -173,6 +175,20 @@ pub fn boundColumnWidths(widths: [column_count]usize, prefix_len: usize, max_col
         growBoundedWidth(&remaining, &bounded[index], widths[index]);
     }
 
+    // Deferred pass: admit a low-priority column only after every existing
+    // column has had a chance to grow. This keeps the plan-expiry column from
+    // stealing width from usage and status cells on mid-sized terminals.
+    if (bounded[deferred_column_index] == 0 and widths[deferred_column_index] > 0) {
+        const separator_width: usize = if (visible_count == 0) 0 else 2;
+        if (remaining > separator_width) {
+            const width = @min(widths[deferred_column_index], remaining - separator_width);
+            if (width > 0) {
+                bounded[deferred_column_index] = width;
+                remaining -= width + separator_width;
+            }
+        }
+    }
+
     return bounded;
 }
 
@@ -185,6 +201,7 @@ pub fn switchWidthsToColumns(widths: SwitchWidths) [column_count]usize {
         widths.rate_5h,
         widths.rate_week,
         widths.last,
+        0,
     };
 }
 

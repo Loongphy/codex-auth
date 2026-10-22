@@ -76,6 +76,8 @@ If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwis
 - `tokens.id_token`
 - a ChatGPT account context from `tokens.account_id`, JWT `https://api.openai.com/auth.chatgpt_account_id`, or JWT `https://api.openai.com/auth.organizations[].id`
 - JWT user identity from `chatgpt_user_id` or `user_id`
+- Optional plan expiry from JWT `https://api.openai.com/auth.chatgpt_subscription_active_until`
+  (ISO-8601 string or epoch seconds/milliseconds)
 
 If required identity fields are missing or mismatched, import/login fails. Existing-registry foreground sync skips unsyncable auth files and continues with registry state already on disk.
 
@@ -86,7 +88,7 @@ Foreground account commands sync `auth.json` before their main work when the cur
 The sync flow is:
 
 1. Read `~/.codex/auth.json`.
-2. Parse email, plan, auth mode, `chatgpt_user_id`, and `chatgpt_account_id`.
+2. Parse email, plan, plan expiry, auth mode, `chatgpt_user_id`, and `chatgpt_account_id`.
 3. Match by `record_key`.
 4. Update the matching account and active key, or create a new account record when no match exists.
 5. Rewrite the managed account snapshot when contents changed.
@@ -124,6 +126,8 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Alias labels take precedence for child rows.
 - Duplicate workspace-style plan labels may use stable numbered labels.
 - `PLAN` comes from the auth claim when available, then falls back to usage snapshot plan data.
+- `PLAN EXPIRE` comes from the stored `id_token` subscription claim. Missing or already-expired
+  timestamps render as `-`; the column is omitted on narrow terminals.
 - Usage cells show remaining percentage plus reset time when reset data is known.
 - `LAST ACTIVITY` is rendered as relative time from `last_usage_at`.
 

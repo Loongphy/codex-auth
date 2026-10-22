@@ -1704,6 +1704,33 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "live list shows plan expiry only when it is still in the future" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    const expected = try cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+
+    reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

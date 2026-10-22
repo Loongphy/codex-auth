@@ -13,6 +13,8 @@ pub const UsageFetchResult = struct {
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
     access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 };
 
 pub const max_response_error_code_bytes: usize = 64;
@@ -33,6 +35,8 @@ pub const BatchUsageFetchResult = struct {
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -72,14 +76,40 @@ pub fn fetchUsageForAuthPath(allocator: std.mem.Allocator, auth_path: []const u8
 pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []const u8) !UsageFetchResult {
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
+    const plan_expires_at = info.plan_expires_at;
 
-    if (info.auth_mode == .apikey) return .{ .snapshot = null, .status_code = null };
-    if (info.auth_mode != .chatgpt) return .{ .snapshot = null, .status_code = null, .missing_auth = true };
-    const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
-    const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
+    if (info.auth_mode == .apikey) return .{
+        .snapshot = null,
+        .status_code = null,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    if (info.auth_mode != .chatgpt) return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    const access_token = info.access_token orelse return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    const chatgpt_account_id = info.chatgpt_account_id orelse return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
 
     var result = try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
     result.access_token_expires_at = auth.accessTokenExpiresAt(allocator, access_token) catch null;
+    result.plan_expires_at = plan_expires_at;
+    result.plan_expires_at_known = true;
     return result;
 }
 
@@ -111,6 +141,8 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         };
         defer info.deinit(arena);
         results[idx].access_token_expires_at = info.access_token_expires_at;
+        results[idx].plan_expires_at = info.plan_expires_at;
+        results[idx].plan_expires_at_known = true;
 
         if (info.auth_mode == .apikey) {
             continue;

@@ -3,12 +3,14 @@
 Every table view uses the same responsive allocator in
 `src/cli/table_layout.zig`. The full column model is:
 
-`ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`
+`ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`,
+and a deferred `PLAN EXPIRE`.
 
-The plain `list` table enables all seven columns. The live views
-(`switch`, `remove`, and `list --live`) disable `CREDITS` and
-`RESET CREDITS`: those columns are absent from the layout, and their width and
-separator budget is redistributed to the remaining columns.
+The plain `list` table enables all eight columns. The live `switch` and
+`remove` views disable `CREDITS`, `RESET CREDITS`, and the deferred
+`PLAN EXPIRE`: those columns are absent from the layout, and their width and
+separator budget is redistributed to the remaining columns. `list --live`
+uses its own account-detail table.
 
 ## Column Allocation
 
@@ -26,6 +28,11 @@ ACCOUNT (10)
   -> RESET CREDITS (2)
   -> LAST (4)
 ```
+
+`PLAN EXPIRE` is deferred: it is not part of the first pass or the grow pass.
+It only receives leftover width after every other visible column has had a
+chance to grow. On mid-sized terminals this keeps usage and status values from
+being squeezed by the extra column.
 
 - Separators are charged only for columns that are actually visible.
 - A non-account column is shown only when its target width and separator fit.
@@ -92,17 +99,20 @@ label is truncated.
 
 ## Examples
 
-Plain `list`, where all seven columns are enabled:
+Plain `list`, where all eight columns are enabled on a wide terminal:
 
 ```text
-ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST
---------------------------------------------------------
-very-long.  Pro   -          -   100%      58%     -
-work-main.  Pro   unlimited  3   31%       42%     -
+ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST  PLAN EXPIRE
+------------------------------------------------------------------
+very-long.  Pro   -          -   100%      58%     -     2026-11-22
+work-main.  Pro   unlimited  3   31%       42%     -     2026-12-01
 ```
 
-Live view, where `CREDITS` and `RESET CREDITS` are disabled and their space is
-redistributed:
+At 70 columns, the deferred `PLAN EXPIRE` column is omitted so `FileNotFound`
+and other status cells stay readable.
+
+Live view, where `CREDITS`, `RESET CREDITS`, and `PLAN EXPIRE` are disabled and
+their space is redistributed:
 
 ```text
 ACCOUNT      PLAN      5H    WEEKLY
