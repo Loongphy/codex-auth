@@ -11,8 +11,10 @@ pub const LiveListViewport = struct {
     max_cols: ?usize = null,
 };
 
-pub const column_count = 5;
+pub const live_column_count = 5;
+pub const column_count = 7;
 const live_account_ident_width: usize = 10;
+const account_min_width: usize = 2;
 const live_account_suffix_min_width: usize = 10;
 const live_account_suffix_min_len: usize = 3;
 const live_account_prefix_min_len: usize = 6;
@@ -28,7 +30,7 @@ pub const Cell = struct {
 };
 
 pub const LiveTable = struct {
-    columns: [column_count]LiveTableColumn,
+    columns: [live_column_count]LiveTableColumn,
     prefix_width: usize,
 
     pub fn writeHeader(self: *const LiveTable, writer: *style.StyledWriter) !void {
@@ -46,6 +48,7 @@ pub const LiveTable = struct {
     }
 
     pub fn writeGroupRow(self: *const LiveTable, writer: *style.StyledWriter, account: []const u8) !void {
+        if (self.columns[0].width == 0) return;
         try writer.writeStyle(style.role.secondary);
         try writeRepeat(writer.out, ' ', self.prefix_width);
         try writeAccountTruncatedPadded(writer.out, account, self.columns[0].width);
@@ -57,7 +60,7 @@ pub const LiveTable = struct {
         self: *const LiveTable,
         writer: *style.StyledWriter,
         prefix: []const u8,
-        cells: [column_count]Cell,
+        cells: [live_column_count]Cell,
         ansi_style: []const u8,
     ) !void {
         try writer.writeStyle(ansi_style);
@@ -73,10 +76,13 @@ pub const LiveTable = struct {
     fn writeCells(
         self: *const LiveTable,
         out: *std.Io.Writer,
-        cells: *const [column_count]Cell,
+        cells: *const [live_column_count]Cell,
     ) !void {
+        var wrote_any = false;
         for (self.columns, 0..) |column, i| {
-            if (i > 0) try out.writeAll("  ");
+            if (column.width == 0) continue;
+            if (wrote_any) try out.writeAll("  ");
+            wrote_any = true;
             const indent = @min(cells[i].indent, column.width);
             try writeRepeat(out, ' ', indent);
             if (i == 0) {
@@ -88,54 +94,98 @@ pub const LiveTable = struct {
     }
 };
 
-pub fn accountTable(widths: SwitchWidths, prefix_width: usize) LiveTable {
+pub fn accountTable(widths: [column_count]usize, prefix_width: usize) LiveTable {
     return .{
         .columns = .{
-            .{ .header = "ACCOUNT", .width = widths.email },
-            .{ .header = "PLAN", .width = widths.plan },
-            .{ .header = "5H", .width = widths.rate_5h },
-            .{ .header = "WEEKLY", .width = widths.rate_week },
-            .{ .header = "LAST", .width = widths.last },
+            .{ .header = "ACCOUNT", .width = widths[0] },
+            .{ .header = "PLAN", .width = widths[1] },
+            .{ .header = "5H", .width = widths[4] },
+            .{ .header = "WEEKLY", .width = widths[5] },
+            .{ .header = "LAST", .width = widths[6] },
         },
         .prefix_width = prefix_width,
     };
 }
 
-pub fn boundWidths(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) SwitchWidths {
+pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) LiveTable {
+    return accountTable(
+        boundColumnWidths(switchWidthsToColumns(widths), prefix_width, max_cols),
+        prefix_width,
+    );
+}
+
+const first_pass_order = [_]usize{ 0, 4, 5, 2, 1, 3, 6 };
+const grow_pass_order = [_]usize{ 2, 4, 5, 1, 3, 6, 0 };
+const column_target_widths = [_]usize{
+    live_account_ident_width, // ACCOUNT
+    "PLAN".len, // PLAN
+    2, // CREDITS
+    2, // RESET CREDITS
+    @max(4, "5H".len), // 5H
+    "WEEKLY".len, // WEEKLY
+    4, // LAST
+};
+
+/// Shared responsive column allocator for every table view.
+///
+/// Input widths are content widths. A zero input width disables a column
+/// (used by the live view to hide CREDITS and RESET CREDITS). The first pass
+/// admits columns by priority only when their target width and separator fit;
+/// ACCOUNT may use a partial width when nothing else fits. The second pass
+/// grows visible columns toward their content width, keeping ACCOUNT last so
+/// long labels cannot starve values such as `unlimited` or error names.
+/// Columns that receive zero width must be skipped by the caller.
+pub fn boundColumnWidths(widths: [column_count]usize, prefix_len: usize, max_cols: ?usize) [column_count]usize {
     const cols = max_cols orelse return widths;
-    const separator_width = 2 * (column_count - 1);
-    if (cols <= prefix_width + separator_width) {
-        return .{
-            .email = 0,
-            .plan = 0,
-            .rate_5h = 0,
-            .rate_week = 0,
-            .last = 0,
-        };
+    var bounded = [_]usize{0} ** column_count;
+    if (cols <= prefix_len) return bounded;
+
+    var remaining = cols - prefix_len;
+    var visible_count: usize = 0;
+
+    // First pass: reserve targets by priority. Separators are charged only
+    // when a column actually becomes visible.
+    for (first_pass_order) |index| {
+        const target = @min(widths[index], column_target_widths[index]);
+        if (target == 0) continue;
+
+        if (index == 0) {
+            const width = @min(target, remaining);
+            if (width < account_min_width) continue;
+            bounded[index] = width;
+            remaining -= width;
+            visible_count += 1;
+            continue;
+        }
+
+        const separator_width: usize = if (visible_count == 0) 0 else 2;
+        if (remaining < target + separator_width) continue;
+        bounded[index] = target;
+        remaining -= target + separator_width;
+        visible_count += 1;
     }
 
-    var remaining = cols - prefix_width - separator_width;
-    var bounded = SwitchWidths{
-        .email = 0,
-        .plan = 0,
-        .rate_5h = 0,
-        .rate_week = 0,
-        .last = 0,
-    };
-
-    growBoundedWidth(&remaining, &bounded.email, @min(widths.email, live_account_ident_width));
-    growBoundedWidth(&remaining, &bounded.rate_5h, @min(widths.rate_5h, @max(@as(usize, 4), "5H".len)));
-    growBoundedWidth(&remaining, &bounded.rate_week, @min(widths.rate_week, "WEEKLY".len));
-    growBoundedWidth(&remaining, &bounded.plan, @min(widths.plan, "PLAN".len));
-    growBoundedWidth(&remaining, &bounded.last, @min(widths.last, @as(usize, 3)));
-
-    growBoundedWidth(&remaining, &bounded.rate_5h, widths.rate_5h);
-    growBoundedWidth(&remaining, &bounded.rate_week, widths.rate_week);
-    growBoundedWidth(&remaining, &bounded.plan, widths.plan);
-    growBoundedWidth(&remaining, &bounded.last, widths.last);
-    growBoundedWidth(&remaining, &bounded.email, widths.email);
+    // Second pass: grow the variable-length credit cell first so values like
+    // `unlimited` do not collapse to `u.`, then the usage windows, and keep
+    // account identity last so long labels cannot starve other values.
+    for (grow_pass_order) |index| {
+        if (bounded[index] == 0) continue;
+        growBoundedWidth(&remaining, &bounded[index], widths[index]);
+    }
 
     return bounded;
+}
+
+pub fn switchWidthsToColumns(widths: SwitchWidths) [column_count]usize {
+    return .{
+        widths.email,
+        widths.plan,
+        0,
+        0,
+        widths.rate_5h,
+        widths.rate_week,
+        widths.last,
+    };
 }
 
 fn growBoundedWidth(remaining: *usize, current: *usize, target: usize) void {

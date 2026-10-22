@@ -2,6 +2,7 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const display_rows = @import("display.zig");
+const table_layout = @import("../cli/table_layout.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
 const rate_limit = @import("rate_limit.zig");
@@ -121,8 +122,23 @@ pub fn writeAccountsTableWithUsageOverrides(
     use_color: bool,
     usage_overrides: ?[]const ?[]const u8,
 ) !void {
+    const cols = terminalWidth();
+    return writeAccountsTableWithUsageOverridesForCols(out, reg, use_color, usage_overrides, if (cols == 0) null else cols);
+}
+
+/// Width-injectable variant: `term_cols = null` disables width handling and
+/// renders content widths unchanged. Columns receiving zero width are skipped
+/// entirely (header, cells, and their separators).
+pub fn writeAccountsTableWithUsageOverridesForCols(
+    out: *std.Io.Writer,
+    reg: *registry.Registry,
+    use_color: bool,
+    usage_overrides: ?[]const ?[]const u8,
+    term_cols: ?usize,
+) !void {
     const headers = [_][]const u8{ "ACCOUNT", "PLAN", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY" };
-    var widths = [_]usize{
+    const compact_headers = [_][]const u8{ "ACCOUNT", "PLAN", "CR", "RESET", "5H", "WEEKLY", "LAST" };
+    var content_widths = [_]usize{
         headers[0].len,
         headers[1].len,
         headers[2].len,
@@ -140,7 +156,7 @@ pub fn writeAccountsTableWithUsageOverrides(
 
     for (display.rows) |row| {
         const indent: usize = @as(usize, row.depth) * 2;
-        widths[0] = @max(widths[0], text_width.displayWidth(row.account_cell) + indent);
+        content_widths[0] = @max(content_widths[0], text_width.displayWidth(row.account_cell) + indent);
         if (row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
             const plan = planDisplay(&rec, "-");
@@ -158,53 +174,54 @@ pub fn writeAccountsTableWithUsageOverrides(
             const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last_str);
 
-            widths[1] = @max(widths[1], plan.len);
-            widths[2] = @max(widths[2], credits_str.len);
-            widths[3] = @max(widths[3], reset_credits_str.len);
-            widths[4] = @max(widths[4], rate_5h_str.len);
-            widths[5] = @max(widths[5], rate_week_str.len);
-            widths[6] = @max(widths[6], last_str.len);
+            content_widths[1] = @max(content_widths[1], plan.len);
+            content_widths[2] = @max(content_widths[2], credits_str.len);
+            content_widths[3] = @max(content_widths[3], reset_credits_str.len);
+            content_widths[4] = @max(content_widths[4], rate_5h_str.len);
+            content_widths[5] = @max(content_widths[5], rate_week_str.len);
+            content_widths[6] = @max(content_widths[6], last_str.len);
         }
     }
 
-    adjustListWidths(&widths, prefix_len, sep_len);
+    const widths = table_layout.boundColumnWidths(content_widths, prefix_len, term_cols);
+    var visible: [7]bool = undefined;
+    var header_cells: [7][]const u8 = undefined;
+    for (widths, 0..) |width, index| {
+        visible[index] = width > 0;
+        const full = headers[index];
+        const fallback = compact_headers[index];
+        header_cells[index] = if (width >= full.len)
+            full
+        else if (index == 3 and width < "RESET".len)
+            if (width >= "RC".len) "RC" else "R"
+        else if (width >= fallback.len)
+            fallback
+        else
+            fallback[0..width];
+    }
 
-    const h0 = try truncateAlloc(headers[0], widths[0]);
-    defer std.heap.page_allocator.free(h0);
-    const h1 = try truncateAlloc(headers[1], widths[1]);
-    defer std.heap.page_allocator.free(h1);
-    const h2 = try truncateAlloc(headers[2], widths[2]);
-    defer std.heap.page_allocator.free(h2);
-    const h3 = try truncateAlloc(headers[3], widths[3]);
-    defer std.heap.page_allocator.free(h3);
-    const h4 = try truncateAlloc(headers[4], widths[4]);
-    defer std.heap.page_allocator.free(h4);
-    const header_week = if (widths[5] >= "WEEKLY".len) "WEEKLY" else if (widths[5] >= "WEEK".len) "WEEK" else "W";
-    const h5 = try truncateAlloc(header_week, widths[5]);
-    defer std.heap.page_allocator.free(h5);
-    const header_last = if (widths[6] >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST";
-    const h6 = try truncateAlloc(header_last, widths[6]);
-    defer std.heap.page_allocator.free(h6);
+    var visible_count: usize = 0;
+    var total: usize = prefix_len;
+    for (widths, 0..) |width, index| {
+        if (!visible[index]) continue;
+        total += width;
+        visible_count += 1;
+    }
+    if (visible_count > 1) total += sep_len * (visible_count - 1);
 
     if (use_color) try out.writeAll(ansi.cyan);
     try writeRepeat(out, ' ', prefix_len);
-    try writePadded(out, h0, widths[0]);
-    try out.writeAll("  ");
-    try writePadded(out, h1, widths[1]);
-    try out.writeAll("  ");
-    try writePadded(out, h2, widths[2]);
-    try out.writeAll("  ");
-    try writePadded(out, h3, widths[3]);
-    try out.writeAll("  ");
-    try writePadded(out, h4, widths[4]);
-    try out.writeAll("  ");
-    try writePadded(out, h5, widths[5]);
-    try out.writeAll("  ");
-    try writePadded(out, h6, widths[6]);
+    var first_visible = true;
+    for (header_cells, 0..) |cell, index| {
+        if (!visible[index]) continue;
+        if (!first_visible) try out.writeAll("  ");
+        first_visible = false;
+        try writePadded(out, cell, widths[index]);
+    }
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
     if (use_color) try out.writeAll(ansi.dim);
-    try writeRepeat(out, '-', listTotalWidth(&widths, prefix_len, sep_len));
+    try writeRepeat(out, '-', total);
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
 
@@ -253,23 +270,20 @@ pub fn writeAccountsTableWithUsageOverrides(
             try writeIndexPadded(out, selectable_counter + 1, idx_width);
             try out.writeAll(" ");
             try writeRepeat(out, ' ', indent_to_print);
-            try writePadded(out, account_cell, widths[0] - indent_to_print);
-            try out.writeAll("  ");
-            try writePadded(out, plan_cell, widths[1]);
-            try out.writeAll("  ");
-            try writePadded(out, credits_cell, widths[2]);
-            try out.writeAll("  ");
-            try writePadded(out, reset_credits_cell, widths[3]);
-            try out.writeAll("  ");
-            try writePadded(out, rate_5h_cell, widths[4]);
-            try out.writeAll("  ");
-            try writePadded(out, rate_week_cell, widths[5]);
-            try out.writeAll("  ");
-            try writePadded(out, last_cell, widths[6]);
+            const row_cells = [_][]const u8{ account_cell, plan_cell, credits_cell, reset_credits_cell, rate_5h_cell, rate_week_cell, last_cell };
+            var row_first_visible = true;
+            for (row_cells, 0..) |cell, index| {
+                if (!visible[index]) continue;
+                if (!row_first_visible) try out.writeAll("  ");
+                row_first_visible = false;
+                const cell_width = if (index == 0) widths[0] - indent_to_print else widths[index];
+                try writePadded(out, cell, cell_width);
+            }
             try out.writeAll("\n");
             if (use_color) try out.writeAll(ansi.reset);
             selectable_counter += 1;
         } else {
+            if (!visible[0]) continue;
             const account_cell = try truncateAlloc(row.account_cell, widths[0]);
             defer std.heap.page_allocator.free(account_cell);
             if (use_color) try out.writeAll(ansi.dim);
@@ -280,7 +294,6 @@ pub fn writeAccountsTableWithUsageOverrides(
         }
     }
 }
-
 fn printTableBorder(out: *std.Io.Writer, widths: []const usize) !void {
     try out.writeAll("+");
     for (widths) |w| {
@@ -348,85 +361,6 @@ fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     var i: usize = 0;
     while (i < count) : (i += 1) {
         try out.writeByte(ch);
-    }
-}
-
-fn listTotalWidth(widths: *const [7]usize, prefix_len: usize, sep_len: usize) usize {
-    var sum: usize = prefix_len;
-    for (widths) |w| sum += w;
-    sum += sep_len * (widths.len - 1);
-    return sum;
-}
-
-fn adjustListWidths(widths: *[7]usize, prefix_len: usize, sep_len: usize) void {
-    const term_cols = terminalWidth();
-    if (term_cols == 0) return;
-    const total = listTotalWidth(widths, prefix_len, sep_len);
-    if (total <= term_cols) return;
-
-    const min_email: usize = 10;
-    const min_plan: usize = 4;
-    const min_credits: usize = 1;
-    const min_reset_credits: usize = 1;
-    const min_rate: usize = 1;
-    const min_last: usize = 4;
-
-    var over = total - term_cols;
-    if (over == 0) return;
-
-    if (widths[0] > min_email) {
-        const reducible = widths[0] - min_email;
-        const reduce = @min(reducible, over);
-        widths[0] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[1] > min_plan) {
-        const reducible = widths[1] - min_plan;
-        const reduce = @min(reducible, over);
-        widths[1] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[2] > min_credits) {
-        const reducible = widths[2] - min_credits;
-        const reduce = @min(reducible, over);
-        widths[2] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[3] > min_reset_credits) {
-        const reducible = widths[3] - min_reset_credits;
-        const reduce = @min(reducible, over);
-        widths[3] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[4] > min_rate) {
-        const reducible = widths[4] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[4] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[5] > min_rate) {
-        const reducible = widths[5] - min_rate;
-        const reduce = @min(reducible, over);
-        widths[5] -= reduce;
-        over -= reduce;
-    }
-    if (over == 0) return;
-
-    if (widths[6] > min_last) {
-        const reducible = widths[6] - min_last;
-        const reduce = @min(reducible, over);
-        widths[6] -= reduce;
-        over -= reduce;
     }
 }
 

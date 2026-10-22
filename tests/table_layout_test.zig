@@ -87,7 +87,7 @@ test "Scenario: Given a narrow table when rendering then account identity and us
 
     const output = writer.buffered();
     try expectLinesWithin(output, 33);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.ple.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") == null);
@@ -151,4 +151,137 @@ test "Scenario: Given an alias-sized account label when rendering a narrow table
     try std.testing.expect(std.mem.indexOf(u8, output, "work-main") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "31%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
+}
+
+const table_format = codex_auth.tui.table;
+
+fn appendListAccount(allocator: std.mem.Allocator, reg: *registry.Registry, email: []const u8) !void {
+    const sep = std.mem.indexOf(u8, email, "@").?;
+    const record_key = try std.fmt.allocPrint(allocator, "user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
+    defer allocator.free(record_key);
+    try reg.accounts.append(allocator, .{
+        .account_key = try allocator.dupe(u8, record_key),
+        .chatgpt_account_id = try allocator.dupe(u8, email[sep + 1 ..]),
+        .chatgpt_user_id = try allocator.dupe(u8, email[0..sep]),
+        .email = try allocator.dupe(u8, email),
+        .alias = try allocator.dupe(u8, email[0..sep]),
+        .account_name = null,
+        .plan = .pro,
+        .auth_mode = .chatgpt,
+        .created_at = 1,
+        .last_used_at = null,
+        .last_usage = .{
+            .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = 4102444800 },
+            .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = 4103049600 },
+            .credits = null,
+            .plan_type = .pro,
+        },
+        .last_usage_at = null,
+        .last_local_rollout = null,
+    });
+}
+
+fn hasDotOnlyCell(line: []const u8) bool {
+    for (line, 0..) |ch, index| {
+        if (ch != '.') continue;
+        const before_is_space = index == 0 or line[index - 1] == ' ';
+        const after_is_space = index + 1 == line.len or line[index + 1] == ' ';
+        if (before_is_space and after_is_space) return true;
+    }
+    return false;
+}
+
+test "Scenario: Given widths from 5 to 130 when rendering the plain list then lines fit and no cell is only a dot" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendListAccount(gpa, &reg, "very-long-account-name@example.com");
+
+    var width: usize = 5;
+    while (width <= 130) : (width += 1) {
+        var buffer: [8192]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, width);
+        const output = writer.buffered();
+        try expectLinesWithin(output, width);
+
+        var header: []const u8 = "";
+        var lines = std.mem.splitScalar(u8, output, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            if (header.len == 0) header = line;
+            try std.testing.expect(!hasDotOnlyCell(line));
+        }
+        if (std.mem.indexOf(u8, header, "5H") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
+        }
+    }
+}
+
+test "Scenario: Given a FileNotFound override and a long account when rendering at 70 columns then the override stays readable" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendListAccount(gpa, &reg, "very-long-account-name@example.com");
+
+    var overrides = [_]?[]const u8{"FileNotFound"};
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, &overrides, 70);
+    const output = writer.buffered();
+    try expectLinesWithin(output, 70);
+    try std.testing.expect(std.mem.indexOf(u8, output, "FileNotFound") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Fil.") == null);
+}
+
+test "Scenario: Given compact list widths when rendering then headers use CR, RC and RESET fallbacks" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendListAccount(gpa, &reg, "very-long-account-name@example.com");
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 40);
+    var output = writer.buffered();
+    try expectLinesWithin(output, 40);
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
+
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 46);
+    output = writer.buffered();
+    try expectLinesWithin(output, 46);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RC") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") == null);
+
+    reg.accounts.items[0].last_usage = null;
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 60);
+    output = writer.buffered();
+    try expectLinesWithin(output, 60);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESET") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") == null);
+}
+
+test "Scenario: Given unlimited credits when rendering at 60 columns then the value is not collapsed to u." {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendListAccount(gpa, &reg, "work-main@example.com");
+    reg.accounts.items[0].last_usage.?.credits = .{
+        .has_credits = true,
+        .unlimited = true,
+        .balance = null,
+    };
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 60);
+    const output = writer.buffered();
+    try expectLinesWithin(output, 60);
+    try std.testing.expect(std.mem.indexOf(u8, output, "unlimited") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "u.") == null);
 }
