@@ -7,7 +7,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 - Command behavior: [docs/commands/README.md](./commands/README.md)
 - API refresh and endpoint rules: [docs/api.md](./api.md)
 - File permissions: [docs/permissions.md](./permissions.md)
-- Schema migration: [docs/schema-migration.md](./schema-migration.md)
+- Registry schema and compatibility: [docs/schema.md](./schema.md)
 - Test organization: [docs/tests.md](./tests.md)
 - Release and CI: [docs/release.md](./release.md)
 
@@ -31,14 +31,15 @@ Managed files:
 
 ## Registry Compatibility
 
-- `registry.json.schema_version` is the on-disk migration gate.
+- `registry.json.schema_version` is the on-disk compatibility gate.
 - `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
 - Current-layout files that still use the top-level `version = 3` key are rewritten to the current schema.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`.
+- Additive optional derived/cache fields stay within the current schema when missing data is safe and recoverable; see [docs/schema.md](./schema.md).
 - Saving always rewrites `registry.json` into the current schema field set.
 
-See [docs/schema-migration.md](./schema-migration.md) for versioning policy and migration rules.
+See [docs/schema.md](./schema.md) for the compatibility policy, data classification, and migration rules.
 
 ## Account Identity
 
