@@ -1704,6 +1704,32 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "live list renders a dash when available reset credits have no expiry" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":1,"credits":[
+        \\{"id":"undated-card","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":null,"title":"Undated card"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 30, .window_minutes = 300, .resets_at = 1790000100 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 1,
+        .reset_credit = details,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (-)") != null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
