@@ -21,7 +21,6 @@ const TuiSession = tui_mod.TuiSession;
 const mapTuiOutputError = tui_mod.mapTuiOutputError;
 const indexWidth = row_data.indexWidth;
 const renderSwitchScreenViewport = render.renderSwitchScreenViewport;
-const renderListScreenViewport = render.renderListScreenViewport;
 const shouldUseNumberedSwitchSelector = picker.shouldUseNumberedSwitchSelector;
 const selectWithNumbers = picker.selectWithNumbers;
 const dupeOptionalAccountKey = picker.dupeOptionalAccountKey;
@@ -258,6 +257,9 @@ pub fn viewAccountsWithLiveUpdates(
     var frame: std.Io.Writer.Allocating = .init(allocator);
     defer frame.deinit();
 
+    var body: std.Io.Writer.Allocating = .init(allocator);
+    defer body.deinit();
+
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
             current_display.deinit(allocator);
@@ -274,12 +276,15 @@ pub fn viewAccountsWithLiveUpdates(
         }
         if (needs_render or now_second != last_render_second) {
             const rows = try rows_cache.ensure(allocator, current_display.borrowed());
-            rendered_row_count = rows.items.len;
+            body.clearRetainingCapacity();
+            var styled_body = style.StyledWriter.init(&body.writer, use_color);
+            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)), rows.widths, tui.terminalCols());
+            rendered_row_count = std.mem.count(u8, body.written(), "\n") - 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
             const viewport = live_tui.listViewport(
                 tui.terminalRows(),
-                rows.items.len,
+                rendered_row_count,
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
             );
@@ -288,12 +293,9 @@ pub fn viewAccountsWithLiveUpdates(
 
             frame.clearRetainingCapacity();
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
-            renderListScreenViewport(
+            render.renderListBodyViewport(
                 &styled_frame,
-                &current_display.reg,
-                rows.items,
-                @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)),
-                rows.widths,
+                body.written(),
                 status_line,
                 bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
@@ -313,8 +315,6 @@ pub fn viewAccountsWithLiveUpdates(
                 if (key_count != 0) {
                     const max_rows = live_tui.maxTableRows(tui.terminalRows(), live_tui.listFixedLines("status"));
                     const wheel_rows = live_tui.mouseWheelRows(max_rows);
-                    const rows = try rows_cache.ensure(allocator, current_display.borrowed());
-                    rendered_row_count = rows.items.len;
 
                     for (key_buf[0..key_count]) |key| {
                         if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {

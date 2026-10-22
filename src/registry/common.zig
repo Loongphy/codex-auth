@@ -64,11 +64,19 @@ pub const CreditsSnapshot = struct {
     balance: ?[]u8,
 };
 
+pub const ResetCreditCard = struct {
+    id: []u8,
+    status: []u8,
+    expires_at: ?[]u8,
+    title: ?[]u8,
+};
+
 pub const RateLimitSnapshot = struct {
     primary: ?RateLimitWindow,
     secondary: ?RateLimitWindow,
     credits: ?CreditsSnapshot,
     reset_credits: ?i64 = null,
+    reset_credit: ?[]ResetCreditCard = null,
     plan_type: ?PlanType,
 };
 
@@ -99,6 +107,7 @@ pub const AccountRecord = struct {
     account_name: ?[]u8,
     plan: ?PlanType,
     auth_mode: ?AuthMode,
+    access_token_expires_at: ?i64 = null,
     created_at: i64,
     last_used_at: ?i64,
     last_usage: ?RateLimitSnapshot,
@@ -177,6 +186,17 @@ pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const Rate
     if (snapshot.credits) |*c| {
         if (c.balance) |b| allocator.free(b);
     }
+    if (snapshot.reset_credit) |cards| {
+        for (cards) |card| freeResetCreditCard(allocator, card);
+        allocator.free(cards);
+    }
+}
+
+pub fn freeResetCreditCard(allocator: std.mem.Allocator, card: ResetCreditCard) void {
+    allocator.free(card.id);
+    allocator.free(card.status);
+    if (card.expires_at) |value| allocator.free(value);
+    if (card.title) |value| allocator.free(value);
 }
 
 pub fn freeRolloutSignature(allocator: std.mem.Allocator, signature: *const RolloutSignature) void {
@@ -213,13 +233,36 @@ pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitS
         if (credits.balance) |balance| allocator.free(balance);
     };
 
+    var cloned_reset_credit: ?[]ResetCreditCard = null;
+    if (snapshot.reset_credit) |cards| {
+        cloned_reset_credit = try cloneResetCreditCards(allocator, cards);
+    }
+
     return .{
         .primary = snapshot.primary,
         .secondary = snapshot.secondary,
         .credits = cloned_credits,
         .reset_credits = snapshot.reset_credits,
+        .reset_credit = cloned_reset_credit,
         .plan_type = snapshot.plan_type,
     };
+}
+
+pub fn cloneResetCreditCards(allocator: std.mem.Allocator, cards: []const ResetCreditCard) ![]ResetCreditCard {
+    var cloned = try allocator.alloc(ResetCreditCard, cards.len);
+    errdefer allocator.free(cloned);
+    var cloned_count: usize = 0;
+    errdefer for (cloned[0..cloned_count]) |card| freeResetCreditCard(allocator, card);
+    for (cards, 0..) |card, idx| {
+        cloned[idx] = .{
+            .id = try allocator.dupe(u8, card.id),
+            .status = try allocator.dupe(u8, card.status),
+            .expires_at = if (card.expires_at) |value| try allocator.dupe(u8, value) else null,
+            .title = if (card.title) |value| try allocator.dupe(u8, value) else null,
+        };
+        cloned_count += 1;
+    }
+    return cloned;
 }
 
 pub fn setRolloutSignature(
@@ -264,7 +307,27 @@ pub fn rateLimitSnapshotEqual(a: RateLimitSnapshot, b: RateLimitSnapshot) bool {
         rateLimitWindowEqual(a.secondary, b.secondary) and
         creditsEqual(a.credits, b.credits) and
         a.reset_credits == b.reset_credits and
+        resetCreditEqual(a.reset_credit, b.reset_credit) and
         a.plan_type == b.plan_type;
+}
+
+pub fn resetCreditEqual(a: ?[]const ResetCreditCard, b: ?[]const ResetCreditCard) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    if (a.?.len != b.?.len) return false;
+    for (a.?, b.?) |left, right| {
+        if (!std.mem.eql(u8, left.id, right.id) or
+            !std.mem.eql(u8, left.status, right.status)) return false;
+        if ((left.expires_at == null) != (right.expires_at == null)) return false;
+        if (left.expires_at) |l| {
+            if (!std.mem.eql(u8, l, right.expires_at.?)) return false;
+        }
+        if ((left.title == null) != (right.title == null)) return false;
+        if (left.title) |l| {
+            if (!std.mem.eql(u8, l, right.title.?)) return false;
+        }
+    }
+    return true;
 }
 
 pub fn rateLimitWindowEqual(a: ?RateLimitWindow, b: ?RateLimitWindow) bool {
