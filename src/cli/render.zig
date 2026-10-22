@@ -183,7 +183,7 @@ pub fn renderSwitchListViewport(
 ) !void {
     _ = reg;
     const prefix_width = 2 + idx_width + 1;
-    const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
+    const table = table_layout.accountTableForSwitch(widths, prefix_width, viewport.max_cols);
     try table.writeHeader(writer);
 
     const visible = visibleRowRange(rows.len, viewport);
@@ -238,7 +238,7 @@ pub fn renderRemoveListViewport(
     _ = reg;
     const checkbox_width: usize = 3;
     const prefix_width = 2 + checkbox_width + 1 + idx_width + 1;
-    const table = table_layout.accountTable(table_layout.boundWidths(widths, prefix_width, viewport.max_cols), prefix_width);
+    const table = table_layout.accountTableForSwitch(widths, prefix_width, viewport.max_cols);
     try table.writeHeader(writer);
 
     const visible = visibleRowRange(rows.len, viewport);
@@ -329,7 +329,7 @@ fn dataRowCount(rows: []const SwitchRow) usize {
     return count;
 }
 
-fn liveAccountCells(row: SwitchRow) [table_layout.column_count]table_layout.Cell {
+fn liveAccountCells(row: SwitchRow) [table_layout.live_column_count]table_layout.Cell {
     return .{
         .{ .text = row.account, .indent = @as(usize, row.depth) * 2 },
         .{ .text = row.plan },

@@ -183,14 +183,21 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
         }
     }
 
-    const widths = table_layout.boundListWidths(content_widths, prefix_len, term_cols);
+    const widths = table_layout.boundColumnWidths(content_widths, prefix_len, term_cols);
     var visible: [7]bool = undefined;
     var header_cells: [7][]const u8 = undefined;
     for (widths, 0..) |width, index| {
         visible[index] = width > 0;
         const full = headers[index];
         const fallback = compact_headers[index];
-        header_cells[index] = if (width >= full.len) full else if (width >= fallback.len) fallback else fallback[0..width];
+        header_cells[index] = if (width >= full.len)
+            full
+        else if (index == 3 and width < "RESET".len)
+            if (width >= "RC".len) "RC" else "R"
+        else if (width >= fallback.len)
+            fallback
+        else
+            fallback[0..width];
     }
 
     var visible_count: usize = 0;
@@ -355,13 +362,6 @@ fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     while (i < count) : (i += 1) {
         try out.writeByte(ch);
     }
-}
-
-fn listTotalWidth(widths: *const [7]usize, prefix_len: usize, sep_len: usize) usize {
-    var sum: usize = prefix_len;
-    for (widths) |w| sum += w;
-    sum += sep_len * (widths.len - 1);
-    return sum;
 }
 
 fn adjustTableWidths(widths: []usize) void {

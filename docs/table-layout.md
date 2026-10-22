@@ -1,27 +1,68 @@
 # Table Layout
 
-The shared account table keeps each rendered line within the terminal width.
-When space is limited, the table should preserve the most useful live status
-before expanding long labels.
+Every table view uses the same responsive allocator in
+`src/cli/table_layout.zig`. The full column model is:
 
-This applies to `switch`, `remove`, `list`, and `list --live` because they all
-render through the shared table code in `src/cli/table_layout.zig` and are
-called by the renderers in `src/cli/render.zig`. The
-width-priority rules only matter when a viewport width is known, which is
-typically the live case.
+`ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`
 
-## Column Width Priority
+The plain `list` table enables all seven columns. The live views
+(`switch`, `remove`, and `list --live`) disable `CREDITS` and
+`RESET CREDITS`: those columns are absent from the layout, and their width and
+separator budget is redistributed to the remaining columns.
 
-The account table uses two account-width phases:
+## Column Allocation
 
-1. Give `ACCOUNT` enough width to remain identifiable.
-2. Give live status columns room in priority order: `5H`, `WEEKLY`, `PLAN`,
-   then `LAST`.
-3. Expand `5H`, `WEEKLY`, `PLAN`, and `LAST` to their requested widths.
-4. Use any remaining width to expand `ACCOUNT` toward its requested width.
+The allocator receives the content width of each column and the available
+terminal width. A column with content width `0` is treated as disabled.
 
-This means `ACCOUNT` is always considered first, but a long account label should
-not consume the whole table before `5H` and `WEEKLY` are visible.
+### First pass: reserve useful targets by priority
+
+```text
+ACCOUNT (10)
+  -> 5H (4)
+  -> WEEKLY (6)
+  -> CREDITS (2)
+  -> PLAN (4)
+  -> RESET CREDITS (2)
+  -> LAST (4)
+```
+
+- Separators are charged only for columns that are actually visible.
+- A non-account column is shown only when its target width and separator fit.
+- `ACCOUNT` may use a partial width down to 2 columns when the terminal is
+  very narrow.
+- A column that cannot receive a useful width is hidden instead of being
+  rendered as a one-column `.` cell.
+
+### Second pass: grow toward content width
+
+Visible columns grow in this order:
+
+```text
+CREDITS -> 5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> ACCOUNT
+```
+
+The credit cell is grown first so values such as `unlimited` do not collapse to
+`u.`. Usage and error-name cells grow before `LAST`, and `ACCOUNT` grows last so
+a long account label cannot starve the values beside it. In the live views,
+`CREDITS` and `RESET CREDITS` are disabled, so the effective order is:
+
+```text
+5H -> WEEKLY -> PLAN -> LAST -> ACCOUNT
+```
+
+Columns with width `0` are skipped entirely, including their headers, cells,
+and separators.
+
+## Headers
+
+Wide headers use their full label. When a column is narrower than its full
+label, compact labels are used:
+
+| Column | Compact |
+|---|---|
+| `CREDITS` | `CR` |
+| `RESET CREDITS` | `RESET`, then `RC` |
 
 ## Account Truncation
 
@@ -42,45 +83,29 @@ Examples for `very-long-account-name@example.com`:
 | 4 | `ver.` |
 | 8 | `very-lo.` |
 | 10 | `very-l.com` |
-| 14 | `very-long-.com` |
-| 32 | `very-long-account-name@example.com` |
+| 14 | `very-l.ple.com` |
+| 32 | `very-l.-account-name@example.com` |
+| 34 | `very-long-account-name@example.com` |
 
 Indentation for grouped child rows consumes account column width before the
 label is truncated.
 
-## Narrow Width Examples
+## Examples
 
-The visible column order remains `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`, but
-width is assigned by usefulness rather than visual order.
-
-Wide enough:
+Plain `list`, where all seven columns are enabled:
 
 ```text
-ACCOUNT                          PLAN      5H   WEEKLY  LAST ACTIVITY
-work-main                        Business  31%       42%           Now
-very-long-account-name@example.com Business 88%       71%           -
+ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST
+--------------------------------------------------------
+very-long.  Pro   -          -   100%      58%     -
+work-main.  Pro   unlimited  3   31%       42%     -
 ```
 
-Medium:
+Live view, where `CREDITS` and `RESET CREDITS` are disabled and their space is
+redistributed:
 
 ```text
-ACCOUNT          PLAN      5H    WEEKLY  LAST
-work-main        Business  31%   42%     Now
-very-l.mple.com   Business 88%   71%     -
-```
-
-Narrow:
-
-```text
-ACCOUNT     5H    WEEKLY
-work-main   31%   42%
-very-l.com  88%   71%
-```
-
-Very narrow:
-
-```text
-ACCOUNT   5H
-work-m.   31%
-very-l.   88%
+ACCOUNT      PLAN      5H    WEEKLY
+-----------------------------------
+very-l..com  Business  100%  42%
 ```
