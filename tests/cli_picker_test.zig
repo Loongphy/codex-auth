@@ -1643,6 +1643,33 @@ test "live list details show reset credits cell and scroll within the viewport" 
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), "\x1b[2m") != null);
 }
 
+test "live list derives the reset credits count from available cards when the summary is absent" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":2,"credits":[
+        \\{"id":"first-card","reset_type":"codex_rate_limits","status":"used","granted_at":"2026-08-01T00:00:00Z","expires_at":null,"title":"First card"},
+        \\{"id":"last-card","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":"2026-10-01T00:00:00Z","title":"Last card"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 30, .window_minutes = 300, .resets_at = 1790000100 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = null,
+        .reset_credit = details,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

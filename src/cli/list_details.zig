@@ -8,6 +8,7 @@ const base_headers = [_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LA
 const base_desired_widths = [_]usize{ 2, 18, 8, 12, 12, 10, 16, 14 };
 const base_minimum_widths = [_]usize{ 1, 8, 4, 4, 6, 5, 10, 8 };
 const base_column_count = base_headers.len;
+const available_status = "available";
 const separator_width: usize = 3;
 
 pub fn writeHeader(writer: *style.StyledWriter, number_width: usize, max_cols: ?usize) !void {
@@ -61,7 +62,19 @@ pub fn write(
 /// the available cards in local `MMM-DD` form (omitted when unknown).
 fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecord) ![]u8 {
     const usage = account.last_usage orelse return std.fmt.allocPrint(allocator, "-", .{});
-    const count = usage.reset_credits orelse return std.fmt.allocPrint(allocator, "-", .{});
+    // Count: the summary's available_count when present; otherwise derived
+    // from the persisted cards (status == available) — the same backend number.
+    var count: ?i64 = usage.reset_credits;
+    if (count == null) {
+        if (usage.reset_credit) |cards| {
+            var derived: i64 = 0;
+            for (cards) |card| {
+                if (std.mem.eql(u8, card.status, available_status)) derived += 1;
+            }
+            count = derived;
+        }
+    }
+    const value = count orelse return std.fmt.allocPrint(allocator, "-", .{});
     var earliest: ?i64 = null;
     if (usage.reset_credit) |cards| {
         for (cards) |card| {
@@ -74,9 +87,9 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
     if (earliest) |epoch| {
         const local = try rows.formatTimestampAlloc(allocator, epoch);
         defer allocator.free(local);
-        if (local.len >= 10) return std.fmt.allocPrint(allocator, "{d} (exp {s})", .{ count, local[5..10] });
+        if (local.len >= 10) return std.fmt.allocPrint(allocator, "{d} (exp {s})", .{ value, local[5..10] });
     }
-    return std.fmt.allocPrint(allocator, "{d}", .{count});
+    return std.fmt.allocPrint(allocator, "{d}", .{value});
 }
 
 fn visibleBaseColumns(max_cols: ?usize, number_width: usize) [base_column_count]bool {
