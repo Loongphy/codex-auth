@@ -45,10 +45,10 @@ pub fn collectAvailable(
     return cards.toOwnedSlice(allocator);
 }
 
-/// Renders the read-only RESET CREDITS detail block. Lines are bounded to
-/// `max_cols` and '\n'-terminated. `card_cursor` marks the selected credit
-/// (cursor ▸ + a status/granted detail line); `confirm_pending` asks for the
-/// second ⏎; `status_line` surfaces the result of the last action.
+/// Renders the RESET CREDITS rail block. Lines are bounded to `max_cols`
+/// and '\n'-terminated. `card_cursor` marks the selected credit; the
+/// selected line appends the two-step confirm hint when `confirm_pending`.
+/// `status_line` surfaces the result of the last action.
 pub fn render(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
@@ -60,14 +60,17 @@ pub fn render(
     status_line: ?[]const u8,
 ) !usize {
     var lines: usize = 0;
+    const budget = if (max_cols > 2) max_cols - 2 else max_cols;
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "RESET CREDITS · {d} available", .{cards.len}) catch "RESET CREDITS";
-    try writeRule(writer, "┌ ", header, max_cols, true);
+    const header = std.fmt.bufPrint(&header_buf, "Remaining {d} · ⏎ select · esc close", .{cards.len}) catch "Remaining";
+    try writer.writeAll("┌ ");
+    try writeBounded(writer, header, budget);
     try writer.writeByte('\n');
     lines += 1;
 
     if (cards.len == 0) {
-        try writeBounded(writer, "│ no available reset credits · run `codex-auth list --api` to refresh", max_cols);
+        try writer.writeAll("│ ");
+        try writeBounded(writer, "no available reset credits · run `codex-auth list --api` to refresh", budget);
         try writer.writeByte('\n');
         lines += 1;
     } else {
@@ -75,47 +78,34 @@ pub fn render(
             const selected = index == card_cursor;
             var line: std.Io.Writer.Allocating = .init(allocator);
             defer line.deinit();
-            if (selected) try line.writer.writeAll("▸ ");
+            try line.writer.writeAll(if (selected) "▸ " else "  ");
             try line.writer.writeAll(card.title orelse "(untitled)");
-            if (card.expires_at) |expiry| {
-                if (parseIsoEpoch(expiry)) |epoch| {
-                    const local = try rows.formatTimestampAlloc(allocator, epoch);
-                    defer allocator.free(local);
-                    const rel = try relativeIn(allocator, epoch, now);
-                    defer allocator.free(rel);
-                    try line.writer.print(" · expires {s} ({s})", .{ local, rel });
-                } else {
-                    try line.writer.print(" · expires {s}", .{expiry});
-                }
+            if (card.epoch) |epoch| {
+                const local = try rows.formatTimestampAlloc(allocator, epoch);
+                defer allocator.free(local);
+                const rel = try relativeIn(allocator, epoch, now);
+                defer allocator.free(rel);
+                const compact = if (local.len >= 16) local[5..16] else local;
+                try line.writer.print(" · {s} · {s}", .{ compact, rel });
             } else {
-                try line.writer.writeAll(" · no expiry");
+                try line.writer.writeAll(" · -");
             }
-            if (selected and confirm_pending) try line.writer.writeAll(" · ⏎ again to use it");
+            if (selected and confirm_pending) try line.writer.writeAll(" · ⏎ again to use");
             try writer.writeAll("│ ");
-            try writeBounded(writer, line.written(), max_cols);
+            try writeBounded(writer, line.written(), budget);
             try writer.writeByte('\n');
             lines += 1;
-            if (selected) {
-                var detail: std.Io.Writer.Allocating = .init(allocator);
-                defer detail.deinit();
-                try detail.writer.writeAll("    status available");
-                if (selected and confirm_pending) try detail.writer.writeAll(" · redeeming this resets the 5h/weekly windows");
-                try writer.writeAll("│ ");
-                try writeBounded(writer, detail.written(), max_cols);
-                try writer.writeByte('\n');
-                lines += 1;
-            }
         }
     }
 
     if (status_line) |message| {
         try writer.writeAll("│ ");
-        try writeBounded(writer, message, max_cols);
+        try writeBounded(writer, message, budget);
         try writer.writeByte('\n');
         lines += 1;
     }
 
-    try writeRule(writer, "└ ", "⏎ use · c collapse", max_cols, false);
+    try writer.writeAll("└\n");
     lines += 1;
     return lines;
 }
@@ -191,20 +181,6 @@ fn relativeIn(allocator: std.mem.Allocator, target: i64, now: i64) ![]u8 {
     if (delta < 3600) return std.fmt.allocPrint(allocator, "in {d}m", .{@divTrunc(delta, 60)});
     if (delta < 86400) return std.fmt.allocPrint(allocator, "in {d}h", .{@divTrunc(delta, 3600)});
     return std.fmt.allocPrint(allocator, "in {d}d", .{@divTrunc(delta, 86400)});
-}
-
-fn writeRule(writer: *std.Io.Writer, open: []const u8, label: []const u8, max_cols: usize, top: bool) !void {
-    try writer.writeAll(open);
-    try writer.writeAll(label);
-    try writer.writeAll(" ");
-    var used: usize = open.len + label.len + 1;
-    const corner: usize = 1;
-    if (used + corner > max_cols) return;
-    while (used + corner < max_cols) {
-        try writer.writeAll("─");
-        used += 1;
-    }
-    try writer.writeAll(if (top) "┐" else "┘");
 }
 
 fn writeBounded(writer: *std.Io.Writer, text: []const u8, max_cols: usize) !void {

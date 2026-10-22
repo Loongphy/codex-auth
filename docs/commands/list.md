@@ -38,6 +38,13 @@ codex-auth list --json
   the list as exhaustive. After a refresh failure, details may be cached.
 - `--json` emits one machine-readable JSON document and cannot be combined with `--live`.
 
+## Live Reset Credits
+
+- With `--live`, `c` expands or collapses the reset-credit block under the cursor row.
+- The block header reads `Remaining N · ⏎ select · esc close`.
+- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). `esc` closes the block without redeeming.
+- Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
+
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
 
 ## Output Notes

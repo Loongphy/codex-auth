@@ -428,12 +428,21 @@ pub fn viewAccountsWithLiveUpdates(
                             continue;
                         }
                         switch (key) {
-                            .quit => return,
+                            .quit => {
+                                if (credits_expanded) {
+                                    credits_expanded = false;
+                                    confirm_pending = false;
+                                    needs_render = true;
+                                    continue;
+                                }
+                                return;
+                            },
                             .redraw => needs_render = true,
                             .byte => |ch| {
                                 if (isQuitKey(ch)) return;
                                 if (ch == 'c') {
                                     credits_expanded = !credits_expanded;
+                                    if (!credits_expanded) confirm_pending = false;
                                     needs_render = true;
                                     continue;
                                 }

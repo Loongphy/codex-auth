@@ -1704,6 +1704,25 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "reset credits panel renders the remaining rail and compact rows" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = "2026-11-01T00:00:00Z", .epoch = now + 9 * 86400 },
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used");
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "┌ Remaining 2 · ⏎ select · esc close") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│ ▸ Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · ⏎ again to use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│   (untitled) · -") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│ ✓ used") != null);
+    try std.testing.expect(std.mem.endsWith(u8, text, "└\n"));
+}
+
 test "live list renders a dash when available reset credits have no expiry" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
