@@ -71,16 +71,16 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
 }
 
 pub fn parseResetCreditList(allocator: std.mem.Allocator, v: std.json.Value) !?[]ResetCreditCard {
-    // Accepts both shapes: the persisted flat array (registry.json) and the
-    // backend wire object (`{"credits": [...]}`).
+    // The persisted registry shape is a flat array of cards.
     const items = switch (v) {
         .array => |array| array.items,
-        .object => |o| switch (o.get("credits") orelse return null) {
-            .array => |array| array.items,
-            else => return null,
-        },
         else => return null,
     };
+    return try parseResetCreditCards(allocator, items);
+}
+
+/// Parses an array of reset-credit card objects (from the backend wire format).
+pub fn parseResetCreditCards(allocator: std.mem.Allocator, items: []std.json.Value) ![]ResetCreditCard {
     var cards = std.ArrayList(ResetCreditCard).empty;
     errdefer {
         for (cards.items) |card| common.freeResetCreditCard(allocator, card);

@@ -353,7 +353,16 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
 pub fn parseResetCreditResponse(allocator: std.mem.Allocator, body: []const u8) !?[]registry.ResetCreditCard {
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{ .parse_numbers = false });
     defer parsed.deinit();
-    return try registry_parse.parseResetCreditList(allocator, parsed.value);
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+    const credits = obj.get("credits") orelse return null;
+    const items = switch (credits) {
+        .array => |array| array.items,
+        else => return null,
+    };
+    return try registry_parse.parseResetCreditCards(allocator, items);
 }
 
 fn parseResetCredits(v: std.json.Value) ?i64 {
