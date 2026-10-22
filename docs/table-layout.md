@@ -1,68 +1,79 @@
 # Table Layout
 
-Every table view uses the same responsive allocator in
-`src/cli/table_layout.zig`. The full column model is:
+Every table view uses one responsive allocator. Each view supplies its own
+visual column order and the fields it supports; unsupported fields are hidden by
+passing a zero content width.
 
-`ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`
+| View | Visible columns |
+|---|---|
+| `list` | `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY` |
+| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`, `AUTH EXPIRE`, `RESET CREDITS` |
+| `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
-The plain `list` table enables all seven columns. The live views
-(`switch`, `remove`, and `list --live`) disable `CREDITS` and
-`RESET CREDITS`: those columns are absent from the layout, and their width and
-separator budget is redistributed to the remaining columns.
+Visual order never changes when columns are hidden. Width and separator budget
+from a hidden column are redistributed to the remaining columns.
 
-## Column Allocation
+## Allocation
 
-The allocator receives the content width of each column and the available
-terminal width. A column with content width `0` is treated as disabled.
+The allocator receives each column's content width and the terminal width.
+Columns reserve width in priority order; a column is skipped when its target
+width and separator do not fit. `ACCOUNT` may use a partial width down to 2
+columns. Columns with width `0` are skipped entirely, including their headers,
+cells, and separators.
 
-### First pass: reserve useful targets by priority
+### Plain `list`
+
+Reserve order:
 
 ```text
-ACCOUNT (10)
-  -> 5H (4)
-  -> WEEKLY (6)
-  -> CREDITS (2)
-  -> PLAN (4)
-  -> RESET CREDITS (2)
-  -> LAST (4)
+ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> CREDITS (2)
+            -> PLAN (4) -> RESET CREDITS (2) -> LAST (4)
 ```
 
-- Separators are charged only for columns that are actually visible.
-- A non-account column is shown only when its target width and separator fit.
-- `ACCOUNT` may use a partial width down to 2 columns when the terminal is
-  very narrow.
-- A column that cannot receive a useful width is hidden instead of being
-  rendered as a one-column `.` cell.
-
-### Second pass: grow toward content width
-
-Visible columns grow in this order:
+Grow order:
 
 ```text
 CREDITS -> 5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> ACCOUNT
 ```
 
-The credit cell is grown first so values such as `unlimited` do not collapse to
-`u.`. Usage and error-name cells grow before `LAST`, and `ACCOUNT` grows last so
-a long account label cannot starve the values beside it. In the live views,
-`CREDITS` and `RESET CREDITS` are disabled, so the effective order is:
+### `list --live`
+
+Reserve order:
+
+```text
+#* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6)
+   -> PLAN (4) -> LAST (4) -> AUTH EXPIRE (10) -> RESET CREDITS (2)
+```
+
+Grow order:
+
+```text
+AUTH EXPIRE -> RESET CREDITS -> PLAN -> LAST -> 5H -> WEEKLY -> ACCOUNT
+```
+
+### `switch`, `remove`
+
+Reserve order:
+
+```text
+ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4) -> LAST (4)
+```
+
+Grow order:
 
 ```text
 5H -> WEEKLY -> PLAN -> LAST -> ACCOUNT
 ```
 
-Columns with width `0` are skipped entirely, including their headers, cells,
-and separators.
-
 ## Headers
 
-Wide headers use their full label. When a column is narrower than its full
-label, compact labels are used:
+Wide headers use their full label. Narrow columns use compact labels:
 
-| Column | Compact |
+| Column | Compact labels |
 |---|---|
 | `CREDITS` | `CR` |
 | `RESET CREDITS` | `RESET`, then `RC` |
+| `AUTH EXPIRE` | `AUTH EXP`, then `AUTH` |
 
 ## Account Truncation
 
@@ -92,7 +103,7 @@ label is truncated.
 
 ## Examples
 
-Plain `list`, where all seven columns are enabled:
+Plain `list`:
 
 ```text
 ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST
@@ -101,11 +112,9 @@ very-long.  Pro   -          -   100%      58%     -
 work-main.  Pro   unlimited  3   31%       42%     -
 ```
 
-Live view, where `CREDITS` and `RESET CREDITS` are disabled and their space is
-redistributed:
+`list --live` at a medium width:
 
 ```text
-ACCOUNT      PLAN      5H    WEEKLY
------------------------------------
-very-l..com  Business  100%  42%
+#*  | ACCOUNT    | PLAN | 5H    | WEEKLY
+ 1  | very-l.om) | Pro  | 100%  | 58%
 ```

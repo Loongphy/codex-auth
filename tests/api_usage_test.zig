@@ -1,6 +1,7 @@
 const std = @import("std");
 const app_runtime = @import("codex_auth").core.runtime;
 const registry = @import("codex_auth").registry;
+const reset_credits_api = @import("codex_auth").api.reset_credits;
 const usage_api = @import("codex_auth").api.usage;
 
 test "parse usage api response maps live usage windows and plan" {
@@ -263,4 +264,47 @@ test "parse 402 usage error response uses detail code as error code fallback" {
 
     const code = usage_api.parseNonSuccessErrorCode(std.testing.allocator, 402, body) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("deactivated_workspace", code.text());
+}
+
+test "consume outcome maps the backend code field" {
+    const gpa = std.testing.allocator;
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.reset,
+        reset_credits_api.parseConsumeOutcome(gpa, "{\"code\":\"reset\",\"windows_reset\":2}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.already_redeemed,
+        reset_credits_api.parseConsumeOutcome(gpa, "{\"code\":\"already_redeemed\",\"windows_reset\":1}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.nothing_to_reset,
+        reset_credits_api.parseConsumeOutcome(gpa, "{\"code\":\"nothing_to_reset\"}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.no_credit,
+        reset_credits_api.parseConsumeOutcome(gpa, "{\"code\":\"no_credit\"}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.unexpected_response,
+        reset_credits_api.parseConsumeOutcome(gpa, "{}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.unexpected_response,
+        reset_credits_api.parseConsumeOutcome(gpa, "not json"),
+    );
+}
+
+test "idempotency key is a UUID v4" {
+    const key = try reset_credits_api.generateIdempotencyKeyAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(key);
+    try std.testing.expectEqual(@as(usize, 36), key.len);
+    for ([_]usize{ 8, 13, 18, 23 }) |index| {
+        try std.testing.expectEqual(@as(u8, '-'), key[index]);
+    }
+    try std.testing.expectEqual(@as(u8, '4'), key[14]);
+    try std.testing.expect(key[19] == '8' or key[19] == '9' or key[19] == 'a' or key[19] == 'b');
+    for (key, 0..) |ch, index| {
+        if (index == 8 or index == 13 or index == 18 or index == 23) continue;
+        try std.testing.expect((ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f'));
+    }
 }

@@ -29,7 +29,7 @@ codex-auth list --json
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
 - Live account details show the access-token expiry and, per account, the
   available reset-credit count with the earliest card expiry. The
-  `ACCESS EXPIRE` and `RESET CREDITS` columns render in local time; the
+  `AUTH EXPIRE` and `RESET CREDITS` columns render in local time; the
   available reset credits are also expandable per account in the live view.
 - Access-token expiry is shown in local time and is not the account or subscription
   expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable
@@ -37,6 +37,14 @@ codex-auth list --json
   capped; compare `available_count` with the JSON `credits` length before treating
   the list as exhaustive. After a refresh failure, details may be cached.
 - `--json` emits one machine-readable JSON document and cannot be combined with `--live`.
+
+## Live Reset Credits
+
+- With `--live`, `c` expands or collapses the reset-credit block under the cursor row.
+- The block header reads `Available N · ⏎ select · esc close`.
+- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). `esc` closes the block without redeeming.
+- A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round.
+- Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
 
@@ -47,7 +55,7 @@ When local-only refresh is active, only the active account can be updated from l
 - Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
 - Usage cells show remaining percent and reset time when that data is known.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
-- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
+- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. The cell appends the earliest available credit expiry as `N (exp MMM-DD)`, or `N (-)` when no available credit has an expiry.
 - JSON output includes the returned reset-credit details.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.

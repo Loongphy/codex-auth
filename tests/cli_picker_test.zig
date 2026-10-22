@@ -1704,6 +1704,51 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "reset credits panel renders the remaining rail and compact rows" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = "2026-11-01T00:00:00Z", .epoch = now + 9 * 86400 },
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used", 6);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "      ┌ Available 2 · ⏎ select · esc close") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      │ ▸ Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · ⏎ again to use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│   (untitled) · -") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│ ✓ used") != null);
+    try std.testing.expect(std.mem.endsWith(u8, text, "└\n"));
+}
+
+test "live list renders a dash when available reset credits have no expiry" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":1,"credits":[
+        \\{"id":"undated-card","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":null,"title":"Undated card"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 30, .window_minutes = 300, .resets_at = 1790000100 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 1,
+        .reset_credit = details,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (-)") != null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -1747,4 +1792,47 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+}
+
+test "live list details keep the responsive column order and complete percentages" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "", .pro);
+    reg.accounts.items[0].access_token_expires_at = 4102444800;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = 4102444800 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = 4103049600 },
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 3,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var width: usize = 20;
+    while (width <= 140) : (width += 1) {
+        var body: std.Io.Writer.Allocating = .init(gpa);
+        defer body.deinit();
+        var writer = StyledWriter.init(&body.writer, false);
+        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width);
+
+        var lines = std.mem.splitScalar(u8, body.written(), '\n');
+        const header = lines.next() orelse "";
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            try std.testing.expect(line.len <= width);
+        }
+        if (std.mem.indexOf(u8, header, "5H") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, body.written(), "100%") != null);
+        }
+        if (width == 140) {
+            var last_index: usize = 0;
+            for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" }) |token| {
+                const index = std.mem.indexOf(u8, header, token) orelse return error.TestUnexpectedResult;
+                try std.testing.expect(index >= last_index);
+                last_index = index;
+            }
+        }
+    }
 }
