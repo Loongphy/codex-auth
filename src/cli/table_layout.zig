@@ -12,7 +12,6 @@ pub const LiveListViewport = struct {
 };
 
 pub const live_column_count = 5;
-pub const column_count = 8;
 const live_account_ident_width: usize = 10;
 const account_min_width: usize = 2;
 const live_account_suffix_min_width: usize = 10;
@@ -27,6 +26,39 @@ const LiveTableColumn = struct {
 pub const Cell = struct {
     text: []const u8,
     indent: usize = 0,
+};
+
+/// Semantic identity of a responsive table column. Visual order is supplied
+/// separately, so views such as `list` and `list --live` can keep their own
+/// column order while sharing one allocation strategy.
+pub const ColumnId = enum {
+    number,
+    account,
+    plan,
+    credits,
+    reset_credits,
+    rate_5h,
+    rate_week,
+    last,
+    auth_expire,
+    plan_expire,
+};
+
+pub const ColumnSpec = struct {
+    id: ColumnId,
+    content_width: usize,
+    target_width: usize,
+    min_width: usize,
+    allow_partial: bool = false,
+};
+
+pub const ColumnLayout = struct {
+    columns: []const ColumnSpec,
+    first_order: []const ColumnId,
+    grow_order: []const ColumnId,
+    deferred_order: []const ColumnId,
+    prefix_width: usize,
+    separator_width: usize,
 };
 
 pub const LiveTable = struct {
@@ -94,115 +126,149 @@ pub const LiveTable = struct {
     }
 };
 
-pub fn accountTable(widths: [column_count]usize, prefix_width: usize) LiveTable {
+pub fn accountTable(widths: [live_column_count]usize, prefix_width: usize) LiveTable {
     return .{
         .columns = .{
             .{ .header = "ACCOUNT", .width = widths[0] },
             .{ .header = "PLAN", .width = widths[1] },
-            .{ .header = "5H", .width = widths[4] },
-            .{ .header = "WEEKLY", .width = widths[5] },
-            .{ .header = "LAST", .width = widths[6] },
+            .{ .header = "5H", .width = widths[2] },
+            .{ .header = "WEEKLY", .width = widths[3] },
+            .{ .header = "LAST", .width = widths[4] },
         },
         .prefix_width = prefix_width,
     };
 }
 
+pub const switch_columns = [_]ColumnId{ .account, .plan, .rate_5h, .rate_week, .last };
+pub const switch_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .plan, .last };
+pub const switch_grow_order = [_]ColumnId{ .rate_5h, .rate_week, .plan, .last, .account };
+pub const switch_deferred_order = [_]ColumnId{};
+
 pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) LiveTable {
-    return accountTable(
-        boundColumnWidths(switchWidthsToColumns(widths), prefix_width, max_cols),
-        prefix_width,
-    );
+    const source_widths = [_]usize{ widths.email, widths.plan, widths.rate_5h, widths.rate_week, widths.last };
+    var columns: [switch_columns.len]ColumnSpec = undefined;
+    for (switch_columns, 0..) |id, index| {
+        columns[index] = columnSpec(id, source_widths[index]);
+    }
+    var bounded = [_]usize{0} ** live_column_count;
+    allocateColumns(.{
+        .columns = &columns,
+        .first_order = &switch_first_order,
+        .grow_order = &switch_grow_order,
+        .deferred_order = &switch_deferred_order,
+        .prefix_width = prefix_width,
+        .separator_width = 2,
+    }, max_cols, &bounded);
+    return accountTable(bounded, prefix_width);
 }
 
-const first_pass_order = [_]usize{ 0, 4, 5, 2, 1, 3, 6 };
-const grow_pass_order = [_]usize{ 2, 4, 5, 1, 3, 6, 0 };
-const deferred_column_index: usize = 7;
-const column_target_widths = [_]usize{
-    live_account_ident_width, // ACCOUNT
-    "PLAN".len, // PLAN
-    2, // CREDITS
-    2, // RESET CREDITS
-    @max(4, "5H".len), // 5H
-    "WEEKLY".len, // WEEKLY
-    4, // LAST
-    10, // PLAN EXPIRE
-};
+pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last, .plan_expire };
+pub const plain_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .credits, .plan, .reset_credits, .last };
+pub const plain_grow_order = [_]ColumnId{ .credits, .rate_5h, .rate_week, .plan, .reset_credits, .last, .account };
+pub const plain_deferred_order = [_]ColumnId{.plan_expire};
 
-/// Shared responsive column allocator for every table view.
-///
-/// Input widths are content widths. A zero input width disables a column
-/// (used by the live view to hide CREDITS and RESET CREDITS). The first pass
-/// admits columns by priority only when their target width and separator fit;
-/// ACCOUNT may use a partial width when nothing else fits. The second pass
-/// grows visible columns toward their content width, keeping ACCOUNT last so
-/// long labels cannot starve values such as `unlimited` or error names.
-/// Columns that receive zero width must be skipped by the caller.
-pub fn boundColumnWidths(widths: [column_count]usize, prefix_len: usize, max_cols: ?usize) [column_count]usize {
-    const cols = max_cols orelse return widths;
-    var bounded = [_]usize{0} ** column_count;
-    if (cols <= prefix_len) return bounded;
+pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .last, .auth_expire, .reset_credits };
+pub const list_detail_first_order = [_]ColumnId{ .number, .account, .rate_5h, .rate_week, .plan, .last, .auth_expire, .reset_credits };
+pub const list_detail_grow_order = [_]ColumnId{ .auth_expire, .reset_credits, .plan, .last, .rate_5h, .rate_week, .account };
+pub const list_detail_deferred_order = [_]ColumnId{.plan_expire};
 
-    var remaining = cols - prefix_len;
+pub fn defaultTargetWidth(id: ColumnId) usize {
+    return switch (id) {
+        .number => 2,
+        .account => live_account_ident_width,
+        .plan => "PLAN".len,
+        .credits => 2,
+        .reset_credits => 2,
+        .rate_5h => @max(4, "5H".len),
+        .rate_week => "WEEKLY".len,
+        .last => 4,
+        .auth_expire => 10,
+        .plan_expire => 10,
+    };
+}
+
+pub fn columnSpec(id: ColumnId, content_width: usize) ColumnSpec {
+    const target = defaultTargetWidth(id);
+    return .{
+        .id = id,
+        .content_width = content_width,
+        .target_width = target,
+        .min_width = if (id == .account) account_min_width else target,
+        .allow_partial = id == .account,
+    };
+}
+
+pub fn allocateColumns(layout: ColumnLayout, max_cols: ?usize, widths: []usize) void {
+    @memset(widths, 0);
+    if (widths.len != layout.columns.len) return;
+
+    if (max_cols == null) {
+        for (layout.columns, 0..) |column, index| widths[index] = column.content_width;
+        return;
+    }
+
+    const cols = max_cols.?;
+    if (cols <= layout.prefix_width) return;
+
+    var remaining = cols - layout.prefix_width;
     var visible_count: usize = 0;
 
-    // First pass: reserve targets by priority. Separators are charged only
-    // when a column actually becomes visible.
-    for (first_pass_order) |index| {
-        const target = @min(widths[index], column_target_widths[index]);
+    for (layout.first_order) |id| {
+        const index = columnIndex(layout.columns, id) orelse continue;
+        const column = layout.columns[index];
+        if (column.content_width == 0) continue;
+
+        const target = @min(column.content_width, column.target_width);
         if (target == 0) continue;
 
-        if (index == 0) {
-            const width = @min(target, remaining);
-            if (width < account_min_width) continue;
-            bounded[index] = width;
-            remaining -= width;
+        const separator = if (visible_count == 0) 0 else layout.separator_width;
+
+        if (column.allow_partial) {
+            if (remaining < column.min_width + separator) break;
+            const width = @min(target, remaining - separator);
+            if (width < column.min_width) break;
+            widths[index] = width;
+            remaining -= width + separator;
             visible_count += 1;
             continue;
         }
 
-        const separator_width: usize = if (visible_count == 0) 0 else 2;
-        if (remaining < target + separator_width) continue;
-        bounded[index] = target;
-        remaining -= target + separator_width;
+        if (remaining < target + separator) break;
+        widths[index] = target;
+        remaining -= target + separator;
         visible_count += 1;
     }
 
-    // Second pass: grow the variable-length credit cell first so values like
-    // `unlimited` do not collapse to `u.`, then the usage windows, and keep
-    // account identity last so long labels cannot starve other values.
-    for (grow_pass_order) |index| {
-        if (bounded[index] == 0) continue;
-        growBoundedWidth(&remaining, &bounded[index], widths[index]);
+    for (layout.grow_order) |id| {
+        const index = columnIndex(layout.columns, id) orelse continue;
+        if (widths[index] == 0) continue;
+        growBoundedWidth(&remaining, &widths[index], layout.columns[index].content_width);
     }
 
-    // Deferred pass: admit a low-priority column only after every existing
-    // column has had a chance to grow. This keeps the plan-expiry column from
-    // stealing width from usage and status cells on mid-sized terminals.
-    if (bounded[deferred_column_index] == 0 and widths[deferred_column_index] > 0) {
-        const separator_width: usize = if (visible_count == 0) 0 else 2;
-        if (remaining > separator_width) {
-            const width = @min(widths[deferred_column_index], remaining - separator_width);
-            if (width > 0) {
-                bounded[deferred_column_index] = width;
-                remaining -= width + separator_width;
-            }
-        }
+    // Deferred columns are admitted only after all normal columns have grown.
+    // They still require their target width, so they never become dot-only
+    // cells; if the target does not fit, the column stays hidden.
+    for (layout.deferred_order) |id| {
+        const index = columnIndex(layout.columns, id) orelse continue;
+        if (widths[index] != 0) continue;
+        const column = layout.columns[index];
+        if (column.content_width == 0) continue;
+        const target = @min(column.content_width, column.target_width);
+        if (target == 0) continue;
+        const separator = if (visible_count == 0) 0 else layout.separator_width;
+        if (remaining < target + separator) continue;
+        widths[index] = target;
+        remaining -= target + separator;
+        visible_count += 1;
+        growBoundedWidth(&remaining, &widths[index], column.content_width);
     }
-
-    return bounded;
 }
 
-pub fn switchWidthsToColumns(widths: SwitchWidths) [column_count]usize {
-    return .{
-        widths.email,
-        widths.plan,
-        0,
-        0,
-        widths.rate_5h,
-        widths.rate_week,
-        widths.last,
-        0,
-    };
+fn columnIndex(columns: []const ColumnSpec, id: ColumnId) ?usize {
+    for (columns, 0..) |column, index| {
+        if (column.id == id) return index;
+    }
+    return null;
 }
 
 fn growBoundedWidth(remaining: *usize, current: *usize, target: usize) void {

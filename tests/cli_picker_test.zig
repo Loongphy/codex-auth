@@ -1775,3 +1775,42 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
+
+test "live list defers PLAN EXPIRE and keeps the configured column order" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "very-long-account-name", .pro);
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = now + 604800 },
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 3,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var narrow_body: std.Io.Writer.Allocating = .init(gpa);
+    defer narrow_body.deinit();
+    var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXPIRE") == null);
+    var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 120);
+
+    var wide_body: std.Io.Writer.Allocating = .init(gpa);
+    defer wide_body.deinit();
+    var wide_writer = StyledWriter.init(&wide_body.writer, false);
+    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200);
+    const body = wide_body.written();
+    try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
+    const plan = std.mem.indexOf(u8, body, "PLAN") orelse return error.TestUnexpectedResult;
+    const expire = std.mem.indexOf(u8, body, "PLAN EXPIRE") orelse return error.TestUnexpectedResult;
+    const five_hour = std.mem.indexOf(u8, body, "5H") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(plan < expire and expire < five_hour);
+    lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 200);
+}

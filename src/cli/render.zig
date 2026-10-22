@@ -422,11 +422,11 @@ pub fn renderListBody(
     widths: SwitchWidths,
     max_cols: ?usize,
 ) !void {
-    _ = widths;
     const details = @import("list_details.zig");
 
     const number_width = idx_width + 1;
-    try details.writeHeader(writer, number_width, max_cols);
+    const column_widths = details.computeWidths(number_width, widths, max_cols);
+    try details.writeHeader(writer, column_widths);
     var displayed_counter: usize = 0;
     for (rows) |row| {
         if (row.is_header) continue;
@@ -444,7 +444,7 @@ pub fn renderListBody(
             .rate_5h = row.rate_5h,
             .rate_week = row.rate_week,
             .last = row.last,
-        }, number_width, max_cols);
+        }, column_widths);
     }
 }
 

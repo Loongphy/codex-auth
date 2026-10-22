@@ -418,3 +418,38 @@ test "writeAccountsTable shows plan expiry for future data and hides expired dat
         try std.testing.expect(std.mem.indexOf(u8, output, expired_text[0..10]) == null);
     }
 }
+
+test "writeAccountsTable defers PLAN EXPIRE on narrow widths" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "very-long-account-name@example.com", "very-long-account-name", .plus);
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = now + 604800 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+
+    var overrides = [_]?[]const u8{"FileNotFound"};
+    var buffer: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, &overrides, 70);
+    var output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") == null);
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 70);
+
+    const expected = try codex_auth.cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, &overrides, 200);
+    output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+    lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 200);
+}
