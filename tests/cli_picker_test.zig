@@ -1704,6 +1704,33 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "live list shows plan expiry only when it is still in the future" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    const expected = try cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+
+    reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -1747,4 +1774,43 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+}
+
+test "live list defers PLAN EXPIRE and keeps the configured column order" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "very-long-account-name", .pro);
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = now + 604800 },
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 3,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var narrow_body: std.Io.Writer.Allocating = .init(gpa);
+    defer narrow_body.deinit();
+    var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 120);
+    try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXPIRE") == null);
+    var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 120);
+
+    var wide_body: std.Io.Writer.Allocating = .init(gpa);
+    defer wide_body.deinit();
+    var wide_writer = StyledWriter.init(&wide_body.writer, false);
+    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200);
+    const body = wide_body.written();
+    try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
+    const plan = std.mem.indexOf(u8, body, "PLAN") orelse return error.TestUnexpectedResult;
+    const expire = std.mem.indexOf(u8, body, "PLAN EXPIRE") orelse return error.TestUnexpectedResult;
+    const five_hour = std.mem.indexOf(u8, body, "5H") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(plan < expire and expire < five_hour);
+    lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 200);
 }

@@ -17,7 +17,8 @@ codex-auth list --json
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, and `LAST ACTIVITY`.
+- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, and `PLAN EXPIRE`.
+  The deferred `PLAN EXPIRE` column appears only when the terminal is wide enough.
 
 ## Refresh Modes
 
@@ -27,15 +28,17 @@ codex-auth list --json
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
-- Live account details show the access-token expiry and, per account, the
-  available reset-credit count with the earliest card expiry. The
-  `ACCESS EXPIRE` and `RESET CREDITS` columns render in local time; the
-  available reset credits are also expandable per account in the live view.
+- Live account details show the access-token expiry, the plan expiry, and, per
+  account, the available reset-credit count with the earliest card expiry. The
+  `AUTH EXPIRE`, `PLAN EXPIRE`, and `RESET CREDITS` columns render in local time;
+  the available reset credits are also expandable per account in the live view.
 - Access-token expiry is shown in local time and is not the account or subscription
-  expiry; refreshing credentials can extend it. Plan expiry is shown as unavailable
-  because the current data sources do not provide it. Server card lists may be
-  capped; compare `available_count` with the JSON `credits` length before treating
-  the list as exhaustive. After a refresh failure, details may be cached.
+  expiry; refreshing credentials can extend it. `PLAN EXPIRE` comes from the
+  `chatgpt_subscription_active_until` claim in the stored `id_token`. Missing or
+  already-expired values render as `-`, so a stale snapshot does not look current.
+  Server card lists may be capped; compare `available_count` with the JSON
+  `credits` length before treating the list as exhaustive. After a refresh failure,
+  details may be cached.
 - `--json` emits one machine-readable JSON document and cannot be combined with `--live`.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
@@ -47,8 +50,12 @@ When local-only refresh is active, only the active account can be updated from l
 - Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
 - Usage cells show remaining percent and reset time when that data is known.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
+- `PLAN EXPIRE` renders the local date from the stored `id_token` subscription claim.
+  Missing or past timestamps render as `-` in both plain and live tables.
 - `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
-- JSON output includes the returned reset-credit details.
+- JSON output includes the raw `plan_expires_at` timestamp and the returned reset-credit details.
+  The terminal column hides past plan-expiry timestamps, but the JSON value remains the
+  stored timestamp so callers can detect stale snapshots.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
 - `LAST ACTIVITY` is based on the last stored usage update time.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.
