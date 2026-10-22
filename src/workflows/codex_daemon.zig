@@ -3,10 +3,11 @@ const builtin = @import("builtin");
 const runtime = @import("../core/runtime.zig");
 
 pub const restart_timeout_ms = 120_000;
+pub const reload_timeout_ms = 10_000;
 const probe_timeout_ms = 5_000;
 const output_limit = 16 * 1024;
 
-pub const Outcome = enum { not_running, running, unknown, unsupported, restarted, restart_failed, timed_out };
+pub const Outcome = enum { not_running, running, unknown, unsupported, reloaded, deferred, restarted, restart_failed, timed_out };
 
 /// Coordinates the supported Codex lifecycle commands for one selected home.
 pub const Client = struct {
@@ -68,6 +69,31 @@ pub const Client = struct {
         defer self.allocator.free(result.stdout);
         if (result.timed_out) return .timed_out;
         return if (result.succeeded) .restarted else .restart_failed;
+    }
+
+    /// Two-tier coordination: prefer the non-disruptive reload when the running
+    /// daemon supports it (codex daemons), and fall back to a full restart for
+    /// upstream daemons without reload support. Busy daemons defer instead of
+    /// interrupting a running turn.
+    pub fn ensure(self: *const Client, timeout_ms: u64) !Outcome {
+        const state = try self.probe();
+        if (state != .running) return state;
+        if (try self.tryReload()) |outcome| return outcome;
+        return try self.restart(timeout_ms);
+    }
+
+    /// Returns the reload outcome when the daemon accepted it (or deferred it);
+    /// null means reload is unavailable or failed and the caller should fall
+    /// back to a restart.
+    fn tryReload(self: *const Client) !?Outcome {
+        const result = self.runLifecycle("reload-auth", reload_timeout_ms) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return null,
+        };
+        defer self.allocator.free(result.stdout);
+        if (result.timed_out or !result.succeeded) return null;
+        if (std.mem.indexOf(u8, result.stdout, "skipped the auth reload") != null) return .deferred;
+        return .reloaded;
     }
 
     const Result = struct { stdout: []u8, succeeded: bool, timed_out: bool };

@@ -51,6 +51,56 @@ test "Scenario: Given failed or malformed daemon probes then explicit restart re
     }
 }
 
+test "Scenario: Given a codex daemon that reloads auth then ensure reloads without restarting" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    try fake.install(tmp.dir, fake.reload_changed);
+    const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(home);
+    var client = try daemon.Client.init(std.testing.allocator, home);
+    defer client.deinit();
+    try std.testing.expectEqual(daemon.Outcome.reloaded, try client.ensure(1_000));
+    const calls = try fake.read(tmp.dir, "lifecycle-calls");
+    defer std.testing.allocator.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\n", calls);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("restarted-home", .{}));
+}
+
+test "Scenario: Given an upstream daemon without reload support then ensure falls back to restart" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    try fake.install(tmp.dir, fake.reload_unsupported_succeed);
+    const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(home);
+    var client = try daemon.Client.init(std.testing.allocator, home);
+    defer client.deinit();
+    try std.testing.expectEqual(daemon.Outcome.restarted, try client.ensure(1_000));
+    const calls = try fake.read(tmp.dir, "lifecycle-calls");
+    defer std.testing.allocator.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\nversion\nrestart\n", calls);
+    const forwarded = try fake.read(tmp.dir, "restarted-home");
+    defer std.testing.allocator.free(forwarded);
+    try std.testing.expect(forwarded.len > 0);
+}
+
+test "Scenario: Given a busy daemon then the reload defers without restarting" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    try fake.install(tmp.dir, fake.reload_busy);
+    const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(home);
+    var client = try daemon.Client.init(std.testing.allocator, home);
+    defer client.deinit();
+    try std.testing.expectEqual(daemon.Outcome.deferred, try client.ensure(1_000));
+    const calls = try fake.read(tmp.dir, "lifecycle-calls");
+    defer std.testing.allocator.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\n", calls);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("restarted-home", .{}));
+}
+
 test "Scenario: Given a restart failure then retry makes another explicit restart attempt" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});

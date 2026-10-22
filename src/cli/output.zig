@@ -29,6 +29,14 @@ pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, execu
             try out.writeAll("Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n");
             return;
         },
+        .reloaded => {
+            try out.writeAll("Account files switched successfully; the running daemon reloaded the new credentials without a restart.\n");
+            return;
+        },
+        .deferred => {
+            try out.writeAll("Account files switched successfully; the daemon deferred the reload until the running turn finishes. Rerun `switch --restart-daemon` afterwards.\n");
+            return;
+        },
         .running => try out.writeAll("A running Codex daemon may still use cached credentials. Use `switch --restart-daemon` to apply the selection or repair stale authentication. Restarting can interrupt attached sessions.\n"),
         .unknown => try out.writeAll(if (requested)
             "Account files switched successfully; daemon responsiveness could not be confirmed. The requested restart was not attempted.\n"

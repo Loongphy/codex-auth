@@ -22,6 +22,9 @@ pub fn install(dir: fs.Dir, body: []const u8) !void {
 
 pub const running = "if [ \"$3\" = version ]; then printf '%s\\n' '{\"status\":\"running\",\"appServerVersion\":\"0.160.0\",\"backend\":\"pid\"}'; exit 0; fi\n";
 pub const succeed = running ++ "[ \"$3\" = restart ] || exit 91\nprintf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\n";
+pub const reload_changed = running ++ "[ \"$3\" = reload-auth ] || exit 91\nprintf '%s\\n' 'Daemon reloaded auth; the account changed.'\n";
+pub const reload_busy = running ++ "[ \"$3\" = reload-auth ] || exit 91\nprintf '%s\\n' 'Daemon skipped the auth reload because a turn is running.'\n";
+pub const reload_unsupported_succeed = running ++ "if [ \"$3\" = reload-auth ]; then exit 92; fi\n" ++ "[ \"$3\" = restart ] || exit 91\nprintf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\n";
 
 pub fn read(dir: fs.Dir, path: []const u8) ![]u8 {
     var file = try dir.openFile(path, .{});

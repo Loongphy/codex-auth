@@ -854,7 +854,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         }
         const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
         defer gpa.free(calls);
-        const expected = if (!case.requested) "version\n" else if (case.attempts == 2) "version\nrestart\nversion\nrestart\n" else "version\nrestart\n";
+        const expected = if (!case.requested) "version\n" else if (case.attempts == 2) "version\nreload-auth\nversion\nrestart\nversion\nreload-auth\nversion\nrestart\n" else "version\nreload-auth\nversion\nrestart\n";
         try std.testing.expectEqualStrings(expected, calls);
         if (case.requested) {
             const forwarded = try fake_daemon.read(home_dir, "restarted-home");
@@ -898,7 +898,7 @@ test "Scenario: Given no managed executable then daemon restart resolves relativ
         try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon restart completed") != null);
         const calls = try fake_daemon.read(dir, "lifecycle-calls");
         defer gpa.free(calls);
-        try std.testing.expectEqualStrings("version\nrestart\n", calls);
+        try std.testing.expectEqualStrings("version\nreload-auth\nversion\nrestart\n", calls);
         const forwarded = try fake_daemon.read(dir, "restarted-home");
         defer gpa.free(forwarded);
         try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
@@ -942,7 +942,7 @@ test "Scenario: Given a non-executable codex first in PATH then daemon restart u
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon restart completed") != null);
     const calls = try fake_daemon.read(dir, "lifecycle-calls");
     defer gpa.free(calls);
-    try std.testing.expectEqualStrings("version\nrestart\n", calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\nversion\nrestart\n", calls);
     const forwarded = try fake_daemon.read(dir, "restarted-home");
     defer gpa.free(forwarded);
     try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
@@ -2975,7 +2975,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
         defer gpa.free(calls_path);
         const calls = try fixtures.readFileAlloc(gpa, calls_path);
         defer gpa.free(calls);
-        try std.testing.expectEqualStrings("version\nrestart\n", calls);
+        try std.testing.expectEqualStrings("version\nreload-auth\nversion\nrestart\n", calls);
     }
 }
 

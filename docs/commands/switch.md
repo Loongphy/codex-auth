@@ -79,7 +79,7 @@ codex-auth switch - --restart-daemon
 codex-auth switch personal --json --restart-daemon
 ```
 
-`--restart-daemon` requests a restart after account activation and registry persistence succeed. It also restarts when the selected credentials are already on disk, so it can repair stale daemon authentication or retry a failed restart. It can interrupt all attached sessions. Reconnect, verify the account, and resume work as needed.
+`--restart-daemon` applies the selected credentials to the running daemon after account activation and registry persistence succeed. Codex daemons reload auth in place without interrupting attached sessions; upstream daemons without reload support are restarted instead, which can interrupt all attached sessions. It also covers stale daemon authentication and retries after a failed attempt. Reconnect, verify the account, and resume work as needed.
 
 - The selected `CODEX_HOME` is passed to both lifecycle commands. The home’s managed executable is preferred, with supported legacy layouts and a PATH fallback.
 - Responsiveness is checked with `codex app-server daemon version`. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; an explicit request then fails without invoking restart.
