@@ -44,6 +44,9 @@ pub const RemoveOptions = struct {
     api_mode: ApiMode = .default,
     json: bool = false,
 };
+pub const ResetOptions = struct {
+    selector: []u8,
+};
 pub const AliasSetOptions = struct {
     selector: []u8,
     alias: []u8,
@@ -81,6 +84,7 @@ pub const HelpTopic = enum {
     export_auth,
     switch_account,
     remove_account,
+    reset_credits,
     alias,
     clean,
     config,
@@ -94,6 +98,7 @@ pub const Command = union(enum) {
     export_auth: ExportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
+    reset_credits: ResetOptions,
     alias: AliasOptions,
     clean: CleanOptions,
     config: ConfigOptions,

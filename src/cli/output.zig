@@ -397,6 +397,61 @@ pub fn printAliasCleared(rec: *const registry.AccountRecord, old_alias: []const 
     try out.flush();
 }
 
+pub const ResetRemainingEntry = struct {
+    title: ?[]const u8,
+    expires_local: ?[]const u8,
+};
+
+/// Prints a `reset` command failure to stderr with the standard error prefix.
+pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" ");
+    try out.print(fmt, args);
+    try out.writeAll("\n");
+    try out.flush();
+}
+
+/// Prints the consumed reset credit (title and local expiry).
+pub fn printResetConsumed(email: []const u8, title: ?[]const u8, expires_local: ?[]const u8, already_used: bool) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    if (already_used) {
+        try out.print("reset credit was already used for {s}: \"{s}\"", .{ email, title orelse "(untitled)" });
+    } else {
+        try out.print("used reset credit for {s}: \"{s}\"", .{ email, title orelse "(untitled)" });
+    }
+    if (expires_local) |expiry| {
+        try out.print(" \u{00b7} expires {s}", .{expiry});
+    }
+    try out.writeAll("\n");
+    try out.flush();
+}
+
+/// Prints the reset credits that remain after the consume call.
+pub fn printResetRemaining(email: []const u8, entries: []const ResetRemainingEntry) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try out.print("Remaining reset credits for {s} ({d}):\n", .{ email, entries.len });
+    if (entries.len == 0) {
+        try out.writeAll("  (none)\n");
+    } else {
+        for (entries) |entry| {
+            try out.print("  \u{00b7} {s}", .{entry.title orelse "(untitled)"});
+            if (entry.expires_local) |expiry| {
+                try out.print(" \u{00b7} expires {s}", .{expiry});
+            }
+            try out.writeAll("\n");
+        }
+    }
+    try out.flush();
+}
+
 pub fn printInvalidRemoveSelectionError() !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();
