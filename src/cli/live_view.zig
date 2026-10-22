@@ -32,7 +32,7 @@ fn panelIndentForBody(body: []const u8) usize {
             }
             continue;
         }
-        if (header[index] == '|') return column + 2;
+        if (header[index] == '|') return column;
         column += 1;
         index += 1;
     }
