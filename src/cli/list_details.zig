@@ -35,9 +35,9 @@ pub fn computeWidths(
     var bounded = [_]usize{0} ** column_count;
     table_layout.allocateColumns(.{
         .columns = &columns,
-        .first_order = &table_layout.list_detail_first_order,
-        .grow_order = &table_layout.list_detail_grow_order,
-        .deferred_order = &table_layout.list_detail_deferred_order,
+        .first_order = &table_layout.shared_first_order,
+        .grow_order = &table_layout.shared_grow_order,
+        .deferred_order = &table_layout.shared_deferred_order,
         .prefix_width = 0,
         .separator_width = separator_width,
     }, max_cols, &bounded);

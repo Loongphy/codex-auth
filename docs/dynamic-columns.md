@@ -3,17 +3,14 @@
 All table views use one responsive allocator in `src/cli/table_layout.zig`.
 The allocator separates a column's semantic identity from its position on
 screen, so each view can keep its own visual order while sharing the same width
-policy.
+policy and hide order.
 
 ## Model
 
 Each view supplies:
 
 - `columns`: the visual order and content width of its supported columns;
-- `first_order`: columns that reserve a useful target width first;
-- `grow_order`: visible columns that may grow toward their content width;
-- `deferred_order`: low-priority columns admitted only after every normal
-  column has had a chance to grow;
+- `first_order`, `grow_order`, `deferred_order`: the shared priority lists;
 - `prefix_width`: width of the row prefix (`#`, checkbox, index);
 - `separator_width`: width of the separator between visible columns.
 
@@ -23,7 +20,7 @@ Their width and separator budget is redistributed to the remaining columns.
 
 ## Visual Order
 
-The order of each view is fixed and independent of priority:
+The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
@@ -31,49 +28,90 @@ The order of each view is fixed and independent of priority:
 | `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `5H`, `WEEKLY`, `LAST`, `AUTH EXPIRE`, `RESET CREDITS` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
-`switch` and `remove` hide `CREDITS`, `RESET CREDITS`, `AUTH EXPIRE`, and
-`PLAN EXPIRE`. The plain `list` hides `AUTH EXPIRE`.
+## Shared Priority
+
+Every view uses the same ordered lists. A view with an unsupported column
+(content width `0`) skips that entry without changing the order.
+
+### Reserve order (highest to lowest)
+
+```text
+#* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4)
+   -> RESET CREDITS (2) -> LAST (4) -> CREDITS (2)
+```
+
+`PLAN EXPIRE` and `AUTH EXPIRE` are not in this list; they are deferred.
+
+### Grow order
+
+```text
+5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> CREDITS -> ACCOUNT
+```
+
+### Deferred order
+
+```text
+AUTH EXPIRE (10) -> PLAN EXPIRE (10)
+```
+
+Deferred columns are considered only after every normal column has grown. Each
+still needs its target width and separator to fit, so deferred columns never
+become one-column dot cells.
+
+## Shared Hide Order
+
+From wide to narrow, columns disappear in the reverse priority order. The
+complete shared order is:
+
+```text
+PLAN EXPIRE
+-> AUTH EXPIRE
+-> CREDITS
+-> LAST
+-> RESET CREDITS
+-> PLAN
+-> WEEKLY
+-> 5H
+-> ACCOUNT
+-> #*
+```
+
+Unsupported columns are already absent from a view:
+
+- plain `list` has no `AUTH EXPIRE` and no `#*`: `PLAN EXPIRE -> CREDITS -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+- `list --live` has no `CREDITS`: `PLAN EXPIRE -> AUTH EXPIRE -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
+- `switch` / `remove` support none of the credits, auth-expiry, or plan-expiry columns: `LAST -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+
+`CREDITS` was intentionally placed just above the expiry fields: it is a
+low-priority metadata column. `RESET CREDITS`, which carries the actionable
+reset count, stays above it.
 
 ## Allocation Phases
 
 1. **Reserve targets** in `first_order`. A column is admitted only when its
    target width and separator fit. `ACCOUNT` may use a partial width down to
-   2 columns; hidden columns are not emitted as a missing separator or a
-   one-column dot.
+   2 columns.
 2. **Grow** visible columns in `grow_order` toward their content width.
-3. **Admit deferred columns** in `deferred_order`, in order, only when their
-   target width and separator still fit after every normal column has grown.
+3. **Admit deferred columns** in `deferred_order`, only when their target
+   width and separator still fit after every normal column has grown.
 
-Separators are charged only when the next column becomes visible. A line never
-exceeds the requested terminal width.
+Separators are charged only when a column becomes visible. A line never exceeds
+the requested terminal width.
 
-## Per-View Priority
+## Target Widths
 
-### Plain `list`
-
-```text
-reserve:  ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> CREDITS (2)
-          -> PLAN (4) -> RESET CREDITS (2) -> LAST (4)
-grow:     CREDITS -> 5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> ACCOUNT
-deferred: PLAN EXPIRE (10)
-```
-
-### `list --live`
-
-```text
-reserve:  #* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4)
-          -> LAST (4) -> AUTH EXPIRE (10) -> RESET CREDITS (2)
-grow:     AUTH EXPIRE -> RESET CREDITS -> PLAN -> LAST -> 5H -> WEEKLY -> ACCOUNT
-deferred: PLAN EXPIRE (10)
-```
-
-### `switch`, `remove`
-
-```text
-reserve:  ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4) -> LAST (4)
-grow:     5H -> WEEKLY -> PLAN -> LAST -> ACCOUNT
-deferred: none
-```
+| Column | Target |
+|---|---:|
+| `#*` | index width (at least `#*`) |
+| `ACCOUNT` | 10 (minimum 2) |
+| `PLAN` | 4 |
+| `PLAN EXPIRE` | 10, deferred |
+| `CREDITS` | 2 |
+| `RESET CREDITS` | 2 |
+| `5H` | 4 |
+| `WEEKLY` | 6 |
+| `LAST` | 4 |
+| `AUTH EXPIRE` | 10, deferred |
 
 ## Headers
 
@@ -91,9 +129,8 @@ Wide headers use their full label. Narrow columns use compact labels:
 1. Add a `ColumnId` and its default target width.
 2. Add it to the visual order of each view that supports it. Unsupported views
    pass content width `0`.
-3. Put it in `first_order`, `grow_order`, or `deferred_order` according to its
-   importance. A new low-priority metadata column normally belongs in
-   `deferred_order`, not in a hardcoded special case in the allocator.
+3. Add it to the shared `first_order`, `grow_order`, or `deferred_order`
+   according to its priority.
 4. Add width-aware cell formatting and a compact header when needed.
 5. Add a width-sweep test for hidden/visible behavior, line length, and any
    value that must stay complete (for example `100%`).

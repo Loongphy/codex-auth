@@ -195,9 +195,9 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     var widths = [_]usize{0} ** table_layout.plain_columns.len;
     table_layout.allocateColumns(.{
         .columns = &columns,
-        .first_order = &table_layout.plain_first_order,
-        .grow_order = &table_layout.plain_grow_order,
-        .deferred_order = &table_layout.plain_deferred_order,
+        .first_order = &table_layout.shared_first_order,
+        .grow_order = &table_layout.shared_grow_order,
+        .deferred_order = &table_layout.shared_deferred_order,
         .prefix_width = prefix_len,
         .separator_width = sep_len,
     }, term_cols, &widths);

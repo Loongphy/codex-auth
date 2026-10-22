@@ -140,9 +140,30 @@ pub fn accountTable(widths: [live_column_count]usize, prefix_width: usize) LiveT
 }
 
 pub const switch_columns = [_]ColumnId{ .account, .plan, .rate_5h, .rate_week, .last };
-pub const switch_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .plan, .last };
-pub const switch_grow_order = [_]ColumnId{ .rate_5h, .rate_week, .plan, .last, .account };
-pub const switch_deferred_order = [_]ColumnId{};
+
+/// Shared priority for every view. A view simply skips columns it does not
+/// support (content width 0). Keep this single list as the source of truth so
+/// `list` and `list --live` cannot drift apart.
+pub const shared_first_order = [_]ColumnId{
+    .number,
+    .account,
+    .rate_5h,
+    .rate_week,
+    .plan,
+    .reset_credits,
+    .last,
+    .credits,
+};
+pub const shared_grow_order = [_]ColumnId{
+    .rate_5h,
+    .rate_week,
+    .plan,
+    .reset_credits,
+    .last,
+    .credits,
+    .account,
+};
+pub const shared_deferred_order = [_]ColumnId{ .auth_expire, .plan_expire };
 
 pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) LiveTable {
     const source_widths = [_]usize{ widths.email, widths.plan, widths.rate_5h, widths.rate_week, widths.last };
@@ -153,9 +174,9 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     var bounded = [_]usize{0} ** live_column_count;
     allocateColumns(.{
         .columns = &columns,
-        .first_order = &switch_first_order,
-        .grow_order = &switch_grow_order,
-        .deferred_order = &switch_deferred_order,
+        .first_order = &shared_first_order,
+        .grow_order = &shared_grow_order,
+        .deferred_order = &shared_deferred_order,
         .prefix_width = prefix_width,
         .separator_width = 2,
     }, max_cols, &bounded);
@@ -163,14 +184,8 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
 }
 
 pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last, .plan_expire };
-pub const plain_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .credits, .plan, .reset_credits, .last };
-pub const plain_grow_order = [_]ColumnId{ .credits, .rate_5h, .rate_week, .plan, .reset_credits, .last, .account };
-pub const plain_deferred_order = [_]ColumnId{.plan_expire};
 
 pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .last, .auth_expire, .reset_credits };
-pub const list_detail_first_order = [_]ColumnId{ .number, .account, .rate_5h, .rate_week, .plan, .last, .auth_expire, .reset_credits };
-pub const list_detail_grow_order = [_]ColumnId{ .auth_expire, .reset_credits, .plan, .last, .rate_5h, .rate_week, .account };
-pub const list_detail_deferred_order = [_]ColumnId{.plan_expire};
 
 pub fn defaultTargetWidth(id: ColumnId) usize {
     return switch (id) {

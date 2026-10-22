@@ -45,9 +45,9 @@ Plain `list` at 70 columns hides the deferred `PLAN EXPIRE` column so status
 and usage values stay readable:
 
 ```text
-ACCOUNT     PLAN  CREDITS  RC  5H          WEEKLY  LAST
---------------------------------------------------------
-very-long.  Pro   -        -   100%        58%     -
+ACCOUNT     PLAN  CR  RC  5H          WEEKLY  LAST
+--------------------------------------------------
+very-long.  Pro   -   -   100%        58%     -
 ```
 
 `list --live` at a medium width:
