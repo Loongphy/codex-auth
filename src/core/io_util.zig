@@ -9,7 +9,8 @@ pub const Stdout = struct {
 
     pub fn init(self: *Stdout) void {
         const file = std.Io.File.stdout();
-        self.writer = file.writer(app_runtime.io(), &self.buffer);
+        // stdout is a stream even when redirected; each writer must retain prior output.
+        self.writer = file.writerStreaming(app_runtime.io(), &self.buffer);
         self.color_enabled = terminal_color.fileColorEnabled(file);
     }
 

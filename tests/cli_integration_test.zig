@@ -5279,3 +5279,50 @@ test "Scenario: auto lock setup failure keeps JSON output machine readable" {
     defer parsed.deinit();
     try std.testing.expectEqualStrings("auto_error", parsed.value.object.get("error").?.object.get("code").?.string);
 }
+
+test "Scenario: auto poll events remain separate when stdout is redirected to a file" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home);
+    const exe_path = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe_path);
+    const output_path = try fs.path.join(gpa, &.{ home, "events.jsonl" });
+    defer gpa.free(output_path);
+    const output = try std.Io.Dir.cwd().createFile(fs.io(), output_path, .{});
+    defer output.close(fs.io());
+    var env_map = try getEnvMap(gpa);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("USERPROFILE", home);
+    try env_map.put("CODEX_HOME", home);
+    var child = try std.process.spawn(fs.io(), .{
+        .argv = &.{ exe_path, "auto", "--dry-run", "--json", "--interval", "15" },
+        .cwd = .{ .path = project_root },
+        .environ_map = &env_map,
+        .stdin = .ignore,
+        .stdout = .{ .file = output },
+        .stderr = .ignore,
+    });
+    defer child.kill(fs.io());
+    const started = std.Io.Timestamp.now(fs.io(), .awake).toMilliseconds();
+    while (std.Io.Timestamp.now(fs.io(), .awake).toMilliseconds() - started < 20000) {
+        const data = try fixtures.readFileAlloc(gpa, output_path);
+        defer gpa.free(data);
+        if (std.mem.count(u8, data, "\n") >= 2) {
+            var lines = std.mem.tokenizeScalar(u8, data, '\n');
+            for (0..2) |_| {
+                var parsed = try std.json.parseFromSlice(std.json.Value, gpa, lines.next().?, .{});
+                defer parsed.deinit();
+                try std.testing.expectEqualStrings("blocked", parsed.value.object.get("status").?.string);
+            }
+            return;
+        }
+        try std.Io.sleep(fs.io(), .fromMilliseconds(100), .awake);
+    }
+    return error.MissingSecondPollEvent;
+}
