@@ -37,6 +37,7 @@ pub fn writeHelp(
     try writeCommandSummary(out, use_color, "help <command>", "Show command-specific help");
     try writeCommandSummary(out, use_color, "--version, -V", "Show version");
     try writeCommandSummary(out, use_color, "-", "Switch to the previous active account");
+    try writeCommandSummary(out, use_color, "auto [--once] [--dry-run] [--json]", "Monitor usage and switch accounts near rate limits");
     try writeCommandSummary(out, use_color, "list [--live] [--active] [--api|--skip-api] [--json]", "List available accounts");
     try writeCommandSummary(out, use_color, "login [--device-auth]", "Login and add the current account");
     try writeCommandSummary(out, use_color, "import", "Import auth files or rebuild registry");
@@ -128,6 +129,7 @@ fn writeCommandHelpHeader(out: *std.Io.Writer, use_color: bool, topic: HelpTopic
 fn commandNameForTopic(topic: HelpTopic) []const u8 {
     return switch (topic) {
         .top_level => "",
+        .auto => "auto",
         .list => "list",
         .login => "login",
         .import_auth => "import",
@@ -144,6 +146,7 @@ fn commandNameForTopic(topic: HelpTopic) []const u8 {
 fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
     return switch (topic) {
         .top_level => "Command-line account management for Codex.",
+        .auto => "Monitor usage and switch stored credentials. Stop with Ctrl-C; clients may need restarting.",
         .list => "List available accounts.",
         .login => "Run `codex login` or `codex login --device-auth`, then add the current account.",
         .import_auth => "Import auth files or rebuild the registry.",
@@ -159,14 +162,14 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
 
 fn commandHelpHasExamples(topic: HelpTopic) bool {
     return switch (topic) {
-        .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .auto, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
         else => false,
     };
 }
 
 fn commandHelpHasOptions(topic: HelpTopic) bool {
     return switch (topic) {
-        .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
+        .auto, .list, .login, .import_auth, .export_auth, .switch_account, .remove_account, .alias, .config, .app => true,
         else => false,
     };
 }
@@ -196,6 +199,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
+        .auto => try out.writeAll("  codex-auth auto [--once] [--dry-run] [--json] [--threshold <percent>] [--interval <seconds>] [--cooldown <seconds>]\n"),
         .list => try out.writeAll("  codex-auth list [--live] [--active] [--api|--skip-api] [--json]\n"),
         .login => {
             try out.writeAll("  codex-auth login\n");
@@ -243,6 +247,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
 pub fn helpCommandForTopic(topic: HelpTopic) []const u8 {
     return switch (topic) {
         .top_level => "codex-auth --help",
+        .auto => "codex-auth auto --help",
         .list => "codex-auth list --help",
         .login => "codex-auth login --help",
         .import_auth => "codex-auth import --help",
@@ -264,6 +269,15 @@ fn writeOptionsSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTo
 
 fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
+        .auto => {
+            try out.writeAll("  --once       Evaluate once and exit.\n");
+            try out.writeAll("  --dry-run    Report decisions without changing credentials or registry files.\n");
+            try out.writeAll("  --json       Emit one JSON event per poll.\n");
+            try out.writeAll("  --threshold <percent>  Used quota that triggers switching (50-99.9; default 90).\n");
+            try out.writeAll("  --interval <seconds>   Poll interval (15-3600; default 60).\n");
+            try out.writeAll("  --cooldown <seconds>   Minimum time since account activation (0-86400; default 300).\n");
+            try out.writeAll("  Fresh API usage is required; API-key accounts are excluded. Clients are never restarted.\n");
+        },
         .list => {
             try out.writeAll("  --live       Open a live-updating table.\n");
             try out.writeAll("  --active     Refresh only the active account before rendering.\n");
@@ -342,6 +356,7 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth import /path/to/auth.json --alias personal\n");
             try out.writeAll("  codex-auth switch --live\n");
         },
+        .auto => try out.writeAll("  codex-auth auto --once --dry-run --json\n"),
         .list => {
             try out.writeAll("  codex-auth list\n");
             try out.writeAll("  codex-auth list --active\n");

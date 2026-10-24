@@ -75,6 +75,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const test_files = [_][]const u8{
+        "tests/auto_test.zig",
         "tests/api_account_test.zig",
         "tests/api_http_test.zig",
         "tests/api_me_test.zig",

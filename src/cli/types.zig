@@ -37,6 +37,14 @@ pub const SwitchOptions = struct {
     json: bool = false,
     restart_daemon: bool = false,
 };
+pub const AutoOptions = struct {
+    once: bool = false,
+    dry_run: bool = false,
+    json: bool = false,
+    threshold: f64 = 90,
+    interval_seconds: u16 = 60,
+    cooldown_seconds: u32 = 300,
+};
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
     all: bool,
@@ -80,6 +88,7 @@ pub const HelpTopic = enum {
     import_auth,
     export_auth,
     switch_account,
+    auto,
     remove_account,
     alias,
     clean,
@@ -93,6 +102,7 @@ pub const Command = union(enum) {
     import_auth: ImportOptions,
     export_auth: ExportOptions,
     switch_account: SwitchOptions,
+    auto: AutoOptions,
     remove_account: RemoveOptions,
     alias: AliasOptions,
     clean: CleanOptions,

@@ -10,6 +10,7 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `login` | [docs/commands/login.md](./login.md) |
 | `import` | [docs/commands/import.md](./import.md) |
 | `export` | [docs/commands/export.md](./export.md) |
+| `auto` | [docs/commands/auto.md](./auto.md) |
 | `switch` | [docs/commands/switch.md](./switch.md) |
 | `remove` | [docs/commands/remove.md](./remove.md) |
 | `alias` | [docs/commands/alias.md](./alias.md) |

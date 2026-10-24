@@ -28,6 +28,7 @@ const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
 const usage_refresh = @import("usage.zig");
 pub const results = @import("results.zig");
+pub const auto = @import("auto.zig");
 pub const codex_daemon = @import("codex_daemon.zig");
 
 pub const nowMilliseconds = workflow_env.nowMilliseconds;
@@ -152,6 +153,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         },
         .config => |opts| try config_workflow.handleConfig(allocator, codex_home.?, opts),
         .app => |opts| try app_workflow.handleApp(allocator, codex_home.?, opts),
+        .auto => |opts| try auto.handleAuto(allocator, codex_home.?, opts),
         .list => |opts| try list_workflow.handleList(allocator, codex_home.?, opts),
         .login => |opts| try login_workflow.handleLogin(allocator, codex_home.?, opts),
         .import_auth => |opts| try import_workflow.handleImport(allocator, codex_home.?, opts),
@@ -165,6 +167,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
 
 fn commandWantsJson(cmd: *const cli.types.Command) bool {
     return switch (cmd.*) {
+        .auto => |opts| opts.json,
         .list => |opts| opts.json,
         .switch_account => |opts| opts.json,
         .remove_account => |opts| opts.json,

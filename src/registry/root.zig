@@ -150,6 +150,7 @@ pub const upsertAccount = account_ops.upsertAccount;
 const syncActiveAccountFromAuthWithImporter = account_ops.syncActiveAccountFromAuthWithImporter;
 
 pub const loadRegistry = storage.loadRegistry;
+pub const loadRegistryReadOnly = storage.loadRegistryReadOnly;
 pub const saveRegistry = storage.saveRegistry;
 const defaultRegistry = storage.defaultRegistry;
 

@@ -5181,3 +5181,101 @@ test "Scenario: Given unsupported native host with missing explicit codex CLI pa
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
 }
+
+test "Scenario: auto dry run preserves files and real switching records credentials and previous account" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const home = try seedDaemonSwitchFixture(gpa, home_root, false);
+    defer gpa.free(home);
+    try tmp.dir.makePath("auto-curl");
+    const active_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(active_id);
+    const script = try std.fmt.allocPrint(gpa, "#!/bin/sh\nused=10\nwhile IFS= read -r line; do\ncase \"$line\" in *'{s}'*) used=95;; esac\ndone\nprintf '{{\"plan_type\":\"plus\",\"rate_limit\":{{\"primary_window\":{{\"used_percent\":%s,\"limit_window_seconds\":18000,\"reset_at\":4102444800}},\"secondary_window\":{{\"used_percent\":10,\"limit_window_seconds\":604800,\"reset_at\":4103049600}}}}}}\\n200' \"$used\"\n", .{active_id});
+    defer gpa.free(script);
+    try tmp.dir.writeFile(.{ .sub_path = "auto-curl/curl", .data = script });
+    var curl = try tmp.dir.openFile("auto-curl/curl", .{ .mode = .read_write });
+    defer curl.close();
+    try curl.chmod(0o755);
+    const path = try tmp.dir.realpathAlloc(gpa, "auto-curl");
+    defer gpa.free(path);
+    const auth_path = try registry.activeAuthPath(gpa, home);
+    defer gpa.free(auth_path);
+    const reg_path = try registry.registryPath(gpa, home);
+    defer gpa.free(reg_path);
+    const auth_before = try fixtures.readFileAlloc(gpa, auth_path);
+    defer gpa.free(auth_before);
+    const reg_before = try fixtures.readFileAlloc(gpa, reg_path);
+    defer gpa.free(reg_before);
+    const dry = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, home_root, home, path, &.{ "auto", "--once", "--dry-run", "--json", "--cooldown", "0" });
+    defer gpa.free(dry.stdout);
+    defer gpa.free(dry.stderr);
+    try expectSuccess(dry);
+    try std.testing.expect(std.mem.indexOf(u8, dry.stdout, "\"status\":\"would_switch\"") != null);
+    const auth_after = try fixtures.readFileAlloc(gpa, auth_path);
+    defer gpa.free(auth_after);
+    const reg_after = try fixtures.readFileAlloc(gpa, reg_path);
+    defer gpa.free(reg_after);
+    try std.testing.expectEqualStrings(auth_before, auth_after);
+    try std.testing.expectEqualStrings(reg_before, reg_after);
+    for ([_][]const u8{ "switched", "held" }) |expected| {
+        const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, home_root, home, path, &.{ "auto", "--once", "--json", "--cooldown", "0" });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        try expectSuccess(result);
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualStrings(expected, parsed.value.object.get("status").?.string);
+    }
+    var final = try registry.loadRegistry(gpa, home);
+    defer final.deinit(gpa);
+    const alpha = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha);
+    const beta = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta);
+    try std.testing.expectEqualStrings(beta, final.active_account_key.?);
+    try std.testing.expectEqualStrings(alpha, final.previous_active_account_key.?);
+    var info = try @import("codex_auth").auth.core.parseAuthInfo(gpa, auth_path);
+    defer info.deinit(gpa);
+    try std.testing.expectEqualStrings(beta, info.record_key.?);
+    const lock_path = try fs.path.join(gpa, &.{ home, "auto.lock" });
+    defer gpa.free(lock_path);
+    const lock = try std.Io.Dir.cwd().openFile(fs.io(), lock_path, .{ .mode = .read_write });
+    defer lock.close(fs.io());
+    try std.testing.expect(try lock.tryLock(fs.io(), .exclusive));
+    const blocked = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, home_root, home, path, &.{ "auto", "--once", "--json" });
+    defer gpa.free(blocked.stdout);
+    defer gpa.free(blocked.stderr);
+    try std.testing.expect(std.mem.indexOf(u8, blocked.stdout, "auto_running") != null);
+    switch (blocked.term) {
+        .exited => |code| try std.testing.expectEqual(@as(u8, 1), code),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: auto lock setup failure keeps JSON output machine readable" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+    const home = try seedDaemonSwitchFixture(gpa, home_root, false);
+    defer gpa.free(home);
+    try tmp.dir.makePath(".codex/auto.lock");
+    const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, home_root, home, &.{ "auto", "--once", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    try expectFailure(result);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("auto_error", parsed.value.object.get("error").?.object.get("code").?.string);
+}

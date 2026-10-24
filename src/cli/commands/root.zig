@@ -48,6 +48,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
         return .{ .command = .{ .switch_account = .{ .target = .previous } } };
     }
 
+    if (std.mem.eql(u8, cmd, "auto")) return @import("auto.zig").parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "list")) return list.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "login")) return login.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "import")) return import_auth.parse(allocator, args[2..]);
@@ -110,6 +111,7 @@ fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !type
 }
 
 fn helpTopicForName(name: []const u8) ?types.HelpTopic {
+    if (std.mem.eql(u8, name, "auto")) return .auto;
     if (std.mem.eql(u8, name, "list")) return .list;
     if (std.mem.eql(u8, name, "login")) return .login;
     if (std.mem.eql(u8, name, "import")) return .import_auth;

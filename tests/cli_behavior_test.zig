@@ -725,7 +725,7 @@ test "Scenario: Given removed top-level auto command when parsing then usage err
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .top_level, "unknown command `auto`");
+    try expectUsageError(result, .auto, "unknown argument `enable` for `auto`");
 }
 
 test "Scenario: Given removed config api section when parsing then usage error is returned" {

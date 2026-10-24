@@ -417,6 +417,14 @@ fn logUnsupportedRegistryVersion(version_value: u32) void {
 }
 
 pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Registry {
+    return loadRegistryWithRewrite(allocator, codex_home, true);
+}
+
+pub fn loadRegistryReadOnly(allocator: std.mem.Allocator, codex_home: []const u8) !Registry {
+    return loadRegistryWithRewrite(allocator, codex_home, false);
+}
+
+fn loadRegistryWithRewrite(allocator: std.mem.Allocator, codex_home: []const u8, allow_rewrite: bool) !Registry {
     const path = try registryPath(allocator, codex_home);
     defer allocator.free(path);
 
@@ -452,6 +460,7 @@ pub fn loadRegistry(allocator: std.mem.Allocator, codex_home: []const u8) !Regis
     const needs_rewrite = schema_version < current_schema_version or
         usesLegacyVersionField(root_obj) or
         (schema_version == current_schema_version and currentLayoutNeedsRewrite(root_obj));
+    if (needs_rewrite and !allow_rewrite) return error.RegistryMigrationRequired;
     var reg = switch (schema_version) {
         2 => try loadLegacyRegistryV2(allocator, codex_home, root_obj),
         3, 4, 5 => try loadCurrentRegistry(allocator, root_obj, schema_version),
