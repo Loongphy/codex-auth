@@ -5,7 +5,33 @@ This document is the single source of truth for outbound ChatGPT API refresh beh
 All API refresh requests are issued through `curl`.
 `codex-auth` resolves `curl` from `PATH`.
 
-`codex-auth` does not translate platform proxy settings. The curl child process inherits the parent process environment, and curl applies its own proxy environment variable handling.
+## Proxy
+
+`curl` reads proxy settings only from its own environment variables. Because the
+Windows proxy lives in the system (WinINET) settings instead, `codex-auth`
+translates platform proxy settings into explicit curl options.
+
+Resolution order, first match wins:
+
+1. `CODEX_AUTH_PROXY` — an explicit proxy URL for scripts, CI, and support. An
+   empty value, `none`, or `direct` forces a direct connection.
+2. Proxy environment variables that `curl` itself understands
+   (`HTTPS_PROXY`/`https_proxy`, `HTTP_PROXY`/`http_proxy`, `ALL_PROXY`/`all_proxy`,
+   matched per request scheme) — nothing is injected, so `curl` keeps its own
+   handling including `NO_PROXY`.
+3. The Windows system proxy for the current user — injected as the curl `proxy`
+   option, with `noproxy` set from the system bypass list.
+4. Otherwise requests connect directly, which is also the pre-existing behaviour.
+
+Notes:
+
+- `NO_PROXY`/`no_proxy`, when set, is used as the exclusion list instead of the
+  system bypass list.
+- An automatic-configuration (PAC) URL is not evaluated. Set `HTTPS_PROXY` or
+  `CODEX_AUTH_PROXY` when a PAC is required.
+- Unreadable or missing system settings are treated as "no system proxy"; a
+  configuration problem never becomes a request error.
+- The `codex-auth app` managed CLI download uses the same resolution.
 
 ## Endpoints
 
