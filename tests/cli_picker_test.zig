@@ -1871,7 +1871,7 @@ test "live list details keep the responsive column order and complete percentage
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
     var last_index: usize = 0;
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST" }) |token| {
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
         const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;

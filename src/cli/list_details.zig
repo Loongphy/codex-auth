@@ -30,7 +30,7 @@ pub fn computeWidths(
         table_layout.columnSpec(.rate_5h, @max(widths.rate_5h, "5H".len)),
         table_layout.columnSpec(.rate_week, @max(widths.rate_week, "WEEKLY".len)),
         table_layout.columnSpec(.auth_expire, @max("AUTH EXPIRE".len, 16)),
-        table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
+        table_layout.columnSpec(.last, @max(widths.last, "LAST ACTIVITY".len)),
     };
     var bounded = [_]usize{0} ** column_count;
     table_layout.allocateColumns(.{
@@ -116,7 +116,7 @@ fn headerFor(id: table_layout.ColumnId, width: usize) []const u8 {
         .reset_credits => if (width >= "RESET CREDITS".len) "RESET CREDITS" else if (width >= "RESET".len) "RESET" else if (width >= "RC".len) "RC" else "R",
         .rate_5h => "5H",
         .rate_week => "WEEKLY",
-        .last => "LAST",
+        .last => if (width >= "LAST ACTIVITY".len) "LAST ACTIVITY" else "LAST",
         .auth_expire => if (width >= "AUTH EXPIRE".len) "AUTH EXPIRE" else if (width >= "AUTH EXP".len) "AUTH EXP" else if (width >= "AUTH".len) "AUTH" else "AE"[0..@min(width, "AE".len)],
         .plan_expire => if (width >= "PLAN EXPIRE".len) "PLAN EXPIRE" else if (width >= "PLAN EXP".len) "PLAN EXP" else if (width >= "PLAN".len) "PLAN" else "PE"[0..@min(width, "PE".len)],
     };

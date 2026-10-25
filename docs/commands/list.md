@@ -65,7 +65,7 @@ When local-only refresh is active, only the active account can be updated from l
   The terminal column hides past plan-expiry timestamps, but the JSON value remains the
   stored timestamp so callers can detect stale snapshots.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
-- `LAST ACTIVITY` is based on the last stored usage update time.
+- `LAST ACTIVITY` is based on the last stored usage update time. Its header is shown in full when the column is at least 13 columns wide and collapses to `LAST` otherwise; the same rule applies to plain and live output.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.
 - JSON plan values are final product plans; callers do not map backend Team/Business identifiers.
 - JSON usage keeps the displayable snapshot separate from the current invocation's refresh result, so cached values remain visible after refresh failure.

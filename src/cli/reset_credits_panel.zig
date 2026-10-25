@@ -1,6 +1,7 @@
 const std = @import("std");
 const registry = @import("../registry/root.zig");
 const rows = @import("rows.zig");
+const text_width = @import("../tui/text_width.zig");
 
 const available_status = "available";
 
@@ -197,7 +198,7 @@ fn relativeIn(allocator: std.mem.Allocator, target: i64, now: i64) ![]u8 {
 }
 
 fn writeBounded(writer: *std.Io.Writer, text: []const u8, max_cols: usize) !void {
-    if (text.len <= max_cols) {
+    if (text_width.displayWidth(text) <= max_cols) {
         try writer.writeAll(text);
         return;
     }
@@ -205,7 +206,7 @@ fn writeBounded(writer: *std.Io.Writer, text: []const u8, max_cols: usize) !void
         try writer.writeAll("...");
         return;
     }
-    try writer.writeAll(text[0 .. max_cols - 3]);
+    try writer.writeAll(text[0..text_width.prefixByteLength(text, max_cols - 3)]);
     try writer.writeAll("...");
 }
 
@@ -214,4 +215,17 @@ test "parseIsoEpoch handles backend strings" {
     try std.testing.expect(epoch != null);
     try std.testing.expectEqual(@as(i64, 1793491200), epoch.?);
     try std.testing.expect(parseIsoEpoch("nonsense") == null);
+}
+
+test "render bounds multibyte lines by display width" {
+    const gpa = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try render(gpa, &out.writer, &.{}, 7, 1_800_000_000, 0, false, "✓ used", 0);
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line));
+        try std.testing.expect(text_width.displayWidth(line) <= 7);
+    }
 }
