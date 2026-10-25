@@ -1724,6 +1724,54 @@ test "reset credits panel renders the remaining rail and compact rows" {
     try std.testing.expect(std.mem.endsWith(u8, text, "└\n"));
 }
 
+test "reset credits panel hint tracks the armed credit identity" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const Identity = cli.reset_credits_panel.Identity;
+    const card_zero = Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    const card_one = Identity{ .account_key = "acct-a", .credit_id = "card-1" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_zero));
+    try std.testing.expect(sel.isPendingFor(card_zero));
+    // The hint must never appear on a card that a second Enter would not redeem.
+    try std.testing.expect(!sel.isPendingFor(card_one));
+    try std.testing.expect(!sel.isPendingFor(null));
+    try std.testing.expect(!sel.isPendingFor(.{ .account_key = "acct-b", .credit_id = "card-0" }));
+}
+
+test "reset credits panel approval is dropped by a cursor move queued in the same key batch" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    try std.testing.expectEqual(Step.consume, sel.confirm(gpa, card));
+    // A `j` that arrives in the same input batch as the two Enters would move
+    // the rail before the queued redeem runs, cancelling it silently; the live
+    // loop stops consuming the batch once a redeem is queued.
+    sel.moveRow(gpa, .down, 6);
+    try std.testing.expect(!sel.approve(gpa, card));
+}
+
+test "live list follows the credits rail row into the viewport" {
+    // The rail row is above the viewport: scroll up to it.
+    try std.testing.expectEqual(@as(usize, 2), live_tui.followViewportStart(40, 10, 20, 2));
+    // Below the viewport: it becomes the last visible line.
+    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 0, 39));
+    // Already visible: unchanged.
+    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, 25));
+    // Without a rail the plain clamp still applies.
+    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, null));
+    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 99, null));
+    // Everything fits on screen, and a zero-height viewport, stay at the top.
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(5, 10, 3, 4));
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(40, 0, 20, 5));
+}
+
 test "reset credits panel orders cards by parsed expiry and keeps undated cards last" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -1779,9 +1827,9 @@ test "reset credits panel requires a second confirm on the same credit after mov
     defer sel.deinit(gpa);
 
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_zero));
-    try std.testing.expect(sel.isPending());
+    try std.testing.expect(sel.isPendingFor(card_zero));
     sel.moveCard(gpa, .down);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card_zero));
     try std.testing.expectEqual(@as(usize, 1), sel.card_cursor);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_one));
     try std.testing.expectEqual(Step.consume, sel.confirm(gpa, card_one));
@@ -1799,7 +1847,7 @@ test "reset credits panel drops a pending confirm when the account row moves" {
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.moveRow(gpa, .down, 4);
     try std.testing.expectEqual(@as(usize, 1), sel.row_cursor);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expect(!sel.valid);
     try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
     sel.moveRow(gpa, .down, 4);
@@ -1807,7 +1855,7 @@ test "reset credits panel drops a pending confirm when the account row moves" {
     try std.testing.expectEqual(@as(usize, 0), sel.row_cursor);
     try std.testing.expect(!sel.valid);
     sel.updateCards(gpa, 2);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
 }
 
@@ -1821,7 +1869,7 @@ test "reset credits panel cannot confirm a row without a consumable credit" {
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.clearSelection(gpa);
     try std.testing.expect(!sel.valid);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
     try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
     try std.testing.expect(!sel.approve(gpa, card));
@@ -1858,13 +1906,13 @@ test "reset credits panel keeps a confirm armed only while the credit stays high
 
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, first));
     sel.updateCards(gpa, 2);
-    try std.testing.expect(sel.isPending());
+    try std.testing.expect(sel.isPendingFor(first));
     try std.testing.expect(sel.valid);
     sel.moveCard(gpa, .down);
     const second = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-1" };
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, second));
     sel.updateCards(gpa, 1);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(second));
     try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
 }
 
@@ -1879,12 +1927,12 @@ test "reset credits panel close drops the pending confirm and the status line" {
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.close(gpa);
     try std.testing.expect(!sel.expanded);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expectEqualStrings("", sel.status orelse "");
     try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
     sel.toggleExpanded(gpa);
     try std.testing.expect(sel.expanded);
-    try std.testing.expect(!sel.isPending());
+    try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expect(sel.status == null);
 }
 

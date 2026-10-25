@@ -397,6 +397,16 @@ pub fn viewAccountsWithLiveUpdates(
                     consumed_ids.items,
                 );
                 credit_selection.updateCards(allocator, available_cards.len);
+                // Derive the shown identity once and use it for the hint, the
+                // armed check, and the owned copies, so the re-confirm hint can
+                // only ever appear on the credit a second Enter would redeem.
+                const shown_identity: ?reset_credits_panel.Identity = if (available_cards.len > 0)
+                    .{
+                        .account_key = account.account_key,
+                        .credit_id = available_cards[credit_selection.card_cursor].id,
+                    }
+                else
+                    null;
                 credits_panel.clearRetainingCapacity();
                 _ = try reset_credits_panel.render(
                     allocator,
@@ -405,7 +415,7 @@ pub fn viewAccountsWithLiveUpdates(
                     tui.terminalCols(),
                     now_second,
                     credit_selection.card_cursor,
-                    credit_selection.isPending(),
+                    credit_selection.isPendingFor(shown_identity),
                     credit_selection.status,
                     panelIndentForBody(body_text),
                 );
@@ -417,12 +427,15 @@ pub fn viewAccountsWithLiveUpdates(
                 );
                 body_text = spliced_panel.?;
                 if (selected_credit_id) |id| allocator.free(id);
-                selected_credit_id = if (available_cards.len > 0)
-                    try allocator.dupe(u8, available_cards[credit_selection.card_cursor].id)
+                selected_credit_id = if (shown_identity) |identity|
+                    try allocator.dupe(u8, identity.credit_id)
                 else
                     null;
                 if (selected_account_key) |key| allocator.free(key);
-                selected_account_key = try allocator.dupe(u8, account.account_key);
+                selected_account_key = if (shown_identity) |identity|
+                    try allocator.dupe(u8, identity.account_key)
+                else
+                    null;
             } else {
                 credit_selection.clearSelection(allocator);
                 if (selected_credit_id) |id| allocator.free(id);
@@ -433,11 +446,12 @@ pub fn viewAccountsWithLiveUpdates(
             rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
-            const viewport = live_tui.listViewport(
+            const viewport = live_tui.listViewportFollowing(
                 tui.terminalRows(),
                 rendered_row_count,
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
+                if (credit_selection.expanded) credit_selection.row_cursor else null,
             );
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
@@ -468,6 +482,10 @@ pub fn viewAccountsWithLiveUpdates(
                     const wheel_rows = live_tui.mouseWheelRows(max_rows);
 
                     for (key_buf[0..key_count]) |key| {
+                        // A queued redeem is a committed action: stop consuming
+                        // this key batch, otherwise a `j` burst behind `⏎⏎` would
+                        // move the rail cursor and silently cancel the approval.
+                        if (pending_consume) break;
                         if (credit_selection.expanded) {
                             switch (key) {
                                 .move_up, .keyboard_up => {

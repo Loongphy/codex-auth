@@ -67,8 +67,14 @@ pub const Selection = struct {
         self.clearStatus(allocator);
     }
 
-    pub fn isPending(self: *Selection) bool {
-        return self.armed != null;
+    /// True only when `identity` is the exact credit the confirmation is armed
+    /// for. The rail draws its re-confirm hint from this, so the hint and the
+    /// credit a second Enter would redeem can never disagree.
+    pub fn isPendingFor(self: *Selection, identity: ?Identity) bool {
+        const armed = self.armed orelse return false;
+        const current = identity orelse return false;
+        return std.mem.eql(u8, armed.account_key, current.account_key) and
+            std.mem.eql(u8, armed.credit_id, current.credit_id);
     }
 
     pub fn toggleExpanded(self: *Selection, allocator: std.mem.Allocator) void {

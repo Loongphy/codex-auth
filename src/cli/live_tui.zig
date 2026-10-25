@@ -101,8 +101,45 @@ pub fn listViewport(
     fixed_lines: usize,
     viewport_start: *usize,
 ) render.LiveListViewport {
+    return listViewportFollowing(terminal_rows, row_count, fixed_lines, viewport_start, null);
+}
+
+/// Keeps a target body line visible while it is being operated on.
+///
+/// `target_row` and the returned start share `renderListBodyViewport`'s index
+/// basis: lines of the rendered body after its column header, which include any
+/// spliced rail lines. That is deliberately not `rows.items`: the live list body
+/// does not render group header rows at all.
+pub fn followViewportStart(
+    row_count: usize,
+    max_rows: usize,
+    current_start: usize,
+    target_row: ?usize,
+) usize {
+    const start = render.clampLiveViewportStart(row_count, max_rows, current_start);
+    const target = target_row orelse return start;
+    if (max_rows == 0 or row_count == 0) return start;
+    var followed = start;
+    if (target < followed) {
+        followed = target;
+    } else if (target >= followed + max_rows) {
+        followed = target - max_rows + 1;
+    }
+    return render.clampLiveViewportStart(row_count, max_rows, followed);
+}
+
+/// Like `listViewport`, but scrolls the given body line into view first. The
+/// reset credits rail uses this so a redeem can never be confirmed on a row the
+/// user cannot see.
+pub fn listViewportFollowing(
+    terminal_rows: usize,
+    row_count: usize,
+    fixed_lines: usize,
+    viewport_start: *usize,
+    target_row: ?usize,
+) render.LiveListViewport {
     const max_rows = maxTableRows(terminal_rows, fixed_lines);
-    viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, viewport_start.*);
+    viewport_start.* = followViewportStart(row_count, max_rows, viewport_start.*, target_row);
     return .{
         .start_row = viewport_start.*,
         .max_rows = max_rows,
