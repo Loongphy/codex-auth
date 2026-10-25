@@ -410,7 +410,7 @@ test "writeAccountsTable shows plan expiry for future data and hides expired dat
     try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
     try std.testing.expect(std.mem.indexOf(u8, output, expected_auth) != null);
     var last_index: usize = 0;
-    for ([_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXPIRE", "CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "RESET CREDITS", "LAST ACTIVITY" }) |token| {
+    for ([_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXPIRE", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
         const index = std.mem.indexOf(u8, output, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;

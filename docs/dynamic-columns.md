@@ -24,8 +24,8 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
-| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, `LAST ACTIVITY` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, `LAST` |
+| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
+| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
 ## Shared Priority
@@ -45,7 +45,7 @@ Every view uses the same ordered lists. A view with an unsupported column
 ### Grow order
 
 ```text
-5H -> WEEKLY -> PLAN -> RESET CREDITS -> CREDITS -> ACCOUNT
+5H -> WEEKLY -> PLAN -> RESET CREDITS -> CREDITS
 ```
 
 ### Deferred order
@@ -57,6 +57,10 @@ AUTH EXPIRE (10) -> PLAN EXPIRE (10) -> LAST (4)
 Deferred columns are considered only after every normal column has grown. Each
 still needs its target width and separator to fit, so deferred columns never
 become one-column dot cells.
+
+`ACCOUNT` is expanded last, after the deferred pass, using only leftover width.
+A long account label therefore cannot hide `AUTH EXPIRE`, `PLAN EXPIRE`, or
+`LAST ACTIVITY`.
 
 ## Shared Hide Order
 

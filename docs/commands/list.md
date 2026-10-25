@@ -17,7 +17,7 @@ codex-auth list --json
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Non-live output shows `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, and `LAST ACTIVITY`.
+- Non-live output shows `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, and `LAST ACTIVITY`.
   The deferred `LAST ACTIVITY`, `PLAN EXPIRE`, and `AUTH EXPIRE` columns appear only when the terminal is wide enough.
 
 ## Refresh Modes
@@ -52,7 +52,7 @@ When local-only refresh is active, only the active account can be updated from l
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `PLAN EXPIRE` renders the local date from the stored `id_token` subscription claim.
   Missing or past timestamps render as `-` in both plain and live tables.
-- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it.
+- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. A zero count renders as `0`; a non-zero count with no known expiry renders as `N (-)`.
 - JSON output includes the raw `plan_expires_at` timestamp and the returned reset-credit details.
   The terminal column hides past plan-expiry timestamps, but the JSON value remains the
   stored timestamp so callers can detect stale snapshots.

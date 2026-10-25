@@ -1796,10 +1796,10 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var narrow_body: std.Io.Writer.Allocating = .init(gpa);
     defer narrow_body.deinit();
     var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
-    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 120);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 90);
     try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXPIRE") == null);
     var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
-    while (lines.next()) |line| try std.testing.expect(line.len <= 120);
+    while (lines.next()) |line| try std.testing.expect(line.len <= 90);
 
     var wide_body: std.Io.Writer.Allocating = .init(gpa);
     defer wide_body.deinit();
@@ -1808,11 +1808,36 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
     var last_index: usize = 0;
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "5H", "WEEKLY", "AUTH EXPIRE", "RESET CREDITS", "LAST" }) |token| {
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST" }) |token| {
         const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;
     }
     lines = std.mem.splitScalar(u8, body, '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 200);
+}
+
+test "live list renders zero reset credits without an expiry marker" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 0,
+        .reset_credit = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+            \\{"available_count":0,"credits":[]}
+        ),
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
 }

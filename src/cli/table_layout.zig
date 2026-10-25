@@ -159,7 +159,6 @@ pub const shared_grow_order = [_]ColumnId{
     .plan,
     .reset_credits,
     .credits,
-    .account,
 };
 pub const shared_deferred_order = [_]ColumnId{ .auth_expire, .plan_expire, .last };
 
@@ -181,9 +180,9 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     return accountTable(bounded, prefix_width);
 }
 
-pub const plain_columns = [_]ColumnId{ .account, .plan, .plan_expire, .credits, .rate_5h, .rate_week, .auth_expire, .reset_credits, .last };
+pub const plain_columns = [_]ColumnId{ .account, .plan, .plan_expire, .credits, .reset_credits, .rate_5h, .rate_week, .auth_expire, .last };
 
-pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .auth_expire, .reset_credits, .last };
+pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .reset_credits, .rate_5h, .rate_week, .auth_expire, .last };
 
 pub fn defaultTargetWidth(id: ColumnId) usize {
     return switch (id) {
@@ -269,11 +268,20 @@ pub fn allocateColumns(layout: ColumnLayout, max_cols: ?usize, widths: []usize) 
         const target = @min(column.content_width, column.target_width);
         if (target == 0) continue;
         const separator = if (visible_count == 0) 0 else layout.separator_width;
-        if (remaining < target + separator) continue;
+        if (remaining < target + separator) break;
         widths[index] = target;
         remaining -= target + separator;
         visible_count += 1;
         growBoundedWidth(&remaining, &widths[index], column.content_width);
+    }
+
+    // ACCOUNT identity is useful but approximate: give every other column,
+    // including deferred columns, a chance before expanding it. A long account
+    // label therefore cannot squeeze AUTH/PLAN expiry or LAST out of the table.
+    if (columnIndex(layout.columns, .account)) |index| {
+        if (widths[index] != 0) {
+            growBoundedWidth(&remaining, &widths[index], layout.columns[index].content_width);
+        }
     }
 }
 

@@ -26,10 +26,10 @@ pub fn computeWidths(
         table_layout.columnSpec(.account, @max(widths.email, "ACCOUNT".len)),
         table_layout.columnSpec(.plan, @max(widths.plan, "PLAN".len)),
         table_layout.columnSpec(.plan_expire, @max("PLAN EXPIRE".len, 10)),
+        table_layout.columnSpec(.reset_credits, @max("RESET CREDITS".len, 14)),
         table_layout.columnSpec(.rate_5h, @max(widths.rate_5h, "5H".len)),
         table_layout.columnSpec(.rate_week, @max(widths.rate_week, "WEEKLY".len)),
         table_layout.columnSpec(.auth_expire, @max("AUTH EXPIRE".len, 16)),
-        table_layout.columnSpec(.reset_credits, @max("RESET CREDITS".len, 14)),
         table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
     };
     var bounded = [_]usize{0} ** column_count;
@@ -78,10 +78,10 @@ pub fn write(
         row.account,
         row.plan,
         plan_expiry,
+        reset_full,
         row.rate_5h,
         row.rate_week,
         token_expiry,
-        reset_full,
         row.last,
     };
     const row_style = if (row.number.len != 0 and row.number[0] == '!') style.role.error_text else if (row.number.len != 0 and row.number[0] == '*') style.role.success else "";
@@ -163,6 +163,7 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
         }
     }
     const value = count orelse return std.fmt.allocPrint(allocator, "-", .{});
+    if (value == 0) return std.fmt.allocPrint(allocator, "0", .{});
     var earliest: ?i64 = null;
     if (usage.reset_credit) |cards| {
         for (cards) |card| {
