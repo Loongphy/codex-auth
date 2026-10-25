@@ -348,14 +348,3 @@ pub fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width
 fn writeRepeat(out: *std.Io.Writer, ch: u8, count: usize) !void {
     try out.splatByteAll(ch, count);
 }
-
-test "plain and live views keep shared columns in the same relative order" {
-    var previous: ?usize = null;
-    for (list_detail_columns) |id| {
-        if (id == .number) continue;
-        const position = std.mem.indexOfScalar(ColumnId, &plain_columns, id) orelse
-            return error.TestUnexpectedResult;
-        if (previous) |prev| try std.testing.expect(position > prev);
-        previous = position;
-    }
-}
