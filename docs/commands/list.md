@@ -43,9 +43,12 @@ codex-auth list --json
 
 ## Live Reset Credits
 
-- With `--live`, `c` expands or collapses the reset-credit block under the cursor row.
-- The block header reads `Available N · ⏎ select · esc close`.
-- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). `esc` closes the block without redeeming.
+- With `--live`, `c` expands or collapses the reset-credit rail. The rail attaches to the row under the *rail cursor*, not to the highlighted switch target; the footer lists the keys (`Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit`).
+- `j` and `k` move the rail cursor between rendered account rows. Group header rows (several accounts sharing one email) are not rows, so the rail always lands on the account drawn on that line.
+- With the rail closed, `↑`/`↓` scroll the table. With it open they move the credit highlight inside the rail.
+- The rail header reads `Available N · ⏎ select · esc close`.
+- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). The confirmation is bound to the exact account and credit it was armed for: moving the credit highlight (`↑`/`↓`), moving the rail cursor (`j`/`k`), collapsing with `c`, closing the rail, or a refresh that changes which credit is highlighted all drop it, so a redeem only fires while the credit showing `⏎ again to use` is the one being confirmed. A failed redeem also drops it; retrying asks for a fresh `⏎` `⏎` pair and reuses the same idempotency key for that credit.
+- While the rail is open, both `esc` and `q` close the rail instead of quitting the session.
 - A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round.
 - Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
 

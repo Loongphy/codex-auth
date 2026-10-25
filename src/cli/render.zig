@@ -412,6 +412,36 @@ fn writeSwitchRow(
     displayed_counter.* += 1;
 }
 
+/// Single source of truth for which rows the live list body renders. The rail
+/// cursor indexes rendered data rows, so row mapping and rendering must share
+/// this predicate or they drift into two truths again.
+pub fn isRenderedLiveRow(row: SwitchRow, account_count: usize) bool {
+    if (row.is_header) return false;
+    const account_idx = row.account_index orelse return false;
+    return account_idx < account_count;
+}
+
+/// Number of data rows `renderListBody` emits for these rows.
+pub fn liveDataRowCount(rows: []const SwitchRow, account_count: usize) usize {
+    var count: usize = 0;
+    for (rows) |row| {
+        if (isRenderedLiveRow(row, account_count)) count += 1;
+    }
+    return count;
+}
+
+/// Maps a rendered data-row index back to its index in `rows`, skipping the
+/// rows `renderListBody` does not draw (group headers and stale indices).
+pub fn liveRowIndexForDataIndex(rows: []const SwitchRow, account_count: usize, data_index: usize) ?usize {
+    var rendered: usize = 0;
+    for (rows, 0..) |row, row_idx| {
+        if (!isRenderedLiveRow(row, account_count)) continue;
+        if (rendered == data_index) return row_idx;
+        rendered += 1;
+    }
+    return null;
+}
+
 /// Render the compact live account table.
 pub fn renderListBody(
     allocator: std.mem.Allocator,
@@ -429,9 +459,8 @@ pub fn renderListBody(
     try details.writeHeader(writer, column_widths);
     var displayed_counter: usize = 0;
     for (rows) |row| {
-        if (row.is_header) continue;
-        const idx = row.account_index orelse continue;
-        if (idx >= reg.accounts.items.len) continue;
+        if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
+        const idx = row.account_index.?;
         displayed_counter += 1;
         const account = reg.accounts.items[idx];
         var number_buf: [32]u8 = undefined;
