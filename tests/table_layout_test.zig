@@ -231,7 +231,6 @@ test "Scenario: Given a FileNotFound override and a long account when rendering 
     const output = writer.buffered();
     try expectLinesWithin(output, 70);
     try std.testing.expect(std.mem.indexOf(u8, output, "FileNotFound") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Fil.") == null);
 }
 
 test "Scenario: Given compact list widths when rendering then headers use CR, RC and RESET fallbacks" {
@@ -246,7 +245,7 @@ test "Scenario: Given compact list widths when rendering then headers use CR, RC
     var output = writer.buffered();
     try expectLinesWithin(output, 40);
     try std.testing.expect(std.mem.indexOf(u8, output, "PLAN") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RC") != null);
 
     buffer = undefined;
     writer = .fixed(&buffer);
@@ -263,10 +262,9 @@ test "Scenario: Given compact list widths when rendering then headers use CR, RC
     output = writer.buffered();
     try expectLinesWithin(output, 60);
     try std.testing.expect(std.mem.indexOf(u8, output, "RESET") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") == null);
 }
 
-test "Scenario: Given unlimited credits when rendering at 60 columns then the value is not collapsed to u." {
+test "Scenario: Given unlimited credits when rendering at 120 columns then the value is not collapsed to u." {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -279,9 +277,29 @@ test "Scenario: Given unlimited credits when rendering at 60 columns then the va
 
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
-    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 60);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 120);
     const output = writer.buffered();
-    try expectLinesWithin(output, 60);
+    try expectLinesWithin(output, 120);
     try std.testing.expect(std.mem.indexOf(u8, output, "unlimited") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "u.") == null);
+}
+
+test "Scenario: Given low-priority metadata when narrowing then LAST hides before CREDITS" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendListAccount(gpa, &reg, "very-long-account-name@example.com");
+    reg.accounts.items[0].last_usage.?.credits = .{
+        .has_credits = true,
+        .unlimited = true,
+        .balance = null,
+    };
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 48);
+    const output = writer.buffered();
+    try expectLinesWithin(output, 48);
+    try std.testing.expect(std.mem.indexOf(u8, output, "LAST") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
 }

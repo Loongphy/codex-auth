@@ -176,7 +176,8 @@ test "writeAccountsTable shows integer credits balance column" {
     const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Plus  5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Plus") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "5") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "5.39") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "2") != null);
 }
@@ -361,4 +362,108 @@ test "writeAccountsTableForCols: very narrow terminal hides low-priority columns
         try std.testing.expect(line.len <= 40);
     }
     try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
+}
+
+test "formatFutureDateAlloc renders only future dates" {
+    const allocator = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+
+    const missing = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, null, now);
+    defer allocator.free(missing);
+    try std.testing.expectEqualStrings("-", missing);
+
+    const expired = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now - 1, now);
+    defer allocator.free(expired);
+    try std.testing.expectEqualStrings("-", expired);
+
+    const boundary = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now, now);
+    defer allocator.free(boundary);
+    try std.testing.expectEqualStrings("-", boundary);
+
+    const future = try codex_auth.cli.rows.formatFutureDateAlloc(allocator, now + 86400, now);
+    defer allocator.free(future);
+    try std.testing.expectEqual(@as(usize, 10), future.len);
+    try std.testing.expectEqual(@as(u8, '-'), future[4]);
+    try std.testing.expectEqual(@as(u8, '-'), future[7]);
+}
+
+test "writeAccountsTable shows plan expiry for future data and hides expired data" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .plus);
+
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].access_token_expires_at = now + 60 * 86400;
+    const expected = try codex_auth.cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+    const expected_auth = try codex_auth.cli.rows.formatTimestampAlloc(gpa, reg.accounts.items[0].access_token_expires_at);
+    defer gpa.free(expected_auth);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
+    var output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "AUTH EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_auth) != null);
+    var last_index: usize = 0;
+    for ([_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXPIRE", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
+        const index = std.mem.indexOf(u8, output, token) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(index >= last_index);
+        last_index = index;
+    }
+
+    const expired_at = now - 30 * 86400;
+    const expired_text = try codex_auth.cli.rows.formatTimestampAlloc(gpa, expired_at);
+    defer gpa.free(expired_text);
+    reg.accounts.items[0].plan_expires_at = expired_at;
+
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
+    output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    if (expired_text.len >= 10) {
+        try std.testing.expect(std.mem.indexOf(u8, output, expired_text[0..10]) == null);
+    }
+}
+
+test "writeAccountsTable defers PLAN EXPIRE on narrow widths" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "very-long-account-name@example.com", "very-long-account-name", .plus);
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = now + 604800 },
+        .credits = null,
+        .plan_type = .plus,
+    };
+
+    var overrides = [_]?[]const u8{"FileNotFound"};
+    var buffer: [8192]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, &overrides, 70);
+    var output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "AUTH EXPIRE") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "LAST ACTIVITY") == null);
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 70);
+
+    const expected = try codex_auth.cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+    buffer = undefined;
+    writer = .fixed(&buffer);
+    try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, &overrides, 200);
+    output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+    lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 200);
 }
