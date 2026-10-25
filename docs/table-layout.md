@@ -1,79 +1,8 @@
 # Table Layout
 
-Every table view uses one responsive allocator. Each view supplies its own
-visual column order and the fields it supports; unsupported fields are hidden by
-passing a zero content width.
-
-| View | Visible columns |
-|---|---|
-| `list` | `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST`, `AUTH EXPIRE`, `RESET CREDITS` |
-| `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
-
-Visual order never changes when columns are hidden. Width and separator budget
-from a hidden column are redistributed to the remaining columns.
-
-## Allocation
-
-The allocator receives each column's content width and the terminal width.
-Columns reserve width in priority order; a column is skipped when its target
-width and separator do not fit. `ACCOUNT` may use a partial width down to 2
-columns. Columns with width `0` are skipped entirely, including their headers,
-cells, and separators.
-
-### Plain `list`
-
-Reserve order:
-
-```text
-ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> CREDITS (2)
-            -> PLAN (4) -> RESET CREDITS (2) -> LAST (4)
-```
-
-Grow order:
-
-```text
-CREDITS -> 5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> ACCOUNT
-```
-
-### `list --live`
-
-Reserve order:
-
-```text
-#* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6)
-   -> PLAN (4) -> LAST (4) -> AUTH EXPIRE (10) -> RESET CREDITS (2)
-```
-
-Grow order:
-
-```text
-AUTH EXPIRE -> RESET CREDITS -> PLAN -> LAST -> 5H -> WEEKLY -> ACCOUNT
-```
-
-### `switch`, `remove`
-
-Reserve order:
-
-```text
-ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4) -> LAST (4)
-```
-
-Grow order:
-
-```text
-5H -> WEEKLY -> PLAN -> LAST -> ACCOUNT
-```
-
-## Headers
-
-Wide headers use their full label. Narrow columns use compact labels:
-
-| Column | Compact labels |
-|---|---|
-| `CREDITS` | `CR` |
-| `RESET CREDITS` | `RESET`, then `RC` |
-| `AUTH EXPIRE` | `AUTH EXP`, then `AUTH` |
+The responsive column policy is documented in
+[dynamic-columns.md](dynamic-columns.md). This page covers the account cell and
+a few rendered examples.
 
 ## Account Truncation
 
@@ -103,13 +32,22 @@ label is truncated.
 
 ## Examples
 
-Plain `list`:
+Plain `list` at a wide width:
 
 ```text
-ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST
---------------------------------------------------------
-very-long.  Pro   -          -   100%      58%     -
-work-main.  Pro   unlimited  3   31%       42%     -
+ACCOUNT             PLAN      PLAN EXPIRE  CREDITS    RESET CREDITS  5H       WEEKLY  AUTH EXPIRE       LAST ACTIVITY
+---------------------------------------------------------------------------------------------------------------------------
+very-long-account.  Pro       2026-11-22   unlimited  3              100%     58%     2027-01-15 08:00  Now
+work-main.          Business  -            12         0              31%      42%     2026-12-31 23:59  3d ago
+```
+
+Plain `list` at 70 columns hides the deferred `LAST ACTIVITY`, `PLAN EXPIRE`,
+and `AUTH EXPIRE` columns so status and usage values stay readable:
+
+```text
+ACCOUNT     PLAN  CR  RC  5H          WEEKLY
+--------------------------------------------
+very-long.  Pro   -   -   100%        58%
 ```
 
 `list --live` at a medium width:

@@ -1,6 +1,7 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const registry = @import("../registry/root.zig");
+const timestamp = @import("../time/timestamp.zig");
 
 pub const AuthInfo = struct {
     email: ?[]u8,
@@ -11,6 +12,7 @@ pub const AuthInfo = struct {
     openai_api_key: ?[]u8 = null,
     last_refresh: ?[]u8,
     access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
     plan: ?registry.PlanType,
     auth_mode: registry.AuthMode,
 
@@ -92,6 +94,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                             .openai_api_key = try allocator.dupe(u8, trimmed),
                             .last_refresh = null,
                             .access_token_expires_at = null,
+                            .plan_expires_at = null,
                             .plan = null,
                             .auth_mode = .apikey,
                         };
@@ -146,6 +149,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                             }
 
                                             var plan: ?registry.PlanType = null;
+                                            var plan_expires_at: ?i64 = null;
                                             if (cobj.get("https://api.openai.com/auth")) |auth_obj| {
                                                 switch (auth_obj) {
                                                     .object => |aobj| {
@@ -167,6 +171,9 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                                 .string => |s| plan = parsePlanType(s),
                                                                 else => {},
                                                             }
+                                                        }
+                                                        if (aobj.get("chatgpt_subscription_active_until")) |until| {
+                                                            plan_expires_at = parseClaimTimestamp(until);
                                                         }
                                                         if (aobj.get("chatgpt_user_id")) |uid| {
                                                             switch (uid) {
@@ -209,6 +216,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
                                                 .openai_api_key = null,
                                                 .last_refresh = last_refresh,
                                                 .access_token_expires_at = access_token_expires_at,
+                                                .plan_expires_at = plan_expires_at,
                                                 .plan = plan,
                                                 .auth_mode = .chatgpt,
                                             };
@@ -246,6 +254,7 @@ pub fn parseAuthInfoData(allocator: std.mem.Allocator, data: []const u8) !AuthIn
         .openai_api_key = null,
         .last_refresh = null,
         .access_token_expires_at = null,
+        .plan_expires_at = null,
         .plan = null,
         .auth_mode = .chatgpt,
     };
@@ -357,6 +366,22 @@ fn base64UrlNoPadDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
 fn parsePlanType(s: []const u8) registry.PlanType {
     return registry.normalizePlanType(s);
+}
+
+fn parseClaimTimestamp(value: std.json.Value) ?i64 {
+    return switch (value) {
+        .string, .number_string => |text| parseClaimTimestampText(text),
+        .integer => |number| timestamp.epochSeconds(number),
+        else => null,
+    };
+}
+
+fn parseClaimTimestampText(text: []const u8) ?i64 {
+    const trimmed = std.mem.trim(u8, text, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (timestamp.parseIso8601(trimmed)) |seconds| return seconds;
+    const numeric = std.fmt.parseInt(i64, trimmed, 10) catch return null;
+    return timestamp.epochSeconds(numeric);
 }
 
 fn organizationAccountIdAlloc(allocator: std.mem.Allocator, auth_obj: std.json.ObjectMap) !?[]u8 {

@@ -168,6 +168,8 @@ fn writeAccount(jw: *std.json.Stringify, account: *const results.AccountView) !v
     try writeOptionalText(jw, authModeName(account.auth_mode));
     try jw.objectField("access_token_expires_at");
     try jw.write(account.access_token_expires_at);
+    try jw.objectField("plan_expires_at");
+    try jw.write(account.plan_expires_at);
     try jw.objectField("active");
     try jw.write(account.active);
     try jw.objectField("created_at");

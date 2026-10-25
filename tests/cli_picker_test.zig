@@ -1749,6 +1749,33 @@ test "live list renders a dash when available reset credits have no expiry" {
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (-)") != null);
 }
 
+test "live list shows plan expiry only when it is still in the future" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    const expected = try cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
+    defer gpa.free(expected);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+
+    reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
+}
+
 test "live list keeps the active marker visible for double-digit accounts" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
@@ -1796,13 +1823,14 @@ test "live list distinguishes unavailable reset details from an empty server lis
 
 test "live list details keep the responsive column order and complete percentages" {
     const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
-    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "", .pro);
-    reg.accounts.items[0].access_token_expires_at = 4102444800;
+    try appendTestAccount(gpa, &reg, "user::account", "very-long-account-name@example.com", "very-long-account-name", .pro);
+    reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
     reg.accounts.items[0].last_usage = .{
-        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = 4102444800 },
-        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = 4103049600 },
+        .primary = .{ .used_percent = 0, .window_minutes = 300, .resets_at = now + 3600 },
+        .secondary = .{ .used_percent = 42, .window_minutes = 10080, .resets_at = now + 604800 },
         .credits = null,
         .plan_type = .pro,
         .reset_credits = 3,
@@ -1826,13 +1854,53 @@ test "live list details keep the responsive column order and complete percentage
         if (std.mem.indexOf(u8, header, "5H") != null) {
             try std.testing.expect(std.mem.indexOf(u8, body.written(), "100%") != null);
         }
-        if (width == 140) {
-            var last_index: usize = 0;
-            for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "5H", "WEEKLY", "LAST", "AUTH EXPIRE", "RESET CREDITS" }) |token| {
-                const index = std.mem.indexOf(u8, header, token) orelse return error.TestUnexpectedResult;
-                try std.testing.expect(index >= last_index);
-                last_index = index;
-            }
-        }
     }
+
+    var narrow_body: std.Io.Writer.Allocating = .init(gpa);
+    defer narrow_body.deinit();
+    var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 90);
+    try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXPIRE") == null);
+    var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 90);
+
+    var wide_body: std.Io.Writer.Allocating = .init(gpa);
+    defer wide_body.deinit();
+    var wide_writer = StyledWriter.init(&wide_body.writer, false);
+    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200);
+    const body = wide_body.written();
+    try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
+    var last_index: usize = 0;
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST" }) |token| {
+        const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(index >= last_index);
+        last_index = index;
+    }
+    lines = std.mem.splitScalar(u8, body, '\n');
+    while (lines.next()) |line| try std.testing.expect(line.len <= 200);
+}
+
+test "live list renders zero reset credits without an expiry marker" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 0,
+        .reset_credit = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+            \\{"available_count":0,"credits":[]}
+        ),
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
 }

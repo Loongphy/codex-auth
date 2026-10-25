@@ -47,6 +47,7 @@ shortcut and is rejected when combined with `--json`.
   "plan": "business",
   "auth_mode": "chatgpt",
   "access_token_expires_at": null,
+  "plan_expires_at": null,
   "active": true,
   "created_at": 1730000000,
   "last_used_at": 1730001000,
@@ -83,9 +84,13 @@ their `id`, `status`, `expires_at`, and `title`. The backend may cap the
 returned list, so treat it as non-exhaustive. All expiry timestamps in the
 terminal views render in local time.
 
-The API currently does not expose a verifiable subscription-plan expiration
-timestamp, so the JSON contract intentionally does not label token expiry as
-plan expiry.
+`plan_expires_at` is the subscription-period end parsed from the stored
+`id_token` claim `https://api.openai.com/auth.chatgpt_subscription_active_until`
+and normalized to Unix seconds. It is `null` when the claim is absent, for
+example for API-key or free-plan accounts. The value is a snapshot: it changes
+only when the stored auth token is refreshed. The `PLAN EXPIRE` terminal column
+hides timestamps that are not in the future and renders `-`; JSON keeps the raw
+timestamp so callers can detect stale data.
 
 `account_key` is stable and should be used for switch/remove calls. `number` is
 an ephemeral display selector valid only for the ordering returned by the
@@ -93,7 +98,8 @@ current invocation. Empty aliases and account names are `null`.
 
 `access_token_expires_at` is the Unix timestamp when the stored access token expires.
 It describes credential lifetime only; it is not a subscription or account
-entitlement expiration timestamp.
+entitlement expiration timestamp. Use `plan_expires_at` for the subscription
+period end.
 
 `plan` is already normalized by the CLI. Important mappings are:
 

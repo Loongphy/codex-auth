@@ -288,6 +288,7 @@ test "registry save/load" {
     defer gpa.free(active_account_key);
     try registry.setActiveAccountKey(gpa, &reg, active_account_key);
     reg.api.usage = true;
+    reg.accounts.items[0].plan_expires_at = 1_785_326_940;
     try registry.setAccountLastLocalRollout(gpa, &reg.accounts.items[0], "/tmp/sessions/run-1/rollout-a.jsonl", 1735689600000);
 
     try registry.saveRegistry(gpa, codex_home, &reg);
@@ -298,6 +299,7 @@ test "registry save/load" {
     defer gpa.free(saved);
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"api\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, saved, "\"previous_active_account_key\": null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, saved, "\"plan_expires_at\": 1785326940") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -310,6 +312,7 @@ test "registry save/load" {
     try std.testing.expectEqual(@as(i64, 1735689600000), loaded.accounts.items[0].last_local_rollout.?.event_timestamp_ms);
     try std.testing.expect(std.mem.eql(u8, loaded.accounts.items[0].last_local_rollout.?.path, "/tmp/sessions/run-1/rollout-a.jsonl"));
     try std.testing.expect(loaded.accounts.items[0].account_name == null);
+    try std.testing.expectEqual(@as(?i64, 1_785_326_940), loaded.accounts.items[0].plan_expires_at);
 }
 
 test "registry save/load round-trips previous active account key" {

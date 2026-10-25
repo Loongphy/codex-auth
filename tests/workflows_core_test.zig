@@ -4,6 +4,7 @@ const app_runtime = @import("codex_auth").core.runtime;
 const fs = @import("codex_auth").core.compat_fs;
 const account_api = @import("codex_auth").api.account;
 const auth_mod = @import("codex_auth").auth.core;
+const cli = @import("codex_auth").cli;
 const display_rows = @import("codex_auth").tui.display;
 const app_workflow = @import("codex_auth").app_workflow;
 const main_mod = @import("codex_auth").workflows;
@@ -1544,4 +1545,35 @@ test "Scenario: Given no remaining accounts when reconciling after remove then a
     const active_auth_path = try registry.activeAuthPath(gpa, codex_home);
     defer gpa.free(active_auth_path);
     try std.testing.expectError(error.FileNotFound, fs.cwd().openFile(active_auth_path, .{}));
+}
+
+test "list JSON includes the stored plan expiry timestamp" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .pro);
+    reg.accounts.items[0].plan_expires_at = 1_785_326_940;
+
+    const overrides = try gpa.alloc(?[]const u8, 1);
+    const outcomes = try gpa.alloc(main_mod.ForegroundUsageOutcome, 1);
+    overrides[0] = null;
+    outcomes[0] = .{};
+    var state = main_mod.ForegroundUsageRefreshState{
+        .usage_overrides = overrides,
+        .outcomes = outcomes,
+    };
+    defer state.deinit(gpa);
+
+    var result = try main_mod.results.buildListResult(gpa, &reg, &state);
+    defer result.deinit(gpa);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try cli.json_output.writeListResult(&writer, &result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, writer.buffered(), .{});
+    defer parsed.deinit();
+    const accounts = parsed.value.object.get("accounts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), accounts.len);
+    try std.testing.expectEqual(@as(i64, 1_785_326_940), accounts[0].object.get("plan_expires_at").?.integer);
 }

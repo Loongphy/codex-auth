@@ -108,6 +108,7 @@ pub const AccountRecord = struct {
     plan: ?PlanType,
     auth_mode: ?AuthMode,
     access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
     created_at: i64,
     last_used_at: ?i64,
     last_usage: ?RateLimitSnapshot,

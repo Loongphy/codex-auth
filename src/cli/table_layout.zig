@@ -41,6 +41,7 @@ pub const ColumnId = enum {
     rate_week,
     last,
     auth_expire,
+    plan_expire,
 };
 
 pub const ColumnSpec = struct {
@@ -55,6 +56,7 @@ pub const ColumnLayout = struct {
     columns: []const ColumnSpec,
     first_order: []const ColumnId,
     grow_order: []const ColumnId,
+    deferred_order: []const ColumnId,
     prefix_width: usize,
     separator_width: usize,
 };
@@ -138,8 +140,27 @@ pub fn accountTable(widths: [live_column_count]usize, prefix_width: usize) LiveT
 }
 
 pub const switch_columns = [_]ColumnId{ .account, .plan, .rate_5h, .rate_week, .last };
-pub const switch_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .plan, .last };
-pub const switch_grow_order = [_]ColumnId{ .rate_5h, .rate_week, .plan, .last, .account };
+
+/// Shared priority for every view. A view simply skips columns it does not
+/// support (content width 0). Keep this single list as the source of truth so
+/// `list` and `list --live` cannot drift apart.
+pub const shared_first_order = [_]ColumnId{
+    .number,
+    .account,
+    .rate_5h,
+    .rate_week,
+    .plan,
+    .reset_credits,
+    .credits,
+};
+pub const shared_grow_order = [_]ColumnId{
+    .rate_5h,
+    .rate_week,
+    .plan,
+    .reset_credits,
+    .credits,
+};
+pub const shared_deferred_order = [_]ColumnId{ .auth_expire, .plan_expire, .last };
 
 pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) LiveTable {
     const source_widths = [_]usize{ widths.email, widths.plan, widths.rate_5h, widths.rate_week, widths.last };
@@ -150,21 +171,18 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     var bounded = [_]usize{0} ** live_column_count;
     allocateColumns(.{
         .columns = &columns,
-        .first_order = &switch_first_order,
-        .grow_order = &switch_grow_order,
+        .first_order = &shared_first_order,
+        .grow_order = &shared_grow_order,
+        .deferred_order = &shared_deferred_order,
         .prefix_width = prefix_width,
         .separator_width = 2,
     }, max_cols, &bounded);
     return accountTable(bounded, prefix_width);
 }
 
-pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last };
-pub const plain_first_order = [_]ColumnId{ .account, .rate_5h, .rate_week, .credits, .plan, .reset_credits, .last };
-pub const plain_grow_order = [_]ColumnId{ .credits, .rate_5h, .rate_week, .plan, .reset_credits, .last, .account };
+pub const plain_columns = [_]ColumnId{ .account, .plan, .plan_expire, .credits, .reset_credits, .rate_5h, .rate_week, .auth_expire, .last };
 
-pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .rate_5h, .rate_week, .last, .auth_expire, .reset_credits };
-pub const list_detail_first_order = [_]ColumnId{ .number, .account, .rate_5h, .rate_week, .plan, .last, .auth_expire, .reset_credits };
-pub const list_detail_grow_order = [_]ColumnId{ .auth_expire, .reset_credits, .plan, .last, .rate_5h, .rate_week, .account };
+pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .reset_credits, .rate_5h, .rate_week, .auth_expire, .last };
 
 pub fn defaultTargetWidth(id: ColumnId) usize {
     return switch (id) {
@@ -177,6 +195,7 @@ pub fn defaultTargetWidth(id: ColumnId) usize {
         .rate_week => "WEEKLY".len,
         .last => 4,
         .auth_expire => 10,
+        .plan_expire => 10,
     };
 }
 
@@ -236,6 +255,33 @@ pub fn allocateColumns(layout: ColumnLayout, max_cols: ?usize, widths: []usize) 
         const index = columnIndex(layout.columns, id) orelse continue;
         if (widths[index] == 0) continue;
         growBoundedWidth(&remaining, &widths[index], layout.columns[index].content_width);
+    }
+
+    // Deferred columns are admitted only after all normal columns have grown.
+    // They still require their target width, so they never become dot-only
+    // cells; if the target does not fit, the column stays hidden.
+    for (layout.deferred_order) |id| {
+        const index = columnIndex(layout.columns, id) orelse continue;
+        if (widths[index] != 0) continue;
+        const column = layout.columns[index];
+        if (column.content_width == 0) continue;
+        const target = @min(column.content_width, column.target_width);
+        if (target == 0) continue;
+        const separator = if (visible_count == 0) 0 else layout.separator_width;
+        if (remaining < target + separator) break;
+        widths[index] = target;
+        remaining -= target + separator;
+        visible_count += 1;
+        growBoundedWidth(&remaining, &widths[index], column.content_width);
+    }
+
+    // ACCOUNT identity is useful but approximate: give every other column,
+    // including deferred columns, a chance before expanding it. A long account
+    // label therefore cannot squeeze AUTH/PLAN expiry or LAST out of the table.
+    if (columnIndex(layout.columns, .account)) |index| {
+        if (widths[index] != 0) {
+            growBoundedWidth(&remaining, &widths[index], layout.columns[index].content_width);
+        }
     }
 }
 

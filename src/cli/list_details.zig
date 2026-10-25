@@ -4,6 +4,8 @@ const rows = @import("rows.zig");
 const style = @import("style.zig");
 const table_layout = @import("table_layout.zig");
 const text_width = @import("../tui/text_width.zig");
+const timestamp = @import("../time/timestamp.zig");
+const app_runtime = @import("../core/runtime.zig");
 
 const available_status = "available";
 const separator_width: usize = 3;
@@ -23,17 +25,19 @@ pub fn computeWidths(
         },
         table_layout.columnSpec(.account, @max(widths.email, "ACCOUNT".len)),
         table_layout.columnSpec(.plan, @max(widths.plan, "PLAN".len)),
+        table_layout.columnSpec(.plan_expire, @max("PLAN EXPIRE".len, 10)),
+        table_layout.columnSpec(.reset_credits, @max("RESET CREDITS".len, 14)),
         table_layout.columnSpec(.rate_5h, @max(widths.rate_5h, "5H".len)),
         table_layout.columnSpec(.rate_week, @max(widths.rate_week, "WEEKLY".len)),
-        table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
         table_layout.columnSpec(.auth_expire, @max("AUTH EXPIRE".len, 16)),
-        table_layout.columnSpec(.reset_credits, @max("RESET CREDITS".len, 14)),
+        table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
     };
     var bounded = [_]usize{0} ** column_count;
     table_layout.allocateColumns(.{
         .columns = &columns,
-        .first_order = &table_layout.list_detail_first_order,
-        .grow_order = &table_layout.list_detail_grow_order,
+        .first_order = &table_layout.shared_first_order,
+        .grow_order = &table_layout.shared_grow_order,
+        .deferred_order = &table_layout.shared_deferred_order,
         .prefix_width = 0,
         .separator_width = separator_width,
     }, max_cols, &bounded);
@@ -60,8 +64,11 @@ pub fn write(
     row: anytype,
     widths: [column_count]usize,
 ) !void {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const token_expiry = try rows.formatTimestampAlloc(allocator, account.access_token_expires_at);
     defer allocator.free(token_expiry);
+    const plan_expiry = try rows.formatFutureDateAlloc(allocator, account.plan_expires_at, now);
+    defer allocator.free(plan_expiry);
     const reset_full = try resetCreditsCell(allocator, account);
     defer allocator.free(reset_full);
     const reset_short = shortResetCell(reset_full);
@@ -70,11 +77,12 @@ pub fn write(
         row.number,
         row.account,
         row.plan,
+        plan_expiry,
+        reset_full,
         row.rate_5h,
         row.rate_week,
-        row.last,
         token_expiry,
-        reset_full,
+        row.last,
     };
     const row_style = if (row.number.len != 0 and row.number[0] == '!') style.role.error_text else if (row.number.len != 0 and row.number[0] == '*') style.role.success else "";
     try writer.writeStyle(row_style);
@@ -110,6 +118,7 @@ fn headerFor(id: table_layout.ColumnId, width: usize) []const u8 {
         .rate_week => "WEEKLY",
         .last => "LAST",
         .auth_expire => if (width >= "AUTH EXPIRE".len) "AUTH EXPIRE" else if (width >= "AUTH EXP".len) "AUTH EXP" else if (width >= "AUTH".len) "AUTH" else "AE"[0..@min(width, "AE".len)],
+        .plan_expire => if (width >= "PLAN EXPIRE".len) "PLAN EXPIRE" else if (width >= "PLAN EXP".len) "PLAN EXP" else if (width >= "PLAN".len) "PLAN" else "PE"[0..@min(width, "PE".len)],
     };
 }
 
@@ -154,11 +163,12 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
         }
     }
     const value = count orelse return std.fmt.allocPrint(allocator, "-", .{});
+    if (value == 0) return std.fmt.allocPrint(allocator, "0", .{});
     var earliest: ?i64 = null;
     if (usage.reset_credit) |cards| {
         for (cards) |card| {
             if (!std.mem.eql(u8, card.status, "available")) continue;
-            if (parseIsoEpoch(card.expires_at orelse "")) |epoch| {
+            if (timestamp.parseIso8601(card.expires_at orelse "")) |epoch| {
                 if (earliest == null or epoch < earliest.?) earliest = epoch;
             }
         }
@@ -169,44 +179,4 @@ fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecor
         if (local.len >= 10) return std.fmt.allocPrint(allocator, "{d} (exp {s})", .{ value, local[5..10] });
     }
     return std.fmt.allocPrint(allocator, "{d} (-)", .{value});
-}
-
-/// Minimal ISO-8601 parser for the backend shape `YYYY-MM-DDTHH:MM:SS` with an
-/// optional trailing zone (`Z` or `±HH:MM`). Returns epoch seconds, or null.
-fn parseIsoEpoch(value: []const u8) ?i64 {
-    if (value.len < 19 or value[4] != '-' or value[7] != '-' or value[10] != 'T' or
-        value[13] != ':' or value[16] != ':') return null;
-    const year = std.fmt.parseInt(i64, value[0..4], 10) catch return null;
-    const month = std.fmt.parseInt(i64, value[5..7], 10) catch return null;
-    const day = std.fmt.parseInt(i64, value[8..10], 10) catch return null;
-    const hour = std.fmt.parseInt(i64, value[11..13], 10) catch return null;
-    const minute = std.fmt.parseInt(i64, value[14..16], 10) catch return null;
-    const second = std.fmt.parseInt(i64, value[17..19], 10) catch return null;
-    if (month < 1 or month > 12 or day < 1 or day > 31) return null;
-
-    var epoch = daysFromCivil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second;
-    if (value.len > 19) {
-        const zone_marker = value[19];
-        if (zone_marker == '+' or zone_marker == '-') {
-            if (value.len >= 25 and value[22] == ':') {
-                const zone_hour = std.fmt.parseInt(i64, value[20..22], 10) catch 0;
-                const zone_minute = std.fmt.parseInt(i64, value[23..25], 10) catch 0;
-                const offset = zone_hour * 3600 + zone_minute * 60;
-                epoch += if (zone_marker == '+') -offset else offset;
-            }
-        }
-    }
-    return epoch;
-}
-
-/// Howard Hinnant's days_from_civil algorithm.
-fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
-    var y = year;
-    if (month <= 2) y -= 1;
-    const era = @divFloor(y, 400);
-    const yoe = y - era * 400;
-    const mp = @mod(month + 9, 12);
-    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
-    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
-    return era * 146097 + doe - 719468;
 }

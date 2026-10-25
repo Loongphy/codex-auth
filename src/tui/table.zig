@@ -3,6 +3,7 @@ const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const display_rows = @import("display.zig");
 const table_layout = @import("../cli/table_layout.zig");
+const cli_rows = @import("../cli/rows.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
 const rate_limit = @import("rate_limit.zig");
@@ -136,8 +137,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     usage_overrides: ?[]const ?[]const u8,
     term_cols: ?usize,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY" };
-    const compact_headers = [_][]const u8{ "ACCOUNT", "PLAN", "CR", "RESET", "5H", "WEEKLY", "LAST" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXPIRE", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" };
+    const compact_headers = [_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXP", "CR", "RESET", "5H", "WEEKLY", "AUTH EXP", "LAST" };
     var content_widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -146,6 +147,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
         headers[4].len,
         headers[5].len,
         headers[6].len,
+        headers[7].len,
+        headers[8].len,
     };
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
@@ -173,13 +176,19 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             defer std.heap.page_allocator.free(rate_week_str);
             const last_str = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last_str);
+            const plan_expiry_str = try cli_rows.formatFutureDateAlloc(std.heap.page_allocator, rec.plan_expires_at, now);
+            defer std.heap.page_allocator.free(plan_expiry_str);
+            const auth_expiry_str = try cli_rows.formatTimestampAlloc(std.heap.page_allocator, rec.access_token_expires_at);
+            defer std.heap.page_allocator.free(auth_expiry_str);
 
             content_widths[1] = @max(content_widths[1], plan.len);
-            content_widths[2] = @max(content_widths[2], credits_str.len);
-            content_widths[3] = @max(content_widths[3], reset_credits_str.len);
-            content_widths[4] = @max(content_widths[4], rate_5h_str.len);
-            content_widths[5] = @max(content_widths[5], rate_week_str.len);
-            content_widths[6] = @max(content_widths[6], last_str.len);
+            content_widths[2] = @max(content_widths[2], plan_expiry_str.len);
+            content_widths[3] = @max(content_widths[3], credits_str.len);
+            content_widths[4] = @max(content_widths[4], reset_credits_str.len);
+            content_widths[5] = @max(content_widths[5], rate_5h_str.len);
+            content_widths[6] = @max(content_widths[6], rate_week_str.len);
+            content_widths[7] = @max(content_widths[7], auth_expiry_str.len);
+            content_widths[8] = @max(content_widths[8], last_str.len);
         }
     }
 
@@ -187,23 +196,24 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     for (table_layout.plain_columns, 0..) |id, index| {
         columns[index] = table_layout.columnSpec(id, content_widths[index]);
     }
-    var widths = [_]usize{0} ** 7;
+    var widths = [_]usize{0} ** table_layout.plain_columns.len;
     table_layout.allocateColumns(.{
         .columns = &columns,
-        .first_order = &table_layout.plain_first_order,
-        .grow_order = &table_layout.plain_grow_order,
+        .first_order = &table_layout.shared_first_order,
+        .grow_order = &table_layout.shared_grow_order,
+        .deferred_order = &table_layout.shared_deferred_order,
         .prefix_width = prefix_len,
         .separator_width = sep_len,
     }, term_cols, &widths);
-    var visible: [7]bool = undefined;
-    var header_cells: [7][]const u8 = undefined;
+    var visible: [table_layout.plain_columns.len]bool = undefined;
+    var header_cells: [table_layout.plain_columns.len][]const u8 = undefined;
     for (widths, 0..) |width, index| {
         visible[index] = width > 0;
         const full = headers[index];
         const fallback = compact_headers[index];
         header_cells[index] = if (width >= full.len)
             full
-        else if (index == 3 and width < "RESET".len)
+        else if (index == 4 and width < "RESET".len)
             if (width >= "RC".len) "RC" else "R"
         else if (width >= fallback.len)
             fallback
@@ -248,27 +258,35 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             defer std.heap.page_allocator.free(credits_str);
             const reset_credits_str = try resetCreditsCellAlloc(std.heap.page_allocator, rec.last_usage, usage_override);
             defer std.heap.page_allocator.free(reset_credits_str);
-            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[4], usage_override);
+            const rate_5h_str = try usageCellTextAlloc(std.heap.page_allocator, rate_5h, widths[5], usage_override);
             defer std.heap.page_allocator.free(rate_5h_str);
-            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[5], usage_override);
+            const rate_week_str = try usageCellTextAlloc(std.heap.page_allocator, rate_week, widths[6], usage_override);
             defer std.heap.page_allocator.free(rate_week_str);
             const last = try timefmt.formatRelativeTimeOrDashAlloc(std.heap.page_allocator, rec.last_usage_at, now);
             defer std.heap.page_allocator.free(last);
+            const plan_expiry = try cli_rows.formatFutureDateAlloc(std.heap.page_allocator, rec.plan_expires_at, now);
+            defer std.heap.page_allocator.free(plan_expiry);
+            const auth_expiry = try cli_rows.formatTimestampAlloc(std.heap.page_allocator, rec.access_token_expires_at);
+            defer std.heap.page_allocator.free(auth_expiry);
             const indent: usize = @as(usize, row.depth) * 2;
             const indent_to_print: usize = @min(indent, widths[0]);
             const account_cell = try truncateAlloc(row.account_cell, widths[0] - indent_to_print);
             defer std.heap.page_allocator.free(account_cell);
             const plan_cell = try truncateAlloc(plan, widths[1]);
             defer std.heap.page_allocator.free(plan_cell);
-            const credits_cell = try truncateAlloc(credits_str, widths[2]);
+            const plan_expiry_cell = try truncateAlloc(plan_expiry, widths[2]);
+            defer std.heap.page_allocator.free(plan_expiry_cell);
+            const credits_cell = try truncateAlloc(credits_str, widths[3]);
             defer std.heap.page_allocator.free(credits_cell);
-            const reset_credits_cell = try truncateAlloc(reset_credits_str, widths[3]);
+            const reset_credits_cell = try truncateAlloc(reset_credits_str, widths[4]);
             defer std.heap.page_allocator.free(reset_credits_cell);
-            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[4]);
+            const rate_5h_cell = try truncateAlloc(rate_5h_str, widths[5]);
             defer std.heap.page_allocator.free(rate_5h_cell);
-            const rate_week_cell = try truncateAlloc(rate_week_str, widths[5]);
+            const rate_week_cell = try truncateAlloc(rate_week_str, widths[6]);
             defer std.heap.page_allocator.free(rate_week_cell);
-            const last_cell = try truncateAlloc(last, widths[6]);
+            const auth_expiry_cell = try truncateAlloc(auth_expiry, widths[7]);
+            defer std.heap.page_allocator.free(auth_expiry_cell);
+            const last_cell = try truncateAlloc(last, widths[8]);
             defer std.heap.page_allocator.free(last_cell);
             if (use_color) {
                 if (row.is_active) {
@@ -281,7 +299,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             try writeIndexPadded(out, selectable_counter + 1, idx_width);
             try out.writeAll(" ");
             try writeRepeat(out, ' ', indent_to_print);
-            const row_cells = [_][]const u8{ account_cell, plan_cell, credits_cell, reset_credits_cell, rate_5h_cell, rate_week_cell, last_cell };
+            const row_cells = [_][]const u8{ account_cell, plan_cell, plan_expiry_cell, credits_cell, reset_credits_cell, rate_5h_cell, rate_week_cell, auth_expiry_cell, last_cell };
             var row_first_visible = true;
             for (row_cells, 0..) |cell, index| {
                 if (!visible[index]) continue;
