@@ -2148,3 +2148,41 @@ test "live list renders zero reset credits without an expiry marker" {
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
 }
+
+test "mouse wheel step scales with visible rows" {
+    try std.testing.expectEqual(@as(usize, 6), live_tui.mouseWheelRows(1));
+    try std.testing.expectEqual(@as(usize, 6), live_tui.mouseWheelRows(18));
+    try std.testing.expectEqual(@as(usize, 10), live_tui.mouseWheelRows(30));
+    try std.testing.expectEqual(@as(usize, 12), live_tui.mouseWheelRows(80));
+}
+
+test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
+    var viewport_start: usize = 9;
+    const row_count: usize = 105;
+    const max_rows: usize = 20;
+    const wheel_rows: usize = live_tui.mouseWheelRows(max_rows);
+
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
+    try std.testing.expectEqual(@as(usize, 3), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
+    try std.testing.expectEqual(@as(usize, 29), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
+    try std.testing.expectEqual(@as(usize, 0), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
+    try std.testing.expectEqual(@as(usize, 85), viewport_start);
+}
+
+test "display width counts UTF-8 codepoints instead of bytes" {
+    try std.testing.expectEqual(@as(usize, 7), text_width.displayWidth("Рабочая"));
+    try std.testing.expectEqual(@as(usize, 6), text_width.prefixByteLength("Рабочая", 3));
+    try std.testing.expectEqualStrings("чая", "Рабочая"[text_width.suffixStart("Рабочая", 3)..]);
+}

@@ -17,38 +17,6 @@ pub fn mouseWheelRows(max_rows: usize) usize {
     return @min(max_mouse_wheel_rows, @max(min_mouse_wheel_rows, max_rows / 3));
 }
 
-test "mouse wheel step scales with visible rows" {
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(1));
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(18));
-    try std.testing.expectEqual(@as(usize, 10), mouseWheelRows(30));
-    try std.testing.expectEqual(@as(usize, 12), mouseWheelRows(80));
-}
-
-test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
-    var viewport_start: usize = 9;
-    const row_count: usize = 105;
-    const max_rows: usize = 20;
-    const wheel_rows: usize = mouseWheelRows(max_rows);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
-    try std.testing.expectEqual(@as(usize, 3), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
-    try std.testing.expectEqual(@as(usize, 29), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
-    try std.testing.expectEqual(@as(usize, 0), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
-    try std.testing.expectEqual(@as(usize, 85), viewport_start);
-}
-
 pub fn nowSecond() i64 {
     return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
 }
