@@ -151,7 +151,6 @@ pub const shared_first_order = [_]ColumnId{
     .rate_week,
     .plan,
     .reset_credits,
-    .last,
     .credits,
 };
 pub const shared_grow_order = [_]ColumnId{
@@ -159,11 +158,10 @@ pub const shared_grow_order = [_]ColumnId{
     .rate_week,
     .plan,
     .reset_credits,
-    .last,
     .credits,
     .account,
 };
-pub const shared_deferred_order = [_]ColumnId{ .auth_expire, .plan_expire };
+pub const shared_deferred_order = [_]ColumnId{ .auth_expire, .plan_expire, .last };
 
 pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols: ?usize) LiveTable {
     const source_widths = [_]usize{ widths.email, widths.plan, widths.rate_5h, widths.rate_week, widths.last };
@@ -183,9 +181,9 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     return accountTable(bounded, prefix_width);
 }
 
-pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last, .plan_expire, .auth_expire };
+pub const plain_columns = [_]ColumnId{ .account, .plan, .plan_expire, .credits, .rate_5h, .rate_week, .auth_expire, .reset_credits, .last };
 
-pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .last, .auth_expire, .reset_credits };
+pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .auth_expire, .reset_credits, .last };
 
 pub fn defaultTargetWidth(id: ColumnId) usize {
     return switch (id) {

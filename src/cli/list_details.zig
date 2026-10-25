@@ -28,9 +28,9 @@ pub fn computeWidths(
         table_layout.columnSpec(.plan_expire, @max("PLAN EXPIRE".len, 10)),
         table_layout.columnSpec(.rate_5h, @max(widths.rate_5h, "5H".len)),
         table_layout.columnSpec(.rate_week, @max(widths.rate_week, "WEEKLY".len)),
-        table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
         table_layout.columnSpec(.auth_expire, @max("AUTH EXPIRE".len, 16)),
         table_layout.columnSpec(.reset_credits, @max("RESET CREDITS".len, 14)),
+        table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
     };
     var bounded = [_]usize{0} ** column_count;
     table_layout.allocateColumns(.{
@@ -80,9 +80,9 @@ pub fn write(
         plan_expiry,
         row.rate_5h,
         row.rate_week,
-        row.last,
         token_expiry,
         reset_full,
+        row.last,
     };
     const row_style = if (row.number.len != 0 and row.number[0] == '!') style.role.error_text else if (row.number.len != 0 and row.number[0] == '*') style.role.success else "";
     try writer.writeStyle(row_style);

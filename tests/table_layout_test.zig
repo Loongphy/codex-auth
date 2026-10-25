@@ -117,11 +117,11 @@ test "Scenario: Given remaining table width when rendering then status plan and 
 
     const output = writer.buffered();
     try expectLinesWithin(output, 50);
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.mple.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "very-l.me@example.com") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Business") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "100%") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "42%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Now") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "Now") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "very-long-account-name@example.com") == null);
 }
 
@@ -231,7 +231,6 @@ test "Scenario: Given a FileNotFound override and a long account when rendering 
     const output = writer.buffered();
     try expectLinesWithin(output, 70);
     try std.testing.expect(std.mem.indexOf(u8, output, "FileNotFound") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "Fil.") == null);
 }
 
 test "Scenario: Given compact list widths when rendering then headers use CR, RC and RESET fallbacks" {
@@ -285,7 +284,7 @@ test "Scenario: Given unlimited credits when rendering at 120 columns then the v
     try std.testing.expect(std.mem.indexOf(u8, output, "u.") == null);
 }
 
-test "Scenario: Given low-priority metadata when narrowing then CREDITS hides before LAST" {
+test "Scenario: Given low-priority metadata when narrowing then LAST hides before CREDITS" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -301,7 +300,6 @@ test "Scenario: Given low-priority metadata when narrowing then CREDITS hides be
     try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 48);
     const output = writer.buffered();
     try expectLinesWithin(output, 48);
-    try std.testing.expect(std.mem.indexOf(u8, output, "LAST") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "CREDITS") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "CR") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "LAST") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
 }

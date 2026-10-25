@@ -1807,10 +1807,12 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200);
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
-    const plan = std.mem.indexOf(u8, body, "PLAN") orelse return error.TestUnexpectedResult;
-    const expire = std.mem.indexOf(u8, body, "PLAN EXPIRE") orelse return error.TestUnexpectedResult;
-    const five_hour = std.mem.indexOf(u8, body, "5H") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(plan < expire and expire < five_hour);
+    var last_index: usize = 0;
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "5H", "WEEKLY", "AUTH EXPIRE", "RESET CREDITS", "LAST" }) |token| {
+        const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(index >= last_index);
+        last_index = index;
+    }
     lines = std.mem.splitScalar(u8, body, '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 200);
 }

@@ -17,8 +17,8 @@ codex-auth list --json
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, `PLAN EXPIRE`, and `AUTH EXPIRE`.
-  The deferred `PLAN EXPIRE` and `AUTH EXPIRE` columns appear only when the terminal is wide enough.
+- Non-live output shows `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, and `LAST ACTIVITY`.
+  The deferred `LAST ACTIVITY`, `PLAN EXPIRE`, and `AUTH EXPIRE` columns appear only when the terminal is wide enough.
 
 ## Refresh Modes
 

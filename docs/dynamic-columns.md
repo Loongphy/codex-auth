@@ -24,8 +24,8 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
-| `list` | `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, `PLAN EXPIRE`, `AUTH EXPIRE` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `5H`, `WEEKLY`, `LAST`, `AUTH EXPIRE`, `RESET CREDITS` |
+| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, `LAST ACTIVITY` |
+| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `RESET CREDITS`, `LAST` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
 ## Shared Priority
@@ -37,21 +37,21 @@ Every view uses the same ordered lists. A view with an unsupported column
 
 ```text
 #* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4)
-   -> RESET CREDITS (2) -> LAST (4) -> CREDITS (2)
+   -> RESET CREDITS (2) -> CREDITS (2)
 ```
 
-`PLAN EXPIRE` and `AUTH EXPIRE` are not in this list; they are deferred.
+`PLAN EXPIRE`, `AUTH EXPIRE`, and `LAST` are not in this list; they are deferred.
 
 ### Grow order
 
 ```text
-5H -> WEEKLY -> PLAN -> RESET CREDITS -> LAST -> CREDITS -> ACCOUNT
+5H -> WEEKLY -> PLAN -> RESET CREDITS -> CREDITS -> ACCOUNT
 ```
 
 ### Deferred order
 
 ```text
-AUTH EXPIRE (10) -> PLAN EXPIRE (10)
+AUTH EXPIRE (10) -> PLAN EXPIRE (10) -> LAST (4)
 ```
 
 Deferred columns are considered only after every normal column has grown. Each
@@ -64,10 +64,10 @@ From wide to narrow, columns disappear in the reverse priority order. The
 complete shared order is:
 
 ```text
-PLAN EXPIRE
+LAST
+-> PLAN EXPIRE
 -> AUTH EXPIRE
 -> CREDITS
--> LAST
 -> RESET CREDITS
 -> PLAN
 -> WEEKLY
@@ -78,13 +78,13 @@ PLAN EXPIRE
 
 Unsupported columns are already absent from a view:
 
-- plain `list` has no `#*`: `PLAN EXPIRE -> AUTH EXPIRE -> CREDITS -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
-- `list --live` has no `CREDITS`: `PLAN EXPIRE -> AUTH EXPIRE -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
+- plain `list` has no `#*`: `LAST -> PLAN EXPIRE -> AUTH EXPIRE -> CREDITS -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+- `list --live` has no `CREDITS`: `LAST -> PLAN EXPIRE -> AUTH EXPIRE -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
 - `switch` / `remove` support none of the credits, auth-expiry, or plan-expiry columns: `LAST -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
 
-`CREDITS` was intentionally placed just above the expiry fields: it is a
-low-priority metadata column. `RESET CREDITS`, which carries the actionable
-reset count, stays above it.
+`LAST` is the absolute lowest-priority column and hides first. `CREDITS` sits
+just above the deferred expiry fields; `RESET CREDITS`, which carries the
+actionable reset count, stays above it.
 
 ## Allocation Phases
 
@@ -110,7 +110,7 @@ the requested terminal width.
 | `RESET CREDITS` | 2 |
 | `5H` | 4 |
 | `WEEKLY` | 6 |
-| `LAST` | 4 |
+| `LAST` | 4, deferred |
 | `AUTH EXPIRE` | 10, deferred |
 
 ## Headers
