@@ -82,6 +82,20 @@ pub fn generateIdempotencyKeyAlloc(allocator: std.mem.Allocator) ![]u8 {
     return allocator.dupe(u8, out[0..]);
 }
 
+/// Builds the consume request body. `credit_id` originates at the backend and
+/// round-trips through the stored registry, so both fields are JSON-encoded
+/// instead of interpolated into body text.
+pub fn buildConsumeBodyAlloc(
+    allocator: std.mem.Allocator,
+    redeem_request_id: []const u8,
+    credit_id: []const u8,
+) ![]u8 {
+    return std.json.Stringify.valueAlloc(allocator, .{
+        .redeem_request_id = redeem_request_id,
+        .credit_id = credit_id,
+    }, .{});
+}
+
 fn fail(allocator: std.mem.Allocator, name: []const u8) ConsumeResult {
     return .{
         .outcome = .request_error,
@@ -111,11 +125,7 @@ pub fn consumeCreditForAccount(
     const access_token = info.access_token orelse return fail(allocator, "MissingAuth");
     const chatgpt_account_id = info.chatgpt_account_id orelse return fail(allocator, "MissingAuth");
 
-    const body = try std.fmt.allocPrint(
-        allocator,
-        "{{\"redeem_request_id\":\"{s}\",\"credit_id\":\"{s}\"}}",
-        .{ redeem_request_id, credit_id },
-    );
+    const body = try buildConsumeBodyAlloc(allocator, redeem_request_id, credit_id);
     defer allocator.free(body);
 
     const http_result = http.runPostJsonCommand(

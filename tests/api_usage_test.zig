@@ -294,6 +294,28 @@ test "consume outcome maps the backend code field" {
     );
 }
 
+test "consume body json-encodes the server-provided credit id" {
+    const gpa = std.testing.allocator;
+    const body = try reset_credits_api.buildConsumeBodyAlloc(
+        gpa,
+        "3f2b7c1e-0000-4000-8000-abcdef012345",
+        "credit\"1 \\ \u{7}\n",
+    );
+    defer gpa.free(body);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, body, .{});
+    defer parsed.deinit();
+    const object = switch (parsed.value) {
+        .object => |object| object,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqualStrings(
+        "3f2b7c1e-0000-4000-8000-abcdef012345",
+        object.get("redeem_request_id").?.string,
+    );
+    try std.testing.expectEqualStrings("credit\"1 \\ \u{7}\n", object.get("credit_id").?.string);
+}
+
 test "idempotency key is a UUID v4" {
     const key = try reset_credits_api.generateIdempotencyKeyAlloc(std.testing.allocator);
     defer std.testing.allocator.free(key);
