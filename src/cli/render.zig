@@ -255,6 +255,13 @@ pub fn clampLiveViewportStart(row_count: usize, max_rows: usize, current_start: 
     return @min(current_start, row_count - max_rows);
 }
 
+/// Viewport start that keeps the selected display index visible on the screens
+/// that render group header rows (switch, remove).
+///
+/// Both the clamp and the resolved row index use the `rows.items` basis, which
+/// matches those screens one line per row. Do not feed it the live list rail
+/// cursor: that one counts body lines without header rows, and is followed with
+/// `live_tui.followViewportStart` instead.
 pub fn liveViewportStartForDisplayIndex(
     rows: []const SwitchRow,
     selected_display_idx: ?usize,
@@ -291,6 +298,11 @@ fn visibleRowRange(row_count: usize, viewport: LiveListViewport) VisibleRowRange
     };
 }
 
+/// Maps a selectable display index to its index in `rows`.
+///
+/// Index basis: `rows.items`, for the views that DO render group header rows
+/// (`renderSwitchScreen`, `renderRemoveScreen`). The live list body skips those
+/// rows entirely, so its rail cursor must use `liveRowIndexForDataIndex` instead.
 fn rowIndexForDisplayIndex(rows: []const SwitchRow, selected_display_idx: usize) ?usize {
     var display_idx: usize = 0;
     for (rows, 0..) |row, row_idx| {
@@ -301,6 +313,9 @@ fn rowIndexForDisplayIndex(rows: []const SwitchRow, selected_display_idx: usize)
     return null;
 }
 
+/// Number of selectable rows in a `rows` prefix, on the same `rows.items` basis
+/// as `rowIndexForDisplayIndex`. Not the live list body line count, which is
+/// `liveDataRowCount`.
 fn dataRowCount(rows: []const SwitchRow) usize {
     var count: usize = 0;
     for (rows) |row| {
@@ -413,8 +428,9 @@ fn writeSwitchRow(
 }
 
 /// Single source of truth for which rows the live list body renders. The rail
-/// cursor indexes rendered data rows, so row mapping and rendering must share
-/// this predicate or they drift into two truths again.
+/// cursor indexes those rendered lines, so mapping and rendering share one
+/// predicate. Views that DO draw group header rows (switch, remove) use the
+/// `rows.items`-based helpers above instead; the two bases are not interchangeable.
 pub fn isRenderedLiveRow(row: SwitchRow, account_count: usize) bool {
     if (row.is_header) return false;
     const account_idx = row.account_index orelse return false;
