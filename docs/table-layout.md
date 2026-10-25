@@ -35,14 +35,14 @@ label is truncated.
 Plain `list` at a wide width:
 
 ```text
-ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST  PLAN EXPIRE
-------------------------------------------------------------------
-very-long.  Pro   -          -   100%      58%     -     2026-11-22
-work-main.  Pro   unlimited  3   31%       42%     -     2026-12-01
+ACCOUNT     PLAN  CREDITS    RC  5H        WEEKLY  LAST  PLAN EXPIRE  AUTH EXPIRE
+---------------------------------------------------------------------------------
+very-long.  Pro   -          -   100%      58%     -     2026-11-22   2027-01-15 08:00
+work-main.  Pro   unlimited  3   31%       42%     -     2026-12-01   2026-12-31 23:59
 ```
 
-Plain `list` at 70 columns hides the deferred `PLAN EXPIRE` column so status
-and usage values stay readable:
+Plain `list` at 70 columns hides the deferred `PLAN EXPIRE` and `AUTH EXPIRE`
+columns so status and usage values stay readable:
 
 ```text
 ACCOUNT     PLAN  CR  RC  5H          WEEKLY  LAST

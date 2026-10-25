@@ -24,7 +24,7 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
-| `list` | `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, `PLAN EXPIRE` |
+| `list` | `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, `PLAN EXPIRE`, `AUTH EXPIRE` |
 | `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `5H`, `WEEKLY`, `LAST`, `AUTH EXPIRE`, `RESET CREDITS` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
@@ -78,7 +78,7 @@ PLAN EXPIRE
 
 Unsupported columns are already absent from a view:
 
-- plain `list` has no `AUTH EXPIRE` and no `#*`: `PLAN EXPIRE -> CREDITS -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+- plain `list` has no `#*`: `PLAN EXPIRE -> AUTH EXPIRE -> CREDITS -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
 - `list --live` has no `CREDITS`: `PLAN EXPIRE -> AUTH EXPIRE -> LAST -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
 - `switch` / `remove` support none of the credits, auth-expiry, or plan-expiry columns: `LAST -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
 

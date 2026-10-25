@@ -183,7 +183,7 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     return accountTable(bounded, prefix_width);
 }
 
-pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last, .plan_expire };
+pub const plain_columns = [_]ColumnId{ .account, .plan, .credits, .reset_credits, .rate_5h, .rate_week, .last, .plan_expire, .auth_expire };
 
 pub const list_detail_columns = [_]ColumnId{ .number, .account, .plan, .plan_expire, .rate_5h, .rate_week, .last, .auth_expire, .reset_credits };
 

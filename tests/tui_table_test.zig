@@ -394,15 +394,20 @@ test "writeAccountsTable shows plan expiry for future data and hides expired dat
     try appendTestAccount(gpa, &reg, "user-1::acc-1", "user@example.com", "", .plus);
 
     reg.accounts.items[0].plan_expires_at = now + 30 * 86400;
+    reg.accounts.items[0].access_token_expires_at = now + 60 * 86400;
     const expected = try codex_auth.cli.rows.formatFutureDateAlloc(gpa, reg.accounts.items[0].plan_expires_at, now);
     defer gpa.free(expected);
+    const expected_auth = try codex_auth.cli.rows.formatTimestampAlloc(gpa, reg.accounts.items[0].access_token_expires_at);
+    defer gpa.free(expected_auth);
 
     var buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buffer);
     try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 200);
     var output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "PLAN EXPIRE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "AUTH EXPIRE") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, expected) != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, expected_auth) != null);
 
     const expired_at = now - 30 * 86400;
     const expired_text = try codex_auth.cli.rows.formatTimestampAlloc(gpa, expired_at);

@@ -137,8 +137,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     usage_overrides: ?[]const ?[]const u8,
     term_cols: ?usize,
 ) !void {
-    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY", "PLAN EXPIRE" };
-    const compact_headers = [_][]const u8{ "ACCOUNT", "PLAN", "CR", "RESET", "5H", "WEEKLY", "LAST", "PLAN EXP" };
+    const headers = [_][]const u8{ "ACCOUNT", "PLAN", "CREDITS", "RESET CREDITS", "5H", "WEEKLY", "LAST ACTIVITY", "PLAN EXPIRE", "AUTH EXPIRE" };
+    const compact_headers = [_][]const u8{ "ACCOUNT", "PLAN", "CR", "RESET", "5H", "WEEKLY", "LAST", "PLAN EXP", "AUTH EXP" };
     var content_widths = [_]usize{
         headers[0].len,
         headers[1].len,
@@ -148,6 +148,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
         headers[5].len,
         headers[6].len,
         headers[7].len,
+        headers[8].len,
     };
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var display = try display_rows.buildDisplayRows(std.heap.page_allocator, reg, null);
@@ -177,6 +178,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             defer std.heap.page_allocator.free(last_str);
             const plan_expiry_str = try cli_rows.formatFutureDateAlloc(std.heap.page_allocator, rec.plan_expires_at, now);
             defer std.heap.page_allocator.free(plan_expiry_str);
+            const auth_expiry_str = try cli_rows.formatTimestampAlloc(std.heap.page_allocator, rec.access_token_expires_at);
+            defer std.heap.page_allocator.free(auth_expiry_str);
 
             content_widths[1] = @max(content_widths[1], plan.len);
             content_widths[2] = @max(content_widths[2], credits_str.len);
@@ -185,6 +188,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             content_widths[5] = @max(content_widths[5], rate_week_str.len);
             content_widths[6] = @max(content_widths[6], last_str.len);
             content_widths[7] = @max(content_widths[7], plan_expiry_str.len);
+            content_widths[8] = @max(content_widths[8], auth_expiry_str.len);
         }
     }
 
@@ -262,6 +266,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             defer std.heap.page_allocator.free(last);
             const plan_expiry = try cli_rows.formatFutureDateAlloc(std.heap.page_allocator, rec.plan_expires_at, now);
             defer std.heap.page_allocator.free(plan_expiry);
+            const auth_expiry = try cli_rows.formatTimestampAlloc(std.heap.page_allocator, rec.access_token_expires_at);
+            defer std.heap.page_allocator.free(auth_expiry);
             const indent: usize = @as(usize, row.depth) * 2;
             const indent_to_print: usize = @min(indent, widths[0]);
             const account_cell = try truncateAlloc(row.account_cell, widths[0] - indent_to_print);
@@ -280,6 +286,8 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             defer std.heap.page_allocator.free(last_cell);
             const plan_expiry_cell = try truncateAlloc(plan_expiry, widths[7]);
             defer std.heap.page_allocator.free(plan_expiry_cell);
+            const auth_expiry_cell = try truncateAlloc(auth_expiry, widths[8]);
+            defer std.heap.page_allocator.free(auth_expiry_cell);
             if (use_color) {
                 if (row.is_active) {
                     try out.writeAll(ansi.green);
@@ -291,7 +299,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             try writeIndexPadded(out, selectable_counter + 1, idx_width);
             try out.writeAll(" ");
             try writeRepeat(out, ' ', indent_to_print);
-            const row_cells = [_][]const u8{ account_cell, plan_cell, credits_cell, reset_credits_cell, rate_5h_cell, rate_week_cell, last_cell, plan_expiry_cell };
+            const row_cells = [_][]const u8{ account_cell, plan_cell, credits_cell, reset_credits_cell, rate_5h_cell, rate_week_cell, last_cell, plan_expiry_cell, auth_expiry_cell };
             var row_first_visible = true;
             for (row_cells, 0..) |cell, index| {
                 if (!visible[index]) continue;

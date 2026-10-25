@@ -17,8 +17,8 @@ codex-auth list --json
 - Syncs the current `auth.json` into the registry before rendering when the current auth file is parseable.
 - Shows selectable row numbers using the same ordering as `switch` and `remove`.
 - Groups rows by email when the same email owns multiple account snapshots.
-- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, and `PLAN EXPIRE`.
-  The deferred `PLAN EXPIRE` column appears only when the terminal is wide enough.
+- Non-live output shows `ACCOUNT`, `PLAN`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `LAST ACTIVITY`, `PLAN EXPIRE`, and `AUTH EXPIRE`.
+  The deferred `PLAN EXPIRE` and `AUTH EXPIRE` columns appear only when the terminal is wide enough.
 
 ## Refresh Modes
 
@@ -28,10 +28,10 @@ codex-auth list --json
 - `--skip-api` forbids remote API calls for this command.
 - `--live` keeps refreshing the terminal view and requires a TTY.
 - In live tables, `*` before the number marks the active account and `!` marks a refresh error.
-- Live account details show the access-token expiry, the plan expiry, and, per
-  account, the available reset-credit count with the earliest card expiry. The
-  `AUTH EXPIRE`, `PLAN EXPIRE`, and `RESET CREDITS` columns render in local time;
-  the available reset credits are also expandable per account in the live view.
+- List output shows the access-token expiry and plan expiry. Live output also
+  shows the per-account available reset-credit count with the earliest card
+  expiry. The `AUTH EXPIRE`, `PLAN EXPIRE`, and `RESET CREDITS` columns render
+  in local time; available reset credits are also expandable in the live view.
 - Access-token expiry is shown in local time and is not the account or subscription
   expiry; refreshing credentials can extend it. `PLAN EXPIRE` comes from the
   `chatgpt_subscription_active_until` claim in the stored `id_token`. Missing or
