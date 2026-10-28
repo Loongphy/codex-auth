@@ -14,6 +14,7 @@ This directory documents command behavior by command. Use `codex-auth <command> 
 | `remove` | [docs/commands/remove.md](./remove.md) |
 | `alias` | [docs/commands/alias.md](./alias.md) |
 | `clean` | [docs/commands/clean.md](./clean.md) |
+| `completion` | [docs/commands/completion.md](./completion.md) |
 | `config` | [docs/commands/config.md](./config.md) |
 | `app` | [docs/commands/app.md](./app.md) |
 
