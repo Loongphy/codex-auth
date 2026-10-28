@@ -17,38 +17,6 @@ pub fn mouseWheelRows(max_rows: usize) usize {
     return @min(max_mouse_wheel_rows, @max(min_mouse_wheel_rows, max_rows / 3));
 }
 
-test "mouse wheel step scales with visible rows" {
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(1));
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(18));
-    try std.testing.expectEqual(@as(usize, 10), mouseWheelRows(30));
-    try std.testing.expectEqual(@as(usize, 12), mouseWheelRows(80));
-}
-
-test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
-    var viewport_start: usize = 9;
-    const row_count: usize = 105;
-    const max_rows: usize = 20;
-    const wheel_rows: usize = mouseWheelRows(max_rows);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
-    try std.testing.expectEqual(@as(usize, 3), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
-    try std.testing.expectEqual(@as(usize, 29), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
-    try std.testing.expectEqual(@as(usize, 0), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
-    try std.testing.expectEqual(@as(usize, 85), viewport_start);
-}
-
 pub fn nowSecond() i64 {
     return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
 }
@@ -133,8 +101,45 @@ pub fn listViewport(
     fixed_lines: usize,
     viewport_start: *usize,
 ) render.LiveListViewport {
+    return listViewportFollowing(terminal_rows, row_count, fixed_lines, viewport_start, null);
+}
+
+/// Keeps a target body line visible while it is being operated on.
+///
+/// `target_row` and the returned start share `renderListBodyViewport`'s index
+/// basis: lines of the rendered body after its column header, which include any
+/// spliced rail lines. That is deliberately not `rows.items`: the live list body
+/// does not render group header rows at all.
+pub fn followViewportStart(
+    row_count: usize,
+    max_rows: usize,
+    current_start: usize,
+    target_row: ?usize,
+) usize {
+    const start = render.clampLiveViewportStart(row_count, max_rows, current_start);
+    const target = target_row orelse return start;
+    if (max_rows == 0 or row_count == 0) return start;
+    var followed = start;
+    if (target < followed) {
+        followed = target;
+    } else if (target >= followed + max_rows) {
+        followed = target - max_rows + 1;
+    }
+    return render.clampLiveViewportStart(row_count, max_rows, followed);
+}
+
+/// Like `listViewport`, but scrolls the given body line into view first. The
+/// reset credits rail uses this so a redeem can never be confirmed on a row the
+/// user cannot see.
+pub fn listViewportFollowing(
+    terminal_rows: usize,
+    row_count: usize,
+    fixed_lines: usize,
+    viewport_start: *usize,
+    target_row: ?usize,
+) render.LiveListViewport {
     const max_rows = maxTableRows(terminal_rows, fixed_lines);
-    viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, viewport_start.*);
+    viewport_start.* = followViewportStart(row_count, max_rows, viewport_start.*, target_row);
     return .{
         .start_row = viewport_start.*,
         .max_rows = max_rows,

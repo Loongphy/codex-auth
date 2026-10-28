@@ -8,5 +8,7 @@ pub const picker = @import("picker.zig");
 pub const live = @import("live.zig");
 pub const live_tui = @import("live_tui.zig");
 pub const render = @import("render.zig");
+pub const reset_credits_panel = @import("reset_credits_panel.zig");
 pub const rows = @import("rows.zig");
+pub const table_layout = @import("table_layout.zig");
 pub const tui = @import("tui.zig");

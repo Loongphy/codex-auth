@@ -25,7 +25,7 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 | View | Visual order |
 |---|---|
 | `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
+| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
 ## Shared Priority
@@ -127,6 +127,12 @@ Wide headers use their full label. Narrow columns use compact labels:
 | `RESET CREDITS` | `RESET`, then `RC` |
 | `AUTH EXPIRE` | `AUTH EXP`, then `AUTH` |
 | `PLAN EXPIRE` | `PLAN EXP`, then `PLAN` |
+| `LAST ACTIVITY` | `LAST` |
+
+`LAST ACTIVITY` renders its full header at 13 columns or wider and falls back
+to `LAST` below that. Plain `list` and `list --live` use the same allocator and
+deferred order, so the abbreviation rule is identical; the exact terminal width
+where it kicks in can differ because each view supports a different column set.
 
 ## Adding a Column
 

@@ -303,3 +303,15 @@ test "Scenario: Given low-priority metadata when narrowing then LAST hides befor
     try std.testing.expect(std.mem.indexOf(u8, output, "LAST") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
 }
+
+test "plain and live views keep shared columns in the same relative order" {
+    const table_layout = cli.table_layout;
+    var previous: ?usize = null;
+    for (table_layout.list_detail_columns) |id| {
+        if (id == .number) continue;
+        const position = std.mem.indexOfScalar(table_layout.ColumnId, &table_layout.plain_columns, id) orelse
+            return error.TestUnexpectedResult;
+        if (previous) |prev| try std.testing.expect(position > prev);
+        previous = position;
+    }
+}

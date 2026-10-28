@@ -9,6 +9,78 @@ const style = @import("style.zig");
 const picker = @import("picker.zig");
 const tui_mod = @import("tui.zig");
 const live_tui = @import("live_tui.zig");
+const reset_credits_panel = @import("reset_credits_panel.zig");
+const reset_credits_api = @import("../api/reset_credits.zig");
+const registry = @import("../registry/root.zig");
+const api_usage = @import("../api/usage.zig");
+
+/// Indentation of the account column in the rendered table, so the reset
+/// credits rail nests under the row it belongs to.
+fn panelIndentForBody(body: []const u8) usize {
+    const line_end = std.mem.indexOfScalar(u8, body, '\n') orelse body.len;
+    const header = body[0..line_end];
+    var column: usize = 0;
+    var index: usize = 0;
+    while (index < header.len) {
+        if (header[index] == 0x1b) {
+            // Skip a CSI escape sequence so the scan counts display columns.
+            index += 1;
+            if (index < header.len and header[index] == '[') {
+                index += 1;
+                while (index < header.len and (header[index] < 0x40 or header[index] > 0x7e)) : (index += 1) {}
+                if (index < header.len) index += 1;
+            }
+            continue;
+        }
+        if (header[index] == '|') return column;
+        column += 1;
+        index += 1;
+    }
+    return 0;
+}
+
+/// Refreshes one account's usage snapshot after a successful consume so the
+/// 5H/WEEKLY cells and the remaining card list reflect the reset immediately.
+fn refreshAccountUsageAfterReset(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    codex_home: []const u8,
+    account_key: []const u8,
+) void {
+    const account_idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return;
+    const auth_path = registry.accountAuthPath(allocator, codex_home, account_key) catch return;
+    defer allocator.free(auth_path);
+    const fetched = api_usage.fetchUsageForAuthPathDetailed(allocator, auth_path) catch return;
+    const snapshot = fetched.snapshot orelse return;
+    const rec = &reg.accounts.items[account_idx];
+    if (rec.last_usage) |*old| registry.freeRateLimitSnapshot(allocator, old);
+    rec.last_usage = snapshot;
+    rec.last_usage_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    if (fetched.access_token_expires_at) |expires_at| rec.access_token_expires_at = expires_at;
+}
+
+fn alreadyConsumed(consumed_ids: []const []u8, credit_id: []const u8) bool {
+    for (consumed_ids) |id| {
+        if (std.mem.eql(u8, id, credit_id)) return true;
+    }
+    return false;
+}
+
+/// Approves the redeem queued by a second `⏎`. `approve` drops the armed
+/// confirmation whether or not the identity matches, so every attempt —
+/// including a retry after a failed request — needs a fresh confirmation on the
+/// credit that is actually rendered under the cursor.
+fn consumeApproved(
+    allocator: std.mem.Allocator,
+    panel: *reset_credits_panel.Selection,
+    account_key: ?[]const u8,
+    credit_id: ?[]const u8,
+) bool {
+    if (!panel.valid) return false;
+    const key = account_key orelse return false;
+    const id = credit_id orelse return false;
+    return panel.approve(allocator, .{ .account_key = key, .credit_id = id });
+}
 
 pub const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
 pub const OwnedSwitchSelectionDisplay = selection.OwnedSwitchSelectionDisplay;
@@ -259,6 +331,25 @@ pub fn viewAccountsWithLiveUpdates(
 
     var body: std.Io.Writer.Allocating = .init(allocator);
     defer body.deinit();
+    var credits_panel: std.Io.Writer.Allocating = .init(allocator);
+    defer credits_panel.deinit();
+    var credit_selection: reset_credits_panel.Selection = .{};
+    var data_row_count: usize = 0;
+    var pending_consume: bool = false;
+    var selected_credit_id: ?[]u8 = null;
+    var selected_account_key: ?[]u8 = null;
+    var redeem_key: ?[]u8 = null;
+    var redeem_credit_id: ?[]u8 = null;
+    var consumed_ids: std.ArrayList([]u8) = .empty;
+    defer {
+        credit_selection.deinit(allocator);
+        for (consumed_ids.items) |id| allocator.free(id);
+        consumed_ids.deinit(allocator);
+        if (selected_credit_id) |id| allocator.free(id);
+        if (selected_account_key) |key| allocator.free(key);
+        if (redeem_key) |key| allocator.free(key);
+        if (redeem_credit_id) |id| allocator.free(id);
+    }
 
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
@@ -266,6 +357,7 @@ pub fn viewAccountsWithLiveUpdates(
             current_display = updated;
             needs_render = true;
             rows_cache.invalidate(allocator);
+            credit_selection.clearSelection(allocator);
         }
 
         const now_second = live_tui.nowSecond();
@@ -279,14 +371,87 @@ pub fn viewAccountsWithLiveUpdates(
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
             try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)), rows.widths, tui.terminalCols());
-            rendered_row_count = std.mem.count(u8, body.written(), "\n") - 1;
+            var body_text: []const u8 = body.written();
+            var spliced_panel: ?[]u8 = null;
+            defer if (spliced_panel) |panel_buf| allocator.free(panel_buf);
+            var available_cards: []reset_credits_panel.AvailableCard = &.{};
+            defer if (available_cards.len > 0) allocator.free(available_cards);
+            const account_count = current_display.reg.accounts.items.len;
+            const data_rows = render.liveDataRowCount(rows.items, account_count);
+            data_row_count = data_rows;
+            credit_selection.clampRow(allocator, data_rows);
+            var panel_account: ?*registry.AccountRecord = null;
+            if (credit_selection.expanded and data_rows > 0) {
+                // The cursor is a rendered data-row index; group header rows are
+                // not drawn, so map it back before touching rows.items.
+                if (render.liveRowIndexForDataIndex(rows.items, account_count, credit_selection.row_cursor)) |row_idx| {
+                    if (rows.items[row_idx].account_index) |account_idx| {
+                        panel_account = &current_display.reg.accounts.items[account_idx];
+                    }
+                }
+            }
+            if (panel_account) |account| {
+                available_cards = try reset_credits_panel.collectAvailable(
+                    allocator,
+                    account,
+                    consumed_ids.items,
+                );
+                credit_selection.updateCards(allocator, available_cards.len);
+                // Derive the shown identity once and use it for the hint, the
+                // armed check, and the owned copies, so the re-confirm hint can
+                // only ever appear on the credit a second Enter would redeem.
+                const shown_identity: ?reset_credits_panel.Identity = if (available_cards.len > 0)
+                    .{
+                        .account_key = account.account_key,
+                        .credit_id = available_cards[credit_selection.card_cursor].id,
+                    }
+                else
+                    null;
+                credits_panel.clearRetainingCapacity();
+                _ = try reset_credits_panel.render(
+                    allocator,
+                    &credits_panel.writer,
+                    available_cards,
+                    tui.terminalCols(),
+                    now_second,
+                    credit_selection.card_cursor,
+                    credit_selection.isPendingFor(shown_identity),
+                    credit_selection.status,
+                    panelIndentForBody(body_text),
+                );
+                spliced_panel = try reset_credits_panel.spliceAfterDataLine(
+                    allocator,
+                    body_text,
+                    credit_selection.row_cursor,
+                    credits_panel.written(),
+                );
+                body_text = spliced_panel.?;
+                if (selected_credit_id) |id| allocator.free(id);
+                selected_credit_id = if (shown_identity) |identity|
+                    try allocator.dupe(u8, identity.credit_id)
+                else
+                    null;
+                if (selected_account_key) |key| allocator.free(key);
+                selected_account_key = if (shown_identity) |identity|
+                    try allocator.dupe(u8, identity.account_key)
+                else
+                    null;
+            } else {
+                credit_selection.clearSelection(allocator);
+                if (selected_credit_id) |id| allocator.free(id);
+                selected_credit_id = null;
+                if (selected_account_key) |key| allocator.free(key);
+                selected_account_key = null;
+            }
+            rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
             defer allocator.free(status_line);
-            const viewport = live_tui.listViewport(
+            const viewport = live_tui.listViewportFollowing(
                 tui.terminalRows(),
                 rendered_row_count,
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
+                if (credit_selection.expanded) credit_selection.row_cursor else null,
             );
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
@@ -295,7 +460,7 @@ pub fn viewAccountsWithLiveUpdates(
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
             render.renderListBodyViewport(
                 &styled_frame,
-                body.written(),
+                body_text,
                 status_line,
                 bounded_viewport,
             ) catch |err| return mapTuiOutputError(err);
@@ -317,17 +482,184 @@ pub fn viewAccountsWithLiveUpdates(
                     const wheel_rows = live_tui.mouseWheelRows(max_rows);
 
                     for (key_buf[0..key_count]) |key| {
+                        // A queued redeem is a committed action: stop consuming
+                        // this key batch, otherwise a `j` burst behind `⏎⏎` would
+                        // move the rail cursor and silently cancel the approval.
+                        if (pending_consume) break;
+                        if (credit_selection.expanded) {
+                            switch (key) {
+                                .move_up, .keyboard_up => {
+                                    credit_selection.moveCard(allocator, .up);
+                                    needs_render = true;
+                                    continue;
+                                },
+                                .move_down, .keyboard_down => {
+                                    credit_selection.moveCard(allocator, .down);
+                                    needs_render = true;
+                                    continue;
+                                },
+                                .enter => {
+                                    if (selected_account_key) |account_key| {
+                                        if (selected_credit_id) |credit_id| {
+                                            switch (credit_selection.confirm(allocator, .{
+                                                .account_key = account_key,
+                                                .credit_id = credit_id,
+                                            })) {
+                                                .consume => {
+                                                    pending_consume = true;
+                                                    needs_render = true;
+                                                },
+                                                .armed => needs_render = true,
+                                                .ignored => {},
+                                                .out_of_memory => {
+                                                    try credit_selection.setStatus(
+                                                        allocator,
+                                                        "credit selection unavailable (out of memory)",
+                                                    );
+                                                    needs_render = true;
+                                                },
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                },
+                                else => {},
+                            }
+                        }
                         if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {
                             needs_render = true;
                             continue;
                         }
                         switch (key) {
-                            .quit => return,
+                            .quit => {
+                                if (credit_selection.expanded) {
+                                    credit_selection.close(allocator);
+                                    needs_render = true;
+                                    continue;
+                                }
+                                return;
+                            },
                             .redraw => needs_render = true,
                             .byte => |ch| {
-                                if (isQuitKey(ch)) return;
+                                if (isQuitKey(ch)) {
+                                    // `q` and `esc` are advertised as equivalent
+                                    // quit keys, so while the rail is open both
+                                    // only close it instead of dropping a
+                                    // confirmation and ending the session.
+                                    if (credit_selection.expanded) {
+                                        credit_selection.close(allocator);
+                                        needs_render = true;
+                                        continue;
+                                    }
+                                    return;
+                                }
+                                if (ch == 'c') {
+                                    credit_selection.toggleExpanded(allocator);
+                                    needs_render = true;
+                                    continue;
+                                }
+                                if (ch == 'j') {
+                                    credit_selection.moveRow(allocator, .down, data_row_count);
+                                    needs_render = true;
+                                    continue;
+                                }
+                                if (ch == 'k') {
+                                    credit_selection.moveRow(allocator, .up, data_row_count);
+                                    needs_render = true;
+                                    continue;
+                                }
                             },
                             else => {},
+                        }
+                    }
+                    if (pending_consume) {
+                        pending_consume = false;
+                        if (consumeApproved(allocator, &credit_selection, selected_account_key, selected_credit_id)) {
+                            // Reuse the idempotency key while retrying the same
+                            // credit: the backend deduplicates repeated redeems.
+                            if (redeem_credit_id == null or !std.mem.eql(u8, redeem_credit_id.?, selected_credit_id.?)) {
+                                if (redeem_key) |key| allocator.free(key);
+                                if (redeem_credit_id) |id| allocator.free(id);
+                                redeem_key = reset_credits_api.generateIdempotencyKeyAlloc(allocator) catch null;
+                                redeem_credit_id = allocator.dupe(u8, selected_credit_id.?) catch null;
+                            }
+                            if (redeem_key) |key| {
+                                const codex_home = registry.resolveCodexHome(allocator) catch |err| {
+                                    try credit_selection.setStatus(allocator, @errorName(err));
+                                    needs_render = true;
+                                    continue;
+                                };
+                                defer allocator.free(codex_home);
+                                var result = reset_credits_api.consumeCreditForAccount(
+                                    allocator,
+                                    codex_home,
+                                    selected_account_key.?,
+                                    key,
+                                    selected_credit_id.?,
+                                ) catch |err| reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
+                                defer result.deinit(allocator);
+                                switch (result.outcome) {
+                                    .reset, .already_redeemed => {
+                                        var already_consumed = false;
+                                        for (consumed_ids.items) |id| {
+                                            if (std.mem.eql(u8, id, selected_credit_id.?)) {
+                                                already_consumed = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!already_consumed) {
+                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                            try consumed_ids.append(allocator, id_copy);
+                                        }
+                                        if (redeem_key) |k| allocator.free(k);
+                                        redeem_key = null;
+                                        if (redeem_credit_id) |c| allocator.free(c);
+                                        redeem_credit_id = null;
+                                        try credit_selection.setStatus(allocator, "✓ reset credit used");
+                                        refreshAccountUsageAfterReset(allocator, &current_display.reg, codex_home, selected_account_key.?);
+                                        registry.saveRegistry(allocator, codex_home, &current_display.reg) catch {};
+                                        rows_cache.invalidate(allocator);
+                                    },
+                                    .no_credit => {
+                                        if (!alreadyConsumed(consumed_ids.items, selected_credit_id.?)) {
+                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                            try consumed_ids.append(allocator, id_copy);
+                                        }
+                                        if (redeem_key) |k| allocator.free(k);
+                                        redeem_key = null;
+                                        if (redeem_credit_id) |c| allocator.free(c);
+                                        redeem_credit_id = null;
+                                        try credit_selection.setStatus(allocator, "✗ reset credit is no longer available · refresh to see current resets");
+                                    },
+                                    .nothing_to_reset => {
+                                        try credit_selection.setStatus(allocator, "reset not needed — usage does not need a reset right now");
+                                    },
+                                    .unexpected_response => {
+                                        if (result.status_code) |code| {
+                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d}, unexpected response)", .{code});
+                                            defer allocator.free(text);
+                                            try credit_selection.setStatus(allocator, text);
+                                        } else {
+                                            try credit_selection.setStatus(allocator, "✗ use failed (unexpected response)");
+                                        }
+                                    },
+                                    .http_error => {
+                                        if (result.status_code) |code| {
+                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d})", .{code});
+                                            defer allocator.free(text);
+                                            try credit_selection.setStatus(allocator, text);
+                                        } else {
+                                            try credit_selection.setStatus(allocator, "use failed");
+                                        }
+                                    },
+                                    .request_error => {
+                                        try credit_selection.setStatus(allocator, result.error_name orelse "use failed");
+                                    },
+                                }
+                            } else {
+                                try credit_selection.setStatus(allocator, "✗ use failed (idempotency key unavailable)");
+                            }
+                            needs_render = true;
                         }
                     }
                 }

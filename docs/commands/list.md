@@ -41,6 +41,18 @@ codex-auth list --json
   details may be cached.
 - `--json` emits one machine-readable JSON document and cannot be combined with `--live`.
 
+## Live Reset Credits
+
+- With `--live`, `c` expands or collapses the reset-credit rail. The rail attaches to the row under the *rail cursor*, not to the highlighted switch target; the footer lists the keys (`Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit`).
+- `j` and `k` move the rail cursor between rendered account rows. Group header rows (several accounts sharing one email) are not rows, so the rail always lands on the account drawn on that line.
+- While the rail is open the list scrolls to keep that row visible, so a redeem is never confirmed or reported on a line outside the viewport.
+- With the rail closed, `↑`/`↓` scroll the table. With it open they move the credit highlight inside the rail.
+- The rail header reads `Available N · ⏎ select · esc close`.
+- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). The confirmation is bound to the exact account and credit it was armed for: moving the credit highlight (`↑`/`↓`), moving the rail cursor (`j`/`k`), collapsing with `c`, closing the rail, or a refresh that changes which credit is highlighted all drop it, so a redeem only fires while the credit showing `⏎ again to use` is the one being confirmed. A failed redeem also drops it; retrying asks for a fresh `⏎` `⏎` pair and reuses the same idempotency key for that credit.
+- While the rail is open, both `esc` and `q` close the rail instead of quitting the session.
+- A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round.
+- Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
+
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
 
 ## Output Notes
@@ -52,12 +64,12 @@ When local-only refresh is active, only the active account can be updated from l
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `PLAN EXPIRE` renders the local date from the stored `id_token` subscription claim.
   Missing or past timestamps render as `-` in both plain and live tables.
-- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. A zero count renders as `0`; a non-zero count with no known expiry renders as `N (-)`.
+- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. A zero count renders as `0`; a non-zero count appends the earliest available credit expiry as `N (exp MMM-DD)`, or `N (-)` when no available credit has an expiry.
 - JSON output includes the raw `plan_expires_at` timestamp and the returned reset-credit details.
   The terminal column hides past plan-expiry timestamps, but the JSON value remains the
   stored timestamp so callers can detect stale snapshots.
 - Remote refresh failures can render row overlays such as `401`, `403`, `TimedOut`, or `MissingAuth`.
-- `LAST ACTIVITY` is based on the last stored usage update time.
+- `LAST ACTIVITY` is based on the last stored usage update time. Its header is shown in full when the column is at least 13 columns wide and collapses to `LAST` otherwise; the same rule applies to plain and live output.
 - `--json` returns accounts in the same display order and includes the same row numbers shown by the table.
 - JSON plan values are final product plans; callers do not map backend Team/Business identifiers.
 - JSON usage keeps the displayable snapshot separate from the current invocation's refresh result, so cached values remain visible after refresh failure.

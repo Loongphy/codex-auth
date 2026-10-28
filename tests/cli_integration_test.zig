@@ -5181,3 +5181,130 @@ test "Scenario: Given unsupported native host with missing explicit codex CLI pa
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
 }
+
+fn seedResetCreditsFixture(allocator: std.mem.Allocator, home_root: []const u8, email: []const u8) !void {
+    try seedRegistryWithAccounts(allocator, home_root, email, &.{
+        .{ .email = email, .alias = "reset" },
+    });
+    const home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(home);
+
+    var reg = try registry.loadRegistry(allocator, home);
+    defer reg.deinit(allocator);
+    const key = try fixtures.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(key);
+    const idx = registry.findAccountIndexByAccountKey(&reg, key) orelse return error.TestUnexpectedResult;
+
+    const cards = try allocator.alloc(registry.ResetCreditCard, 2);
+    cards[0] = .{
+        .id = try allocator.dupe(u8, "credit-later"),
+        .status = try allocator.dupe(u8, "available"),
+        .expires_at = try allocator.dupe(u8, "2027-01-01T00:00:00Z"),
+        .title = try allocator.dupe(u8, "Later card"),
+    };
+    cards[1] = .{
+        .id = try allocator.dupe(u8, "credit-soon"),
+        .status = try allocator.dupe(u8, "available"),
+        .expires_at = try allocator.dupe(u8, "2026-11-01T00:00:00Z"),
+        .title = try allocator.dupe(u8, "Full reset (Weekly + 5 hr)"),
+    };
+    reg.accounts.items[idx].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .reset_credits = 2,
+        .reset_credit = cards,
+        .plan_type = .plus,
+    };
+    try registry.saveRegistry(allocator, home, &reg);
+}
+
+fn writeResetConsumeFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir) !void {
+    try dir.makePath("fake-curl-bin");
+    const script =
+        "#!/bin/sh\n" ++
+        "config=$(cat)\n" ++
+        "case \"$config\" in\n" ++
+        "  *credit-soon*) printf '%s\\n200' '{\"code\":\"reset\",\"windows_reset\":1}' ;;\n" ++
+        "  *) exit 1 ;;\n" ++
+        "esac\n";
+    _ = allocator;
+    const sub_path = fakeCurlCommandPath();
+    try dir.writeFile(.{ .sub_path = sub_path, .data = script });
+
+    var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o755);
+}
+
+fn writeResetCreditsAuthFile(allocator: std.mem.Allocator, home_root: []const u8, email: []const u8) !void {
+    const home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(home);
+    const key = try fixtures.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(key);
+    const path = try registry.accountAuthPath(allocator, home, key);
+    defer allocator.free(path);
+    const data = try fixtures.authJsonWithEmailPlan(allocator, email, "plus");
+    defer allocator.free(data);
+    try fs.cwd().writeFile(.{ .sub_path = path, .data = data });
+}
+
+test "Scenario: Given reset credits when running reset then it consumes the soonest-expiring card and lists the rest" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "reset-user@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+    try writeResetConsumeFakeCurl(gpa, tmp.dir);
+
+    const fake_curl_dir = try tmp.dir.realpathAlloc(gpa, "fake-curl-bin");
+    defer gpa.free(fake_curl_dir);
+    const path_override = try prependPathEntryAlloc(gpa, fake_curl_dir);
+    defer gpa.free(path_override);
+
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, &[_][]const u8{ "reset", email });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset", result);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "used \"Full reset (Weekly + 5 hr)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"Full reset (Weekly + 5 hr)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "remaining: 1 \u{00b7} next: Later card") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Later card") != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
+test "Scenario: Given no available reset credits when running reset then it reports and fails" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "empty-reset@example.com";
+    try seedRegistryWithAccounts(gpa, home_root, email, &.{
+        .{ .email = email, .alias = "empty" },
+    });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "reset", email });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "no available reset credits") != null);
+}

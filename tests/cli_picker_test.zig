@@ -5,6 +5,7 @@ const app_runtime = codex_auth.core.runtime;
 const cli = codex_auth.cli;
 const live_tui = cli.live_tui;
 const registry = codex_auth.registry;
+const text_width = codex_auth.tui.text_width;
 const isQuitInput = cli.picker.isQuitInput;
 const isQuitKey = cli.picker.isQuitKey;
 const activeSelectableIndex = cli.picker.activeSelectableIndex;
@@ -1512,7 +1513,7 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         removeTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: Up/Down scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
         listTuiFooterText(true),
     );
 }
@@ -1527,7 +1528,7 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         removeTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n",
+        "Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
         listTuiFooterText(false),
     );
 }
@@ -1704,6 +1705,342 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "reset credits panel renders the remaining rail and compact rows" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = "2026-11-01T00:00:00Z", .epoch = now + 9 * 86400 },
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used", 6);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "      ┌ Available 2 · ⏎ select · esc close") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      │ ▸ Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · ⏎ again to use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│   (untitled) · -") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "│ ✓ used") != null);
+    try std.testing.expect(std.mem.endsWith(u8, text, "└\n"));
+}
+
+test "reset credits panel hint tracks the armed credit identity" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const Identity = cli.reset_credits_panel.Identity;
+    const card_zero = Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    const card_one = Identity{ .account_key = "acct-a", .credit_id = "card-1" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_zero));
+    try std.testing.expect(sel.isPendingFor(card_zero));
+    // The hint must never appear on a card that a second Enter would not redeem.
+    try std.testing.expect(!sel.isPendingFor(card_one));
+    try std.testing.expect(!sel.isPendingFor(null));
+    try std.testing.expect(!sel.isPendingFor(.{ .account_key = "acct-b", .credit_id = "card-0" }));
+}
+
+test "reset credits panel approval is dropped by a cursor move queued in the same key batch" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    try std.testing.expectEqual(Step.consume, sel.confirm(gpa, card));
+    // A `j` that arrives in the same input batch as the two Enters would move
+    // the rail before the queued redeem runs, cancelling it silently; the live
+    // loop stops consuming the batch once a redeem is queued.
+    sel.moveRow(gpa, .down, 6);
+    try std.testing.expect(!sel.approve(gpa, card));
+}
+
+test "live list follows the credits rail row into the viewport" {
+    // The rail row is above the viewport: scroll up to it.
+    try std.testing.expectEqual(@as(usize, 2), live_tui.followViewportStart(40, 10, 20, 2));
+    // Below the viewport: it becomes the last visible line.
+    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 0, 39));
+    // Already visible: unchanged.
+    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, 25));
+    // Without a rail the plain clamp still applies.
+    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, null));
+    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 99, null));
+    // Everything fits on screen, and a zero-height viewport, stay at the top.
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(5, 10, 3, 4));
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(40, 0, 20, 5));
+}
+
+test "reset credits panel orders cards by parsed expiry and keeps undated cards last" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":3,"total_earned_count":4,"credits":[
+        \\{"id":"nov","status":"available","expires_at":"2026-11-01T00:00:00Z","title":"Full reset (Weekly + 5 hr)"},
+        \\{"id":"undated","status":"available","expires_at":null,"title":"Late grant"},
+        \\{"id":"used","status":"consumed","expires_at":"2026-09-01T00:00:00Z","title":"Used card"},
+        \\{"id":"oct","status":"available","expires_at":"2026-10-01T00:00:00Z","title":"Half reset"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 3,
+        .reset_credit = details,
+    };
+
+    const cards = try cli.reset_credits_panel.collectAvailable(gpa, &reg.accounts.items[0], &.{});
+    defer gpa.free(cards);
+
+    try std.testing.expectEqual(@as(usize, 3), cards.len);
+    try std.testing.expectEqualStrings("oct", cards[0].id);
+    try std.testing.expectEqual(@as(i64, 1_790_812_800), cards[0].epoch.?);
+    try std.testing.expectEqualStrings("nov", cards[1].id);
+    try std.testing.expectEqual(@as(i64, 1_793_491_200), cards[1].epoch.?);
+    try std.testing.expectEqualStrings("undated", cards[2].id);
+    try std.testing.expect(cards[2].epoch == null);
+}
+
+test "reset credits panel bounds multibyte lines by display width" {
+    const gpa = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, 7, 1_800_000_000, 0, false, "✓ used", 0);
+    var lines = std.mem.splitScalar(u8, out.written(), '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try std.testing.expect(std.unicode.utf8ValidateSlice(line));
+        try std.testing.expect(text_width.displayWidth(line) <= 7);
+    }
+}
+
+test "reset credits panel requires a second confirm on the same credit after moving" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card_zero = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    const card_one = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-1" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_zero));
+    try std.testing.expect(sel.isPendingFor(card_zero));
+    sel.moveCard(gpa, .down);
+    try std.testing.expect(!sel.isPendingFor(card_zero));
+    try std.testing.expectEqual(@as(usize, 1), sel.card_cursor);
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card_one));
+    try std.testing.expectEqual(Step.consume, sel.confirm(gpa, card_one));
+    try std.testing.expect(sel.approve(gpa, card_one));
+    try std.testing.expect(!sel.approve(gpa, card_one));
+}
+
+test "reset credits panel drops a pending confirm when the account row moves" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    sel.moveRow(gpa, .down, 4);
+    try std.testing.expectEqual(@as(usize, 1), sel.row_cursor);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expect(!sel.valid);
+    try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
+    sel.moveRow(gpa, .down, 4);
+    sel.clampRow(gpa, 1);
+    try std.testing.expectEqual(@as(usize, 0), sel.row_cursor);
+    try std.testing.expect(!sel.valid);
+    sel.updateCards(gpa, 2);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
+}
+
+test "reset credits panel cannot confirm a row without a consumable credit" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    sel.clearSelection(gpa);
+    try std.testing.expect(!sel.valid);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
+    try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
+    try std.testing.expect(!sel.approve(gpa, card));
+}
+
+test "reset credits panel binds a pending confirm to one account and credit" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const first = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    const other_credit = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-9" };
+    const other_account = cli.reset_credits_panel.Identity{ .account_key = "acct-b", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, first));
+    // A refresh that keeps the list length but swaps the highlighted card must
+    // not let the queued second Enter redeem the new card.
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, other_credit));
+    try std.testing.expect(!sel.approve(gpa, first));
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, other_credit));
+    try std.testing.expect(!sel.approve(gpa, other_account));
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, other_credit));
+    try std.testing.expectEqual(Step.consume, sel.confirm(gpa, other_credit));
+    try std.testing.expect(sel.approve(gpa, other_credit));
+    try std.testing.expect(!sel.approve(gpa, other_credit));
+}
+
+test "reset credits panel keeps a confirm armed only while the credit stays highlighted" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const first = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, first));
+    sel.updateCards(gpa, 2);
+    try std.testing.expect(sel.isPendingFor(first));
+    try std.testing.expect(sel.valid);
+    sel.moveCard(gpa, .down);
+    const second = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-1" };
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, second));
+    sel.updateCards(gpa, 1);
+    try std.testing.expect(!sel.isPendingFor(second));
+    try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
+}
+
+test "reset credits panel close drops the pending confirm and the status line" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try sel.setStatus(gpa, "✓ reset credit used");
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    sel.close(gpa);
+    try std.testing.expect(!sel.expanded);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expectEqualStrings("", sel.status orelse "");
+    try std.testing.expectEqual(Step.ignored, sel.confirm(gpa, card));
+    sel.toggleExpanded(gpa);
+    try std.testing.expect(sel.expanded);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expect(sel.status == null);
+}
+
+test "reset credits panel clears the status line when the account row moves" {
+    const gpa = std.testing.allocator;
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try sel.setStatus(gpa, "✓ reset credit used");
+    sel.moveRow(gpa, .down, 5);
+    try std.testing.expect(sel.status == null);
+    try sel.setStatus(gpa, "✗ use failed (HTTP 500)");
+    sel.clearSelection(gpa);
+    try std.testing.expect(sel.status == null);
+}
+
+test "reset credits panel splice keeps one line per rendered row" {
+    const gpa = std.testing.allocator;
+    const body = "header\nrow-a\nrow-b\n";
+
+    const middle = try cli.reset_credits_panel.spliceAfterDataLine(gpa, body, 0, "RAIL\n");
+    defer gpa.free(middle);
+    try std.testing.expectEqualStrings("header\nrow-a\nRAIL\nrow-b\n", middle);
+
+    const last = try cli.reset_credits_panel.spliceAfterDataLine(gpa, body, 1, "RAIL\n");
+    defer gpa.free(last);
+    try std.testing.expectEqualStrings("header\nrow-a\nrow-b\nRAIL\n", last);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, last, "\n"));
+}
+
+test "live list maps the credits rail cursor to the rendered account row" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    // Two accounts sharing one email render as a group (header row plus two
+    // account rows) alongside a singleton account, so the row indices of
+    // rows.items and the rendered data-row indices cannot be used interchangeably.
+    try appendTestAccount(gpa, &reg, "user-1::acct-a", "shared@example.com", "", .pro);
+    try appendTestAccount(gpa, &reg, "user-1::acct-b", "shared@example.com", "", .plus);
+    try appendTestAccount(gpa, &reg, "user-2::acct-c", "other@example.com", "", .pro);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
+
+    const account_count = reg.accounts.items.len;
+    var header_rows: usize = 0;
+    for (rows.items) |row| {
+        if (row.is_header) header_rows += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), header_rows);
+    try std.testing.expectEqual(@as(usize, 3), cli.render.liveDataRowCount(rows.items, account_count));
+    try std.testing.expectEqual(
+        std.mem.count(u8, body.written(), "\n") - 1,
+        cli.render.liveDataRowCount(rows.items, account_count),
+    );
+
+    var iter = std.mem.splitScalar(u8, body.written(), '\n');
+    _ = iter.next(); // column header line
+    var shifted: usize = 0;
+    var naive_hits_header: usize = 0;
+    for (0..3) |data_index| {
+        const line = iter.next() orelse return error.TestUnexpectedResult;
+        const row_index = cli.render.liveRowIndexForDataIndex(rows.items, account_count, data_index) orelse
+            return error.TestUnexpectedResult;
+        try std.testing.expect(!rows.items[row_index].is_header);
+        try std.testing.expect(std.mem.indexOf(u8, line, rows.items[row_index].account) != null);
+        if (row_index != data_index) shifted += 1;
+        if (rows.items[data_index].is_header) naive_hits_header += 1;
+    }
+    // The header row is not drawn, so the naive `rows.items[data_index]`
+    // indexing both points at a group header and desyncs the rail from the row
+    // it is spliced under.
+    try std.testing.expect(naive_hits_header > 0);
+    try std.testing.expect(shifted > 0);
+    try std.testing.expect(cli.render.liveRowIndexForDataIndex(rows.items, account_count, 3) == null);
+}
+
+test "live list renders a dash when available reset credits have no expiry" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":1,"credits":[
+        \\{"id":"undated-card","reset_type":"codex_rate_limits","status":"available","granted_at":"2026-09-01T00:00:00Z","expires_at":null,"title":"Undated card"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 30, .window_minutes = 300, .resets_at = 1790000100 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 1,
+        .reset_credit = details,
+    };
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var styled_body = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (-)") != null);
+}
+
 test "live list shows plan expiry only when it is still in the future" {
     const gpa = std.testing.allocator;
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
@@ -1776,7 +2113,7 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
 
-test "live list defers PLAN EXPIRE and keeps the configured column order" {
+test "live list details keep the responsive column order and complete percentages" {
     const gpa = std.testing.allocator;
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var reg = makeTestRegistry();
@@ -1793,6 +2130,24 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var rows = try buildSwitchRows(gpa, &reg);
     defer rows.deinit(gpa);
 
+    var width: usize = 20;
+    while (width <= 140) : (width += 1) {
+        var body: std.Io.Writer.Allocating = .init(gpa);
+        defer body.deinit();
+        var writer = StyledWriter.init(&body.writer, false);
+        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width);
+
+        var lines = std.mem.splitScalar(u8, body.written(), '\n');
+        const header = lines.next() orelse "";
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            try std.testing.expect(line.len <= width);
+        }
+        if (std.mem.indexOf(u8, header, "5H") != null) {
+            try std.testing.expect(std.mem.indexOf(u8, body.written(), "100%") != null);
+        }
+    }
+
     var narrow_body: std.Io.Writer.Allocating = .init(gpa);
     defer narrow_body.deinit();
     var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
@@ -1808,7 +2163,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
     var last_index: usize = 0;
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST" }) |token| {
+    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
         const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;
@@ -1840,4 +2195,42 @@ test "live list renders zero reset credits without an expiry marker" {
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
+}
+
+test "mouse wheel step scales with visible rows" {
+    try std.testing.expectEqual(@as(usize, 6), live_tui.mouseWheelRows(1));
+    try std.testing.expectEqual(@as(usize, 6), live_tui.mouseWheelRows(18));
+    try std.testing.expectEqual(@as(usize, 10), live_tui.mouseWheelRows(30));
+    try std.testing.expectEqual(@as(usize, 12), live_tui.mouseWheelRows(80));
+}
+
+test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
+    var viewport_start: usize = 9;
+    const row_count: usize = 105;
+    const max_rows: usize = 20;
+    const wheel_rows: usize = live_tui.mouseWheelRows(max_rows);
+
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
+    try std.testing.expectEqual(@as(usize, 3), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
+    try std.testing.expectEqual(@as(usize, 29), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
+    try std.testing.expectEqual(@as(usize, 0), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
+    try std.testing.expectEqual(@as(usize, 85), viewport_start);
+}
+
+test "display width counts UTF-8 codepoints instead of bytes" {
+    try std.testing.expectEqual(@as(usize, 7), text_width.displayWidth("Рабочая"));
+    try std.testing.expectEqual(@as(usize, 6), text_width.prefixByteLength("Рабочая", 3));
+    try std.testing.expectEqualStrings("чая", "Рабочая"[text_width.suffixStart("Рабочая", 3)..]);
 }

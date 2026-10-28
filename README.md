@@ -58,6 +58,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
 | [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
+| [`codex-auth reset <query>`](./docs/commands/reset.md) | Use the soonest-expiring reset credit for one account |
 | [`codex-auth alias set <query> <alias>`](./docs/commands/alias.md) | Set an alias for an account |
 | [`codex-auth alias clear <query>`](./docs/commands/alias.md) | Clear the alias for an account |
 
