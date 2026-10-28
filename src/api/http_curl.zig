@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("http_types.zig");
 const child = @import("http_child.zig");
 const executable = @import("http_executable.zig");
+const proxy = @import("http_proxy.zig");
 
 const HttpResult = types.HttpResult;
 const BatchRequest = types.BatchRequest;
@@ -166,20 +167,15 @@ fn runCurlJsonCommandWithExecutable(
     endpoint: []const u8,
     headers: []const []const u8,
 ) !HttpResult {
-    const user_agent_header = "User-Agent: " ++ user_agent;
-
     var argv = std.ArrayList([]const u8).empty;
     defer argv.deinit(allocator);
     try appendCurlBaseArgs(allocator, &argv, curl_executable);
 
     var curl_config = std.ArrayList(u8).empty;
     defer curl_config.deinit(allocator);
-    try appendCurlConfigLine(allocator, &curl_config, "url", endpoint);
-    try appendCurlConfigLine(allocator, &curl_config, "header", user_agent_header);
-    try appendCurlConfigLine(allocator, &curl_config, "header", "Accept: application/json");
-    for (headers) |header| {
-        try appendCurlConfigLine(allocator, &curl_config, "header", header);
-    }
+    var resolved_proxy = try proxy.resolve(allocator, endpoint);
+    defer if (resolved_proxy) |*value| value.deinit(allocator);
+    try appendCurlConfig(allocator, &curl_config, endpoint, headers, resolved_proxy);
 
     const result = runChildCaptureWithInputAndOutputLimit(
         allocator,
@@ -351,6 +347,32 @@ fn curlBatchErrorItem(allocator: std.mem.Allocator, err: anyerror) BatchItemResu
             .outcome = .failed,
         },
     };
+}
+
+/// Assemble the `--config -` document for one request.
+///
+/// `resolved_proxy` stays owned by the caller: the curl child only reads proxy
+/// environment variables, so a platform system proxy has to be written here as
+/// explicit options rather than inherited.
+pub fn appendCurlConfig(
+    allocator: std.mem.Allocator,
+    config: *std.ArrayList(u8),
+    endpoint: []const u8,
+    headers: []const []const u8,
+    resolved_proxy: ?proxy.Proxy,
+) !void {
+    try appendCurlConfigLine(allocator, config, "url", endpoint);
+    try appendCurlConfigLine(allocator, config, "header", "User-Agent: " ++ user_agent);
+    try appendCurlConfigLine(allocator, config, "header", "Accept: application/json");
+    for (headers) |header| {
+        try appendCurlConfigLine(allocator, config, "header", header);
+    }
+    if (resolved_proxy) |value| {
+        try appendCurlConfigLine(allocator, config, "proxy", value.url);
+        if (value.noproxy) |noproxy| {
+            try appendCurlConfigLine(allocator, config, "noproxy", noproxy);
+        }
+    }
 }
 
 fn appendCurlBaseArgs(

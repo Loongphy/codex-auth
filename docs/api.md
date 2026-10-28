@@ -5,7 +5,33 @@ This document is the single source of truth for outbound ChatGPT API refresh beh
 All API refresh requests are issued through `curl`.
 `codex-auth` resolves `curl` from `PATH`.
 
-`codex-auth` does not translate platform proxy settings. The curl child process inherits the parent process environment, and curl applies its own proxy environment variable handling.
+## Proxy
+
+The curl child process inherits the parent process environment, and curl applies its own proxy environment variable handling.
+
+`curl` never reads the platform system proxy that a browser or PowerShell honours. So when no proxy environment variable is set, `codex-auth` translates the platform setting into explicit `proxy` and `noproxy` curl options.
+
+Resolution order:
+
+1. A proxy environment variable already set for the request scheme (`HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, `http_proxy`, `ALL_PROXY`, `all_proxy`) wins, and nothing is injected.
+2. Otherwise the platform system proxy is used.
+3. Otherwise the connection is direct.
+
+Platform sources:
+
+| Platform | Source | PAC |
+| --- | --- | --- |
+| Windows | WinHTTP `WinHttpGetIEProxyConfigForCurrentUser`; an explicit auto-config URL is resolved through `WinHttpGetProxyForUrl` | yes |
+| macOS | `scutil --proxy` | no |
+| Linux | none; use proxy environment variables | n/a |
+
+Windows does not perform WPAD auto-detection, because it probes DHCP and DNS and can stall on a network with no WPAD server. A macOS PAC-only configuration is treated as no system proxy.
+
+Exclusions: an explicit `NO_PROXY` or `no_proxy` wins over the platform bypass list. Otherwise the platform list (Windows `ProxyOverride`, macOS `ExceptionsList`) is translated into curl's `noproxy` option, with the WinINET `<local>` shorthand mapped to `localhost` and duplicates dropped.
+
+A SOCKS-only system proxy is passed to curl as `socks5h://` so DNS resolution stays on the proxy side. When both an HTTP-family entry and a SOCKS entry are configured, the HTTP-family entry wins.
+
+The platform setting is read once per process. Lookup failures are treated as "no system proxy" and never surface as request errors. Proxy values are never written to logs.
 
 ## Endpoints
 
