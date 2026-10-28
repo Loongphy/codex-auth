@@ -57,3 +57,29 @@ OK Downloaded Codext CLI for WSL (v0.3.0)
 ----------------------------------------------------------------------------
 Launching Codex App...
 ```
+
+## System proxy
+
+`curl` only discovers proxies from its own environment variables, so the system
+proxy that a browser or `Invoke-WebRequest` honours was previously invisible to
+API refresh. `codex-auth` reads it through WinHTTP and passes it to the curl
+child process explicitly.
+
+- The static proxy comes from `WinHttpGetIEProxyConfigForCurrentUser`, which
+  already accounts for `ProxyEnable`, so a disabled entry is not mistaken for a
+  configured one.
+- An explicit auto-config URL is resolved per request by `WinHttpGetProxyForUrl`,
+  which evaluates the PAC script in-process.
+- WPAD auto-detection is deliberately not requested. It probes DHCP and DNS and
+  can stall for seconds on a network with no WPAD server, and local forwarders
+  such as mihomo do not rely on it.
+- `ProxyOverride` becomes curl's `noproxy` option, with `<local>` mapped to
+  `localhost`.
+- An existing `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` still wins, so nothing
+  changes for a shell that already exports them. To force a direct connection,
+  set `NO_PROXY=*`.
+
+The same translation applies to the Codext release lookup and download in
+`codex-auth app`.
+
+See [api.md](./api.md) for the full resolution order.

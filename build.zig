@@ -78,6 +78,7 @@ pub fn build(b: *std.Build) void {
         "tests/api_account_test.zig",
         "tests/api_http_test.zig",
         "tests/api_me_test.zig",
+        "tests/api_proxy_test.zig",
         "tests/api_usage_test.zig",
         "tests/auth_test.zig",
         "tests/cli_behavior_test.zig",
