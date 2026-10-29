@@ -53,31 +53,20 @@ pub fn handleReset(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
 
     switch (result.outcome) {
         .reset, .already_redeemed => {
-            const expires_local = if (card.epoch) |epoch|
-                try cli.rows.formatTimestampAlloc(allocator, epoch)
-            else
-                null;
-            defer if (expires_local) |text| allocator.free(text);
-            try cli.output.printResetConsumed(card.title, expires_local, result.outcome == .already_redeemed);
-
-            var remaining = std.ArrayList(cli.output.ResetRemainingEntry).empty;
-            defer {
-                for (remaining.items) |entry| {
-                    if (entry.expires_local) |text| allocator.free(text);
-                }
-                remaining.deinit(allocator);
+            // The redeemed card's own expiry is spent, so the summary reports only
+            // what is left and when the next card expires. `collectAvailable` sorts
+            // by expiry ascending, so `cards[1]` is that card.
+            var next_expiry: ?[]u8 = null;
+            if (cards.len > 1 and cards[1].epoch != null) {
+                next_expiry = try cli.rows.formatCompactTimestampAlloc(allocator, cards[1].epoch);
             }
-            for (cards[1..]) |remaining_card| {
-                const remaining_expiry = if (remaining_card.epoch) |epoch|
-                    try cli.rows.formatTimestampAlloc(allocator, epoch)
-                else
-                    null;
-                try remaining.append(allocator, .{
-                    .title = remaining_card.title,
-                    .expires_local = remaining_expiry,
-                });
-            }
-            try cli.output.printResetRemaining(remaining.items);
+            defer if (next_expiry) |text| allocator.free(text);
+            try cli.output.printResetSummary(
+                allocator,
+                result.outcome == .already_redeemed,
+                cards.len - 1,
+                next_expiry,
+            );
         },
         .no_credit => {
             try cli.output.printResetError("reset credit is no longer available; run `codex-auth list --api` to refresh.", .{});

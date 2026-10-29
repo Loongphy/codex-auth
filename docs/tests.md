@@ -55,6 +55,44 @@ const fixtures = @import("support/fixtures.zig");
 
 Do not expose fixtures from `src/root.zig`.
 
+## Mock Backend
+
+`tests/fake_curl.zig` is the mock backend, installed as `curl` by
+`zig build test-helpers`. `codex-auth` resolves `curl` from `PATH`, so putting the
+mock first shadows the real one without touching any production code path.
+
+Without `CODEX_AUTH_FAKE_CURL_DIR` it answers the two fixed bodies the older tests
+were written against. With it, the directory drives the responses:
+`usage[-<account_id>].json`, `credits[-<account_id>].json`,
+`accounts[-<account_id>].json`, `me.json` and `consume.json` supply bodies, a sibling
+`<name>.status` file supplies a non-`200` status, a sibling `<name>.exit` file makes
+that one request fail like curl would (so a single account in a batch can fail
+transport while the others succeed), and `after-consume-*.json` takes over once a
+redeem succeeded. `CODEX_AUTH_FAKE_CURL_SCENARIO` selects a built-in consume outcome
+(`ok`, `already_redeemed`, `no_credit`, `nothing_to_reset`, `unknown_code`, `http500`,
+`timeout`, `resolve_failed`). `requests.log` records each consume request with its
+body, and never a credential; tests assert both.
+
+The mock replaces only the HTTP peer: the CLI binary, registry and usage parsing, the
+rail renderer and the exit codes are all the real thing. It is a `test-helpers`
+artifact, so it is never part of a release package: the release and preview workflows
+copy `zig-out/bin/<binary_name>` alone into the uploaded artifacts.
+
+The same mock backs the dev demos, so there is only one backend double in the repo:
+
+- `scripts/dev/reset-demo.sh` prints every documented `codex-auth reset` outcome
+  with its stdout, stderr and exit code; `--dump` also shows the seeded registry,
+  the raw backend response and the parsed `list --json` side by side.
+- `scripts/dev/reset-live-demo.sh` runs the real `list --live` rail against it,
+  either interactively or, with `--drive`, as a scripted tmux session that prints
+  one captured frame per step. `--assert` turns that session into a smoke test over
+  the captured frames; it needs tmux and timing tolerance, so it stays a local
+  check rather than a CI step.
+- `scripts/dev/reset-rail-preview.sh` renders the rail for both platform glyph sets
+  at several widths, without a terminal.
+
+No demo touches the network or a real account, so no credit is consumed.
+
 ## Test Descriptions
 
 When refactoring, test descriptions must remain compatible with `main`. This is part of the compatibility contract. A refactor is acceptable only when the set of test descriptions remains unchanged unless the behavior itself intentionally changes.

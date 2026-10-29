@@ -10,17 +10,19 @@ codex-auth reset <alias|email|display-number|query>
 
 `codex-auth reset` redeems one reset credit for a single stored account.
 
-- The account selector accepts the same forms as `switch` and must resolve to exactly one account.
+- The account selector accepts the same alias, email, display-number, and query forms as `switch`, and must resolve to exactly one account. Two differences from `switch`: a selector starting with `-` is rejected as an unknown flag rather than read as the previous account, and a query matching several accounts fails instead of opening the interactive picker.
 - The command picks the available credit (`status == "available"`) with the earliest `expires_at` from the stored `last_usage.reset_credit` snapshot. Credits without an expiry are used only when no dated credit is available.
-- The chosen credit is redeemed through `POST wham/rate-limit-reset-credits/consume` with a freshly generated UUID v4 `redeem_request_id`.
-- On success it prints two compact lines: the consumed credit (title and local expiry) and a remaining summary with the count and the card that expires next:
+- The chosen credit is redeemed through `POST wham/rate-limit-reset-credits/consume` with a freshly generated UUID v4 `redeem_request_id`. See [docs/api.md](../api.md) for the full request.
+- On success it prints one compact line: that a credit was used, how many are left, and when the next one expires:
 
   ```text
-  used "Full reset (Weekly + 5 hr)" · expires 2026-11-01 08:00
-  remaining: 1 · next: (untitled) · -
+  reset credit used · 1 left (next exp 01-01 08:00)
   ```
+
+  Variants: `reset credit already used` when the backend answers `already_redeemed`, `· none left` when the redeemed card was the last one, and `· N left (no expiry)` when the next card carries no expiry. The redeemed card is neither named nor dated: the wording matches the `list --live` rail's status line, while `list --json` and the stored snapshot keep the card detail. Times are local `MM-DD HH:MM`, the same compact form the rail uses. Windows default output uses a comma instead of the `·` separator.
+- The remaining count is derived from the stored card list, so it can be lower than the `RESET CREDITS` cell of `codex-auth list`, which prefers the server's `available_count`. Server card lists may be capped; run `codex-auth list --api` to reconcile them.
 - The registry file is not rewritten by this command. The consumed credit disappears from the account list on the next `codex-auth list --api` refresh; run that refresh when the backend state changed elsewhere.
-- Exit code is `0` after a successful consume (including the backend reporting `already_redeemed`) and `1` when the account has no available credits, the backend reports `no_credit` or `nothing_to_reset`, or the request fails.
+- Exit code is `0` after a successful consume (including the backend reporting `already_redeemed`), `1` when the account has no available credits, the backend reports `no_credit` or `nothing_to_reset`, or the request fails, and `2` for a usage error such as a missing selector or an unknown flag.
 
 ## Notes
 

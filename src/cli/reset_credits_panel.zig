@@ -1,6 +1,7 @@
 const std = @import("std");
 const registry = @import("../registry/root.zig");
 const rows = @import("rows.zig");
+const style = @import("style.zig");
 const timestamp = @import("../time/timestamp.zig");
 const text_width = @import("../tui/text_width.zig");
 
@@ -23,7 +24,52 @@ pub const Identity = struct {
     credit_id: []const u8,
 };
 
-/// Result of pressing `⏎` while the panel is open.
+/// Identity cached from the last rendered frame.
+///
+/// Keys are processed in batches before the next frame is drawn, so a move can
+/// make this cached identity describe a credit that is no longer highlighted.
+/// The batch code clears it through `Selection.moveCardAndInvalidate`; `get`
+/// then returns null and the same batch cannot arm or redeem the stale credit.
+pub const RenderedIdentity = struct {
+    account_key: ?[]u8 = null,
+    credit_id: ?[]u8 = null,
+
+    pub fn deinit(self: *RenderedIdentity, allocator: std.mem.Allocator) void {
+        self.clear(allocator);
+    }
+
+    pub fn clear(self: *RenderedIdentity, allocator: std.mem.Allocator) void {
+        if (self.credit_id) |id| allocator.free(id);
+        self.credit_id = null;
+        if (self.account_key) |key| allocator.free(key);
+        self.account_key = null;
+    }
+
+    /// Replaces the cached pair. Both copies are allocated before the old pair
+    /// is freed, so an allocation failure leaves the previous frame's identity
+    /// intact instead of dangling.
+    pub fn set(self: *RenderedIdentity, allocator: std.mem.Allocator, identity: ?Identity) !void {
+        var credit_copy: ?[]u8 = null;
+        errdefer if (credit_copy) |copy| allocator.free(copy);
+        var account_copy: ?[]u8 = null;
+        errdefer if (account_copy) |copy| allocator.free(copy);
+        if (identity) |current| {
+            credit_copy = try allocator.dupe(u8, current.credit_id);
+            account_copy = try allocator.dupe(u8, current.account_key);
+        }
+        self.clear(allocator);
+        self.credit_id = credit_copy;
+        self.account_key = account_copy;
+    }
+
+    pub fn get(self: *const RenderedIdentity) ?Identity {
+        const account_key = self.account_key orelse return null;
+        const credit_id = self.credit_id orelse return null;
+        return .{ .account_key = account_key, .credit_id = credit_id };
+    }
+};
+
+/// Result of pressing `Enter` while the panel is open.
 pub const ConfirmStep = enum {
     /// The credit is now armed; the caller must render the re-confirm hint.
     armed,
@@ -36,6 +82,9 @@ pub const ConfirmStep = enum {
     /// The armed identity could not be recorded; nothing was armed.
     out_of_memory,
 };
+
+/// Role of a rail status line, mapped to the shared color roles.
+pub const StatusKind = enum { ok, fail, info };
 
 /// Selection state of the live reset credits panel.
 ///
@@ -61,6 +110,7 @@ pub const Selection = struct {
     /// Status line rendered inside the rail, owned by the selection so it
     /// cannot describe a credit from another account row.
     status: ?[]u8 = null,
+    status_kind: StatusKind = .info,
 
     pub fn deinit(self: *Selection, allocator: std.mem.Allocator) void {
         self.clearArmed(allocator);
@@ -94,13 +144,28 @@ pub const Selection = struct {
         const next = movedIndex(self.row_cursor, direction, row_count) orelse return;
         self.row_cursor = next;
         self.clearSelection(allocator);
-        self.clearStatus(allocator);
     }
 
     pub fn moveCard(self: *Selection, allocator: std.mem.Allocator, direction: Direction) void {
         const next = movedIndex(self.card_cursor, direction, self.card_count) orelse return;
         self.card_cursor = next;
         self.clearArmed(allocator);
+    }
+
+    /// `moveCard` for one input batch. If the cursor actually moved, the
+    /// identity cached from the previous frame is dropped before a following
+    /// `Enter` in the same batch can use it. At a boundary the cursor and the
+    /// cached identity both stay, so a repeated move key does not make the
+    /// visible credit unusable.
+    pub fn moveCardAndInvalidate(
+        self: *Selection,
+        allocator: std.mem.Allocator,
+        rendered: *RenderedIdentity,
+        direction: Direction,
+    ) void {
+        const before = self.card_cursor;
+        self.moveCard(allocator, direction);
+        if (self.card_cursor != before) rendered.clear(allocator);
     }
 
     /// Keeps the row cursor inside the rendered table after a refresh.
@@ -123,13 +188,20 @@ pub const Selection = struct {
         if (!self.valid) self.clearArmed(allocator);
     }
 
-    /// The cursor row has no consumable credit: keep the row cursor, drop the
-    /// card highlight, the armed confirmation, and any status line.
-    pub fn clearSelection(self: *Selection, allocator: std.mem.Allocator) void {
+    /// Drops the card highlight and the armed confirmation but keeps the status
+    /// line, so a background refresh cannot erase the report of a redeem that
+    /// already happened on this row.
+    pub fn clearCards(self: *Selection, allocator: std.mem.Allocator) void {
         self.card_cursor = 0;
         self.card_count = 0;
         self.valid = false;
         self.clearArmed(allocator);
+    }
+
+    /// The cursor row has no consumable credit: keep the row cursor, drop the
+    /// card highlight, the armed confirmation, and any status line.
+    pub fn clearSelection(self: *Selection, allocator: std.mem.Allocator) void {
+        self.clearCards(allocator);
         self.clearStatus(allocator);
     }
 
@@ -164,10 +236,24 @@ pub const Selection = struct {
         return matches;
     }
 
-    pub fn setStatus(self: *Selection, allocator: std.mem.Allocator, text: []const u8) !void {
+    pub fn setStatus(self: *Selection, allocator: std.mem.Allocator, text: []const u8, kind: StatusKind) !void {
         const copy = try allocator.dupe(u8, text);
         if (self.status) |old| allocator.free(old);
         self.status = copy;
+        self.status_kind = kind;
+    }
+
+    /// `setStatus` from a formatted message, freeing the temporary.
+    pub fn setStatusf(
+        self: *Selection,
+        allocator: std.mem.Allocator,
+        kind: StatusKind,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) !void {
+        const text = try std.fmt.allocPrint(allocator, fmt, args);
+        defer allocator.free(text);
+        try self.setStatus(allocator, text, kind);
     }
 
     pub fn clearStatus(self: *Selection, allocator: std.mem.Allocator) void {
@@ -227,75 +313,137 @@ pub fn collectAvailable(
     return cards.toOwnedSlice(allocator);
 }
 
-/// Renders the RESET CREDITS rail block. Lines are bounded to `max_cols`
-/// and '\n'-terminated. `card_cursor` marks the selected credit; the
-/// selected line appends the two-step confirm hint when `confirm_pending`.
-/// `status_line` surfaces the result of the last action.
+/// True when the account currently has a credit the rail can show. The live
+/// list uses this before opening the rail, so a zero-credit row stays a plain
+/// account row instead of flashing an empty panel.
+pub fn hasAvailable(
+    allocator: std.mem.Allocator,
+    account: *const registry.AccountRecord,
+    consumed_ids: []const []const u8,
+) !bool {
+    const cards = try collectAvailable(allocator, account, consumed_ids);
+    defer allocator.free(cards);
+    return cards.len > 0;
+}
+
+/// Inputs of one rail render. `is_windows` selects the ASCII glyph set that
+/// docs/windows.md requires for Windows default output.
+pub const RenderOptions = struct {
+    max_cols: usize,
+    now: i64,
+    card_cursor: usize = 0,
+    /// Draws the re-confirm hint on the highlighted card.
+    confirm_pending: bool = false,
+    status: ?[]const u8 = null,
+    status_kind: StatusKind = .info,
+    indent: usize = 0,
+    is_windows: bool = false,
+    use_color: bool = false,
+};
+
+/// Renders the borderless RESET CREDITS block and returns its line count,
+/// which the caller needs to keep the whole block inside the viewport. Lines
+/// are bounded to `max_cols` and '\n'-terminated. `card_cursor` marks the
+/// selected credit; the selected line appends the two-step confirm hint when
+/// `confirm_pending`. The block uses indentation, an uppercase heading, and
+/// color roles instead of a box border.
 pub fn render(
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
     cards: []const AvailableCard,
-    max_cols: usize,
-    now: i64,
-    card_cursor: usize,
-    confirm_pending: bool,
-    status_line: ?[]const u8,
-    indent: usize,
+    opts: RenderOptions,
 ) !usize {
+    const g = style.Glyphs.forPlatform(opts.is_windows);
+    // Below this the heading would have no room at all, which reads as stray
+    // whitespace instead of a rail.
+    if (opts.max_cols <= opts.indent) return 0;
+    const budget = opts.max_cols - opts.indent;
+
     var lines: usize = 0;
-    const budget = if (max_cols > indent + 2) max_cols - indent - 2 else 0;
     var header_buf: [128]u8 = undefined;
-    const header = std.fmt.bufPrint(&header_buf, "Available {d} · ⏎ select · esc close", .{cards.len}) catch "Available";
-    try writeIndent(writer, indent);
-    try writer.writeAll("┌ ");
-    try writeBounded(writer, header, budget);
-    try writer.writeByte('\n');
+    const header = std.fmt.bufPrint(
+        &header_buf,
+        "RESET CREDITS{s}{d} available",
+        .{ g.separator, cards.len },
+    ) catch "RESET CREDITS";
+    try writeRailLine(writer, opts.indent, header, budget, if (opts.use_color) style.role.heading else "");
     lines += 1;
 
-    if (cards.len == 0) {
-        try writeIndent(writer, indent);
-        try writer.writeAll("│ ");
-        try writeBounded(writer, "no available reset credits · run `codex-auth list --api` to refresh", budget);
-        try writer.writeByte('\n');
-        lines += 1;
-    } else {
-        for (cards, 0..) |card, index| {
-            const selected = index == card_cursor;
-            var line: std.Io.Writer.Allocating = .init(allocator);
-            defer line.deinit();
-            try line.writer.writeAll(if (selected) "▸ " else "  ");
-            try line.writer.writeAll(card.title orelse "(untitled)");
-            if (card.epoch) |epoch| {
-                const local = try rows.formatTimestampAlloc(allocator, epoch);
-                defer allocator.free(local);
-                const rel = try relativeIn(allocator, epoch, now);
-                defer allocator.free(rel);
-                const compact = if (local.len >= 16) local[5..16] else local;
-                try line.writer.print(" · {s} · {s}", .{ compact, rel });
-            } else {
-                try line.writer.writeAll(" · -");
-            }
-            if (selected and confirm_pending) try line.writer.writeAll(" · ⏎ again to use");
-            try writeIndent(writer, indent);
-            try writer.writeAll("│ ");
-            try writeBounded(writer, line.written(), budget);
-            try writer.writeByte('\n');
-            lines += 1;
+    for (cards, 0..) |card, index| {
+        const selected = index == opts.card_cursor;
+        var line: std.Io.Writer.Allocating = .init(allocator);
+        defer line.deinit();
+        // `>` is the cursor mark style.md already establishes for the switch
+        // and remove tables, so the rail uses it on every platform.
+        try line.writer.writeAll(if (selected) "> " else "  ");
+        try line.writer.writeAll(card.title orelse "(untitled)");
+        if (card.epoch) |epoch| {
+            const compact = try rows.formatCompactTimestampAlloc(allocator, epoch);
+            defer allocator.free(compact);
+            const rel = try relativeIn(allocator, epoch, opts.now);
+            defer allocator.free(rel);
+            try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
+        } else {
+            try line.writer.print("{s}-", .{g.separator});
         }
-    }
-
-    if (status_line) |message| {
-        try writeIndent(writer, indent);
-        try writer.writeAll("│ ");
-        try writeBounded(writer, message, budget);
-        try writer.writeByte('\n');
+        if (selected and opts.confirm_pending) {
+            try line.writer.print("{s}Enter again to use", .{g.separator});
+        }
+        try writeRailLine(
+            writer,
+            opts.indent,
+            line.written(),
+            budget,
+            if (selected and opts.use_color) style.role.success else "",
+        );
         lines += 1;
     }
 
-    try writeIndent(writer, indent);
-    try writer.writeAll("└\n");
-    lines += 1;
+    if (opts.status) |message| {
+        // The marker joins the message before bounding, so a narrow terminal
+        // truncates the pair instead of overflowing by the marker's width.
+        const marked = try std.fmt.allocPrint(allocator, "{s}{s}", .{ statusMarker(g, opts.status_kind), message });
+        defer allocator.free(marked);
+        try writeRailLine(
+            writer,
+            opts.indent,
+            marked,
+            budget,
+            if (opts.use_color) statusRole(opts.status_kind) else "",
+        );
+        lines += 1;
+    }
     return lines;
+}
+
+fn writeRailLine(
+    writer: *std.Io.Writer,
+    indent: usize,
+    text: []const u8,
+    budget: usize,
+    ansi_style: []const u8,
+) !void {
+    try writeIndent(writer, indent);
+    if (ansi_style.len != 0) try writer.writeAll(ansi_style);
+    try writeBounded(writer, text, budget);
+    if (ansi_style.len != 0) try writer.writeAll(style.ansi.reset);
+    try writer.writeByte('\n');
+}
+
+fn statusMarker(g: style.Glyphs, kind: StatusKind) []const u8 {
+    return switch (kind) {
+        .ok => g.success,
+        .fail => g.failure,
+        .info => "",
+    };
+}
+
+fn statusRole(kind: StatusKind) []const u8 {
+    return switch (kind) {
+        .ok => style.role.success,
+        .fail => style.role.error_text,
+        .info => style.role.status,
+    };
 }
 
 fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
@@ -349,8 +497,10 @@ fn writeBounded(writer: *std.Io.Writer, text: []const u8, max_cols: usize) !void
         try writer.writeAll(text);
         return;
     }
+    if (max_cols == 0) return;
     if (max_cols <= 3) {
-        try writer.writeAll("...");
+        // A budget below the ellipsis width still must not widen the line.
+        try writer.writeAll("..."[0..max_cols]);
         return;
     }
     try writer.writeAll(text[0..text_width.prefixByteLength(text, max_cols - 3)]);

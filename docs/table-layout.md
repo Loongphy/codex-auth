@@ -53,6 +53,6 @@ very-long.  Pro   -   -   100%        58%
 `list --live` at a medium width:
 
 ```text
-#*  | ACCOUNT    | PLAN | 5H    | WEEKLY
- 1  | very-l.om) | Pro  | 100%  | 58%
+#*   ACCOUNT     PLAN  5H     WEEKLY
+ 1   very-l.om)  Pro   100%   58%
 ```

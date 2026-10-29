@@ -397,11 +397,6 @@ pub fn printAliasCleared(rec: *const registry.AccountRecord, old_alias: []const 
     try out.flush();
 }
 
-pub const ResetRemainingEntry = struct {
-    title: ?[]const u8,
-    expires_local: ?[]const u8,
-};
-
 /// Prints a `reset` command failure to stderr with the standard error prefix.
 pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
     var stderr: io_util.Stderr = undefined;
@@ -415,42 +410,50 @@ pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
     try out.flush();
 }
 
-/// Prints the consumed reset credit as one compact line.
-pub fn printResetConsumed(title: ?[]const u8, expires_local: ?[]const u8, already_used: bool) !void {
-    var stdout: io_util.Stdout = undefined;
-    stdout.init();
-    const out = stdout.out();
-    if (already_used) {
-        try out.print("already used \"{s}\"", .{title orelse "(untitled)"});
+/// The one-line summary `reset` prints after a consume: that a credit was used,
+/// how many are left, and when the next one expires. The redeemed card is not
+/// named; `list --json` and the stored snapshot keep that detail. The wording
+/// matches the live rail's status line. Takes the platform explicitly so tests
+/// and the dev preview can render both variants.
+pub fn resetSummaryLineAlloc(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+    is_windows: bool,
+) ![]u8 {
+    const separator = style.Glyphs.forPlatform(is_windows).separator;
+    var line: std.Io.Writer.Allocating = .init(allocator);
+    errdefer line.deinit();
+    try line.writer.writeAll(if (already_used) "reset credit already used" else "reset credit used");
+    if (remaining == 0) {
+        try line.writer.print("{s}none left", .{separator});
     } else {
-        try out.print("used \"{s}\"", .{title orelse "(untitled)"});
+        try line.writer.print("{s}{d} left", .{ separator, remaining });
+        if (next_expiry) |expiry| {
+            try line.writer.print(" (next exp {s})", .{expiry});
+        } else {
+            try line.writer.writeAll(" (no expiry)");
+        }
     }
-    if (expires_local) |expiry| {
-        try out.print(" \u{00b7} expires {s}", .{expiry});
-    }
-    try out.writeAll("\n");
-    try out.flush();
+    return line.toOwnedSlice();
 }
 
-/// Prints a one-line summary of the remaining reset credits: the count and
-/// the card that expires next (title plus local expiry).
-pub fn printResetRemaining(entries: []const ResetRemainingEntry) !void {
+/// Prints the `reset` summary line. `next_expiry` is the compact local
+/// `MM-DD HH:MM` of the soonest-expiring remaining card, or null when that card
+/// carries no expiry.
+pub fn printResetSummary(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+) !void {
+    const line = try resetSummaryLineAlloc(allocator, already_used, remaining, next_expiry, builtin.os.tag == .windows);
+    defer allocator.free(line);
     var stdout: io_util.Stdout = undefined;
     stdout.init();
-    const out = stdout.out();
-    if (entries.len == 0) {
-        try out.writeAll("remaining: 0\n");
-    } else {
-        const next = entries[0];
-        try out.print("remaining: {d} \u{00b7} next: {s}", .{ entries.len, next.title orelse "(untitled)" });
-        if (next.expires_local) |expiry| {
-            try out.print(" \u{00b7} {s}", .{expiry});
-        } else {
-            try out.writeAll(" \u{00b7} -");
-        }
-        try out.writeAll("\n");
-    }
-    try out.flush();
+    try stdout.out().print("{s}\n", .{line});
+    try stdout.out().flush();
 }
 
 pub fn printInvalidRemoveSelectionError() !void {

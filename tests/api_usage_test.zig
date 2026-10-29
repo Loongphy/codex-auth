@@ -286,6 +286,10 @@ test "consume outcome maps the backend code field" {
     );
     try std.testing.expectEqual(
         reset_credits_api.ConsumeOutcome.unexpected_response,
+        reset_credits_api.parseConsumeOutcome(gpa, "{\"code\":\"reset_all\"}"),
+    );
+    try std.testing.expectEqual(
+        reset_credits_api.ConsumeOutcome.unexpected_response,
         reset_credits_api.parseConsumeOutcome(gpa, "{}"),
     );
     try std.testing.expectEqual(

@@ -18,6 +18,22 @@ All API refresh requests are issued through `curl`.
   - `ChatGPT-Account-Id: <chatgpt_account_id>`
   - `User-Agent: codex-auth/<version>`
 
+### Reset Credit List Refresh
+
+- method: `GET`
+- URL: `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
+- headers:
+  - `Authorization: Bearer <tokens.access_token>`
+  - `ChatGPT-Account-Id: <chatgpt_account_id>`
+  - `User-Agent: codex-auth/<version>`
+
+Issued for every account whose usage refresh returned a usable snapshot, in the same
+refresh pass and under the same concurrency limit. The card list is read from
+`credits[]` (`id`, `status`, `expires_at`, `title`) and stored as
+`last_usage.reset_credit`. An empty, failed, or non-`2xx` response is non-fatal: the
+stored card list stays as it was, so `RESET CREDITS` keeps showing the summary count
+that came from the usage response.
+
 ### Account Metadata Refresh
 
 - method: `GET`
@@ -28,6 +44,42 @@ All API refresh requests are issued through `curl`.
   - `User-Agent: codex-auth/<version>`
 
 The account metadata response is parsed from `items[].id` and `items[].name`. `name: null` and `name: ""` are both normalized to `account_name = null`. An empty `items` array, or an `items` array with no usable `id`, is treated as unusable and leaves stored `account_name` values unchanged.
+
+### Reset Credit Consume
+
+- method: `POST`
+- URL: `https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`
+- headers:
+  - `Authorization: Bearer <tokens.access_token>`
+  - `ChatGPT-Account-Id: <chatgpt_account_id>`
+  - `User-Agent: codex-auth/<version>`
+  - `Accept: application/json`
+  - `Content-Type: application/json`
+- body: `{"redeem_request_id": "<client-generated UUID v4>", "credit_id": "<stored credit id>"}`
+
+This is the only state-mutating request `codex-auth` sends, and it consumes a limited
+paid resource. It is never part of a usage or account-name refresh: it runs only when
+the user explicitly redeems a reset credit, either through `codex-auth reset <selector>`
+or by confirming a credit in the `list --live` rail.
+
+`redeem_request_id` is the idempotency key. It is generated once per credit and reused
+while retrying that same credit, so a retry is deduplicated by the backend instead of
+consuming a second credit. Both body fields are JSON-encoded rather than interpolated,
+because `credit_id` originates at the backend and round-trips through the stored
+registry.
+
+The response `code` decides the outcome:
+
+| `code` | Meaning |
+| --- | --- |
+| `reset` | The credit was consumed and the rate limits were reset |
+| `already_redeemed` | The same idempotency key was already accepted; treated as success |
+| `no_credit` | The credit is gone; the stored snapshot needs a refresh |
+| `nothing_to_reset` | Current usage does not need a reset |
+| anything else | Unexpected response, treated as a failure |
+
+A non-`2xx` status is a failure regardless of the body, and the request shares the
+5-second curl budget and the 1 MiB output cap of the refresh requests.
 
 ## Usage Refresh Rules
 

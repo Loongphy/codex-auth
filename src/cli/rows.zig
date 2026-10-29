@@ -369,6 +369,17 @@ pub fn formatTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8
     });
 }
 
+/// Formats a timestamp as a local `MM-DD HH:MM`: the compact form the live reset
+/// credits rail and the `reset` summary share. An unparseable timestamp keeps the
+/// `unavailable` fallback of the full form.
+pub fn formatCompactTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8 {
+    const full = try formatTimestampAlloc(allocator, timestamp);
+    if (full.len < 16) return full;
+    const compact = try allocator.dupe(u8, full[5..16]);
+    allocator.free(full);
+    return compact;
+}
+
 /// Formats a future timestamp as a local `YYYY-MM-DD` date. Missing, invalid,
 /// and already-expired timestamps render as `-` so stale snapshots do not look
 /// like current entitlements.

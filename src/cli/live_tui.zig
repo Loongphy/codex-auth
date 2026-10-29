@@ -104,42 +104,56 @@ pub fn listViewport(
     return listViewportFollowing(terminal_rows, row_count, fixed_lines, viewport_start, null);
 }
 
-/// Keeps a target body line visible while it is being operated on.
+/// A range of rendered body lines that must stay visible together.
+pub const BodySpan = struct {
+    first: usize,
+    last: usize,
+};
+
+/// Keeps a span of body lines visible with the smallest scroll: a span above the
+/// viewport is top-aligned, a span reaching below it is bottom-aligned. When the
+/// span is taller than the viewport its end wins, because that is where the reset
+/// credits rail draws the redeem result.
 ///
-/// `target_row` and the returned start share `renderListBodyViewport`'s index
-/// basis: lines of the rendered body after its column header, which include any
-/// spliced rail lines. That is deliberately not `rows.items`: the live list body
-/// does not render group header rows at all.
+/// `span` and the returned start share `renderListBodyViewport`'s index basis:
+/// lines of the rendered body after its column header, which include any spliced
+/// rail lines. That is deliberately not `rows.items`: the live list body does not
+/// render group header rows at all.
 pub fn followViewportStart(
     row_count: usize,
     max_rows: usize,
     current_start: usize,
-    target_row: ?usize,
+    span: ?BodySpan,
 ) usize {
     const start = render.clampLiveViewportStart(row_count, max_rows, current_start);
-    const target = target_row orelse return start;
+    const target = span orelse return start;
     if (max_rows == 0 or row_count == 0) return start;
+    const last = @min(target.last, row_count - 1);
     var followed = start;
-    if (target < followed) {
-        followed = target;
-    } else if (target >= followed + max_rows) {
-        followed = target - max_rows + 1;
+    if (last < followed) {
+        followed = target.first;
+    } else if (last >= followed + max_rows) {
+        followed = last + 1 -| max_rows;
+    } else if (target.first < followed and target.first + max_rows > last) {
+        // The rail's end is visible but its anchor row scrolled off, and the
+        // whole span fits: pull the window back up to the anchor row.
+        followed = target.first;
     }
     return render.clampLiveViewportStart(row_count, max_rows, followed);
 }
 
-/// Like `listViewport`, but scrolls the given body line into view first. The
-/// reset credits rail uses this so a redeem can never be confirmed on a row the
-/// user cannot see.
+/// Like `listViewport`, but scrolls the given body lines into view first. The
+/// reset credits rail uses this so a redeem can never be confirmed or reported
+/// on a line the user cannot see.
 pub fn listViewportFollowing(
     terminal_rows: usize,
     row_count: usize,
     fixed_lines: usize,
     viewport_start: *usize,
-    target_row: ?usize,
+    span: ?BodySpan,
 ) render.LiveListViewport {
     const max_rows = maxTableRows(terminal_rows, fixed_lines);
-    viewport_start.* = followViewportStart(row_count, max_rows, viewport_start.*, target_row);
+    viewport_start.* = followViewportStart(row_count, max_rows, viewport_start.*, span);
     return .{
         .start_row = viewport_start.*,
         .max_rows = max_rows,

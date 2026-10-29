@@ -66,6 +66,29 @@ Priority:
 4. Checked row: `green`
 5. Normal row: default terminal foreground
 
+### list --live table and reset credits rail
+
+The live list separates columns with whitespace instead of `|`. The account
+table header is bold `cyan`; an active row is `green`; an error row is `red`.
+The reset credits rail is borderless on every platform:
+
+| UI element | Color |
+| --- | --- |
+| `RESET CREDITS` heading | bold `cyan` |
+| Selected credit | `green` |
+| Other credit rows | Default terminal foreground |
+| Success status line | `green` |
+| Failure status line | `red` |
+| Informational status line | `cyan` |
+| Rail key legend | `dim` |
+
+The rail draws inside the live list body, so its status line follows the shared
+success and error roles instead of introducing its own palette. `Enter` and the
+`>` cursor mark are spelled the same on every platform, matching the footers and
+the switch and remove tables. On Windows the rail keeps the same borderless
+layout, spells the separator as a comma, marks success with `OK` and leaves
+failures unmarked; see `docs/windows.md`.
+
 # Avoid
 
 - Avoid custom colors because there is no guarantee that they will contrast well or look good in different terminal themes.

@@ -499,6 +499,19 @@ pub fn renderListBodyViewport(
     status_line: []const u8,
     viewport: LiveListViewport,
 ) !void {
+    try renderListBodyViewportWithFooter(writer, body, status_line, viewport, null);
+}
+
+/// Like `renderListBodyViewport`, but `footer_text` replaces the default list
+/// footer when the caller has a context-specific key legend (for example while
+/// the reset credits rail owns `j`/`k`).
+pub fn renderListBodyViewportWithFooter(
+    writer: *style.StyledWriter,
+    body: []const u8,
+    status_line: []const u8,
+    viewport: LiveListViewport,
+    footer_text: ?[]const u8,
+) !void {
     var lines = std.mem.splitScalar(u8, body, '\n');
     if (lines.next()) |header| {
         try writer.print("{s}\n", .{header});
@@ -514,5 +527,11 @@ pub fn renderListBodyViewport(
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
     }
-    try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
+    if (footer_text) |text| {
+        // The rail's own key legend is secondary: the credit rows and the
+        // status line stay the focus while the user is consuming a credit.
+        try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) style.role.secondary else "", text, viewport.max_cols);
+    } else {
+        try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
+    }
 }

@@ -8,7 +8,8 @@ const timestamp = @import("../time/timestamp.zig");
 const app_runtime = @import("../core/runtime.zig");
 
 const available_status = "available";
-const separator_width: usize = 3;
+/// The borderless live list separates columns with whitespace only.
+const separator_width: usize = 2;
 const column_count = table_layout.list_detail_columns.len;
 
 pub fn computeWidths(
@@ -45,11 +46,11 @@ pub fn computeWidths(
 }
 
 pub fn writeHeader(writer: *style.StyledWriter, widths: [column_count]usize) !void {
-    try writer.writeStyle(style.role.status);
+    try writer.writeStyle(style.role.heading);
     var wrote_any = false;
     for (table_layout.list_detail_columns, 0..) |id, index| {
         if (widths[index] == 0) continue;
-        if (wrote_any) try writer.out.writeAll(" | ");
+        if (wrote_any) try writer.out.writeAll("  ");
         wrote_any = true;
         try table_layout.writeTruncatedPadded(writer.out, headerFor(id, widths[index]), widths[index]);
     }
@@ -89,12 +90,7 @@ pub fn write(
     var wrote_any = false;
     for (table_layout.list_detail_columns, 0..) |id, index| {
         if (widths[index] == 0) continue;
-        if (wrote_any) {
-            if (row_style.len == 0) try writer.writeStyle(style.role.secondary);
-            try writer.out.writeAll(" | ");
-            if (row_style.len == 0) try writer.reset();
-            try writer.writeStyle(row_style);
-        }
+        if (wrote_any) try writer.out.writeAll("  ");
         wrote_any = true;
         switch (id) {
             .account => try table_layout.writeAccountTruncatedPadded(writer.out, values[index], widths[index]),
@@ -147,7 +143,7 @@ fn shortResetCell(full: []const u8) []const u8 {
 }
 
 /// `N` from the persisted `reset_credits` count, plus the earliest expiry among
-/// the available cards in local `MMM-DD` form (omitted when unknown).
+/// the available cards in local `MM-DD` form (omitted when unknown).
 fn resetCreditsCell(allocator: std.mem.Allocator, account: registry.AccountRecord) ![]u8 {
     const usage = account.last_usage orelse return std.fmt.allocPrint(allocator, "-", .{});
     // Count: the summary's available_count when present; otherwise derived

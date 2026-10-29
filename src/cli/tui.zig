@@ -303,9 +303,19 @@ pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_col
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n"
+        "Keys: Up/Down scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n"
     else
-        "Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n";
+        "Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n";
+}
+
+/// Footer while the reset credits rail owns the navigation keys. It replaces
+/// the account-list legend entirely, so the rail mode shows only its own
+/// actions and cannot imply that `j`/`k` still move account rows.
+pub fn listCreditsTuiFooterText(is_windows: bool) []const u8 {
+    return if (is_windows)
+        "Keys: Up/Down or j/k credit, Enter use, Esc back\n"
+    else
+        "Keys: ↑/↓ or j/k credit, Enter use, Esc back\n";
 }
 
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {

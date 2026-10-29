@@ -43,15 +43,20 @@ codex-auth list --json
 
 ## Live Reset Credits
 
-- With `--live`, `c` expands or collapses the reset-credit rail. The rail attaches to the row under the *rail cursor*, not to the highlighted switch target; the footer lists the keys (`Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit`).
-- `j` and `k` move the rail cursor between rendered account rows. Group header rows (several accounts sharing one email) are not rows, so the rail always lands on the account drawn on that line.
-- While the rail is open the list scrolls to keep that row visible, so a redeem is never confirmed or reported on a line outside the viewport.
-- With the rail closed, `↑`/`↓` scroll the table. With it open they move the credit highlight inside the rail.
-- The rail header reads `Available N · ⏎ select · esc close`.
-- `⏎` selects the highlighted credit; pressing `⏎` again redeems it (two-step confirm). The confirmation is bound to the exact account and credit it was armed for: moving the credit highlight (`↑`/`↓`), moving the rail cursor (`j`/`k`), collapsing with `c`, closing the rail, or a refresh that changes which credit is highlighted all drop it, so a redeem only fires while the credit showing `⏎ again to use` is the one being confirmed. A failed redeem also drops it; retrying asks for a fresh `⏎` `⏎` pair and reuses the same idempotency key for that credit.
-- While the rail is open, both `esc` and `q` close the rail instead of quitting the session.
-- A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round.
+- With `--live`, `j` / `k` move the account-row cursor and `Enter` opens the reset-credit rail for that row. The footer lists the account-list keys (`Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit`).
+- `Enter` opens the rail only when the row under the cursor has at least one available credit. A zero-credit row stays a plain account row; there is no empty panel or refresh placeholder. Group header rows (several accounts sharing one email) are not rows, so the rail always lands on the account drawn on that line.
+- While the rail is open the list scrolls to keep the rail's own lines visible, not just its anchor row, so the confirm hint and the redeem result are on screen. If the rail is taller than the viewport its last line wins: the redeem result stays visible and the top of a long card list may scroll off.
+- While the rail is open, `↑`/`↓` and `j`/`k` move the credit highlight, which also applies to a mouse wheel that the terminal translates into arrow keys. Account rows do not move while the rail is open; `Esc` returns to the account list.
+- The footer switches to the rail's own keys while it is open (`Keys: ↑/↓ or j/k credit, Enter use, Esc back`), replacing the account-list legend so `j` / `k` cannot be mistaken for row movement.
+- The rail header reads `RESET CREDITS · N available`; the footer owns the key hints, so the heading never repeats them. With no available credit the header reads `RESET CREDITS · 0 available`; the rail does not add a placeholder telling the user how to refresh.
+- `Enter` selects the highlighted credit; pressing `Enter` again redeems it (two-step confirm). The confirmation is bound to the exact account and credit it was armed for: moving the credit highlight (`↑`/`↓` or `j`/`k`), closing the rail, or a refresh that changes which credit is highlighted all drop it, so a redeem only fires while the credit showing `Enter again to use` is the one being confirmed. A redeem also waits for a frame that actually drew that hint, so a double tap fast enough to land in one input batch arms the credit and shows the hint instead of consuming it. A failed redeem also drops it; retrying asks for a fresh `Enter` `Enter` pair and reuses the same idempotency key for that credit.
+- A redeem is one blocking backend request (bounded by the shared curl and child-process timeouts). While it runs the last drawn frame stays on screen, including the `Enter again to use` hint; the result and the refreshed row appear on the next frame. The consuming step does not currently animate a spinner.
+- While the rail is open, both `esc` and `q` close it instead of quitting the session.
+- A successful redeem refreshes that account immediately, so the `5H`/`WEEKLY` cells and the remaining card list reflect the reset without waiting for the next refresh round. The rail does not rewrite the registry itself: the next refresh round reloads it from disk and persists the new state, so a redeem cannot roll back another account's newer snapshot.
 - Rows show the card title, the local `MM-DD HH:MM` expiry, and a relative countdown; credits without an expiry render `-`.
+- The rail reports the outcome on its last line: `✓ reset credit used`, `✗ reset credit is no longer available; refresh to see current resets`, `usage does not need a reset right now`, or `✗ use failed (...)` with the HTTP status when the request failed. Success is green and failure red.
+- The live list uses whitespace between columns instead of `|`; its header is bold cyan, and the rail is borderless on every platform. `Enter` and the `>` credit cursor are the same on every platform, matching the footers and the `switch` / `remove` tables.
+- Windows default output follows [docs/windows.md](../windows.md): the rail keeps the same borderless layout, the `·` separator becomes a comma, `✓` becomes `OK`, and a failure line carries no marker because its sentence already says what happened.
 
 When local-only refresh is active, only the active account can be updated from local rollout files. Non-active rows use the stored registry snapshot.
 
@@ -64,7 +69,7 @@ When local-only refresh is active, only the active account can be updated from l
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `PLAN EXPIRE` renders the local date from the stored `id_token` subscription claim.
   Missing or past timestamps render as `-` in both plain and live tables.
-- `RESET CREDITS` remains a separate field that shows the stored reset-credit count when remote usage refresh provides it. A zero count renders as `0`; a non-zero count appends the earliest available credit expiry as `N (exp MMM-DD)`, or `N (-)` when no available credit has an expiry.
+- `RESET CREDITS` shows the stored reset-credit count when remote usage refresh provides it, preferring the server's `available_count` and falling back to counting the stored cards; a missing count renders `-` and a zero count renders `0`. Only the `--live` table appends the earliest available credit expiry, as `N (exp MM-DD)`, or `N (-)` when no available credit has an expiry; plain `list` shows the bare count because its column is much narrower. Since the count can come from the summary while the expiry comes from the card list, `codex-auth reset` may report a different remaining count when the server capped the card list.
 - JSON output includes the raw `plan_expires_at` timestamp and the returned reset-credit details.
   The terminal column hides past plan-expiry timestamps, but the JSON value remains the
   stored timestamp so callers can detect stale snapshots.

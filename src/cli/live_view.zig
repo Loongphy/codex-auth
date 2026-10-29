@@ -14,30 +14,7 @@ const reset_credits_api = @import("../api/reset_credits.zig");
 const registry = @import("../registry/root.zig");
 const api_usage = @import("../api/usage.zig");
 
-/// Indentation of the account column in the rendered table, so the reset
-/// credits rail nests under the row it belongs to.
-fn panelIndentForBody(body: []const u8) usize {
-    const line_end = std.mem.indexOfScalar(u8, body, '\n') orelse body.len;
-    const header = body[0..line_end];
-    var column: usize = 0;
-    var index: usize = 0;
-    while (index < header.len) {
-        if (header[index] == 0x1b) {
-            // Skip a CSI escape sequence so the scan counts display columns.
-            index += 1;
-            if (index < header.len and header[index] == '[') {
-                index += 1;
-                while (index < header.len and (header[index] < 0x40 or header[index] > 0x7e)) : (index += 1) {}
-                if (index < header.len) index += 1;
-            }
-            continue;
-        }
-        if (header[index] == '|') return column;
-        column += 1;
-        index += 1;
-    }
-    return 0;
-}
+const is_windows = builtin.os.tag == .windows;
 
 /// Refreshes one account's usage snapshot after a successful consume so the
 /// 5H/WEEKLY cells and the remaining card list reflect the reset immediately.
@@ -66,20 +43,34 @@ fn alreadyConsumed(consumed_ids: []const []u8, credit_id: []const u8) bool {
     return false;
 }
 
-/// Approves the redeem queued by a second `⏎`. `approve` drops the armed
+/// True when the rendered data row under the rail cursor still has a credit
+/// the rail could show. `Enter` opens the rail only for these rows, so a row
+/// with zero credits stays a plain account row.
+fn rowHasAvailableCredits(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    rows: []const row_data.SwitchRow,
+    data_index: usize,
+    consumed_ids: []const []const u8,
+) bool {
+    const row_idx = render.liveRowIndexForDataIndex(rows, reg.accounts.items.len, data_index) orelse return false;
+    const account_idx = rows[row_idx].account_index orelse return false;
+    if (account_idx >= reg.accounts.items.len) return false;
+    return reset_credits_panel.hasAvailable(allocator, &reg.accounts.items[account_idx], consumed_ids) catch false;
+}
+
+/// Approves the redeem queued by a second `Enter`. `approve` drops the armed
 /// confirmation whether or not the identity matches, so every attempt —
 /// including a retry after a failed request — needs a fresh confirmation on the
 /// credit that is actually rendered under the cursor.
 fn consumeApproved(
     allocator: std.mem.Allocator,
     panel: *reset_credits_panel.Selection,
-    account_key: ?[]const u8,
-    credit_id: ?[]const u8,
+    identity: ?reset_credits_panel.Identity,
 ) bool {
     if (!panel.valid) return false;
-    const key = account_key orelse return false;
-    const id = credit_id orelse return false;
-    return panel.approve(allocator, .{ .account_key = key, .credit_id = id });
+    const current = identity orelse return false;
+    return panel.approve(allocator, current);
 }
 
 pub const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
@@ -336,8 +327,10 @@ pub fn viewAccountsWithLiveUpdates(
     var credit_selection: reset_credits_panel.Selection = .{};
     var data_row_count: usize = 0;
     var pending_consume: bool = false;
-    var selected_credit_id: ?[]u8 = null;
-    var selected_account_key: ?[]u8 = null;
+    // True only when the frame on screen shows the re-confirm hint for the
+    // armed credit, so a redeem always follows a visible confirmation.
+    var armed_hint_rendered: bool = false;
+    var rendered_identity: reset_credits_panel.RenderedIdentity = .{};
     var redeem_key: ?[]u8 = null;
     var redeem_credit_id: ?[]u8 = null;
     var consumed_ids: std.ArrayList([]u8) = .empty;
@@ -345,8 +338,7 @@ pub fn viewAccountsWithLiveUpdates(
         credit_selection.deinit(allocator);
         for (consumed_ids.items) |id| allocator.free(id);
         consumed_ids.deinit(allocator);
-        if (selected_credit_id) |id| allocator.free(id);
-        if (selected_account_key) |key| allocator.free(key);
+        rendered_identity.deinit(allocator);
         if (redeem_key) |key| allocator.free(key);
         if (redeem_credit_id) |id| allocator.free(id);
     }
@@ -357,7 +349,11 @@ pub fn viewAccountsWithLiveUpdates(
             current_display = updated;
             needs_render = true;
             rows_cache.invalidate(allocator);
-            credit_selection.clearSelection(allocator);
+            // Keep the status line: a refresh landing right after a redeem must
+            // not erase the report of an action that already happened. The row
+            // cursor is re-clamped on the next render, which drops the status if
+            // the rail ends up on a different account.
+            credit_selection.clearCards(allocator);
         }
 
         const now_second = live_tui.nowSecond();
@@ -368,9 +364,10 @@ pub fn viewAccountsWithLiveUpdates(
         }
         if (needs_render or now_second != last_render_second) {
             const rows = try rows_cache.ensure(allocator, current_display.borrowed());
+            const list_index_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
-            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)), rows.widths, tui.terminalCols());
+            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols());
             var body_text: []const u8 = body.written();
             var spliced_panel: ?[]u8 = null;
             defer if (spliced_panel) |panel_buf| allocator.free(panel_buf);
@@ -380,6 +377,12 @@ pub fn viewAccountsWithLiveUpdates(
             const data_rows = render.liveDataRowCount(rows.items, account_count);
             data_row_count = data_rows;
             credit_selection.clampRow(allocator, data_rows);
+            if (credit_selection.expanded and data_rows == 0) {
+                // Without a row to attach to the rail draws nothing, yet staying
+                // expanded would keep swallowing `esc` and `q`.
+                credit_selection.close(allocator);
+            }
+            var panel_lines: usize = 0;
             var panel_account: ?*registry.AccountRecord = null;
             if (credit_selection.expanded and data_rows > 0) {
                 // The cursor is a rendered data-row index; group header rows are
@@ -408,17 +411,27 @@ pub fn viewAccountsWithLiveUpdates(
                 else
                     null;
                 credits_panel.clearRetainingCapacity();
-                _ = try reset_credits_panel.render(
+                const confirm_pending = credit_selection.isPendingFor(shown_identity);
+                panel_lines = try reset_credits_panel.render(
                     allocator,
                     &credits_panel.writer,
                     available_cards,
-                    tui.terminalCols(),
-                    now_second,
-                    credit_selection.card_cursor,
-                    credit_selection.isPendingFor(shown_identity),
-                    credit_selection.status,
-                    panelIndentForBody(body_text),
+                    .{
+                        .max_cols = tui.terminalCols(),
+                        .now = now_second,
+                        .card_cursor = credit_selection.card_cursor,
+                        .confirm_pending = confirm_pending,
+                        .status = credit_selection.status,
+                        .status_kind = credit_selection.status_kind,
+                        .indent = list_index_width + 3,
+                        .is_windows = is_windows,
+                        .use_color = use_color,
+                    },
                 );
+                // A second `Enter` only redeems once the hint it confirms has been
+                // on screen: keys arrive in batches that are processed before
+                // the next frame, so a fast double tap must not skip it.
+                armed_hint_rendered = confirm_pending;
                 spliced_panel = try reset_credits_panel.spliceAfterDataLine(
                     allocator,
                     body_text,
@@ -426,22 +439,11 @@ pub fn viewAccountsWithLiveUpdates(
                     credits_panel.written(),
                 );
                 body_text = spliced_panel.?;
-                if (selected_credit_id) |id| allocator.free(id);
-                selected_credit_id = if (shown_identity) |identity|
-                    try allocator.dupe(u8, identity.credit_id)
-                else
-                    null;
-                if (selected_account_key) |key| allocator.free(key);
-                selected_account_key = if (shown_identity) |identity|
-                    try allocator.dupe(u8, identity.account_key)
-                else
-                    null;
+                try rendered_identity.set(allocator, shown_identity);
             } else {
                 credit_selection.clearSelection(allocator);
-                if (selected_credit_id) |id| allocator.free(id);
-                selected_credit_id = null;
-                if (selected_account_key) |key| allocator.free(key);
-                selected_account_key = null;
+                armed_hint_rendered = false;
+                rendered_identity.clear(allocator);
             }
             rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
@@ -451,18 +453,28 @@ pub fn viewAccountsWithLiveUpdates(
                 rendered_row_count,
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
-                if (credit_selection.expanded) credit_selection.row_cursor else null,
+                // Follow the rail's last line, not just its anchor row: the
+                // confirm hint and the redeem result are drawn below the row.
+                if (panel_lines > 0)
+                    .{ .first = credit_selection.row_cursor, .last = credit_selection.row_cursor + panel_lines }
+                else
+                    null,
             );
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
 
             frame.clearRetainingCapacity();
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
-            render.renderListBodyViewport(
+            const footer_text = if (credit_selection.expanded)
+                tui_mod.listCreditsTuiFooterText(is_windows)
+            else
+                tui_mod.listTuiFooterText(is_windows);
+            render.renderListBodyViewportWithFooter(
                 &styled_frame,
                 body_text,
                 status_line,
                 bounded_viewport,
+                footer_text,
             ) catch |err| return mapTuiOutputError(err);
             try tui.drawFrame(frame.written());
             last_render_second = now_second;
@@ -483,45 +495,71 @@ pub fn viewAccountsWithLiveUpdates(
 
                     for (key_buf[0..key_count]) |key| {
                         // A queued redeem is a committed action: stop consuming
-                        // this key batch, otherwise a `j` burst behind `⏎⏎` would
-                        // move the rail cursor and silently cancel the approval.
+                        // this key batch, otherwise a `j` burst behind `Enter` `Enter` would
+                        // move the credit highlight and silently cancel the approval.
                         if (pending_consume) break;
                         if (credit_selection.expanded) {
                             switch (key) {
-                                .move_up, .keyboard_up => {
-                                    credit_selection.moveCard(allocator, .up);
+                                // Inside the reset-credit TUI, Up/Down and j/k are
+                                // one operator on the credit list. The account
+                                // row is chosen before opening it with `Enter`.
+                                .move_up, .keyboard_up, .scroll_up => {
+                                    credit_selection.moveCardAndInvalidate(allocator, &rendered_identity, .up);
                                     needs_render = true;
                                     continue;
                                 },
-                                .move_down, .keyboard_down => {
-                                    credit_selection.moveCard(allocator, .down);
+                                .move_down, .keyboard_down, .scroll_down => {
+                                    credit_selection.moveCardAndInvalidate(allocator, &rendered_identity, .down);
                                     needs_render = true;
                                     continue;
                                 },
                                 .enter => {
-                                    if (selected_account_key) |account_key| {
-                                        if (selected_credit_id) |credit_id| {
-                                            switch (credit_selection.confirm(allocator, .{
-                                                .account_key = account_key,
-                                                .credit_id = credit_id,
-                                            })) {
-                                                .consume => {
+                                    if (rendered_identity.get()) |identity| {
+                                        switch (credit_selection.confirm(allocator, identity)) {
+                                            .consume => {
+                                                if (armed_hint_rendered) {
                                                     pending_consume = true;
-                                                    needs_render = true;
-                                                },
-                                                .armed => needs_render = true,
-                                                .ignored => {},
-                                                .out_of_memory => {
-                                                    try credit_selection.setStatus(
-                                                        allocator,
-                                                        "credit selection unavailable (out of memory)",
-                                                    );
-                                                    needs_render = true;
-                                                },
-                                            }
+                                                }
+                                                // Otherwise the credit stays
+                                                // armed and the hint is drawn
+                                                // by the next frame, so the
+                                                // redeem needs a deliberate
+                                                // third `Enter`.
+                                                needs_render = true;
+                                            },
+                                            .armed => {
+                                                // The hint for this credit has
+                                                // not been drawn yet, so a
+                                                // second `Enter` in the same input
+                                                // batch must wait for a frame.
+                                                armed_hint_rendered = false;
+                                                needs_render = true;
+                                            },
+                                            .ignored => {},
+                                            .out_of_memory => {
+                                                try credit_selection.setStatus(
+                                                    allocator,
+                                                    "credit selection unavailable (out of memory)",
+                                                    .fail,
+                                                );
+                                                needs_render = true;
+                                            },
                                         }
                                     }
                                     continue;
+                                },
+                                .byte => |ch| switch (ch) {
+                                    'j' => {
+                                        credit_selection.moveCardAndInvalidate(allocator, &rendered_identity, .down);
+                                        needs_render = true;
+                                        continue;
+                                    },
+                                    'k' => {
+                                        credit_selection.moveCardAndInvalidate(allocator, &rendered_identity, .up);
+                                        needs_render = true;
+                                        continue;
+                                    },
+                                    else => {},
                                 },
                                 else => {},
                             }
@@ -540,6 +578,23 @@ pub fn viewAccountsWithLiveUpdates(
                                 return;
                             },
                             .redraw => needs_render = true,
+                            .enter => {
+                                // Opening the rail is the account-row selection:
+                                // only rows with a consumable credit get one.
+                                const borrowed = current_display.borrowed();
+                                const rows = try rows_cache.ensure(allocator, borrowed);
+                                if (rowHasAvailableCredits(
+                                    allocator,
+                                    borrowed.reg,
+                                    rows.items,
+                                    credit_selection.row_cursor,
+                                    consumed_ids.items,
+                                )) {
+                                    credit_selection.toggleExpanded(allocator);
+                                    needs_render = true;
+                                }
+                                continue;
+                            },
                             .byte => |ch| {
                                 if (isQuitKey(ch)) {
                                     // `q` and `esc` are advertised as equivalent
@@ -553,18 +608,15 @@ pub fn viewAccountsWithLiveUpdates(
                                     }
                                     return;
                                 }
-                                if (ch == 'c') {
-                                    credit_selection.toggleExpanded(allocator);
-                                    needs_render = true;
-                                    continue;
-                                }
                                 if (ch == 'j') {
                                     credit_selection.moveRow(allocator, .down, data_row_count);
+                                    rendered_identity.clear(allocator);
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'k') {
                                     credit_selection.moveRow(allocator, .up, data_row_count);
+                                    rendered_identity.clear(allocator);
                                     needs_render = true;
                                     continue;
                                 }
@@ -574,18 +626,24 @@ pub fn viewAccountsWithLiveUpdates(
                     }
                     if (pending_consume) {
                         pending_consume = false;
-                        if (consumeApproved(allocator, &credit_selection, selected_account_key, selected_credit_id)) {
+                        const identity = rendered_identity.get();
+                        if (consumeApproved(allocator, &credit_selection, identity)) {
+                            const current = identity.?;
                             // Reuse the idempotency key while retrying the same
                             // credit: the backend deduplicates repeated redeems.
-                            if (redeem_credit_id == null or !std.mem.eql(u8, redeem_credit_id.?, selected_credit_id.?)) {
+                            // A missing key counts as a different credit so a
+                            // failed generation is retried instead of sticking.
+                            if (redeem_key == null or redeem_credit_id == null or
+                                !std.mem.eql(u8, redeem_credit_id.?, current.credit_id))
+                            {
                                 if (redeem_key) |key| allocator.free(key);
                                 if (redeem_credit_id) |id| allocator.free(id);
                                 redeem_key = reset_credits_api.generateIdempotencyKeyAlloc(allocator) catch null;
-                                redeem_credit_id = allocator.dupe(u8, selected_credit_id.?) catch null;
+                                redeem_credit_id = allocator.dupe(u8, current.credit_id) catch null;
                             }
                             if (redeem_key) |key| {
                                 const codex_home = registry.resolveCodexHome(allocator) catch |err| {
-                                    try credit_selection.setStatus(allocator, @errorName(err));
+                                    try credit_selection.setStatus(allocator, @errorName(err), .fail);
                                     needs_render = true;
                                     continue;
                                 };
@@ -593,71 +651,68 @@ pub fn viewAccountsWithLiveUpdates(
                                 var result = reset_credits_api.consumeCreditForAccount(
                                     allocator,
                                     codex_home,
-                                    selected_account_key.?,
+                                    current.account_key,
                                     key,
-                                    selected_credit_id.?,
+                                    current.credit_id,
                                 ) catch |err| reset_credits_api.ConsumeResult{ .outcome = .request_error, .error_name = try allocator.dupe(u8, @errorName(err)) };
                                 defer result.deinit(allocator);
                                 switch (result.outcome) {
                                     .reset, .already_redeemed => {
-                                        var already_consumed = false;
-                                        for (consumed_ids.items) |id| {
-                                            if (std.mem.eql(u8, id, selected_credit_id.?)) {
-                                                already_consumed = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!already_consumed) {
-                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                        if (!alreadyConsumed(consumed_ids.items, current.credit_id)) {
+                                            const id_copy = try allocator.dupe(u8, current.credit_id);
                                             try consumed_ids.append(allocator, id_copy);
                                         }
                                         if (redeem_key) |k| allocator.free(k);
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatus(allocator, "✓ reset credit used");
-                                        refreshAccountUsageAfterReset(allocator, &current_display.reg, codex_home, selected_account_key.?);
-                                        registry.saveRegistry(allocator, codex_home, &current_display.reg) catch {};
+                                        try credit_selection.setStatus(allocator, "reset credit used", .ok);
+                                        // Refresh the row in place for this frame
+                                        // only. The registry is left to the next
+                                        // refresh round, which reloads it from
+                                        // disk before saving, so this cannot roll
+                                        // back another account's newer snapshot.
+                                        refreshAccountUsageAfterReset(allocator, &current_display.reg, codex_home, current.account_key);
                                         rows_cache.invalidate(allocator);
                                     },
                                     .no_credit => {
-                                        if (!alreadyConsumed(consumed_ids.items, selected_credit_id.?)) {
-                                            const id_copy = try allocator.dupe(u8, selected_credit_id.?);
+                                        if (!alreadyConsumed(consumed_ids.items, current.credit_id)) {
+                                            const id_copy = try allocator.dupe(u8, current.credit_id);
                                             try consumed_ids.append(allocator, id_copy);
                                         }
                                         if (redeem_key) |k| allocator.free(k);
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatus(allocator, "✗ reset credit is no longer available · refresh to see current resets");
+                                        try credit_selection.setStatus(
+                                            allocator,
+                                            "reset credit is no longer available; refresh to see current resets",
+                                            .fail,
+                                        );
                                     },
                                     .nothing_to_reset => {
-                                        try credit_selection.setStatus(allocator, "reset not needed — usage does not need a reset right now");
+                                        try credit_selection.setStatus(allocator, "usage does not need a reset right now", .info);
                                     },
                                     .unexpected_response => {
                                         if (result.status_code) |code| {
-                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d}, unexpected response)", .{code});
-                                            defer allocator.free(text);
-                                            try credit_selection.setStatus(allocator, text);
+                                            try credit_selection.setStatusf(allocator, .fail, "use failed (HTTP {d}, unexpected response)", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "✗ use failed (unexpected response)");
+                                            try credit_selection.setStatus(allocator, "use failed (unexpected response)", .fail);
                                         }
                                     },
                                     .http_error => {
                                         if (result.status_code) |code| {
-                                            const text = try std.fmt.allocPrint(allocator, "✗ use failed (HTTP {d})", .{code});
-                                            defer allocator.free(text);
-                                            try credit_selection.setStatus(allocator, text);
+                                            try credit_selection.setStatusf(allocator, .fail, "use failed (HTTP {d})", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "use failed");
+                                            try credit_selection.setStatus(allocator, "use failed", .fail);
                                         }
                                     },
                                     .request_error => {
-                                        try credit_selection.setStatus(allocator, result.error_name orelse "use failed");
+                                        try credit_selection.setStatus(allocator, result.error_name orelse "use failed", .fail);
                                     },
                                 }
                             } else {
-                                try credit_selection.setStatus(allocator, "✗ use failed (idempotency key unavailable)");
+                                try credit_selection.setStatus(allocator, "use failed (idempotency key unavailable)", .fail);
                             }
                             needs_render = true;
                         }

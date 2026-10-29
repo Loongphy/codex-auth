@@ -161,6 +161,8 @@ This project is provided as-is and use is at your own risk.
 **API Call Declaration:**
 By using the default API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers for usage limit and team name refresh. The exact endpoints are:
 - `GET https://chatgpt.com/backend-api/wham/usage`
+- `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
 - `GET https://chatgpt.com/backend-api/accounts`
+- `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume` (only when you explicitly redeem a reset credit with `codex-auth reset` or in the `list --live` rail; never during a refresh)
 
 This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.

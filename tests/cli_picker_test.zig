@@ -26,12 +26,14 @@ const SwitchRow = cli.rows.SwitchRow;
 const switchTuiFooterText = cli.tui.switchTuiFooterText;
 const removeTuiFooterText = cli.tui.removeTuiFooterText;
 const listTuiFooterText = cli.tui.listTuiFooterText;
+const listCreditsTuiFooterText = cli.tui.listCreditsTuiFooterText;
 const writeTuiFrameTo = cli.tui.writeTuiFrameTo;
 const TuiInputKey = cli.tui.TuiInputKey;
 const mapTuiOutputError = cli.tui.mapTuiOutputError;
 const indexWidth = cli.render.indexWidth;
 const LiveListViewport = cli.render.LiveListViewport;
 const ansi = struct {
+    const bold = "\x1b[1m";
     const dim = "\x1b[2m";
     const red = "\x1b[31m";
     const green = "\x1b[32m";
@@ -1513,8 +1515,12 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         removeTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        "Keys: Up/Down scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
         listTuiFooterText(true),
+    );
+    try std.testing.expectEqualStrings(
+        "Keys: Up/Down or j/k credit, Enter use, Esc back\n",
+        listCreditsTuiFooterText(true),
     );
 }
 
@@ -1528,8 +1534,12 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         removeTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ scroll, j/k row, c credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        "Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
         listTuiFooterText(false),
+    );
+    try std.testing.expectEqualStrings(
+        "Keys: ↑/↓ or j/k credit, Enter use, Esc back\n",
+        listCreditsTuiFooterText(false),
     );
 }
 
@@ -1675,7 +1685,7 @@ test "live list details show reset credits cell and scroll within the viewport" 
     var colored_writer = StyledWriter.init(&color_body.writer, true);
     try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120);
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
-    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), "\x1b[2m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.bold) != null);
 }
 
 test "live list derives the reset credits count from available cards when the summary is absent" {
@@ -1714,14 +1724,108 @@ test "reset credits panel renders the remaining rail and compact rows" {
     };
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, 100, now, 0, true, "✓ used", 6);
+    // The caller feeds this count to the viewport, so it must include every line.
+    const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
+        .max_cols = 100,
+        .now = now,
+        .card_cursor = 0,
+        .confirm_pending = true,
+        .status = "used",
+        .status_kind = .ok,
+        .indent = 6,
+    });
+    try std.testing.expectEqual(@as(usize, 4), lines);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, out.written(), "\n"));
     const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "      ┌ Available 2 · ⏎ select · esc close") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "      │ ▸ Full reset (Weekly + 5 hr) · ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · ⏎ again to use") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "│   (untitled) · -") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "│ ✓ used") != null);
-    try std.testing.expect(std.mem.endsWith(u8, text, "└\n"));
+    try std.testing.expect(std.mem.indexOf(u8, text, "      RESET CREDITS · 2 available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · Enter again to use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "        (untitled) · -") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      ✓ used") != null);
+    try std.testing.expect(!std.mem.endsWith(u8, text, "└\n"));
+}
+
+test "reset credits panel uses heading and selected color roles" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset", .expires_at = null, .epoch = null },
+        .{ .id = "later", .title = "Later card", .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
+        .max_cols = 100,
+        .now = now,
+        .card_cursor = 0,
+        .status = "reset credit used",
+        .status_kind = .ok,
+        .indent = 4,
+        .use_color = true,
+    });
+    const text = out.written();
+    // Borderless design D: the heading carries weight/color, the selected
+    // credit is green, and the other credit stays at the default foreground.
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[1m\x1b[36mRESET CREDITS · 2 available\x1b[0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m> Full reset · -\x1b[0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m  Later card") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m✓ reset credit used\x1b[0m") != null);
+}
+
+test "reset credits panel stays ASCII on Windows" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = "2026-11-01T00:00:00Z", .epoch = now + 9 * 86400 },
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    // The rail is borderless on every platform, so Windows only changes the
+    // separator and success marker.
+    const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
+        .max_cols = 100,
+        .now = now,
+        .card_cursor = 0,
+        .confirm_pending = true,
+        .status = "reset credit used",
+        .status_kind = .ok,
+        .indent = 6,
+        .is_windows = true,
+    });
+    try std.testing.expectEqual(@as(usize, 4), lines);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "      RESET CREDITS, 2 available") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr), ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, ", in 9d, Enter again to use") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "        (untitled), -") != null);
+    try std.testing.expect(std.mem.endsWith(u8, text, "      OK reset credit used\n"));
+    // docs/windows.md: no box-drawing, bullets, arrows or marks in the output.
+    for (text) |byte| try std.testing.expect(byte < 0x80);
+}
+
+test "reset credits panel keeps every line inside a narrow width budget" {
+    const gpa = std.testing.allocator;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = null, .epoch = null },
+    };
+    // Below a three-column text budget the ellipsis itself must shrink instead
+    // of widening the line, and the status marker is truncated with its message.
+    for ([_]usize{ 1, 2, 3, 4, 5, 9 }) |max_cols| {
+        var out: std.Io.Writer.Allocating = .init(gpa);
+        defer out.deinit();
+        _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
+            .max_cols = max_cols,
+            .now = 1_800_000_000,
+            .status = "reset credit used",
+            .status_kind = .ok,
+            .is_windows = true,
+        });
+        var iter = std.mem.splitScalar(u8, out.written(), '\n');
+        while (iter.next()) |line| {
+            try std.testing.expect(line.len <= max_cols);
+        }
+    }
 }
 
 test "reset credits panel hint tracks the armed credit identity" {
@@ -1757,19 +1861,86 @@ test "reset credits panel approval is dropped by a cursor move queued in the sam
     try std.testing.expect(!sel.approve(gpa, card));
 }
 
-test "live list follows the credits rail row into the viewport" {
-    // The rail row is above the viewport: scroll up to it.
-    try std.testing.expectEqual(@as(usize, 2), live_tui.followViewportStart(40, 10, 20, 2));
+test "reset credits panel invalidates a rendered credit when the highlight moves in one key batch" {
+    const gpa = std.testing.allocator;
+    const Identity = cli.reset_credits_panel.Identity;
+    const RenderedIdentity = cli.reset_credits_panel.RenderedIdentity;
+    const first = Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    const second = Identity{ .account_key = "acct-a", .credit_id = "card-1" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+    var rendered: RenderedIdentity = .{};
+    defer rendered.deinit(gpa);
+
+    try rendered.set(gpa, first);
+
+    // At a boundary the highlight does not move, so the cached identity still
+    // describes the card drawn on screen and remains usable.
+    sel.moveCardAndInvalidate(gpa, &rendered, .up);
+    try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
+    try std.testing.expectEqualStrings("card-0", rendered.get().?.credit_id);
+
+    // A real move drops the frame identity immediately, before the next render.
+    sel.moveCardAndInvalidate(gpa, &rendered, .down);
+    try std.testing.expectEqual(@as(usize, 1), sel.card_cursor);
+    try std.testing.expect(rendered.get() == null);
+
+    // Simulate the rest of the input batch: Enter can only act on a live frame
+    // identity. Without the invalidation above it would arm the old card.
+    if (rendered.get()) |identity| _ = sel.confirm(gpa, identity);
+    try std.testing.expect(!sel.isPendingFor(first));
+    try std.testing.expect(!sel.isPendingFor(second));
+
+    // The new frame publishes the new card; a boundary move keeps it valid.
+    try rendered.set(gpa, second);
+    sel.moveCardAndInvalidate(gpa, &rendered, .down);
+    try std.testing.expectEqual(@as(usize, 1), sel.card_cursor);
+    try std.testing.expectEqualStrings("card-1", rendered.get().?.credit_id);
+}
+
+test "live list follows the credits rail into the viewport" {
+    // A single row above the viewport: scroll up to it.
+    try std.testing.expectEqual(@as(usize, 2), live_tui.followViewportStart(40, 10, 20, .{ .first = 2, .last = 2 }));
     // Below the viewport: it becomes the last visible line.
-    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 0, 39));
+    try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 0, .{ .first = 39, .last = 39 }));
     // Already visible: unchanged.
-    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, 25));
+    try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, .{ .first = 25, .last = 25 }));
     // Without a rail the plain clamp still applies.
     try std.testing.expectEqual(@as(usize, 20), live_tui.followViewportStart(40, 10, 20, null));
     try std.testing.expectEqual(@as(usize, 30), live_tui.followViewportStart(40, 10, 99, null));
     // Everything fits on screen, and a zero-height viewport, stay at the top.
-    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(5, 10, 3, 4));
-    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(40, 0, 20, 5));
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(5, 10, 3, .{ .first = 4, .last = 4 }));
+    try std.testing.expectEqual(@as(usize, 0), live_tui.followViewportStart(40, 0, 20, .{ .first = 5, .last = 5 }));
+}
+
+test "live list keeps the whole credits rail visible, not just its anchor row" {
+    // The rail hangs below its row: following the row alone would pin it to the
+    // last visible line and push the confirm hint and the redeem result off
+    // screen, where a second Enter would still consume a credit.
+    try std.testing.expectEqual(
+        @as(usize, 30),
+        live_tui.followViewportStart(40, 10, 0, .{ .first = 34, .last = 39 }),
+    );
+    // A rail taller than the viewport keeps its end, where the hint is drawn.
+    try std.testing.expectEqual(
+        @as(usize, 30),
+        live_tui.followViewportStart(40, 10, 0, .{ .first = 20, .last = 39 }),
+    );
+    // Scrolling up top-aligns the anchor row, which keeps a fitting rail visible.
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        live_tui.followViewportStart(40, 10, 20, .{ .first = 2, .last = 6 }),
+    );
+    // The rail end is visible but its anchor row scrolled off, and both fit.
+    try std.testing.expectEqual(
+        @as(usize, 18),
+        live_tui.followViewportStart(40, 10, 20, .{ .first = 18, .last = 25 }),
+    );
+    // A fully visible rail does not move the viewport.
+    try std.testing.expectEqual(
+        @as(usize, 20),
+        live_tui.followViewportStart(40, 10, 20, .{ .first = 22, .last = 27 }),
+    );
 }
 
 test "reset credits panel orders cards by parsed expiry and keeps undated cards last" {
@@ -1805,11 +1976,42 @@ test "reset credits panel orders cards by parsed expiry and keeps undated cards 
     try std.testing.expect(cards[2].epoch == null);
 }
 
+test "reset credits panel opens only for rows with a consumable credit" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user::account", "test@example.com", "", .pro);
+
+    // No usage snapshot: the row has nothing to open.
+    try std.testing.expect(!try cli.reset_credits_panel.hasAvailable(gpa, &reg.accounts.items[0], &.{}));
+
+    const details = try codex_auth.api.usage.parseResetCreditResponse(gpa,
+        \\{"available_count":1,"total_earned_count":1,"credits":[
+        \\{"id":"only","status":"available","expires_at":null,"title":"Only card"}]}
+    );
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .plan_type = .pro,
+        .reset_credits = 1,
+        .reset_credit = details,
+    };
+
+    try std.testing.expect(try cli.reset_credits_panel.hasAvailable(gpa, &reg.accounts.items[0], &.{}));
+    // A credit already consumed in this session cannot reopen the rail.
+    try std.testing.expect(!try cli.reset_credits_panel.hasAvailable(gpa, &reg.accounts.items[0], &.{"only"}));
+}
+
 test "reset credits panel bounds multibyte lines by display width" {
     const gpa = std.testing.allocator;
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, 7, 1_800_000_000, 0, false, "✓ used", 0);
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, .{
+        .max_cols = 7,
+        .now = 1_800_000_000,
+        .status = "✓ used",
+    });
     var lines = std.mem.splitScalar(u8, out.written(), '\n');
     while (lines.next()) |line| {
         if (line.len == 0) continue;
@@ -1916,6 +2118,75 @@ test "reset credits panel keeps a confirm armed only while the credit stays high
     try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
 }
 
+test "reset credits panel moves only the credit cursor, never the account row" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const on_row = cli.reset_credits_panel.Identity{ .account_key = "acct-row-3", .credit_id = "card-1" };
+    var sel: cli.reset_credits_panel.Selection = .{
+        .expanded = true,
+        .row_cursor = 3,
+        .card_cursor = 1,
+        .card_count = 3,
+        .valid = true,
+    };
+    defer sel.deinit(gpa);
+
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, on_row));
+    sel.moveCard(gpa, .down);
+    try std.testing.expectEqual(@as(usize, 3), sel.row_cursor);
+    try std.testing.expectEqual(@as(usize, 2), sel.card_cursor);
+    try std.testing.expect(sel.expanded);
+    try std.testing.expect(sel.valid);
+    try std.testing.expect(!sel.isPendingFor(on_row));
+
+    // The credit cursor clamps at both ends without borrowing a row step from
+    // the next account, so holding Down cannot walk off the current account.
+    sel.moveCard(gpa, .down);
+    try std.testing.expectEqual(@as(usize, 3), sel.row_cursor);
+    try std.testing.expectEqual(@as(usize, 2), sel.card_cursor);
+    sel.moveCard(gpa, .up);
+    sel.moveCard(gpa, .up);
+    sel.moveCard(gpa, .up);
+    try std.testing.expectEqual(@as(usize, 3), sel.row_cursor);
+    try std.testing.expectEqual(@as(usize, 0), sel.card_cursor);
+
+    // Only the explicit row move changes the parent row.
+    sel.moveRow(gpa, .down, 6);
+    try std.testing.expectEqual(@as(usize, 4), sel.row_cursor);
+    try std.testing.expect(!sel.valid);
+}
+
+test "reset credits panel reports the last redeem without an empty-list placeholder" {
+    const gpa = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+
+    const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, .{
+        .max_cols = 100,
+        .now = 1_800_000_000,
+        .status = "reset credit used",
+        .status_kind = .ok,
+        .indent = 4,
+    });
+    try std.testing.expectEqual(@as(usize, 2), lines);
+    try std.testing.expectEqualStrings(
+        "    RESET CREDITS · 0 available\n    ✓ reset credit used\n",
+        out.written(),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "no available reset credits") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "codex-auth list --api") == null);
+
+    // The same empty rail without a status is only the count, never a hint to
+    // go refresh; `0 available` already says there is nothing to use.
+    out.clearRetainingCapacity();
+    _ = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, .{
+        .max_cols = 100,
+        .now = 1_800_000_000,
+        .indent = 4,
+    });
+    try std.testing.expectEqualStrings("    RESET CREDITS · 0 available\n", out.written());
+}
+
 test "reset credits panel close drops the pending confirm and the status line" {
     const gpa = std.testing.allocator;
     const Step = cli.reset_credits_panel.ConfirmStep;
@@ -1923,7 +2194,7 @@ test "reset credits panel close drops the pending confirm and the status line" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit used");
+    try sel.setStatus(gpa, "✓ reset credit used", .ok);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.close(gpa);
     try std.testing.expect(!sel.expanded);
@@ -1941,12 +2212,31 @@ test "reset credits panel clears the status line when the account row moves" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit used");
+    try sel.setStatus(gpa, "✓ reset credit used", .ok);
     sel.moveRow(gpa, .down, 5);
     try std.testing.expect(sel.status == null);
-    try sel.setStatus(gpa, "✗ use failed (HTTP 500)");
+    try sel.setStatus(gpa, "✗ use failed (HTTP 500)", .fail);
     sel.clearSelection(gpa);
     try std.testing.expect(sel.status == null);
+}
+
+test "reset credits panel keeps the redeem report across a card list refresh" {
+    const gpa = std.testing.allocator;
+    const Step = cli.reset_credits_panel.ConfirmStep;
+    const card = cli.reset_credits_panel.Identity{ .account_key = "acct-a", .credit_id = "card-0" };
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try sel.setStatus(gpa, "✓ reset credit used", .ok);
+    try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
+    // A background refresh landing right after a redeem replaces the card list
+    // under the cursor: it must disarm the confirmation but keep the report of
+    // the action that already happened.
+    sel.clearCards(gpa);
+    try std.testing.expectEqualStrings("✓ reset credit used", sel.status orelse "");
+    try std.testing.expectEqual(cli.reset_credits_panel.StatusKind.ok, sel.status_kind);
+    try std.testing.expect(!sel.isPendingFor(card));
+    try std.testing.expect(!sel.valid);
 }
 
 test "reset credits panel splice keeps one line per rendered row" {
@@ -2113,7 +2403,7 @@ test "live list distinguishes unavailable reset details from an empty server lis
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
 
-test "live list details keep the responsive column order and complete percentages" {
+test "live list defers PLAN EXPIRE and keeps the configured column order" {
     const gpa = std.testing.allocator;
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     var reg = makeTestRegistry();

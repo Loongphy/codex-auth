@@ -57,3 +57,46 @@ OK Downloaded Codext CLI for WSL (v0.3.0)
 ----------------------------------------------------------------------------
 Launching Codex App...
 ```
+
+### Reset credits rail examples
+
+The `list --live` reset credits rail is borderless on every platform. It nests
+under its account row by indentation, uses an uppercase heading, and relies on
+the footer for the key hints. The same state on both platforms, with the rail
+indented four columns under its account row:
+
+Non-Windows:
+
+```text
+    RESET CREDITS · 2 available
+    > Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d · Enter again to use
+      (untitled) · -
+    ✓ reset credit used
+```
+
+Windows:
+
+```text
+    RESET CREDITS, 2 available
+    > Full reset (Weekly + 5 hr), 11-01 08:00, in 9d, Enter again to use
+      (untitled), -
+    OK reset credit used
+```
+
+A failure line carries no marker on Windows, because its sentence already says
+what happened: `use failed (HTTP 500)`, or `reset credit is no longer available;
+refresh to see current resets`.
+
+`codex-auth reset` prints the same separator difference outside the TUI.
+
+Non-Windows:
+
+```text
+reset credit used · 1 left (next exp 01-01 08:00)
+```
+
+Windows:
+
+```text
+reset credit used, 1 left (next exp 01-01 08:00)
+```

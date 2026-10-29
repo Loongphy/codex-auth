@@ -24,9 +24,12 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
-| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
+| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
+| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
+
+The tables and orders in this document name columns, not rendered headers: `LAST`
+is the column whose wide header reads `LAST ACTIVITY`. See [Headers](#headers).
 
 ## Shared Priority
 
@@ -60,7 +63,7 @@ become one-column dot cells.
 
 `ACCOUNT` is expanded last, after the deferred pass, using only leftover width.
 A long account label therefore cannot hide `AUTH EXPIRE`, `PLAN EXPIRE`, or
-`LAST ACTIVITY`.
+`LAST`.
 
 ## Shared Hide Order
 
@@ -127,12 +130,13 @@ Wide headers use their full label. Narrow columns use compact labels:
 | `RESET CREDITS` | `RESET`, then `RC` |
 | `AUTH EXPIRE` | `AUTH EXP`, then `AUTH` |
 | `PLAN EXPIRE` | `PLAN EXP`, then `PLAN` |
-| `LAST ACTIVITY` | `LAST` |
+| `LAST` | `LAST`; its full header is `LAST ACTIVITY` |
 
-`LAST ACTIVITY` renders its full header at 13 columns or wider and falls back
-to `LAST` below that. Plain `list` and `list --live` use the same allocator and
-deferred order, so the abbreviation rule is identical; the exact terminal width
-where it kicks in can differ because each view supports a different column set.
+`LAST` is the only column whose compact label is also its column name: it renders
+`LAST ACTIVITY` at 13 columns or wider and falls back to `LAST` below that. Plain
+`list` and `list --live` use the same allocator and deferred order, so the
+abbreviation rule is identical; the exact terminal width where it kicks in can
+differ because each view supports a different column set.
 
 ## Adding a Column
 
