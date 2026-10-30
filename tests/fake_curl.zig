@@ -169,7 +169,7 @@ fn serveConsume(init: std.process.Init, dir: std.Io.Dir, request: Request) !void
             defer init.gpa.free(body);
             const status = try readStatus(init, dir, per_account);
             if (status < 300 and std.mem.indexOf(u8, body, "\"code\":\"reset\"") != null) {
-                try markConsumed(init, dir, request.account_id);
+                try recordConsume(init, dir, request);
             }
             return try respond(init, body, status);
         }
@@ -182,7 +182,7 @@ fn serveConsume(init: std.process.Init, dir: std.Io.Dir, request: Request) !void
         defer init.gpa.free(body);
         const status = try readStatus(init, dir, "consume.json");
         if (status < 300 and std.mem.indexOf(u8, body, "\"code\":\"reset\"") != null) {
-            try markConsumed(init, dir, request.account_id);
+            try recordConsume(init, dir, request);
         }
         return try respond(init, body, status);
     }
@@ -193,7 +193,7 @@ fn serveConsume(init: std.process.Init, dir: std.Io.Dir, request: Request) !void
         else => {},
     }
 
-    if (scenario == .ok) try markConsumed(init, dir, request.account_id);
+    if (scenario == .ok) try recordConsume(init, dir, request);
     try respond(init, scenario.body(), scenario.status());
 }
 
@@ -243,6 +243,90 @@ fn markConsumed(init: std.process.Init, dir: std.Io.Dir, account_id: []const u8)
     const stamp = try std.fmt.allocPrint(init.gpa, "{d}\n", .{nowSeconds(init)});
     defer init.gpa.free(stamp);
     try dir.writeFile(init.io, .{ .sub_path = marker, .data = stamp });
+}
+
+const FakeCredit = struct {
+    id: []const u8,
+    status: []const u8,
+    expires_at: ?[]const u8 = null,
+    title: ?[]const u8 = null,
+};
+
+const FakeCreditsFile = struct {
+    credits: []FakeCredit,
+};
+
+/// Applies a successful consume to the account's credit state: the card named
+/// in the request body is removed from the remaining list, and that list is
+/// persisted as the new after-consume state. This models the real backend —
+/// whichever card the caller consumed disappears, not "all of them" — so a
+/// multi-card account still shows what is left, in any redemption order.
+fn recordConsume(
+    init: std.process.Init,
+    dir: std.Io.Dir,
+    request: Request,
+) !void {
+    try markConsumed(init, dir, request.account_id);
+    const body = request.body orelse return;
+
+    const parsed_body = std.json.parseFromSlice(struct { credit_id: []const u8 }, init.gpa, body, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+    defer parsed_body.deinit();
+    if (parsed_body.value.credit_id.len == 0) return;
+    const credit_id = parsed_body.value.credit_id;
+
+    // Current remaining state: a previous consume this session wins over the
+    // pristine per-account fixture.
+    const after_name = try std.fmt.allocPrint(init.gpa, "after-consume-credits-{s}.json", .{request.account_id});
+    defer init.gpa.free(after_name);
+    const base_name = try std.fmt.allocPrint(init.gpa, "credits-{s}.json", .{request.account_id});
+    defer init.gpa.free(base_name);
+    const current = (try readFixture(init, dir, after_name)) orelse
+        (try readFixture(init, dir, base_name)) orelse return;
+    defer init.gpa.free(current);
+
+    const parsed_credits = std.json.parseFromSliceLeaky(FakeCreditsFile, init.gpa, current, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+    var flipped = false;
+    var available_count: usize = 0;
+    for (parsed_credits.credits) |*credit| {
+        if (std.mem.eql(u8, credit.id, credit_id)) {
+            credit.status = "consumed";
+            flipped = true;
+        }
+        if (std.mem.eql(u8, credit.status, "available")) available_count += 1;
+    }
+    if (!flipped) return;
+
+    // Stringify copies, so the written body outlives the parse allocation.
+    const credits_body = std.json.Stringify.valueAlloc(init.gpa, .{ .credits = parsed_credits.credits }, .{}) catch return;
+    defer init.gpa.free(credits_body);
+    try dir.writeFile(init.io, .{ .sub_path = after_name, .data = credits_body });
+
+    patchAfterConsumeUsageCount(init, dir, request.account_id, available_count) catch {};
+}
+
+/// Keeps the usage fixture's `available_count` in step with the remaining
+/// credit list, so the table cell and the rail header tell the same story.
+fn patchAfterConsumeUsageCount(
+    init: std.process.Init,
+    dir: std.Io.Dir,
+    account_id: []const u8,
+    count: usize,
+) !void {
+    const name = try std.fmt.allocPrint(init.gpa, "after-consume-usage-{s}.json", .{account_id});
+    defer init.gpa.free(name);
+    const text = (try readFixture(init, dir, name)) orelse return;
+    defer init.gpa.free(text);
+    const needle = "\"available_count\":";
+    const idx = std.mem.indexOf(u8, text, needle) orelse return;
+    var digits_end = idx + needle.len;
+    while (digits_end < text.len and std.ascii.isDigit(text[digits_end])) digits_end += 1;
+    const patched = try std.fmt.allocPrint(init.gpa, "{s}{d}{s}", .{ text[0 .. idx + needle.len], count, text[digits_end..] });
+    defer init.gpa.free(patched);
+    try dir.writeFile(init.io, .{ .sub_path = name, .data = patched });
 }
 
 fn nowSeconds(init: std.process.Init) i64 {

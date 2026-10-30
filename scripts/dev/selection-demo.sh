@@ -17,7 +17,8 @@
 #   scripts/dev/selection-demo.sh --keep                keep the CODEX_HOME for inspection
 #
 # What to look for by hand (interactive mode):
-#   - The cursor `>` starts on row 1; the active marker `*` sits on row 12.
+#   - The cursor `>` opens on the active account (zeta, row 12), covering the
+#     `*` marker; move off it and `*` reappears while `>` tracks the cursor.
 #     They are independent markers: moving the cursor never moves `*`.
 #   - Every single j / k / Up / Down must move `>` exactly one row, on the
 #     very next frame — no trailing highlight, no doubled cursor.
@@ -190,8 +191,8 @@ cli="$repo_root/zig-out/bin/codex-auth"
 cat <<INFO
 Isolated CODEX_HOME : $demo_home
 Data source         : registry.json only (--skip-api, no backend, no network)
-Active account      : zeta (row 12, table sorts by label) — the "*" marker
-                      stays there; the ">" cursor starts on row 1
+Active account      : zeta (row 12, table sorts by label) — the cursor opens
+                      there, so `>` and `*` share that row at boot
 Redeem              : intentionally impossible (apikey snapshots fail fast,
                       zero requests); this demo tests selection, not redemption
 
@@ -267,14 +268,14 @@ run_drive() {
   send() { tmux send-keys -t "$session" "$1"; }
 
   capture 00-initial
-  send j
-  capture 01-single-j
   send k
-  capture 02-single-k
-  send jjjjk
-  capture 03-burst-five-keys 0.4
+  capture 01-single-k
   send j
-  capture 04-single-j-onto-eta
+  capture 02-single-j
+  send kkkkj
+  capture 03-burst-five-keys 0.4
+  send kkkk
+  capture 04-burst-onto-eta 0.4
   send Enter
   capture 05-rail-on-cursor-row
   send j
@@ -296,21 +297,21 @@ run_drive() {
 
 run_assertions() {
   printf '\n=== assertions ===\n'
-  # Cursor starts on row 1; active marker on row 6; header text gone.
-  frame_has 00-initial '^>1[[:space:]]' 'cursor starts on row 1'
-  frame_has 00-initial '^\*12[[:space:]]' 'active marker stays on row 12 (zeta)'
+  # The cursor opens on the active account row (zeta, 12): `>` covers `*`.
+  frame_has 00-initial '^>12[[:space:]]' 'cursor opens on the active account row'
   frame_count 00-initial '^>' 1 'exactly one cursor marker' 'cursor markers'
   frame_count 00-initial '#\*' 0 'no "#*" header text' 'header fragments'
-  # Single keys move the cursor one row per frame, with no trail.
-  expect_cursor 01-single-j 2
-  expect_cursor 02-single-k 1
-  frame_count 01-single-j '^>' 1 'no doubled cursor after a single key' 'cursor markers'
-  # Burst: five pasted keys from row 1 land on row 4 (4 down, 1 up).
-  expect_cursor 03-burst-five-keys 4
+  # Single keys: k moves up one row and the * active marker reappears on zeta.
+  expect_cursor 01-single-k 11
+  frame_has 01-single-k '^\*12[[:space:]]' 'active marker reappears once the cursor moves off zeta'
+  frame_count 01-single-k '^>' 1 'no doubled cursor after a single key' 'cursor markers'
+  expect_cursor 02-single-j 12
+  # Burst: five pasted keys (4 up, 1 down) land on row 9 (iota-a).
+  expect_cursor 03-burst-five-keys 9
   frame_count 03-burst-five-keys '^>' 1 'burst keeps exactly one cursor' 'cursor markers'
   frame_has 03-burst-five-keys '^\*12[[:space:]]' 'burst did not move the active marker'
-  # One more down lands on row 5 (eta, 2 cards).
-  expect_cursor 04-single-j-onto-eta 5
+  # Four more ups land on row 5 (eta, 2 cards).
+  expect_cursor 04-burst-onto-eta 5
   # Enter opens the rail under the cursor row; both markers coexist.
   frame_has 05-rail-on-cursor-row '^>5[[:space:]]' 'rail anchored on the cursor row'
   frame_has 05-rail-on-cursor-row '^\*12[[:space:]]' 'active marker untouched by the rail'

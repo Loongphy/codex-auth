@@ -92,17 +92,12 @@ JSON
 
   # Mock backend responses for this account. The `after-consume-*` fixtures are
   # what the CLI sees once a redeem succeeded, so the live table and the rail
-  # visibly change without editing anything. A consume takes the soonest card
-  # only: the fixtures keep the remaining cards so a multi-card account still
-  # shows what is left instead of dropping to zero.
-  local remaining_cards="[]"
+  # visibly change without editing anything. A consume takes exactly one card:
+  # the usage count drops by one, and the fake curl flips that card's status to
+  # "consumed" in the credit list dynamically (per the request body's
+  # credit_id), so any redemption order leaves the remaining cards intact.
   local remaining_count=0
-  if [ "$count" -gt 1 ]; then
-    # The seeded card list is soonest-first, so the consume drops the first one.
-    # Cards are split on the object boundary `}, {`, not on `, ` (which also
-    # occurs inside each object).
-    local sep='}, '
-    remaining_cards="[${cards#*"$sep"}"
+  if [ "$count" -gt 0 ]; then
     remaining_count=$((count - 1))
   fi
   if [ "$auth_kind" != "apikey" ]; then
@@ -111,7 +106,6 @@ JSON
     printf '{"credits":%s}\n' "$cards" > "$demo_home/fixtures/credits-$account.json"
     printf '{"plan_type":"%s","rate_limit":{"primary_window":{"used_percent":4,"limit_window_seconds":18000,"reset_at":4102444800},"secondary_window":{"used_percent":2,"limit_window_seconds":604800,"reset_at":4103049600}},"rate_limit_reset_credits":{"available_count":%s}}\n' \
       "$plan" "$remaining_count" > "$demo_home/fixtures/after-consume-usage-$account.json"
-    printf '{"credits":%s}\n' "$remaining_cards" > "$demo_home/fixtures/after-consume-credits-$account.json"
   fi
 }
 
