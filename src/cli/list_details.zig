@@ -20,9 +20,9 @@ pub fn computeWidths(
     const columns = [_]table_layout.ColumnSpec{
         .{
             .id = .number,
-            .content_width = @max(number_width, "#*".len),
-            .target_width = @max(number_width, "#*".len),
-            .min_width = @max(number_width, "#*".len),
+            .content_width = @max(number_width, 2),
+            .target_width = @max(number_width, 2),
+            .min_width = @max(number_width, 2),
         },
         table_layout.columnSpec(.account, @max(widths.email, "ACCOUNT".len)),
         table_layout.columnSpec(.plan, @max(widths.plan, "PLAN".len)),
@@ -105,7 +105,7 @@ pub fn write(
 
 fn headerFor(id: table_layout.ColumnId, width: usize) []const u8 {
     return switch (id) {
-        .number => "#*",
+        .number => "",
         .account => "ACCOUNT",
         .plan => "PLAN",
         .credits => "CREDITS",

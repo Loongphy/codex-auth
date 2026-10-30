@@ -1656,8 +1656,8 @@ test "live list details show reset credits cell and scroll within the viewport" 
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "test@e", "AUTH EXPIRE", "RESET CREDITS", "1 (exp 10-01)" }) |expected| {
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    for ([_][]const u8{ "ACCOUNT", "PLAN", "test@e", "AUTH EXPIRE", "RESET CREDITS", "1 (exp 10-01)" }) |expected| {
         try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
     }
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "00:00:00 UTC") == null);
@@ -1676,14 +1676,14 @@ test "live list details show reset credits cell and scroll within the viewport" 
     try std.testing.expect(std.mem.count(u8, frame.written(), "\n") <= 7);
 
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40, null);
     var lines = std.mem.splitScalar(u8, body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 40);
 
     var color_body: std.Io.Writer.Allocating = .init(gpa);
     defer color_body.deinit();
     var colored_writer = StyledWriter.init(&color_body.writer, true);
-    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120);
+    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120, null);
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.bold) != null);
 }
@@ -1711,7 +1711,7 @@ test "live list derives the reset credits count from available cards when the su
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
@@ -2270,7 +2270,7 @@ test "live list maps the credits rail cursor to the rendered account row" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null);
 
     const account_count = reg.accounts.items.len;
     var header_rows: usize = 0;
@@ -2327,7 +2327,7 @@ test "live list renders a dash when available reset credits have no expiry" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (-)") != null);
 }
 
@@ -2347,13 +2347,13 @@ test "live list shows plan expiry only when it is still in the future" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
 
     reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXPIRE") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
 }
@@ -2370,7 +2370,7 @@ test "live list keeps the active marker visible for double-digit accounts" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
 
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "*10") != null);
 }
@@ -2385,8 +2385,8 @@ test "live list distinguishes unavailable reset details from an empty server lis
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
     reg.accounts.items[0].last_usage = .{
         .primary = null,
@@ -2398,8 +2398,8 @@ test "live list distinguishes unavailable reset details from an empty server lis
         ),
     };
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "#*") != null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
 
@@ -2425,7 +2425,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
         var body: std.Io.Writer.Allocating = .init(gpa);
         defer body.deinit();
         var writer = StyledWriter.init(&body.writer, false);
-        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width);
+        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width, null);
 
         var lines = std.mem.splitScalar(u8, body.written(), '\n');
         const header = lines.next() orelse "";
@@ -2441,7 +2441,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var narrow_body: std.Io.Writer.Allocating = .init(gpa);
     defer narrow_body.deinit();
     var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
-    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 90);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 90, null);
     try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXPIRE") == null);
     var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 90);
@@ -2449,11 +2449,11 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var wide_body: std.Io.Writer.Allocating = .init(gpa);
     defer wide_body.deinit();
     var wide_writer = StyledWriter.init(&wide_body.writer, false);
-    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200);
+    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200, null);
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXPIRE") != null);
     var last_index: usize = 0;
-    for ([_][]const u8{ "#*", "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
+    for ([_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXPIRE", "RESET CREDITS", "5H", "WEEKLY", "AUTH EXPIRE", "LAST ACTIVITY" }) |token| {
         const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;
@@ -2482,7 +2482,7 @@ test "live list renders zero reset credits without an expiry marker" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
 }

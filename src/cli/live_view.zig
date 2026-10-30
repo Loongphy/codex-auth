@@ -369,7 +369,7 @@ pub fn viewAccountsWithLiveUpdates(
             const list_index_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
-            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols());
+            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols(), credit_selection.row_cursor);
             var body_text: []const u8 = body.written();
             var spliced_panel: ?[]u8 = null;
             defer if (spliced_panel) |panel_buf| allocator.free(panel_buf);

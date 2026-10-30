@@ -36,7 +36,6 @@ Plain `list` at a wide width:
 
 ```text
 ACCOUNT             PLAN      PLAN EXPIRE  CREDITS    RESET CREDITS  5H       WEEKLY  AUTH EXPIRE       LAST ACTIVITY
----------------------------------------------------------------------------------------------------------------------------
 very-long-account.  Pro       2026-11-22   unlimited  3              100%     58%     2027-01-15 08:00  Now
 work-main.          Business  -            12         0              31%      42%     2026-12-31 23:59  3d ago
 ```
@@ -46,13 +45,13 @@ and `AUTH EXPIRE` columns so status and usage values stay readable:
 
 ```text
 ACCOUNT     PLAN  CR  RC  5H          WEEKLY
---------------------------------------------
 very-long.  Pro   -   -   100%        58%
 ```
 
-`list --live` at a medium width:
+`list --live` at a medium width (the marker column has no header text; `>`
+marks the row cursor, `*` the active account, `!` an error):
 
 ```text
-#*   ACCOUNT     PLAN  5H     WEEKLY
- 1   very-l.om)  Pro   100%   58%
+     ACCOUNT     PLAN  5H     WEEKLY
+>1   very-l.om)  Pro   100%   58%
 ```

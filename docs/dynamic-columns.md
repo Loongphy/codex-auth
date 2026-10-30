@@ -25,7 +25,7 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 | View | Visual order |
 |---|---|
 | `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
+| `list --live` | marker, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
 
 The tables and orders in this document name columns, not rendered headers: `LAST`

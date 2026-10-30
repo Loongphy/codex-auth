@@ -459,6 +459,9 @@ pub fn liveRowIndexForDataIndex(rows: []const SwitchRow, account_count: usize, d
 }
 
 /// Render the compact live account table.
+/// `cursor` is an optional data-row index on the `liveDataRowCount` basis
+/// (0-based, group header rows excluded); the matching row draws `>` instead
+/// of the `!`/`*`/space marker, so the row `Enter` acts on is always visible.
 pub fn renderListBody(
     allocator: std.mem.Allocator,
     writer: *style.StyledWriter,
@@ -467,6 +470,7 @@ pub fn renderListBody(
     idx_width: usize,
     widths: SwitchWidths,
     max_cols: ?usize,
+    cursor: ?usize,
 ) !void {
     const details = @import("list_details.zig");
 
@@ -477,10 +481,11 @@ pub fn renderListBody(
     for (rows) |row| {
         if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
         const idx = row.account_index.?;
+        const is_cursor = cursor != null and cursor.? == displayed_counter;
         displayed_counter += 1;
         const account = reg.accounts.items[idx];
         var number_buf: [32]u8 = undefined;
-        const marker: []const u8 = if (row.has_error) "!" else if (row.is_active) "*" else " ";
+        const marker: []const u8 = if (is_cursor) ">" else if (row.has_error) "!" else if (row.is_active) "*" else " ";
         const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
         try details.write(allocator, writer, account, .{
             .number = number,

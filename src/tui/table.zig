@@ -221,15 +221,6 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
             fallback[0..width];
     }
 
-    var visible_count: usize = 0;
-    var total: usize = prefix_len;
-    for (widths, 0..) |width, index| {
-        if (!visible[index]) continue;
-        total += width;
-        visible_count += 1;
-    }
-    if (visible_count > 1) total += sep_len * (visible_count - 1);
-
     if (use_color) try out.writeAll(ansi.cyan);
     try writeRepeat(out, ' ', prefix_len);
     var first_visible = true;
@@ -239,10 +230,6 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
         first_visible = false;
         try writePadded(out, cell, widths[index]);
     }
-    try out.writeAll("\n");
-    if (use_color) try out.writeAll(ansi.reset);
-    if (use_color) try out.writeAll(ansi.dim);
-    try writeRepeat(out, '-', total);
     try out.writeAll("\n");
     if (use_color) try out.writeAll(ansi.reset);
 
@@ -343,34 +330,6 @@ fn printTableDivider(out: *std.Io.Writer, widths: []const usize) !void {
             try out.writeAll("=");
         }
         try out.writeAll("+");
-    }
-    try out.writeAll("\n");
-}
-
-fn printTableEnd(out: *std.Io.Writer, widths: []const usize) !void {
-    try out.writeAll("+");
-    for (widths) |w| {
-        var i: usize = 0;
-        while (i < w + 2) : (i += 1) {
-            try out.writeAll("=");
-        }
-        try out.writeAll("+");
-    }
-    try out.writeAll("\n");
-}
-
-pub fn printTableRow(out: *std.Io.Writer, widths: []const usize, cells: []const []const u8) !void {
-    try out.writeAll("|");
-    for (cells, 0..) |cell, idx| {
-        try out.writeAll(" ");
-        try out.print("{s}", .{cell});
-        const cell_width = text_width.displayWidth(cell);
-        const pad = if (cell_width >= widths[idx]) 0 else (widths[idx] - cell_width);
-        var i: usize = 0;
-        while (i < pad) : (i += 1) {
-            try out.writeAll(" ");
-        }
-        try out.writeAll(" |");
     }
     try out.writeAll("\n");
 }

@@ -4,7 +4,6 @@ const codex_auth = @import("codex_auth");
 const app_runtime = codex_auth.core.runtime;
 const format = codex_auth.tui.table;
 const registry = codex_auth.registry;
-const printTableRow = format.printTableRow;
 const truncateAlloc = format.truncateAlloc;
 const formatRateLimitFullAlloc = format.formatRateLimitFullAlloc;
 const writeAccountsTable = format.writeAccountsTable;
@@ -75,15 +74,6 @@ fn appendApiKeyTestAccount(
         .last_usage_at = null,
         .last_local_rollout = null,
     });
-}
-
-test "printTableRow handles long cells without underflow" {
-    var buffer: [256]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&buffer);
-    const widths = [_]usize{3};
-    const cells = [_][]const u8{"abcdef"};
-    try printTableRow(&writer, &widths, &cells);
-    try writer.flush();
 }
 
 test "truncateAlloc respects max_len" {
