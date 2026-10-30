@@ -4535,8 +4535,8 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     try expectFailure(result);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- alice@example.com / work\n" ++
             "- alice@example.com / personal\n" ++
+            "- alice@example.com / work\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,

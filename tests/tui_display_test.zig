@@ -205,8 +205,10 @@ test "Scenario: Given mixed singleton and grouped accounts when building display
     try std.testing.expect(std.mem.eql(u8, rows.rows[0].account_cell, "solo(Solo Workspace, solo@example.com)"));
     try std.testing.expect(rows.rows[1].account_index == null);
     try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "user@example.com"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "work(Primary Workspace)"));
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
+    // Within the group, rows order alphabetically by their displayed label:
+    // the plan fallback "Plus" before the alias "work".
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Plus"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "work(Primary Workspace)"));
 }
 
 test "Scenario: Given grouped accounts with account names when building display rows then child labels use the same precedence" {
@@ -224,13 +226,11 @@ test "Scenario: Given grouped accounts with account names when building display 
     defer rows.deinit(gpa);
 
     try std.testing.expectEqual(@as(usize, 4), rows.rows.len);
-    try std.testing.expect(
-        (std.mem.eql(u8, rows.rows[1].account_cell, "work(Primary Workspace)") and
-            std.mem.eql(u8, rows.rows[2].account_cell, "Backup Workspace")) or
-            (std.mem.eql(u8, rows.rows[1].account_cell, "Backup Workspace") and
-                std.mem.eql(u8, rows.rows[2].account_cell, "work(Primary Workspace)")),
-    );
-    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "Plus"));
+    // Alphabetical by displayed label: account name "Backup Workspace", then
+    // the plan fallback "Plus", then the alias "work".
+    try std.testing.expect(std.mem.eql(u8, rows.rows[1].account_cell, "Backup Workspace"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[2].account_cell, "Plus"));
+    try std.testing.expect(std.mem.eql(u8, rows.rows[3].account_cell, "work(Primary Workspace)"));
 }
 
 test "Scenario: Given a single API key account when building display rows then the row stays as the email" {

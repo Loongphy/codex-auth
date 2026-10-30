@@ -1759,10 +1759,11 @@ test "Scenario: Given grouped accounts when resolving the rail cursor start then
     defer rows.deinit(gpa);
 
     // Live data-row basis: a@=0; the shared-email group header is not a row,
-    // and within the group the active account sorts first (team-b=1, team-a=2).
+    // and within the group rows order alphabetically by their displayed label
+    // (team-a=1, team-b=2 — active status does not reorder the group).
     try std.testing.expectEqual(@as(?usize, 0), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-1"));
-    try std.testing.expectEqual(@as(?usize, 1), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-3"));
-    try std.testing.expectEqual(@as(?usize, 2), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-2"));
+    try std.testing.expectEqual(@as(?usize, 1), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-2"));
+    try std.testing.expectEqual(@as(?usize, 2), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-3"));
     try std.testing.expectEqual(@as(?usize, null), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::missing"));
 }
 
