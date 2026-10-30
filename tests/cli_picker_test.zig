@@ -1715,6 +1715,36 @@ test "live list derives the reset credits count from available cards when the su
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
+test "Scenario: Given a live list cursor when rendering the body then the cursor row shares the active row's green" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    // Email-sorted: the cursor account lands on row 1, the active one on row 2.
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "a-cursor@example.com", "", .business);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "b-active@example.com", "", .business);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-2");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var colored = StyledWriter.init(&body.writer, true);
+    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 0);
+
+    // Cursor row: the ">" glyph wears the same green as the active row — the
+    // glyph, not the color, says which row Enter acts on (the pickers' rule).
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ ">1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ "*2") != null);
+
+    // Cursor on the active row: ">" wins the marker, the green survives.
+    body.clearRetainingCapacity();
+    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 1);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ ">2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "*2") == null);
+}
+
 test "reset credits panel renders the remaining rail and compact rows" {
     const gpa = std.testing.allocator;
     const now: i64 = 1_800_000_000;

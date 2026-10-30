@@ -487,6 +487,16 @@ pub fn renderListBody(
         var number_buf: [32]u8 = undefined;
         const marker: []const u8 = if (is_cursor) ">" else if (row.has_error) "!" else if (row.is_active) "*" else " ";
         const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
+        // Style precedence deliberately differs from the marker's: an error row
+        // stays red under the cursor (the glyph already marks the focus, the
+        // alarm must not be hidden), while cursor and active share the green the
+        // switch/remove pickers give both — the glyph, not the color, says which.
+        const row_style: []const u8 = if (row.has_error)
+            style.role.error_text
+        else if (is_cursor or row.is_active)
+            style.role.success
+        else
+            "";
         try details.write(allocator, writer, account, .{
             .number = number,
             .account = row.account,
@@ -494,7 +504,7 @@ pub fn renderListBody(
             .rate_5h = row.rate_5h,
             .rate_week = row.rate_week,
             .last = row.last,
-        }, column_widths);
+        }, column_widths, row_style);
     }
 }
 

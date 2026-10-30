@@ -58,12 +58,16 @@ pub fn writeHeader(writer: *style.StyledWriter, widths: [column_count]usize) !vo
     try writer.out.writeByte('\n');
 }
 
+/// `row_style` comes from the caller: deriving it from the marker glyph here
+/// would leave the `>` cursor row unstyled, which is exactly the ambiguity
+/// the picker row styles already avoid.
 pub fn write(
     allocator: std.mem.Allocator,
     writer: *style.StyledWriter,
     account: registry.AccountRecord,
     row: anytype,
     widths: [column_count]usize,
+    row_style: []const u8,
 ) !void {
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const token_expiry = try rows.formatTimestampAlloc(allocator, account.access_token_expires_at);
@@ -85,7 +89,6 @@ pub fn write(
         token_expiry,
         row.last,
     };
-    const row_style = if (row.number.len != 0 and row.number[0] == '!') style.role.error_text else if (row.number.len != 0 and row.number[0] == '*') style.role.success else "";
     try writer.writeStyle(row_style);
     var wrote_any = false;
     for (table_layout.list_detail_columns, 0..) |id, index| {
