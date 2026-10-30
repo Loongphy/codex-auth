@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do
         printf -- '--screen needs list, switch or remove\n' >&2
         exit 2
       }
-      shift
+      shift 2
       ;;
     --drive) drive=1; shift ;;
     --assert) drive=1; assert_frames=1; shift ;;
@@ -57,6 +57,11 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$drive" = 1 ] && [ "$screen" != list ]; then
+  printf -- '--drive/--assert cover the list screen only (interactive --screen switch/remove are manual by nature).\n' >&2
+  exit 2
+fi
 
 zig build
 
@@ -322,10 +327,6 @@ run_assertions() {
 }
 
 if [ "$drive" = 1 ]; then
-  if [ "$screen" != list ]; then
-    printf -- '--drive/--assert cover the list screen only (interactive --screen switch/remove are manual by nature).\n' >&2
-    exit 2
-  fi
   run_drive
 elif [ ! -t 0 ] || [ ! -t 1 ]; then
   printf '\nNot a terminal: falling back to --drive (install tmux, or run this script in a terminal).\n'
