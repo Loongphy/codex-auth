@@ -1745,6 +1745,27 @@ test "Scenario: Given a live list cursor when rendering the body then the cursor
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "*2") == null);
 }
 
+test "Scenario: Given grouped accounts when resolving the rail cursor start then group headers do not shift the index" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "a@example.com", "", .pro);
+    try appendTestAccount(gpa, &reg, "user-1::acc-2", "shared@example.com", "team-a", .business);
+    try appendTestAccount(gpa, &reg, "user-1::acc-3", "shared@example.com", "team-b", .business);
+    reg.active_account_key = try gpa.dupe(u8, "user-1::acc-3");
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+
+    // Live data-row basis: a@=0; the shared-email group header is not a row,
+    // and within the group the active account sorts first (team-b=1, team-a=2).
+    try std.testing.expectEqual(@as(?usize, 0), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-1"));
+    try std.testing.expectEqual(@as(?usize, 1), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-3"));
+    try std.testing.expectEqual(@as(?usize, 2), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::acc-2"));
+    try std.testing.expectEqual(@as(?usize, null), cli.render.liveDataIndexForAccountKey(rows.items, &reg, "user-1::missing"));
+}
+
 test "reset credits panel renders the remaining rail and compact rows" {
     const gpa = std.testing.allocator;
     const now: i64 = 1_800_000_000;

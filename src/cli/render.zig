@@ -458,6 +458,21 @@ pub fn liveRowIndexForDataIndex(rows: []const SwitchRow, account_count: usize, d
     return null;
 }
 
+/// Reverse of `liveRowIndexForDataIndex`, on the same rendered basis: the
+/// data-row index of `account_key`. The rail cursor uses it to open on the
+/// active account's row, the same starting point the pickers' initial
+/// selection takes.
+pub fn liveDataIndexForAccountKey(rows: []const SwitchRow, reg: *const registry.Registry, account_key: []const u8) ?usize {
+    var data_index: usize = 0;
+    for (rows) |row| {
+        if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
+        const account_idx = row.account_index.?;
+        if (std.mem.eql(u8, reg.accounts.items[account_idx].account_key, account_key)) return data_index;
+        data_index += 1;
+    }
+    return null;
+}
+
 /// Render the compact live account table.
 /// `cursor` is an optional data-row index on the `liveDataRowCount` basis
 /// (0-based, group header rows excluded); the matching row draws `>` instead

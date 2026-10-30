@@ -349,6 +349,17 @@ pub fn viewAccountsWithLiveUpdates(
         if (redeem_credit_id) |id| allocator.free(id);
     }
 
+    // The rail cursor opens on the active account's row — the same starting
+    // point the switch/remove pickers take — so on the first frame the `>`
+    // cursor, the green highlight and the `*` marker all agree. Falls back to
+    // the first data row when there is no active account or it went stale.
+    if (current_display.reg.active_account_key) |key| {
+        const initial_rows = try rows_cache.ensure(allocator, current_display.borrowed());
+        if (render.liveDataIndexForAccountKey(initial_rows.items, &current_display.reg, key)) |idx| {
+            credit_selection.row_cursor = idx;
+        }
+    }
+
     while (true) {
         if (try controller.maybe_take_updated_display(controller.context)) |updated| {
             current_display.deinit(allocator);

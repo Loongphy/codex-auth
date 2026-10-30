@@ -195,12 +195,8 @@ run_drive() {
   send() { tmux send-keys -t "$session" "$1"; }
 
   capture 00-table
-  # Walk the account-row cursor to `ok@`, which has two cards. A detour to
-  # `empty@` proves that Enter on a zero-credit row does not open a rail.
-  send 'j'
-  send 'j'
-  send 'j'
-  send 'j'
+  # The cursor opens on the active account `ok@`, which has two cards. A detour
+  # to `empty@` proves that Enter on a zero-credit row does not open a rail.
   send 'k'
   send 'Enter'
   capture 01-enter-empty-no-rail
