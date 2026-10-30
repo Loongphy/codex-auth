@@ -2,7 +2,7 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const registry = @import("../registry/root.zig");
 const auth = @import("../auth/auth.zig");
-const http = @import("http.zig");
+const transport_mod = @import("transport.zig");
 
 pub const default_reset_credits_consume_endpoint =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
@@ -107,9 +107,11 @@ fn fail(allocator: std.mem.Allocator, name: []const u8) ConsumeResult {
 
 /// Redeems one reset credit for the given account via the backend consume
 /// endpoint, using `redeem_request_id` as the idempotency key. The account
-/// must be a ChatGPT-auth account with a usable token.
+/// must be a ChatGPT-auth account with a usable token. The transport port
+/// carries the request; production wires `Transport.curl()`.
 pub fn consumeCreditForAccount(
     allocator: std.mem.Allocator,
+    transport: transport_mod.Transport,
     codex_home: []const u8,
     account_key: []const u8,
     redeem_request_id: []const u8,
@@ -128,7 +130,7 @@ pub fn consumeCreditForAccount(
     const body = try buildConsumeBodyAlloc(allocator, redeem_request_id, credit_id);
     defer allocator.free(body);
 
-    const http_result = http.runPostJsonCommand(
+    const http_result = transport.postJson(
         allocator,
         default_reset_credits_consume_endpoint,
         access_token,

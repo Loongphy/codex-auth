@@ -9,7 +9,10 @@ const std = @import("std");
 ///   credits[-<account_id>].json         GET  wham/rate-limit-reset-credits
 ///   accounts[-<account_id>].json        GET  accounts
 ///   me.json                             GET  v1/me
-///   consume.json                        POST wham/rate-limit-reset-credits/consume
+///   consume[-<account_id>].json         POST wham/rate-limit-reset-credits/consume;
+///                                         a per-account fixture wins over the global
+///                                         one, so a single session can redeem for one
+///                                         account and fail for another
 ///   after-consume-usage[-<id>].json     served instead of usage once a consume
 ///   after-consume-credits[-<id>].json   succeeded, so a live session shows the
 ///                                       reset without editing any file
@@ -155,6 +158,23 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn serveConsume(init: std.process.Init, dir: std.Io.Dir, request: Request) !void {
+    // A per-account fixture wins over the global fixture and the scenario env,
+    // so one account in a session can fail while the others succeed. Files are
+    // re-read on every request, which makes mid-session edits possible.
+    if (request.account_id.len != 0) {
+        const per_account = try std.fmt.allocPrint(init.gpa, "consume-{s}.json", .{request.account_id});
+        defer init.gpa.free(per_account);
+        if (try readExitCode(init, dir, per_account)) |code| std.process.exit(code);
+        if (try readFixture(init, dir, per_account)) |body| {
+            defer init.gpa.free(body);
+            const status = try readStatus(init, dir, per_account);
+            if (status < 300 and std.mem.indexOf(u8, body, "\"code\":\"reset\"") != null) {
+                try markConsumed(init, dir, request.account_id);
+            }
+            return try respond(init, body, status);
+        }
+    }
+
     if (try readExitCode(init, dir, "consume.json")) |code| std.process.exit(code);
     const scenario = Scenario.parse(init.environ_map.get("CODEX_AUTH_FAKE_CURL_SCENARIO") orelse "ok");
 

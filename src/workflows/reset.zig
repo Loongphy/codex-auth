@@ -2,11 +2,12 @@ const std = @import("std");
 const cli = @import("../cli/root.zig");
 const registry = @import("../registry/root.zig");
 const reset_credits_api = @import("../api/reset_credits.zig");
+const transport_mod = @import("../api/transport.zig");
 const query_mod = @import("query.zig");
 
 const panel = cli.reset_credits_panel;
 
-pub fn handleReset(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ResetOptions) !void {
+pub fn handleReset(allocator: std.mem.Allocator, transport: transport_mod.Transport, codex_home: []const u8, opts: cli.types.ResetOptions) !void {
     var reg = try registry.loadRegistry(allocator, codex_home);
     defer reg.deinit(allocator);
 
@@ -44,6 +45,7 @@ pub fn handleReset(allocator: std.mem.Allocator, codex_home: []const u8, opts: c
     defer allocator.free(redeem_key);
     var result = try reset_credits_api.consumeCreditForAccount(
         allocator,
+        transport,
         codex_home,
         rec.account_key,
         redeem_key,

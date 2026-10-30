@@ -3,6 +3,7 @@ pub const api = struct {
     pub const http = @import("api/http.zig");
     pub const me = @import("api/me.zig");
     pub const reset_credits = @import("api/reset_credits.zig");
+    pub const transport = @import("api/transport.zig");
     pub const usage = @import("api/usage.zig");
 };
 

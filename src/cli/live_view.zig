@@ -11,6 +11,7 @@ const tui_mod = @import("tui.zig");
 const live_tui = @import("live_tui.zig");
 const reset_credits_panel = @import("reset_credits_panel.zig");
 const reset_credits_api = @import("../api/reset_credits.zig");
+const transport_mod = @import("../api/transport.zig");
 const registry = @import("../registry/root.zig");
 const api_usage = @import("../api/usage.zig");
 
@@ -299,6 +300,7 @@ pub fn selectAccountWithLiveUpdates(
 
 pub fn viewAccountsWithLiveUpdates(
     allocator: std.mem.Allocator,
+    transport: transport_mod.Transport,
     initial_display: OwnedSwitchSelectionDisplay,
     controller: SwitchLiveController,
 ) !void {
@@ -650,6 +652,7 @@ pub fn viewAccountsWithLiveUpdates(
                                 defer allocator.free(codex_home);
                                 var result = reset_credits_api.consumeCreditForAccount(
                                     allocator,
+                                    transport,
                                     codex_home,
                                     current.account_key,
                                     key,

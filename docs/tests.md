@@ -64,7 +64,9 @@ mock first shadows the real one without touching any production code path.
 Without `CODEX_AUTH_FAKE_CURL_DIR` it answers the two fixed bodies the older tests
 were written against. With it, the directory drives the responses:
 `usage[-<account_id>].json`, `credits[-<account_id>].json`,
-`accounts[-<account_id>].json`, `me.json` and `consume.json` supply bodies, a sibling
+`accounts[-<account_id>].json`, `me.json` and `consume[-<account_id>].json` supply
+bodies (a per-account consume fixture wins over the global one, so a single live
+session can redeem for one account and fail for another), a sibling
 `<name>.status` file supplies a non-`200` status, a sibling `<name>.exit` file makes
 that one request fail like curl would (so a single account in a batch can fail
 transport while the others succeed), and `after-consume-*.json` takes over once a
@@ -78,20 +80,29 @@ rail renderer and the exit codes are all the real thing. It is a `test-helpers`
 artifact, so it is never part of a release package: the release and preview workflows
 copy `zig-out/bin/<binary_name>` alone into the uploaded artifacts.
 
-The same mock backs the dev demos, so there is only one backend double in the repo:
+## Transport Port
 
-- `scripts/dev/reset-demo.sh` prints every documented `codex-auth reset` outcome
-  with its stdout, stderr and exit code; `--dump` also shows the seeded registry,
-  the raw backend response and the parsed `list --json` side by side.
-- `scripts/dev/reset-live-demo.sh` runs the real `list --live` rail against it,
-  either interactively or, with `--drive`, as a scripted tmux session that prints
-  one captured frame per step. `--assert` turns that session into a smoke test over
-  the captured frames; it needs tmux and timing tolerance, so it stays a local
-  check rather than a CI step.
-- `scripts/dev/reset-rail-preview.sh` renders the rail for both platform glyph sets
-  at several widths, without a terminal.
+`src/api/transport.zig` is the port between the endpoint modules and the HTTP
+machinery: a `Transport` vtable covering `getJson`, `bearerGetJson`, `getJsonBatch`
+and `postJson`. Workflow entry points assemble `Transport.curl()`, so the shipped
+binary always talks through the real curl child process. This is a production
+architecture boundary, not a test-only seam.
 
-No demo touches the network or a real account, so no credit is consumed.
+Tests wire `tests/support/scripted_transport.zig` instead: an in-memory transport
+that queues responses per verb, injects transport failures, and records every
+request as structured data. Port-level tests (e.g. `api_reset_credits_test.zig`)
+run endpoint logic in-process — no process spawn, no fixture files, no parsing of
+curl config text.
+
+The split between the two doubles:
+
+- Port level owns scenario coverage: outcome matrices, per-account behavior,
+  request/body assertions. `reset_credits` is the reference implementation;
+  route any other endpoint through the port when you next modify it or need
+  port-level coverage for it.
+- Fake curl owns the curl assembly contract: argv/config construction, exit-code
+  to error mapping, timeouts, output caps, plus a thin end-to-end slice through
+  the real binary.
 
 ## Test Descriptions
 

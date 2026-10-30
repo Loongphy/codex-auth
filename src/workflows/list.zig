@@ -2,6 +2,7 @@ const std = @import("std");
 const cli = @import("../cli/root.zig");
 const format = @import("../tui/table.zig");
 const registry = @import("../registry/root.zig");
+const transport_mod = @import("../api/transport.zig");
 const account_names = @import("account_names.zig");
 const live_flow = @import("live.zig");
 const preflight = @import("preflight.zig");
@@ -31,7 +32,7 @@ const ListComputation = struct {
     }
 };
 
-pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.ListOptions) !void {
+pub fn handleList(allocator: std.mem.Allocator, transport: transport_mod.Transport, codex_home: []const u8, opts: cli.types.ListOptions) !void {
     if (opts.live) {
         try ensureLiveTty(.list);
         const live_allocator = std.heap.smp_allocator;
@@ -64,7 +65,7 @@ pub fn handleList(allocator: std.mem.Allocator, codex_home: []const u8, opts: cl
 
         const transferred_display = initial_display.?;
         initial_display = null;
-        cli.live.viewAccountsWithLiveUpdates(live_allocator, transferred_display, controller) catch |err| {
+        cli.live.viewAccountsWithLiveUpdates(live_allocator, transport, transferred_display, controller) catch |err| {
             if (err == error.TuiRequiresTty) {
                 try cli.output.printListRequiresTtyError();
                 return error.ListLiveRequiresTty;

@@ -152,7 +152,7 @@ fn commandDescriptionForTopic(topic: HelpTopic) []const u8 {
         .export_auth => "Export stored account auth files.",
         .switch_account => "Switch the active account by alias, email, display number, or partial query.",
         .remove_account => "Remove one or more accounts by alias, email, display number, or partial query.",
-        .reset_credits => "Use the available reset credit that expires first and list what remains.",
+        .reset_credits => "Use the available reset credit that expires first.",
         .alias => "Set or clear an account alias by alias, email, display number, or partial query.",
         .clean => "Delete backup and stale files under accounts/.",
         .config => "Manage live refresh configuration.",

@@ -11,6 +11,11 @@
 #
 # Scenarios: ok, already_redeemed, no_credit, nothing_to_reset, unknown_code,
 # http500, timeout, resolve_failed.
+#
+# The scenario applies to every account. For a mixed session, drop
+# consume-<account_id>.json (e.g. consume-account-ok.json) into the fixtures
+# dir instead: a per-account fixture beats the scenario, and fixtures are
+# re-read on every request, so edits take effect without a restart.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -31,7 +36,7 @@ while [ $# -gt 0 ]; do
     --assert) drive=1; assert_frames=1; shift ;;
     --keep) keep=1; shift ;;
     -h | --help)
-      sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -71,6 +76,7 @@ Isolated CODEX_HOME : $demo_home
 Mock backend        : zig-out/bin/curl (fixtures in $fixtures)
 Consume scenario    : $scenario
 Request log         : $fixtures/requests.log
+Mixed outcomes      : drop consume-<account_id>.json into the fixtures dir; live-reloaded
 
 Demo accounts: ok@ (2 cards), undated@ (no expiry), empty@ (no cards),
 spent@ (card already consumed), apikey@ (cannot redeem),
