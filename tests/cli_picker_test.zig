@@ -1519,7 +1519,7 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         listTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down or j/k credit, Enter use, Esc back\n",
+        "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n",
         listCreditsTuiFooterText(true),
     );
 }
@@ -1538,7 +1538,7 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         listTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ or j/k credit, Enter use, Esc back\n",
+        "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n",
         listCreditsTuiFooterText(false),
     );
 }

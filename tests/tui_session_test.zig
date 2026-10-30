@@ -45,6 +45,35 @@ test "Scenario: Given keyboard enhancement responses and keys when classifying t
     try std.testing.expectEqual(TuiEscapeAction.keyboard_up, result.action);
 }
 
+test "Scenario: Given a bare Esc followed by a non-sequence byte when reading input then the Esc quits and the byte replays" {
+    const gpa = std.testing.allocator;
+    _ = gpa;
+
+    // Fast typing / auto-repeat: the `j` lands inside the escape window. The
+    // Esc must still quit and the byte must come back as a normal key instead
+    // of both vanishing into an unknown-sequence `.ignore`.
+    const swallowed_pair = try readTuiEscapeAction(std.Io.File.stdin(), "j", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.quit, swallowed_pair.action);
+    try std.testing.expectEqual(@as(usize, 1), swallowed_pair.buffered_bytes_consumed);
+    try std.testing.expectEqual(@as(?u8, 'j'), swallowed_pair.pending_byte);
+
+    // The same for an Esc replaying another Esc (a double-tap of Escape).
+    const double_tap = try readTuiEscapeAction(std.Io.File.stdin(), "\x1b", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.quit, double_tap.action);
+    try std.testing.expectEqual(@as(usize, 1), double_tap.buffered_bytes_consumed);
+    try std.testing.expectEqual(@as(?u8, 0x1b), double_tap.pending_byte);
+
+    // Sequence bytes are untouched: `[` opens the CSI path and still parses.
+    const sequence = try readTuiEscapeAction(std.Io.File.stdin(), "[A", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.move_up, sequence.action);
+    try std.testing.expectEqual(@as(?u8, null), sequence.pending_byte);
+
+    // A bare Esc with nothing following stays the plain quit.
+    const bare = try readTuiEscapeAction(std.Io.File.stdin(), "", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.quit, bare.action);
+    try std.testing.expectEqual(@as(?u8, null), bare.pending_byte);
+}
+
 test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {
     switch (classifyTuiEscapeSuffix("[6~")) {
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.page_down, direction),

@@ -130,7 +130,7 @@ run_assertions() {
   frame_has 01-enter-empty-no-rail 'Enter credits' 'the closed rail keeps the account-list footer'
   frame_has 02-rail-on-two-card-account 'RESET CREDITS · 2 available' 'Enter opens the rail on the two-card row'
   frame_has 02-rail-on-two-card-account '> Full reset (Weekly + 5 hr)' 'the first card starts highlighted'
-  frame_has 02-rail-on-two-card-account 'Esc back' 'the open rail replaces the account-list footer'
+  frame_has 02-rail-on-two-card-account 'Esc/q back' 'the open rail replaces the account-list footer'
   frame_has 03-second-credit-highlighted '> Later card' 'Down moved the credit highlight'
   frame_has 04-first-credit-highlighted '> Full reset (Weekly + 5 hr)' 'Up moved it back'
   frame_has 04b-j-second-credit '> Later card' 'j matches Down on the credit list'

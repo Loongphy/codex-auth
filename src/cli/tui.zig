@@ -140,6 +140,9 @@ pub const TuiEscapeAction = enum {
 pub const TuiEscapeReadResult = struct {
     action: TuiEscapeAction,
     buffered_bytes_consumed: usize,
+    /// Set when a byte following a standalone Esc was already consumed from
+    /// the TTY and must be replayed as a normal key by the caller.
+    pending_byte: ?u8 = null,
 };
 
 pub const TuiPollResult = enum {
@@ -313,9 +316,9 @@ pub fn listTuiFooterText(is_windows: bool) []const u8 {
 /// actions and cannot imply that `j`/`k` still move account rows.
 pub fn listCreditsTuiFooterText(is_windows: bool) []const u8 {
     return if (is_windows)
-        "Keys: Up/Down or j/k credit, Enter use, Esc back\n"
+        "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n"
     else
-        "Keys: ↑/↓ or j/k credit, Enter use, Esc back\n";
+        "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n";
 }
 
 pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
@@ -504,7 +507,18 @@ pub const TuiSession = struct {
                     .end => appendTuiInputKey(keys, &key_count, .end),
                     .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
                     .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
-                    .quit => appendTuiInputKey(keys, &key_count, .quit),
+                    .quit => {
+                        appendTuiInputKey(keys, &key_count, .quit);
+                        if (escape.pending_byte) |byte| {
+                            // The byte arrived hard on the heels of a standalone
+                            // Esc; replay it as its own key (an Esc replay quit).
+                            if (byte == 0x1b) {
+                                appendTuiInputKey(keys, &key_count, .quit);
+                            } else {
+                                appendTuiInputKey(keys, &key_count, .{ .byte = byte });
+                            }
+                        }
+                    },
                     .keyboard_enhancement_supported => self.keyboard_enhancement_supported = true,
                     .ignore => {},
                 }
@@ -759,6 +773,12 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     };
 }
 
+fn isTuiEscapeSequenceStarter(byte: u8) bool {
+    // CSI (`\x1b[...`) and SS3 (`\x1bO...`) cover everything this TUI reads:
+    // arrows, PgUp/PgDn, Home/End, mouse, and the keyboard-enhancement reply.
+    return byte == '[' or byte == 'O';
+}
+
 pub fn readTuiEscapeAction(
     tty: std.Io.File,
     buffered_tail: []const u8,
@@ -770,6 +790,18 @@ pub fn readTuiEscapeAction(
     var buffered_bytes_consumed: usize = 0;
 
     while (true) {
+        // A bare Esc followed by a byte that cannot start a known sequence is a
+        // standalone Esc, not the head of an unknown sequence. Without this,
+        // fast typists and key auto-repeat lose the Esc (and the byte) to the
+        // `.ignore` path: the escape-sequence window would swallow both. The
+        // byte travels out as `pending_byte` for the caller to replay.
+        if (seq_len == 1 and !isTuiEscapeSequenceStarter(seq[0])) {
+            return .{
+                .action = .quit,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+                .pending_byte = seq[0],
+            };
+        }
         switch (classifyTuiEscapeSuffix(seq[0..seq_len])) {
             .navigation => |direction| {
                 return .{
