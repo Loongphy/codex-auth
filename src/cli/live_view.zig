@@ -329,6 +329,10 @@ pub fn viewAccountsWithLiveUpdates(
     var credit_selection: reset_credits_panel.Selection = .{};
     var data_row_count: usize = 0;
     var pending_consume: bool = false;
+    // Set by the rail-closed j/k handlers so the next frame keeps the row
+    // cursor inside the viewport; scroll keys leave it unset, so ↑/↓ and the
+    // wheel still roam freely without the cursor snapping the window back.
+    var follow_row_cursor: bool = false;
     // True only when the frame on screen shows the re-confirm hint for the
     // armed credit, so a redeem always follows a visible confirmation.
     var armed_hint_rendered: bool = false;
@@ -459,9 +463,14 @@ pub fn viewAccountsWithLiveUpdates(
                 // confirm hint and the redeem result are drawn below the row.
                 if (panel_lines > 0)
                     .{ .first = credit_selection.row_cursor, .last = credit_selection.row_cursor + panel_lines }
+                else if (follow_row_cursor)
+                    // A j/k move must stay visible: with the rail closed the
+                    // body is exactly the data rows, so the cursor is its own span.
+                    .{ .first = credit_selection.row_cursor, .last = credit_selection.row_cursor }
                 else
                     null,
             );
+            follow_row_cursor = false;
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
 
@@ -613,12 +622,14 @@ pub fn viewAccountsWithLiveUpdates(
                                 if (ch == 'j') {
                                     credit_selection.moveRow(allocator, .down, data_row_count);
                                     rendered_identity.clear(allocator);
+                                    follow_row_cursor = true;
                                     needs_render = true;
                                     continue;
                                 }
                                 if (ch == 'k') {
                                     credit_selection.moveRow(allocator, .up, data_row_count);
                                     rendered_identity.clear(allocator);
+                                    follow_row_cursor = true;
                                     needs_render = true;
                                     continue;
                                 }
