@@ -5662,3 +5662,52 @@ test "Scenario: Given a redeemed credit when the next api refresh runs then the 
     try std.testing.expect(std.mem.indexOf(u8, after, "credit-later") != null);
     try std.testing.expect(std.mem.indexOf(u8, refreshed.stdout, "96%") != null);
 }
+
+test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" {
+    // Regression for redirected stdout: the two child processes share one file
+    // description, so a positional writer would rewind to offset 0 and erase
+    // the first process's output. Streaming stdout must append both lines.
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home);
+    const exe_path = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe_path);
+    const output_path = try fs.path.join(gpa, &[_][]const u8{ home, "version.log" });
+    defer gpa.free(output_path);
+
+    const output = try tmp.dir.createFile("version.log", .{});
+    defer output.close();
+
+    var env_map = try getEnvMap(gpa);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("USERPROFILE", home);
+    try env_map.put("CODEX_HOME", home);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+
+    for (0..2) |_| {
+        var child = try std.process.spawn(fs.io(), .{
+            .argv = &[_][]const u8{ exe_path, "--version" },
+            .cwd = .{ .path = project_root },
+            .environ_map = &env_map,
+            .stdin = .ignore,
+            .stdout = .{ .file = output.toIoFile() },
+            .stderr = .ignore,
+        });
+        const term = try child.wait(fs.io());
+        switch (term) {
+            .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    const contents = try fixtures.readFileAlloc(gpa, output_path);
+    defer gpa.free(contents);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, contents, "codex-auth "));
+}
