@@ -415,8 +415,8 @@ pub fn viewAccountsWithLiveUpdates(
             var panel_lines: usize = 0;
             var panel_account: ?*registry.AccountRecord = null;
             if (credit_selection.expanded and data_rows > 0) {
-                // The cursor is a rendered data-row index; group header rows are
-                // not drawn, so map it back before touching rows.items.
+                // The cursor counts data rows; group header lines are rendered
+                // but unnumbered, so map it back before touching rows.items.
                 if (render.liveRowIndexForDataIndex(rows.items, account_count, credit_selection.row_cursor)) |row_idx| {
                     if (rows.items[row_idx].account_index) |account_idx| {
                         panel_account = &current_display.reg.accounts.items[account_idx];
