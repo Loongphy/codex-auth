@@ -39,12 +39,48 @@ test "Scenario: Given keyboard enhancement responses and keys when classifying t
         else => return error.TestUnexpectedResult,
     }
     switch (classifyTuiEscapeSuffix("[57420;1u")) {
-        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_down, direction),
+        .key => |key| try std.testing.expectEqual(cli.tui.TuiInputKey.keyboard_down, key),
         else => return error.TestUnexpectedResult,
     }
 
     const result = try readTuiEscapeAction(std.Io.File.stdin(), "[1;1:1A", 0, 0);
     try std.testing.expectEqual(TuiEscapeAction.keyboard_up, result.action);
+}
+
+test "Scenario: Given kitty CSI-u key events when classifying them then disambiguated keys keep their meaning" {
+    // `\x1b[>7u` asks terminals for the kitty keyboard protocol, where the
+    // disambiguate flag reports Esc/Enter/Backspace as CSI-u instead of their
+    // legacy bytes — a terminal honoring it would otherwise leave Esc dead.
+    const Key = cli.tui.TuiInputKey;
+    const cases = .{
+        .{ "[27u", Key.quit },
+        .{ "[13u", Key.enter },
+        .{ "[127u", Key.backspace },
+        .{ "[57419u", Key.keyboard_up },
+        .{ "[57420;1u", Key.keyboard_down },
+        // Ctrl-C arrives as `99;5` (key 'c' + ctrl), not byte 0x03.
+        .{ "[99;5u", Key.quit },
+        .{ "[99;6u", Key.quit },
+    };
+    inline for (cases) |case| {
+        switch (classifyTuiEscapeSuffix(case[0])) {
+            .key => |key| try std.testing.expectEqual(case[1], key),
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    // Key releases (event type 3) must not re-fire; press and repeat do.
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[57419;1:3u"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[27;1:3u"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[97u"));
+
+    // The action a live session sees for a CSI-u Esc is the same quit a bare
+    // \x1b produces — closing the rail before exiting.
+    const esc_result = try readTuiEscapeAction(std.Io.File.stdin(), "[27u", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.quit, esc_result.action);
+    try std.testing.expectEqual(@as(usize, 4), esc_result.buffered_bytes_consumed);
+    const enter_result = try readTuiEscapeAction(std.Io.File.stdin(), "[13u", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.enter, enter_result.action);
 }
 
 test "Scenario: Given a bare Esc followed by a non-sequence byte when reading input then the Esc quits and the byte replays" {

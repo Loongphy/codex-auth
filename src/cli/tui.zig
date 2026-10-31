@@ -119,11 +119,14 @@ pub const TuiEscapeClassification = union(enum) {
     ignore,
     keyboard_enhancement_supported,
     navigation: TuiNavigation,
+    key: TuiInputKey,
 };
 
 pub const TuiEscapeAction = enum {
     quit,
     ignore,
+    enter,
+    backspace,
     move_up,
     move_down,
     keyboard_up,
@@ -645,6 +648,8 @@ pub fn appendTuiInputKeysFromEscape(
         );
         consumed += escape.buffered_bytes_consumed;
         switch (escape.action) {
+            .enter => appendTuiInputKey(keys, key_count, .enter),
+            .backspace => appendTuiInputKey(keys, key_count, .backspace),
             .move_up => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_up else .move_up),
             .move_down => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_down else .move_down),
             .keyboard_up => appendTuiInputKey(keys, key_count, .keyboard_up),
@@ -727,16 +732,43 @@ fn isEnhancedArrowSuffix(seq: []const u8) bool {
     return has_separator;
 }
 
-fn isCsiUKeyboardArrow(seq: []const u8) ?TuiNavigation {
-    if (seq.len < 4 or seq[0] != '[' or seq[seq.len - 1] != 'u') return null;
+/// Decodes a `CSI <key>;<modifiers>:<event-type> u` key event (the kitty
+/// keyboard protocol the `\x1b[>7u` push enables). Disambiguate moves Escape,
+/// Enter and Backspace off their legacy bytes — Esc arrives as `27u`, and
+/// Ctrl-C arrives as `99;5` rather than byte 0x03. Returns null for sequences
+/// that stay `.ignore`: key releases (event type 3 — press and repeat both
+/// fire), unbound keys, and malformed parameters.
+fn csiUKey(seq: []const u8) ?TuiInputKey {
+    if (seq.len < 3 or seq[0] != '[' or seq[seq.len - 1] != 'u') return null;
     const params = seq[1 .. seq.len - 1];
-    var code_end: usize = 0;
-    while (code_end < params.len and params[code_end] != ':' and params[code_end] != ';') : (code_end += 1) {}
-    if (code_end == 0) return null;
-    const code = std.fmt.parseInt(usize, params[0..code_end], 10) catch return null;
+
+    // Field 1 is `key-code[:shifted[:base-layout]]`; field 2 is
+    // `modifiers[:event-type]`. The alternate key codes and any third field
+    // (text codepoints) are irrelevant to the keys this TUI binds.
+    var fields = std.mem.splitScalar(u8, params, ';');
+    const key_field = fields.first();
+    const code_end = std.mem.indexOfScalar(u8, key_field, ':') orelse key_field.len;
+    const code = std.fmt.parseInt(usize, key_field[0..code_end], 10) catch return null;
+
+    var modifiers: usize = 1;
+    var event_type: usize = 1;
+    if (fields.next()) |mod_field| {
+        if (std.mem.indexOfScalar(u8, mod_field, ':')) |colon| {
+            modifiers = std.fmt.parseInt(usize, mod_field[0..colon], 10) catch 1;
+            event_type = std.fmt.parseInt(usize, mod_field[colon + 1 ..], 10) catch 1;
+        } else if (mod_field.len != 0) {
+            modifiers = std.fmt.parseInt(usize, mod_field, 10) catch 1;
+        }
+    }
+    if (event_type == 3) return null;
+
     return switch (code) {
+        27 => .quit,
+        13 => .enter,
+        127 => .backspace,
         57419 => .keyboard_up,
         57420 => .keyboard_down,
+        99 => if (modifiers > 1 and (modifiers - 1) & 4 != 0) .quit else null,
         else => null,
     };
 }
@@ -749,7 +781,7 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
             if (seq.len == 1) break :blk .incomplete;
             const final = seq[seq.len - 1];
             if (isKeyboardEnhancementFlagsResponse(seq)) break :blk .keyboard_enhancement_supported;
-            if (isCsiUKeyboardArrow(seq)) |direction| break :blk .{ .navigation = direction };
+            if (csiUKey(seq)) |key| break :blk .{ .key = key };
             if (seq[1] == '<') {
                 if (final != 'M' and final != 'm') {
                     if (final >= '@' and final <= '~') break :blk .ignore;
@@ -839,6 +871,19 @@ pub fn readTuiEscapeAction(
             };
         }
         switch (classifyTuiEscapeSuffix(seq[0..seq_len])) {
+            .key => |key| {
+                return .{
+                    .action = switch (key) {
+                        .quit => .quit,
+                        .enter => .enter,
+                        .backspace => .backspace,
+                        .keyboard_up => .keyboard_up,
+                        .keyboard_down => .keyboard_down,
+                        else => .ignore,
+                    },
+                    .buffered_bytes_consumed = buffered_bytes_consumed,
+                };
+            },
             .navigation => |direction| {
                 return .{
                     .action = switch (direction) {

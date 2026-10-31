@@ -158,6 +158,8 @@ run_assertions() {
     assert_failures=$((assert_failures + 1))
   fi
   frame_has 09-esc-arrow-rail-closed 'Enter credits' 'the account-list footer is back after Esc+Arrow'
+  frame_has 09b-rail-reopened-csiu 'RESET CREDITS' 'CSI-u Enter reopened the rail'
+  frame_has 10-csiu-esc-rail-closed 'Enter credits' 'CSI-u Esc closed the rail'
   if [ "$quit_failed" = 0 ]; then
     printf 'ok    %-32s %s\n' "quit" 'q exited the live session'
   else
@@ -253,6 +255,13 @@ run_drive() {
     esc_arrow_failed=1
   fi
   capture 09-esc-arrow-rail-closed 0.2
+  # Regression: kitty-protocol terminals report Enter as CSI 13 u and Esc as
+  # CSI 27 u — not as their legacy bytes. Hex sends the exact bytes those
+  # terminals deliver: CSI-u Enter reopens the rail, a CSI-u Esc closes it.
+  tmux send-keys -t "$session" -H 1b 5b 31 33 75
+  capture 09b-rail-reopened-csiu
+  tmux send-keys -t "$session" -H 1b 5b 32 37 75
+  capture 10-csiu-esc-rail-closed
   send 'q'
   sleep 0.6
   if tmux has-session -t "$session" 2>/dev/null; then

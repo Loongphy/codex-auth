@@ -315,6 +315,23 @@ fn selectInteractiveFromIndices(
                             number_len = 0;
                         }
                     },
+                    .enter => {
+                        if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
+                            return accountIdForDisplayedAccount(&rows, reg, displayed_idx);
+                        }
+                        if (rows.selectable_row_indices.len == 0) return null;
+                        return accountIdForSelectable(&rows, reg, idx);
+                    },
+                    .backspace => {
+                        if (number_len > 0) {
+                            number_len -= 1;
+                            if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
+                                if (selectableIndexForDisplayedAccount(&rows, displayed_idx)) |selectable_idx| {
+                                    idx = selectable_idx;
+                                }
+                            }
+                        }
+                    },
                     .quit => return null,
                     .keyboard_enhancement_supported, .ignore => {},
                 }
@@ -518,6 +535,23 @@ fn selectInteractive(
                         if (rows.selectable_row_indices.len != 0) {
                             idx = rows.selectable_row_indices.len - 1;
                             number_len = 0;
+                        }
+                    },
+                    .enter => {
+                        if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
+                            return accountIdForDisplayedAccount(&rows, reg, displayed_idx);
+                        }
+                        if (rows.selectable_row_indices.len == 0) return null;
+                        return accountIdForSelectable(&rows, reg, idx);
+                    },
+                    .backspace => {
+                        if (number_len > 0) {
+                            number_len -= 1;
+                            if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
+                                if (selectableIndexForDisplayedAccount(&rows, displayed_idx)) |selectable_idx| {
+                                    idx = selectable_idx;
+                                }
+                            }
                         }
                     },
                     .quit => return null,

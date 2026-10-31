@@ -265,6 +265,32 @@ fn selectRemoveInteractive(
                             number_len = 0;
                         }
                     },
+                    .enter => {
+                        var count: usize = 0;
+                        for (checked) |flag| {
+                            if (flag) count += 1;
+                        }
+                        if (count == 0) return null;
+                        var selected = try allocator.alloc(usize, count);
+                        var out_idx: usize = 0;
+                        for (checked, 0..) |flag, sel_idx| {
+                            if (!flag) continue;
+                            selected[out_idx] = accountIndexForSelectable(&rows, sel_idx);
+                            out_idx += 1;
+                        }
+                        return selected;
+                    },
+                    .backspace => {
+                        if (number_len > 0) {
+                            number_len -= 1;
+                            if (number_len > 0) {
+                                const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                                if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                    idx = parsed - 1;
+                                }
+                            }
+                        }
+                    },
                     .quit => return null,
                     .keyboard_enhancement_supported, .ignore => {},
                 }
