@@ -278,6 +278,19 @@ const Context = struct {
     pos_count: usize = 0,
     sub_pending: bool = false,
     unknown: bool = false,
+    seen_buf: [32]*const FlagSpec = undefined,
+    seen_len: usize = 0,
+
+    fn seenFlags(self: *const Context) []const *const FlagSpec {
+        return self.seen_buf[0..self.seen_len];
+    }
+
+    fn markFlag(self: *Context, flag: *const FlagSpec) void {
+        if (self.seen_len < self.seen_buf.len) {
+            self.seen_buf[self.seen_len] = flag;
+            self.seen_len += 1;
+        }
+    }
 };
 
 fn findSpec(specs: []const CmdSpec, name: []const u8) ?*const CmdSpec {
@@ -338,6 +351,7 @@ fn resolveContext(prev: []const []const u8) Context {
                 const eq = std.mem.indexOfScalar(u8, tok, '=');
                 const name = if (eq) |i| tok[0..i] else tok;
                 if (findFlag(spec, name)) |flag| {
+                    ctx.markFlag(flag);
                     if (flag.value != .none and (eq == null or eq.? == tok.len - 1)) {
                         ctx.pending = flag;
                     }
@@ -370,9 +384,15 @@ fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8) !void {
     for (cands) |cand| try writeCand(out, cand.value, cand.desc, cur);
 }
 
-fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8) !void {
-    for (spec.flags) |flag| try writeCand(out, flag.name, flag.desc, cur);
-    for (&help_flags) |flag| try writeCand(out, flag.name, flag.desc, cur);
+fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, seen: []const *const FlagSpec) !void {
+    outer: for (spec.flags) |*flag| {
+        for (seen) |s| if (s == flag) continue :outer;
+        try writeCand(out, flag.name, flag.desc, cur);
+    }
+    outer: for (&help_flags) |*flag| {
+        for (seen) |s| if (s == flag) continue :outer;
+        try writeCand(out, flag.name, flag.desc, cur);
+    }
 }
 
 fn writeSpecNames(out: *std.Io.Writer, specs: []const CmdSpec, cur: []const u8) !void {
@@ -424,6 +444,7 @@ fn writePositionalCands(
     spec: *const CmdSpec,
     pos: *const PosSpec,
     cur: []const u8,
+    seen: []const *const FlagSpec,
 ) !u6 {
     switch (pos.kind) {
         .account => {
@@ -434,11 +455,11 @@ fn writePositionalCands(
         .command_name => try writeSpecNames(out, &command_specs, cur),
         .freeform => {},
         .path => {
-            try writeFlagCands(out, spec, cur);
+            try writeFlagCands(out, spec, cur, seen);
             return Directive.none;
         },
         .dir => {
-            try writeFlagCands(out, spec, cur);
+            try writeFlagCands(out, spec, cur, seen);
             return Directive.filter_dirs;
         },
     }
@@ -479,14 +500,14 @@ pub fn writeCompleteResponse(
         if (spec == &empty_spec) {
             // `codex-auth -` takes no further arguments.
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
-            try writeFlagCands(out, spec, cur);
+            try writeFlagCands(out, spec, cur, ctx.seenFlags());
             if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur);
         } else if (ctx.sub_pending) {
             try writeSpecNames(out, spec.subs, cur);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {
-            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur);
+            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, ctx.seenFlags());
         } else {
-            try writeFlagCands(out, spec, cur);
+            try writeFlagCands(out, spec, cur, ctx.seenFlags());
         }
     }
     try out.print(":{d}\n", .{directive});
