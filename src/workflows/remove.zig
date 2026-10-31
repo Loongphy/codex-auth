@@ -11,6 +11,7 @@ const results = @import("results.zig");
 const ensureLiveTty = preflight.ensureLiveTty;
 const findMatchingAccountsForRemove = query_mod.findMatchingAccountsForRemove;
 const findAccountIndexByDisplayNumber = query_mod.findAccountIndexByDisplayNumber;
+const findAccountIndexByExactLabel = query_mod.findAccountIndexByExactLabel;
 const loadCurrentAuthState = active_auth.loadCurrentAuthState;
 const selectionContainsAccountKey = active_auth.selectionContainsAccountKey;
 const selectionContainsIndex = active_auth.selectionContainsIndex;
@@ -319,6 +320,12 @@ fn resolveRemoveSelectors(
 
     for (selectors) |selector| {
         if (registry.findAccountIndexByAccountKey(reg, selector)) |account_idx| {
+            try appendSelectedIndex(allocator, &selected, account_idx);
+            try resolutions.append(allocator, .{ .selector = selector, .match = .{ .resolved = account_idx } });
+            continue;
+        }
+
+        if (findAccountIndexByExactLabel(reg, selector)) |account_idx| {
             try appendSelectedIndex(allocator, &selected, account_idx);
             try resolutions.append(allocator, .{ .selector = selector, .match = .{ .resolved = account_idx } });
             continue;

@@ -44,10 +44,14 @@ codex-auth switch <query> --json
 
 Selectors can match:
 
+- account key,
+- exact alias or email,
 - displayed row number,
 - alias fragment,
 - email fragment, or
 - account name fragment.
+
+Shell completion inserts numbered selectors in the form `<number>:<label>` (for example `02:beta@example.com`). The label is resolved as an account key, alias, or email first; the number is used only when the label does not identify an account.
 
 If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--api`, or `--skip-api`.
 

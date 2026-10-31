@@ -25,6 +25,10 @@ pub fn resolveSwitchQueryLocally(
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }
 
+    if (findAccountIndexByExactLabel(reg, query)) |account_idx| {
+        return .{ .direct = reg.accounts.items[account_idx].account_key };
+    }
+
     if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }
@@ -98,13 +102,46 @@ pub fn parseDisplayNumber(selector: []const u8) ?usize {
     return parsed;
 }
 
+pub fn findAccountIndexByExactLabel(reg: *const registry.Registry, selector: []const u8) ?usize {
+    var match: ?usize = null;
+    var ambiguous = false;
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        const alias_hit = rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, selector);
+        const email_hit = std.ascii.eqlIgnoreCase(rec.email, selector);
+        if (!alias_hit and !email_hit) continue;
+        if (match != null) {
+            ambiguous = true;
+        } else {
+            match = idx;
+        }
+    }
+    return if (ambiguous) null else match;
+}
+
 pub fn findAccountIndexByDisplayNumber(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
     selector: []const u8,
 ) !?usize {
-    const display_number = parseDisplayNumber(selector) orelse return null;
+    if (std.mem.indexOfScalar(u8, selector, ':')) |colon_idx| {
+        const hint = selector[colon_idx + 1 ..];
+        if (hint.len != 0) {
+            if (registry.findAccountIndexByAccountKey(reg, hint)) |account_idx| return account_idx;
+            if (findAccountIndexByExactLabel(reg, hint)) |account_idx| return account_idx;
+        }
+        const display_number = parseDisplayNumber(selector[0..colon_idx]) orelse return null;
+        return findAccountIndexByRowNumber(allocator, reg, display_number);
+    }
 
+    const display_number = parseDisplayNumber(selector) orelse return null;
+    return findAccountIndexByRowNumber(allocator, reg, display_number);
+}
+
+fn findAccountIndexByRowNumber(
+    allocator: std.mem.Allocator,
+    reg: *registry.Registry,
+    display_number: usize,
+) !?usize {
     var display = try display_rows.buildDisplayRows(allocator, reg, null);
     defer display.deinit(allocator);
 
