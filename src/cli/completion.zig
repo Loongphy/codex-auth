@@ -29,6 +29,7 @@ pub fn writeCompletion(out: *std.Io.Writer, shell: types.CompletionShell) !void 
         .bash => try out.writeAll(bash_script),
         .zsh => try out.writeAll(zsh_script),
         .fish => try out.writeAll(fish_script),
+        .pwsh => try out.writeAll(pwsh_script),
     }
 }
 
@@ -143,6 +144,43 @@ const fish_script =
     \\complete -c codex-auth -f -a '(__fish_codex_auth_complete)'
 ;
 
+const pwsh_script =
+    \\function __codex_auth_complete {
+    \\    param($wordToComplete, $commandAst, $cursorPosition)
+    \\    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
+    \\    if ($wordToComplete.Length -gt 0 -and $words.Count -gt 0 -and $words[-1] -eq $wordToComplete) {
+    \\        $words = @($words | Select-Object -First ($words.Count - 1))
+    \\    }
+    \\    $words += $wordToComplete
+    \\    $directive = 0
+    \\    $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
+    \\    foreach ($line in (codex-auth __complete @words 2>$null)) {
+    \\        if ($line.StartsWith(':')) {
+    \\            $directive = [int]$line.Substring(1)
+    \\            continue
+    \\        }
+    \\        $parts = $line -split "`t", 2
+    \\        $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+    \\        $results.Add([System.Management.Automation.CompletionResult]::new($parts[0], $parts[0], 'ParameterValue', $desc))
+    \\    }
+    \\    if ($directive -eq 1) { return }
+    \\    if ($directive -band 16) {
+    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*" -Directory -ErrorAction SilentlyContinue)) {
+    \\            $value = "$entry$([IO.Path]::DirectorySeparatorChar)"
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new($value, $value, 'ProviderContainer', $entry))
+    \\        }
+    \\    } elseif (-not ($directive -band 4)) {
+    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*")) {
+    \\            $type = if (Test-Path -LiteralPath $entry -PathType Container) { 'ProviderContainer' } else { 'ProviderItem' }
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new($entry, $entry, $type, $entry))
+    \\        }
+    \\    }
+    \\    return $results
+    \\}
+    \\
+    \\Register-ArgumentCompleter -Native -CommandName 'codex-auth' -ScriptBlock ${function:__codex_auth_complete}
+;
+
 const Directive = struct {
     pub const none: u6 = 0;
     pub const err: u6 = 1;
@@ -236,6 +274,7 @@ const shell_cands = [_]Cand{
     .{ .value = "bash", .desc = "Print Bash completion script" },
     .{ .value = "zsh", .desc = "Print Zsh completion script" },
     .{ .value = "fish", .desc = "Print Fish completion script" },
+    .{ .value = "pwsh", .desc = "Print PowerShell completion script" },
 };
 
 const help_positionals = [_]PosSpec{.{ .kind = .command_name }};

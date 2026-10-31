@@ -62,6 +62,7 @@ pub const CompletionShell = enum {
     bash,
     zsh,
     fish,
+    pwsh,
 };
 pub const CompleteRequest = struct {
     args: []const []const u8,

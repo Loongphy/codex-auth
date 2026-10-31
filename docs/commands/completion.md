@@ -6,6 +6,7 @@
 codex-auth completion bash
 codex-auth completion zsh
 codex-auth completion fish
+codex-auth completion pwsh
 ```
 
 ## Bash
@@ -58,6 +59,22 @@ Or load it dynamically from `~/.config/fish/config.fish` so upgrades apply autom
 
 ```shell
 codex-auth completion fish | source
+```
+
+## PowerShell
+
+`completion pwsh` prints a PowerShell completion script to stdout (requires PowerShell 7+).
+
+Install it by appending to your profile so upgrades apply automatically:
+
+```powershell
+codex-auth completion pwsh >> $PROFILE
+```
+
+Or load it for the current session only:
+
+```powershell
+codex-auth completion pwsh | Invoke-Expression
 ```
 
 ## Runtime Completion Protocol

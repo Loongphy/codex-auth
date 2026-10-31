@@ -442,6 +442,8 @@ test "Scenario: Given completion shells when parsing then shell is preserved" {
         .{ .shell_name = "bash", .shell = .bash },
         .{ .shell_name = "zsh", .shell = .zsh },
         .{ .shell_name = "fish", .shell = .fish },
+        .{ .shell_name = "pwsh", .shell = .pwsh },
+        .{ .shell_name = "powershell", .shell = .pwsh },
     };
 
     for (cases) |case| {
@@ -489,7 +491,7 @@ test "Scenario: Given help when rendering then login and command help notes are 
     try std.testing.expect(std.mem.indexOf(u8, help, "list [--live] [--active] [--api|--skip-api] [--json]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "switch [--live] [--api|--skip-api]") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "alias set <alias|email|display-number|query> <alias>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, help, "completion <bash|zsh|fish>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, help, "completion <bash|zsh|fish|pwsh>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "config live --interval <seconds>") != null);
     try std.testing.expect(std.mem.indexOf(u8, help, "auto enable") == null);
 }
@@ -700,6 +702,21 @@ test "Scenario: Given fish completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth __complete $tokens") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "__fish_complete_path") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -f -a '(__fish_codex_auth_complete)'") != null);
+}
+
+test "Scenario: Given pwsh completion when rendering then the script is a __complete trampoline" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeCompletion(&aw.writer, .pwsh);
+
+    const script = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, script, "function __codex_auth_complete") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth __complete @words") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "CompletionResult") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Register-ArgumentCompleter -Native -CommandName 'codex-auth'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "Get-ChildItem") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {

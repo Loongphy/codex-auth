@@ -21,6 +21,9 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         if (std.mem.eql(u8, shell_name, "fish")) {
             return .{ .command = .{ .completion = .fish } };
         }
+        if (std.mem.eql(u8, shell_name, "pwsh") or std.mem.eql(u8, shell_name, "powershell")) {
+            return .{ .command = .{ .completion = .pwsh } };
+        }
     }
     if (args.len > 1) {
         return common.usageErrorResult(allocator, .completion, "unexpected argument after `completion`: `{s}`.", .{
