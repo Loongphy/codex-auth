@@ -681,7 +681,7 @@ test "Scenario: Given zsh completion when rendering then the script is a __compl
     try std.testing.expect(std.mem.indexOf(u8, script, "#compdef codex-auth") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth __complete \"${argv[@]}\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "compdef _codex-auth codex-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "words[@]:2:$CURRENT-1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "words[2,CURRENT]") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "compadd -Q -d descs -- \"${cands[@]}\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_files -/") != null);
 }

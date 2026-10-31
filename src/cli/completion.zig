@@ -35,7 +35,7 @@ pub fn writeCompletion(out: *std.Io.Writer, shell: types.CompletionShell) !void 
 const bash_script =
     \\_codex_auth_complete() {
     \\    COMPREPLY=()
-    \\    local i w buf="" cur directive=0 value desc out
+    \\    local i w buf="" cur tail before directive=0 value desc out
     \\    local -a argv cands
     \\    for (( i=1; i<=COMP_CWORD; i++ )); do
     \\        w="${COMP_WORDS[i]}"
@@ -56,10 +56,17 @@ const bash_script =
     \\    done <<< "$out"
     \\    (( directive == 1 )) && return
     \\    cur="${argv[$((${#argv[@]} - 1))]}"
+    \\    tail="$cur"
+    \\    [[ "$COMP_WORDBREAKS" == *":"* ]] && tail="${tail##*:}"
+    \\    [[ "$COMP_WORDBREAKS" == *"="* ]] && tail="${tail##*=}"
+    \\    before="${cur%"$tail"}"
     \\    if (( directive & 16 )); then
-    \\        COMPREPLY=( $(compgen -d -- "$cur") )
+    \\        COMPREPLY=( $(compgen -d -- "$tail") )
     \\    elif (( ${#cands[@]} )); then
     \\        COMPREPLY=( $(compgen -W "${cands[*]}" -- "$cur") )
+    \\        if [[ -n "$before" ]]; then
+    \\            COMPREPLY=("${COMPREPLY[@]#"$before"}")
+    \\        fi
     \\    fi
     \\    (( directive & 2 )) && compopt -o nospace 2>/dev/null
     \\    (( directive & 4 )) || compopt -o default 2>/dev/null
@@ -76,7 +83,7 @@ const zsh_script =
     \\  local out value desc
     \\  local -a argv cands descs
     \\  local directive=0
-    \\  argv=("${words[@]:2:$CURRENT-1}")
+    \\  argv=("${words[2,CURRENT]}")
     \\  out="$(codex-auth __complete "${argv[@]}" 2>/dev/null)"
     \\  while IFS=$'\t' read -r value desc; do
     \\    case "$value" in

@@ -5080,8 +5080,8 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<work>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<02:beta@example.com>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<->") != null);
-    try std.testing.expectEqualStrings("<01:alpha@example.com>", line_colon);
-    try std.testing.expectEqualStrings("<--platform=win><--platform=wsl>", line_platform);
+    try std.testing.expectEqualStrings("<alpha@example.com>", line_colon);
+    try std.testing.expectEqualStrings("<win><wsl>", line_platform);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<set>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<clear>") != null);
 }
