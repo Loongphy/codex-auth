@@ -21,7 +21,7 @@ pub fn printQueryCompletion(
     stdout.init();
     const out = stdout.out();
     switch (target) {
-        .switch_account => try writeSwitchQueryCompletion(out, allocator, codex_home),
+        .account => try writeAccountQueryCompletion(out, allocator, codex_home),
     }
     try out.flush();
 }
@@ -36,8 +36,8 @@ pub fn writeCompletion(out: *std.Io.Writer, shell: types.CompletionShell) !void 
 
 fn writeBashCompletion(out: *std.Io.Writer) !void {
     try out.writeAll(
-        \\_codex_auth_switch_queries() {
-        \\    codex-auth completion query switch 2>/dev/null
+        \\_codex_auth_account_words() {
+        \\    codex-auth completion query account 2>/dev/null | awk -F '\t' '{ if ($1 ~ /^[0-9]+$/ && $2 != "") print $1":"$2; else print $1 }'
         \\}
         \\
         \\_codex_auth_complete() {
@@ -63,7 +63,7 @@ fn writeBashCompletion(out: *std.Io.Writer) !void {
         \\            COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
         \\            ;;
         \\        list)
-        \\            COMPREPLY=( $(compgen -W "--live --active --api --skip-api" -- "$cur") )
+        \\            COMPREPLY=( $(compgen -W "--live --active --api --skip-api --json" -- "$cur") )
         \\            ;;
         \\        login)
         \\            COMPREPLY=( $(compgen -W "--device-auth" -- "$cur") )
@@ -72,22 +72,24 @@ fn writeBashCompletion(out: *std.Io.Writer) !void {
         \\            if [[ "$prev" == "--alias" ]]; then
         \\                return
         \\            fi
+        \\            compopt -o default 2>/dev/null
         \\            COMPREPLY=( $(compgen -W "--alias --cpa --purge" -- "$cur") )
         \\            ;;
         \\        export)
+        \\            compopt -o default 2>/dev/null
         \\            COMPREPLY=( $(compgen -W "--cpa" -- "$cur") )
         \\            ;;
         \\        switch)
-        \\            local _sw_targets
-        \\            _sw_targets="$(_codex_auth_switch_queries)"
-        \\            COMPREPLY=( $(compgen -W "- --live --api --skip-api $(printf '%s\n' "$_sw_targets" | awk -F '\t' '{ if ($2 != "") print $1":"$2; else print $1 }') $(printf '%s\n' "$_sw_targets" | cut -f2)" -- "$cur") )
+        \\            COMPREPLY=( $(compgen -W "- --live --api --skip-api --json $(_codex_auth_account_words)" -- "$cur") )
         \\            ;;
         \\        remove)
-        \\            COMPREPLY=( $(compgen -W "--live --api --skip-api --all" -- "$cur") )
+        \\            COMPREPLY=( $(compgen -W "--live --api --skip-api --all --json $(_codex_auth_account_words)" -- "$cur") )
         \\            ;;
         \\        alias)
         \\            if (( cword == 2 )); then
         \\                COMPREPLY=( $(compgen -W "set clear" -- "$cur") )
+        \\            elif (( cword == 3 )) && [[ "${COMP_WORDS[2]}" == "set" || "${COMP_WORDS[2]}" == "clear" ]]; then
+        \\                COMPREPLY=( $(compgen -W "$(_codex_auth_account_words)" -- "$cur") )
         \\            fi
         \\            ;;
         \\        clean)
@@ -117,14 +119,14 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
     try out.writeAll(
         \\#compdef codex-auth
         \\
-        \\_codex_auth_switch_queries() {
+        \\_codex_auth_account_queries() {
         \\  local value description
         \\  local -a values descriptions
         \\  while IFS=$'\t' read -r value description; do
         \\    [[ -z "$value" ]] && continue
         \\    values+=("$value")
-        \\    descriptions+=("${description:-switch target}")
-        \\  done <<< "$(codex-auth completion query switch 2>/dev/null)"
+        \\    descriptions+=("${description:-account}")
+        \\  done <<< "$(codex-auth completion query account 2>/dev/null)"
         \\  (( ${#values[@]} == 0 )) && return 1
         \\  compadd -Q -d descriptions -- "${values[@]}"
         \\}
@@ -133,9 +135,9 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
         \\  local context state line
         \\  if (( CURRENT >= 3 )) && [[ "$words[2]" == "switch" ]]; then
         \\    if [[ "$PREFIX" == -* ]]; then
-        \\      _values 'flag' '--live[Open the live switch UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]'
+        \\      _values 'flag' '-[Switch to the previous active account]' '--live[Open the live switch UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]' '--json[Emit one machine-readable JSON document for non-interactive switch]'
         \\    else
-        \\      _codex_auth_switch_queries || _message 'no switch targets'
+        \\      _codex_auth_account_queries || _message 'no switch targets'
         \\    fi
         \\    return
         \\  fi
@@ -169,26 +171,40 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
         \\          _values 'command' - help list login import export switch remove alias clean completion config app
         \\          ;;
         \\        list)
-        \\          _values 'flag' '--live[Open a live-updating table]' '--active[Refresh only the active account before rendering]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]'
+        \\          _values 'flag' '--live[Open a live-updating table]' '--active[Refresh only the active account before rendering]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]' '--json[Emit one machine-readable JSON document]'
         \\          ;;
         \\        login)
         \\          _values 'flag' '--device-auth[Run codex login with device auth]'
         \\          ;;
         \\        import)
-        \\          _values 'flag' '--alias[Set an alias for a single imported account]' '--cpa[Import CPA flat token JSON]' '--purge[Rebuild registry.json from auth files]'
+        \\          if [[ "$PREFIX" == -* ]]; then
+        \\            _values 'flag' '--alias[Set an alias for a single imported account]' '--cpa[Import CPA flat token JSON]' '--purge[Rebuild registry.json from auth files]'
+        \\          else
+        \\            _files
+        \\          fi
         \\          ;;
         \\        export)
-        \\          _values 'flag' '--cpa[Export CPA flat token JSON]'
+        \\          if [[ "$PREFIX" == -* ]]; then
+        \\            _values 'flag' '--cpa[Export CPA flat token JSON]'
+        \\          else
+        \\            _files
+        \\          fi
         \\          ;;
         \\        switch)
-        \\          _values 'target' '-[Switch to the previous active account]' '--live[Open the live switch UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]'
+        \\          _values 'target' '-[Switch to the previous active account]' '--live[Open the live switch UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]' '--json[Emit one machine-readable JSON document for non-interactive switch]'
         \\          ;;
         \\        remove)
-        \\          _values 'flag' '--live[Open the live remove UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]' '--all[Remove every stored account]'
+        \\          if [[ "$PREFIX" == -* ]]; then
+        \\            _values 'flag' '--live[Open the live remove UI]' '--api[Load usage and account data from APIs]' '--skip-api[Load usage and account data from local data only]' '--all[Remove every stored account]' '--json[Emit one machine-readable JSON document for non-interactive remove]'
+        \\          else
+        \\            _codex_auth_account_queries || _message 'no accounts'
+        \\          fi
         \\          ;;
         \\        alias)
         \\          if (( CURRENT == 3 )); then
         \\            _values 'action' set clear
+        \\          elif (( CURRENT == 4 )); then
+        \\            _codex_auth_account_queries || _message 'no accounts'
         \\          fi
         \\          ;;
         \\        clean)
@@ -218,8 +234,8 @@ fn writeZshCompletion(out: *std.Io.Writer) !void {
 
 fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll(
-        \\function __fish_codex_auth_switch_queries
-        \\    codex-auth completion query switch 2>/dev/null
+        \\function __fish_codex_auth_account_queries
+        \\    codex-auth completion query account 2>/dev/null
         \\end
         \\
         \\function __fish_codex_auth_needs_command
@@ -228,6 +244,11 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
         \\
         \\function __fish_codex_auth_using_command
         \\    __fish_seen_subcommand_from $argv
+        \\end
+        \\
+        \\function __fish_codex_auth_alias_needs_account
+        \\    set -l tokens (commandline -opc)
+        \\    test (count $tokens) -eq 3; and contains -- $tokens[3] set clear
         \\end
         \\
     );
@@ -254,6 +275,7 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l active -d 'Refresh only the active account before rendering'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l api -d 'Load usage and account data from APIs'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l skip-api -d 'Load usage and account data from local data only'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command list' -l json -d 'Emit one machine-readable JSON document'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command login' -l device-auth -d 'Run codex login with device auth'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command import' -l alias -r -d 'Set an alias for a single imported account'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command import' -l cpa -d 'Import CPA flat token JSON'\n");
@@ -264,14 +286,18 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -l live -d 'Open the live switch UI'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -l api -d 'Load usage and account data from APIs'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -l skip-api -d 'Load usage and account data from local data only'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -l json -d 'Emit one machine-readable JSON document for non-interactive switch'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '-' -d 'Switch to the previous active account'\n");
-    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_switch_queries)' -d 'Switch target'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_account_queries)' -d 'Switch target'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -l live -d 'Open the live remove UI'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -l api -d 'Load usage and account data from APIs'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -l skip-api -d 'Load usage and account data from local data only'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -l all -d 'Remove every stored account'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -l json -d 'Emit one machine-readable JSON document for non-interactive remove'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command remove' -a '(__fish_codex_auth_account_queries)' -d 'Account'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command alias' -a set -d 'Set one stored account alias'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command alias' -a clear -d 'Clear one stored account alias'\n");
+    try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command alias; and __fish_codex_auth_alias_needs_account' -a '(__fish_codex_auth_account_queries)' -d 'Account'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command clean' -a background -d 'Delete stale background files'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command completion' -a 'bash zsh fish' -d 'Generate shell completions'\n");
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command config' -a live -d 'Manage live refresh settings'\n");
@@ -283,7 +309,7 @@ fn writeFishCompletion(out: *std.Io.Writer) !void {
     try out.writeAll("complete -c codex-auth -n '__fish_codex_auth_using_command app' -l std -d 'Attach stdout and stderr to this terminal'\n");
 }
 
-fn writeSwitchQueryCompletion(out: *std.Io.Writer, allocator: std.mem.Allocator, codex_home: []const u8) !void {
+pub fn writeAccountQueryCompletion(out: *std.Io.Writer, allocator: std.mem.Allocator, codex_home: []const u8) !void {
     var reg = registry.loadRegistry(allocator, codex_home) catch return;
     defer reg.deinit(allocator);
 
@@ -300,10 +326,15 @@ fn writeSwitchQueryCompletion(out: *std.Io.Writer, allocator: std.mem.Allocator,
     for (display.selectable_row_indices, 0..) |row_idx, displayed_idx| {
         const account_idx = display.rows[row_idx].account_index orelse continue;
         const rec = &reg.accounts.items[account_idx];
+        const account_cell = display.rows[row_idx].account_cell;
 
         var number_buf: [16]u8 = undefined;
         const display_number = std.fmt.bufPrint(&number_buf, "{d:0>2}", .{displayed_idx + 1}) catch unreachable;
         try writeUniqueCandidate(out, &seen, display_number, rec.email, allocator);
+        if (rec.alias.len != 0) {
+            try writeUniqueCandidate(out, &seen, rec.alias, account_cell, allocator);
+        }
+        try writeUniqueCandidate(out, &seen, rec.email, account_cell, allocator);
     }
 }
 

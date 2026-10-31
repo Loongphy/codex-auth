@@ -39,8 +39,8 @@ fn parseQuery(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.P
     }
 
     const target_name = std.mem.sliceTo(args[0], 0);
-    if (std.mem.eql(u8, target_name, "switch")) {
-        return .{ .command = .{ .completion = .{ .query = .switch_account } } };
+    if (std.mem.eql(u8, target_name, "account")) {
+        return .{ .command = .{ .completion = .{ .query = .account } } };
     }
     return common.usageErrorResult(allocator, .completion, "unknown completion query target `{s}`.", .{target_name});
 }

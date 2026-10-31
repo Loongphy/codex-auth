@@ -63,7 +63,7 @@ pub const CompletionShell = enum {
     zsh,
     fish,
 };
-pub const CompletionQueryTarget = enum { switch_account };
+pub const CompletionQueryTarget = enum { account };
 pub const CompletionOptions = union(enum) {
     shell: CompletionShell,
     query: CompletionQueryTarget,

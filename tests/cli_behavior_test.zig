@@ -619,16 +619,16 @@ test "Scenario: Given completion help when rendering then shell install flows ar
     try std.testing.expect(std.mem.indexOf(u8, help, "source ~/.config/fish/completions/codex-auth.fish") != null);
 }
 
-test "Scenario: Given completion query switch when parsing then switch target is preserved" {
+test "Scenario: Given completion query account when parsing then account target is preserved" {
     const gpa = std.testing.allocator;
-    const args = [_][:0]const u8{ "codex-auth", "completion", "query", "switch" };
+    const args = [_][:0]const u8{ "codex-auth", "completion", "query", "account" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
     switch (result) {
         .command => |cmd| switch (cmd) {
             .completion => |opts| switch (opts) {
-                .query => |target| try std.testing.expectEqual(cli.types.CompletionQueryTarget.switch_account, target),
+                .query => |target| try std.testing.expectEqual(cli.types.CompletionQueryTarget.account, target),
                 else => return error.TestExpectedEqual,
             },
             else => return error.TestExpectedEqual,
@@ -646,14 +646,15 @@ test "Scenario: Given bash completion when rendering then commands and switch qu
 
     const script = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, script, "_codex_auth_complete()") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth completion query switch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth completion query account") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "complete -F _codex_auth_complete codex-auth") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "bash zsh fish") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "- help list login import export switch remove alias clean completion config app") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "local _sw_targets") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "_sw_targets=\"$(_codex_auth_switch_queries)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "_codex_auth_account_words()") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "print $1\":\"$2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "compgen -W \"- --live --api --skip-api") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "compgen -W \"- --live --api --skip-api --json $(_codex_auth_account_words)\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "--live --api --skip-api --all --json $(_codex_auth_account_words)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "compopt -o default") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "$( _codex_auth_switch_queries | cut") == null);
     try std.testing.expect(std.mem.indexOf(u8, script, "app)") != null);
 }
@@ -667,15 +668,16 @@ test "Scenario: Given zsh completion when rendering then commands and switch que
 
     const script = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, script, "#compdef codex-auth") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth completion query switch") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "codex-auth completion query account") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_values 'shell' bash zsh fish") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "_codex_auth_switch_queries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "_codex_auth_account_queries") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "'app[Launch Codex App with CLI overrides]'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "'-[Switch to the previous active account]'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_values 'command' - help list login import export switch remove alias clean completion config app") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "_values 'target' '-[Switch to the previous active account]'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "'--json[Emit one machine-readable JSON document") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "values+=(\"$value\")") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "descriptions+=(\"${description:-switch target}\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "descriptions+=(\"${description:-account}\")") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "compadd -Q -d descriptions -- \"${values[@]}\"") != null);
 }
 
@@ -688,7 +690,7 @@ test "Scenario: Given fish completion when rendering then commands and flags are
 
     const script = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -e") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_switch_queries") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_account_queries") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-a completion -d 'Generate shell completion scripts'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_using_command completion") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-a 'bash zsh fish' -d 'Generate shell completions'") != null);
@@ -697,7 +699,10 @@ test "Scenario: Given fish completion when rendering then commands and flags are
     try std.testing.expect(std.mem.indexOf(u8, script, "-a '-' -d 'Switch to the previous active account'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-a app -d 'Launch Codex App with CLI overrides'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_using_command app") != null);
-    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_switch_queries)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "complete -c codex-auth -n '__fish_codex_auth_using_command switch' -a '(__fish_codex_auth_account_queries)'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-l json -d 'Emit one machine-readable JSON document'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "__fish_codex_auth_alias_needs_account") != null);
+    try std.testing.expect(std.mem.indexOf(u8, script, "-a '(__fish_codex_auth_account_queries)' -d 'Account'") != null);
     try std.testing.expect(std.mem.indexOf(u8, script, "-l interval -r -d 'Set the live refresh interval in seconds'") != null);
 }
 
@@ -1755,4 +1760,59 @@ test "Scenario: Given selector environment when deciding switch or remove UI the
     try std.testing.expect(cli.picker.shouldUseNumberedRemoveSelector(false, true, false));
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(false, true, true));
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(true, true, true));
+}
+
+test "Scenario: Given stored accounts when querying account completion then numbered, alias, and email candidates are emitted" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeAccountQueryCompletion(&aw.writer, gpa, codex_home);
+
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, "01\talpha@example.com\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "work\twork(alpha@example.com)\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "alpha@example.com\t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "02\tbeta@example.com\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "beta@example.com\t") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "beta@example.com\tbeta@example.com") != null);
+}
+
+test "Scenario: Given grouped accounts sharing an email when querying account completion then the email candidate is deduplicated" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "same@example.com", "", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "same@example.com", "", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeAccountQueryCompletion(&aw.writer, gpa, codex_home);
+
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, "01\tsame@example.com\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "02\tsame@example.com\n") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "same@example.com\t"));
 }
