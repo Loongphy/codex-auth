@@ -136,11 +136,14 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .version => false,
         .help => false,
         .completion => false,
+        .complete_request => false,
         else => true,
     };
     const json_requested = commandWantsJson(&cmd);
     const codex_home = if (needs_codex_home)
         registry.resolveCodexHome(allocator) catch |err| return printJsonStartupError(err, json_requested)
+    else if (cmd == .complete_request)
+        registry.resolveCodexHome(allocator) catch null
     else
         null;
     defer if (codex_home) |path| allocator.free(path);
@@ -162,7 +165,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
         .completion => |opts| try completion_workflow.handleCompletion(opts),
-        .complete_request => |opts| try completion_workflow.handleCompleteRequest(allocator, codex_home.?, opts),
+        .complete_request => |opts| try completion_workflow.handleCompleteRequest(allocator, codex_home, opts),
     }
 }
 

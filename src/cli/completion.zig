@@ -14,7 +14,7 @@ pub fn printCompletion(shell: types.CompletionShell) !void {
 
 pub fn printCompleteResponse(
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
+    codex_home: ?[]const u8,
     args: []const []const u8,
 ) !void {
     var stdout: io_util.Stdout = undefined;
@@ -420,7 +420,7 @@ fn inlineFlagSpec(spec: ?*const CmdSpec, cur: []const u8) ?*const FlagSpec {
 fn writePositionalCands(
     out: *std.Io.Writer,
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
+    codex_home: ?[]const u8,
     spec: *const CmdSpec,
     pos: *const PosSpec,
     cur: []const u8,
@@ -448,7 +448,7 @@ fn writePositionalCands(
 pub fn writeCompleteResponse(
     out: *std.Io.Writer,
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
+    codex_home: ?[]const u8,
     args: []const []const u8,
 ) !void {
     var cur: []const u8 = "";
@@ -495,10 +495,11 @@ pub fn writeCompleteResponse(
 pub fn writeAccountCandidates(
     out: *std.Io.Writer,
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
+    codex_home: ?[]const u8,
     cur: []const u8,
 ) !void {
-    var reg = registry.loadRegistry(allocator, codex_home) catch return;
+    const home = codex_home orelse return;
+    var reg = registry.loadRegistry(allocator, home) catch return;
     defer reg.deinit(allocator);
 
     var display = display_rows.buildDisplayRows(allocator, &reg, null) catch return;

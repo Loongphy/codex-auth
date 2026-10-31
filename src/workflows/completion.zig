@@ -7,7 +7,7 @@ pub fn handleCompletion(opts: cli.types.CompletionShell) !void {
 
 pub fn handleCompleteRequest(
     allocator: std.mem.Allocator,
-    codex_home: []const u8,
+    codex_home: ?[]const u8,
     opts: cli.types.CompleteRequest,
 ) !void {
     try cli.completion.printCompleteResponse(allocator, codex_home, opts.args);
