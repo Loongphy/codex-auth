@@ -135,10 +135,7 @@ fn runMain(init: std.process.Init.Minimal) !void {
     const needs_codex_home = switch (cmd) {
         .version => false,
         .help => false,
-        .completion => |opts| switch (opts) {
-            .shell => false,
-            .query => true,
-        },
+        .completion => false,
         else => true,
     };
     const json_requested = commandWantsJson(&cmd);
@@ -164,7 +161,8 @@ fn runMain(init: std.process.Init.Minimal) !void {
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
         .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
-        .completion => |opts| try completion_workflow.handleCompletion(allocator, codex_home, opts),
+        .completion => |opts| try completion_workflow.handleCompletion(opts),
+        .complete_request => |opts| try completion_workflow.handleCompleteRequest(allocator, codex_home.?, opts),
     }
 }
 

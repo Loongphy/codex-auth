@@ -63,10 +63,8 @@ pub const CompletionShell = enum {
     zsh,
     fish,
 };
-pub const CompletionQueryTarget = enum { account };
-pub const CompletionOptions = union(enum) {
-    shell: CompletionShell,
-    query: CompletionQueryTarget,
+pub const CompleteRequest = struct {
+    args: []const []const u8,
 };
 pub const LiveOptions = struct {
     interval_seconds: u16,
@@ -106,7 +104,8 @@ pub const Command = union(enum) {
     remove_account: RemoveOptions,
     alias: AliasOptions,
     clean: CleanOptions,
-    completion: CompletionOptions,
+    completion: CompletionShell,
+    complete_request: CompleteRequest,
     config: ConfigOptions,
     app: AppOptions,
     version: void,

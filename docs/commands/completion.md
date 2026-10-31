@@ -60,6 +60,14 @@ Or load it dynamically from `~/.config/fish/config.fish` so upgrades apply autom
 codex-auth completion fish | source
 ```
 
-## Dynamic Account Candidates
+## Runtime Completion Protocol
 
-Account-taking arguments (`switch`, `remove`, `alias set`, `alias clear`) query the CLI at completion time through the hidden `codex-auth completion query account` subcommand. It prints tab-separated `candidate<TAB>description` rows: display numbers, aliases, and emails.
+The generated scripts are thin trampolines: on every Tab they forward the current command-line words to the hidden `codex-auth __complete` endpoint and let the binary decide what to offer.
+
+```shell
+codex-auth __complete <word>... <current-word>
+```
+
+The last argument is the word being completed (possibly empty); the arguments before it are the already-typed words after `codex-auth`. The endpoint prints `candidate<TAB>description` rows followed by a final `:<directive>` line. The directive is a bitmask compatible with Cobra's `ShellCompDirective`: `0` allow file completion, `1` error, `2` no trailing space, `4` no file completion, `16` directories only, `32` keep output order.
+
+Account-taking arguments (`switch`, `remove`, `alias set`, `alias clear`) emit `NN:email` composites plus alias and bare-email candidates, so the inserted value always resolves to a stable account identity rather than a bare list position.

@@ -58,6 +58,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
     if (std.mem.eql(u8, cmd, "alias")) return alias.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "clean")) return clean.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "completion")) return completion.parse(allocator, args[2..]);
+    if (std.mem.eql(u8, cmd, "__complete")) return parseCompleteRequest(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "config")) return config.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "app")) return app.parse(allocator, args[2..]);
 
@@ -93,9 +94,25 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
             },
             .clear => |clear_opts| allocator.free(clear_opts.selector),
         },
+        .complete_request => |opts| {
+            common.freeOwnedStringList(allocator, opts.args);
+            allocator.free(opts.args);
+        },
         else => {},
     }
     cmd.* = undefined;
+}
+
+fn parseCompleteRequest(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        common.freeOwnedStringList(allocator, owned.items);
+        owned.deinit(allocator);
+    }
+    for (args) |arg| {
+        try owned.append(allocator, try allocator.dupe(u8, std.mem.sliceTo(arg, 0)));
+    }
+    return .{ .command = .{ .complete_request = .{ .args = try owned.toOwnedSlice(allocator) } } };
 }
 
 fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !types.ParseResult {
