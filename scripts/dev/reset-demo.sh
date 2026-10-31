@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
     --dump) mode="dump"; shift ;;
     --keep) keep=1; shift ;;
     -h | --help)
-      sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -116,7 +116,7 @@ run_case timeout "failure: the request times out (curl exit 28)" reset ok@exampl
 run_case resolve_failed "failure: the request cannot reach the host (curl exit 6)" reset ok@example.com
 run_case ok "failure: no available reset credits" reset empty@example.com
 run_case ok "failure: the only card is already consumed" reset spent@example.com
-run_case ok "failure: API-key account cannot redeem" reset apikey@example.com
+run_case ok "failure: API-key account cannot redeem (no stored credits)" reset apikey@example.com
 run_case ok "failure: selector matches nothing" reset nobody@example.com
 run_case ok "failure: selector matches several accounts" reset dup
 run_case ok "success: the next card carries no expiry" reset undated@example.com

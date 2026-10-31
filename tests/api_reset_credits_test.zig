@@ -173,3 +173,14 @@ test "consume credit rejects api key auth before touching the transport" {
     try std.testing.expectEqualStrings("MissingAuth", result.error_name.?);
     try std.testing.expectEqual(@as(usize, 0), ctx.backend.requests.items.len);
 }
+
+test "describeRequestError translates stored error codes to user-facing text" {
+    // error_name stays the machine code for logs and JSON; display paths show
+    // the phrasing instead. Unknown names pass through rather than collapsing
+    // into a vague placeholder.
+    try std.testing.expectEqualStrings("request timed out", reset_credits_api.describeRequestError("TimedOut"));
+    try std.testing.expectEqualStrings("request failed", reset_credits_api.describeRequestError("RequestFailed"));
+    try std.testing.expectEqualStrings("no ChatGPT login on this account", reset_credits_api.describeRequestError("MissingAuth"));
+    try std.testing.expectEqualStrings("auth file not found", reset_credits_api.describeRequestError("FileNotFound"));
+    try std.testing.expectEqualStrings("HomeDirUnavailable", reset_credits_api.describeRequestError("HomeDirUnavailable"));
+}

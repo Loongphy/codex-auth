@@ -50,10 +50,16 @@ zig build
 zig build test-helpers
 
 demo_home="$(mktemp -d)"
-if [ "$keep" = 0 ]; then
-  cleanup() { rm -rf "$demo_home"; }
-  trap cleanup EXIT
-fi
+tmux_session=""
+cleanup() {
+  if [ -n "$tmux_session" ]; then
+    tmux kill-session -t "$tmux_session" 2>/dev/null || true
+  fi
+  if [ "$keep" = 0 ]; then
+    rm -rf "$demo_home"
+  fi
+}
+trap cleanup EXIT
 
 # shellcheck source=scripts/dev/lib/seed-codex-home.sh
 source "$repo_root/scripts/dev/lib/seed-codex-home.sh"
@@ -103,6 +109,8 @@ print_log() {
 # --assert turns the scripted session into a smoke test of the real rail: every
 # check below reads a frame the real renderer produced.
 assert_failures=0
+quit_failed=0
+esc_arrow_failed=0
 
 frame_has() { # frame_has <frame> <needle> <what it proves>
   local frame="$demo_home/frames/$1.txt"
@@ -143,6 +151,19 @@ run_assertions() {
   frame_has 07-after-immediate-refresh '96%' 'the immediate refresh shows the reset usage'
   frame_lacks 08-rail-closed 'Available' 'Esc closed the rail'
   frame_has 08-rail-closed 'Enter credits' 'the account-list footer comes back after Esc'
+  if [ "$esc_arrow_failed" = 0 ]; then
+    printf 'ok    %-32s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
+  else
+    printf 'FAIL  %-32s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
+    assert_failures=$((assert_failures + 1))
+  fi
+  frame_has 09-esc-arrow-rail-closed 'Enter credits' 'the account-list footer is back after Esc+Arrow'
+  if [ "$quit_failed" = 0 ]; then
+    printf 'ok    %-32s %s\n' "quit" 'q exited the live session'
+  else
+    printf 'FAIL  %-32s %s\n' "quit" 'q exited the live session'
+    assert_failures=$((assert_failures + 1))
+  fi
 
   local posts
   posts=$(grep -c 'POST .*rate-limit-reset-credits/consume' "$fixtures/requests.log" 2>/dev/null || true)
@@ -167,10 +188,12 @@ run_drive() {
     printf 'tmux is required for --drive\n' >&2
     exit 2
   }
-  local session="codex-auth-reset-demo"
+  # A PID suffix keeps parallel runs and a leftover demo session from
+  # colliding; the EXIT trap still tears it down on a failure path.
+  local session="codex-auth-reset-demo-$$"
+  tmux_session="$session"
   local frames="$demo_home/frames"
   mkdir -p "$frames"
-  tmux kill-session -t "$session" 2>/dev/null || true
 
   # A runner script keeps the environment out of tmux's command line, so no
   # quoting has to survive two shells.
@@ -218,8 +241,23 @@ run_drive() {
   capture 07-after-immediate-refresh 3.0
   send 'Escape'
   capture 08-rail-closed
+  # Regression: a fast Esc+Arrow (or Esc+wheel) must close the rail and scroll,
+  # not read as Esc+Esc and quit the session. Enter reopens the rail first so
+  # the second key is visible; sending both in one send-keys lands them inside
+  # the same escape window the way a fast typist produces them.
+  send 'Enter'
+  capture 08b-rail-reopened
+  tmux send-keys -t "$session" Escape Down
+  sleep 0.5
+  if ! tmux has-session -t "$session" 2>/dev/null; then
+    esc_arrow_failed=1
+  fi
+  capture 09-esc-arrow-rail-closed 0.2
   send 'q'
   sleep 0.6
+  if tmux has-session -t "$session" 2>/dev/null; then
+    quit_failed=1
+  fi
   tmux kill-session -t "$session" 2>/dev/null || true
 
   local frame

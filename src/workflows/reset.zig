@@ -87,7 +87,11 @@ pub fn handleReset(allocator: std.mem.Allocator, transport: transport_mod.Transp
             return error.ResetFailed;
         },
         .request_error => {
-            try cli.output.printResetError("reset failed: {s}.", .{result.error_name orelse "request error"});
+            const detail = if (result.error_name) |name|
+                reset_credits_api.describeRequestError(name)
+            else
+                "request error";
+            try cli.output.printResetError("reset failed: {s}.", .{detail});
             return error.ResetFailed;
         },
     }

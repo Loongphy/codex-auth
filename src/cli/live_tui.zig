@@ -116,9 +116,10 @@ pub const BodySpan = struct {
 /// credits rail draws the redeem result.
 ///
 /// `span` and the returned start share `renderListBodyViewport`'s index basis:
-/// lines of the rendered body after its column header, which include any spliced
-/// rail lines. That is deliberately not `rows.items`: the live list body does not
-/// render group header rows at all.
+/// lines of the rendered body after its column header, which include group
+/// header lines and any spliced rail lines. That is deliberately not
+/// `rows.items`, and not the data-row basis either: callers map a data index
+/// through `render.liveLineIndexForDataIndex` before building a span.
 pub fn followViewportStart(
     row_count: usize,
     max_rows: usize,

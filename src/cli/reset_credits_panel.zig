@@ -454,9 +454,11 @@ fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
 }
 
 /// Splices `panel` into `body` (a '\n'-separated table render: line 0 is the
-/// header, data lines follow) immediately after the given 0-based data line.
+/// column header, body lines follow) immediately after the given 0-based body
+/// line. The index is on the rendered-line basis: group header lines count,
+/// so callers map a data-row index through `liveLineIndexForDataIndex` first.
 /// The terminating newline of `body` must not become a phantom data row.
-pub fn spliceAfterDataLine(allocator: std.mem.Allocator, body: []const u8, data_line: usize, panel: []const u8) ![]u8 {
+pub fn spliceAfterBodyLine(allocator: std.mem.Allocator, body: []const u8, data_line: usize, panel: []const u8) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
     var iter = std.mem.splitScalar(u8, body, '\n');

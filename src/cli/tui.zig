@@ -432,6 +432,10 @@ pub const TuiSession = struct {
             var raw = saved_termios;
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
+            // Signals would kill the process before `deinit` can restore the
+            // terminal; with ISIG off, Ctrl-C arrives as a byte the input loop
+            // maps to `.quit`, so quitting always runs the restore path.
+            raw.lflag.ISIG = false;
             raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
             raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
             try std.posix.tcsetattr(input.handle, .FLUSH, raw);
@@ -490,47 +494,17 @@ pub const TuiSession = struct {
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (buffer[i] == 0x1b) {
-                const escape = try readTuiEscapeAction(
+                i += try appendTuiInputKeysFromEscape(
                     self.input,
                     buffer[i + 1 .. n],
-                    tui_poll_error_mask,
-                    tui_escape_sequence_timeout_ms,
+                    keys,
+                    &key_count,
+                    &self.keyboard_enhancement_supported,
                 );
-                switch (escape.action) {
-                    .move_up => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_up else .move_up),
-                    .move_down => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_down else .move_down),
-                    .keyboard_up => appendTuiInputKey(keys, &key_count, .keyboard_up),
-                    .keyboard_down => appendTuiInputKey(keys, &key_count, .keyboard_down),
-                    .page_up => appendTuiInputKey(keys, &key_count, .page_up),
-                    .page_down => appendTuiInputKey(keys, &key_count, .page_down),
-                    .home => appendTuiInputKey(keys, &key_count, .home),
-                    .end => appendTuiInputKey(keys, &key_count, .end),
-                    .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
-                    .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
-                    .quit => {
-                        appendTuiInputKey(keys, &key_count, .quit);
-                        if (escape.pending_byte) |byte| {
-                            // The byte arrived hard on the heels of a standalone
-                            // Esc; replay it as its own key (an Esc replay quit).
-                            if (byte == 0x1b) {
-                                appendTuiInputKey(keys, &key_count, .quit);
-                            } else {
-                                appendTuiInputKey(keys, &key_count, .{ .byte = byte });
-                            }
-                        }
-                    },
-                    .keyboard_enhancement_supported => self.keyboard_enhancement_supported = true,
-                    .ignore => {},
-                }
-                i += escape.buffered_bytes_consumed;
                 continue;
             }
 
-            switch (buffer[i]) {
-                '\r', '\n' => appendTuiInputKey(keys, &key_count, .enter),
-                0x7f, 0x08 => appendTuiInputKey(keys, &key_count, .backspace),
-                else => appendTuiInputKey(keys, &key_count, .{ .byte = buffer[i] }),
-            }
+            appendTuiInputKey(keys, &key_count, tuiInputKeyFromByte(buffer[i]));
         }
 
         return .{ .ready = key_count };
@@ -587,7 +561,7 @@ pub const TuiSession = struct {
                 else => blk: {
                     const codepoint = key_event.uChar.UnicodeChar;
                     if (codepoint == 0 or codepoint > 0x7f) continue;
-                    break :blk TuiInputKey{ .byte = @intCast(codepoint) };
+                    break :blk tuiInputKeyFromByte(@intCast(codepoint));
                 },
             };
 
@@ -632,6 +606,68 @@ fn appendTuiInputKey(keys: []TuiInputKey, key_count: *usize, key: TuiInputKey) v
     if (key_count.* >= keys.len) return;
     keys[key_count.*] = key;
     key_count.* += 1;
+}
+
+/// Byte-to-key mapping shared by the normal input path, the `pending_byte`
+/// replay, and the Windows console reader: Enter variants, backspace
+/// variants, and Ctrl-C, which arrives as a byte because ISIG and
+/// ENABLE_PROCESSED_INPUT stay off for the whole session.
+pub fn tuiInputKeyFromByte(byte: u8) TuiInputKey {
+    return switch (byte) {
+        '\r', '\n' => .enter,
+        0x7f, 0x08 => .backspace,
+        0x03 => .quit,
+        else => .{ .byte = byte },
+    };
+}
+
+/// Translates the bytes that follow a consumed Esc into input keys and returns
+/// how many `buffered_tail` bytes that took. A `pending_byte` that cannot
+/// start a known sequence replays through `tuiInputKeyFromByte`, so Enter and
+/// Backspace mean the same thing there as anywhere else. A pending Esc is
+/// trickier: it may head a real sequence (Esc then Arrow inside one read or
+/// paste), so it re-enters the parser instead of assuming a second quit —
+/// otherwise Esc+Arrow would read as Esc+Esc and quit twice.
+pub fn appendTuiInputKeysFromEscape(
+    tty: std.Io.File,
+    buffered_tail: []const u8,
+    keys: []TuiInputKey,
+    key_count: *usize,
+    keyboard_enhancement_supported: *bool,
+) !usize {
+    var consumed: usize = 0;
+    while (true) {
+        const escape = try readTuiEscapeAction(
+            tty,
+            buffered_tail[consumed..],
+            tui_poll_error_mask,
+            tui_escape_sequence_timeout_ms,
+        );
+        consumed += escape.buffered_bytes_consumed;
+        switch (escape.action) {
+            .move_up => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_up else .move_up),
+            .move_down => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_down else .move_down),
+            .keyboard_up => appendTuiInputKey(keys, key_count, .keyboard_up),
+            .keyboard_down => appendTuiInputKey(keys, key_count, .keyboard_down),
+            .page_up => appendTuiInputKey(keys, key_count, .page_up),
+            .page_down => appendTuiInputKey(keys, key_count, .page_down),
+            .home => appendTuiInputKey(keys, key_count, .home),
+            .end => appendTuiInputKey(keys, key_count, .end),
+            .scroll_up => appendTuiInputKey(keys, key_count, .scroll_up),
+            .scroll_down => appendTuiInputKey(keys, key_count, .scroll_down),
+            .quit => {
+                appendTuiInputKey(keys, key_count, .quit);
+                if (escape.pending_byte) |byte| {
+                    if (byte == 0x1b) continue;
+                    appendTuiInputKey(keys, key_count, tuiInputKeyFromByte(byte));
+                }
+            },
+            .keyboard_enhancement_supported => keyboard_enhancement_supported.* = true,
+            .ignore => {},
+        }
+        break;
+    }
+    return consumed;
 }
 
 pub fn terminalSize(file: std.Io.File) ?TuiSize {

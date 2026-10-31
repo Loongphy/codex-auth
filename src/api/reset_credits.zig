@@ -96,6 +96,27 @@ pub fn buildConsumeBodyAlloc(
     }, .{});
 }
 
+/// User-facing phrasing for a `request_error` name. `error_name` itself stays
+/// the machine-readable error code so logs and `--json` keep a stable value;
+/// CLI and rail output translate it here. Unknown names pass through: they are
+/// rare and the raw name is more useful than a vague "unknown error".
+pub fn describeRequestError(error_name: []const u8) []const u8 {
+    const known = .{
+        .{ "MissingAuth", "no ChatGPT login on this account" },
+        .{ "TimedOut", "request timed out" },
+        .{ "RequestFailed", "request failed" },
+        .{ "CurlRequired", "curl is required for API requests" },
+        .{ "CommandFailed", "request failed" },
+        .{ "FileNotFound", "auth file not found" },
+        .{ "AccessDenied", "auth file access denied" },
+        .{ "OutOfMemory", "out of memory" },
+    };
+    inline for (known) |entry| {
+        if (std.mem.eql(u8, error_name, entry[0])) return entry[1];
+    }
+    return error_name;
+}
+
 fn fail(allocator: std.mem.Allocator, name: []const u8) ConsumeResult {
     return .{
         .outcome = .request_error,

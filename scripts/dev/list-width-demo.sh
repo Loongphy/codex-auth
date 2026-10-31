@@ -1,5 +1,22 @@
 #!/usr/bin/env bash
+# Renders `codex-auth list` from a two-account demo registry and, on a TTY,
+# redraws it as the terminal is resized.
+#
+#   scripts/dev/list-width-demo.sh           interactive; Ctrl-C to stop
+#   scripts/dev/list-width-demo.sh --help    show this help
 set -euo pipefail
+
+case "${1:-}" in
+  -h | --help)
+    sed -n '2,6p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  "") ;;
+  *)
+    printf 'unknown option: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"

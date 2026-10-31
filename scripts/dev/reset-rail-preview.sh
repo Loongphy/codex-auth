@@ -6,7 +6,22 @@
 #
 # Expiry times are rendered in this machine's local time zone, the same way the
 # live rail does it.
+#
+#   scripts/dev/reset-rail-preview.sh            render every preview case
+#   scripts/dev/reset-rail-preview.sh --help     show this help
 set -euo pipefail
+
+case "${1:-}" in
+  -h | --help)
+    sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  "") ;;
+  *)
+    printf 'unknown option: %s\n' "$1" >&2
+    exit 2
+    ;;
+esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"

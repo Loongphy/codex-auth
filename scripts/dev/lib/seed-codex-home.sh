@@ -54,14 +54,14 @@ _demo_account() {
   local usage='null'
   if [ "$auth_kind" != "apikey" ]; then
     usage=$(cat <<JSON
-{
-        "primary": { "used_percent": $primary, "window_minutes": 300, "resets_at": 4102444800 },
-        "secondary": { "used_percent": $weekly, "window_minutes": 10080, "resets_at": 4103049600 },
-        "credits": null,
-        "reset_credits": $count,
-        "reset_credit": $cards,
-        "plan_type": "$plan"
-      }
+    {
+      "primary": { "used_percent": $primary, "window_minutes": 300, "resets_at": 4102444800 },
+      "secondary": { "used_percent": $weekly, "window_minutes": 10080, "resets_at": 4103049600 },
+      "credits": null,
+      "reset_credits": $count,
+      "reset_credit": $cards,
+      "plan_type": "$plan"
+    }
 JSON
 )
   fi
@@ -146,7 +146,9 @@ seed_codex_home() {
   _demo_account user-dup2 account-dup2 dup-two@example.com dup-two plus 31 31 1 \
     "[$(demo_card credit-dup2 2026-11-06T00:00:00Z "Full reset (Weekly + 5 hr)" available)]" \
     chatgpt
-  # An API-key snapshot cannot redeem: the consume step reports MissingAuth.
+  # An API-key snapshot has no stored usage snapshot, so `reset` stops at the
+  # missing-credit check. If it did have a card, the consume step would report
+  # MissingAuth; selection-demo.sh seeds that shape for its API-key accounts.
   _demo_account user-apikey account-apikey apikey@example.com apikey plus 0 0 1 \
     "[$(demo_card credit-apikey 2026-11-01T00:00:00Z "Full reset (Weekly + 5 hr)" available)]" \
     apikey

@@ -300,9 +300,10 @@ fn visibleRowRange(row_count: usize, viewport: LiveListViewport) VisibleRowRange
 
 /// Maps a selectable display index to its index in `rows`.
 ///
-/// Index basis: `rows.items`, for the views that DO render group header rows
-/// (`renderSwitchScreen`, `renderRemoveScreen`). The live list body skips those
-/// rows entirely, so its rail cursor must use `liveRowIndexForDataIndex` instead.
+/// Index basis: `rows.items`, for the views that treat rows one-to-one with
+/// screen lines (`renderSwitchScreen`, `renderRemoveScreen`). The live list
+/// numbers only its data rows while also drawing unnumbered group header
+/// lines, so its rail cursor must use `liveRowIndexForDataIndex` instead.
 fn rowIndexForDisplayIndex(rows: []const SwitchRow, selected_display_idx: usize) ?usize {
     var display_idx: usize = 0;
     for (rows, 0..) |row, row_idx| {
@@ -427,17 +428,20 @@ fn writeSwitchRow(
     displayed_counter.* += 1;
 }
 
-/// Single source of truth for which rows the live list body renders. The rail
-/// cursor indexes those rendered lines, so mapping and rendering share one
-/// predicate. Views that DO draw group header rows (switch, remove) use the
-/// `rows.items`-based helpers above instead; the two bases are not interchangeable.
+/// Single source of truth for which rows the live list body renders as
+/// numbered data rows. Selection and the rail cursor index those data rows,
+/// so mapping and rendering share one predicate. Views that draw group header
+/// rows as selectable-style rows (switch, remove) use the `rows.items`-based
+/// helpers above instead; the two bases are not interchangeable.
 pub fn isRenderedLiveRow(row: SwitchRow, account_count: usize) bool {
     if (row.is_header) return false;
     const account_idx = row.account_index orelse return false;
     return account_idx < account_count;
 }
 
-/// Number of data rows `renderListBody` emits for these rows.
+/// Number of data rows `renderListBody` emits for these rows. Group header
+/// lines are extra body lines on top of this count; see
+/// `liveLineIndexForDataIndex` for the rendered-line basis.
 pub fn liveDataRowCount(rows: []const SwitchRow, account_count: usize) usize {
     var count: usize = 0;
     for (rows) |row| {
@@ -447,7 +451,7 @@ pub fn liveDataRowCount(rows: []const SwitchRow, account_count: usize) usize {
 }
 
 /// Maps a rendered data-row index back to its index in `rows`, skipping the
-/// rows `renderListBody` does not draw (group headers and stale indices).
+/// rows `renderListBody` does not number (group headers and stale indices).
 pub fn liveRowIndexForDataIndex(rows: []const SwitchRow, account_count: usize, data_index: usize) ?usize {
     var rendered: usize = 0;
     for (rows, 0..) |row, row_idx| {
@@ -473,10 +477,45 @@ pub fn liveDataIndexForAccountKey(rows: []const SwitchRow, reg: *const registry.
     return null;
 }
 
+/// Rendered body-line index (0-based, column header excluded) of a data-row
+/// index: the group header lines `renderListBody` emits ahead of a group's
+/// first rendered child shift everything below them. The rail's splice point
+/// and viewport-follow span are body lines, so they go through this mapping;
+/// the selection state itself stays on the `liveDataRowCount` basis.
+pub fn liveLineIndexForDataIndex(
+    rows: []const SwitchRow,
+    account_count: usize,
+    data_index: usize,
+) ?usize {
+    var data: usize = 0;
+    var line: usize = 0;
+    var pending_header = false;
+    for (rows) |row| {
+        if (row.is_header) {
+            pending_header = true;
+            continue;
+        }
+        if (!isRenderedLiveRow(row, account_count)) continue;
+        // The header only counts once a rendered child actually follows it,
+        // matching renderListBody's emission rule; a group whose rows all went
+        // stale leaves no orphan line behind.
+        if (pending_header) {
+            line += 1;
+            pending_header = false;
+        }
+        if (data == data_index) return line;
+        data += 1;
+        line += 1;
+    }
+    return null;
+}
+
 /// Render the compact live account table.
 /// `cursor` is an optional data-row index on the `liveDataRowCount` basis
-/// (0-based, group header rows excluded); the matching row draws `>` instead
+/// (0-based, group header lines excluded); the matching row draws `>` instead
 /// of the `!`/`*`/space marker, so the row `Enter` acts on is always visible.
+/// A group header draws one unnumbered dim line ahead of its first rendered
+/// child so grouped rows keep their shared email in view.
 pub fn renderListBody(
     allocator: std.mem.Allocator,
     writer: *style.StyledWriter,
@@ -493,8 +532,17 @@ pub fn renderListBody(
     const column_widths = details.computeWidths(number_width, widths, max_cols);
     try details.writeHeader(writer, column_widths);
     var displayed_counter: usize = 0;
+    var pending_header: ?[]const u8 = null;
     for (rows) |row| {
+        if (row.is_header) {
+            pending_header = row.account;
+            continue;
+        }
         if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
+        if (pending_header) |email| {
+            pending_header = null;
+            try details.writeGroupHeader(writer, email, column_widths[0] + 2, max_cols);
+        }
         const idx = row.account_index.?;
         const is_cursor = cursor != null and cursor.? == displayed_counter;
         displayed_counter += 1;

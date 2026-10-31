@@ -20,8 +20,10 @@
 #   - The cursor `>` opens on the active account (zeta, row 12), covering the
 #     `*` marker; move off it and `*` reappears while `>` tracks the cursor.
 #     They are independent markers: moving the cursor never moves `*`.
-#   - Every single j / k / Up / Down must move `>` exactly one row, on the
-#     very next frame — no trailing highlight, no doubled cursor.
+#   - Every single j / k must move `>` exactly one row, on the very next
+#     frame — no trailing highlight, no doubled cursor. Up / Down scroll the
+#     viewport instead, exactly as the footer says; only inside the rail do
+#     Up / Down move the credit highlight.
 #   - Hold a key down: `>` must end on the row the key count implies.
 #   - Enter opens the rail directly under the `>` row; inside the rail,
 #     j / k move the credit highlight without moving the row cursor.
@@ -49,7 +51,7 @@ while [ $# -gt 0 ]; do
     --assert) drive=1; assert_frames=1; shift ;;
     --keep) keep=1; shift ;;
     -h | --help)
-      sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -67,10 +69,16 @@ fi
 zig build
 
 demo_home="$(mktemp -d)"
-if [ "$keep" = 0 ]; then
-  cleanup() { rm -rf "$demo_home"; }
-  trap cleanup EXIT
-fi
+tmux_session=""
+cleanup() {
+  if [ -n "$tmux_session" ]; then
+    tmux kill-session -t "$tmux_session" 2>/dev/null || true
+  fi
+  if [ "$keep" = 0 ]; then
+    rm -rf "$demo_home"
+  fi
+}
+trap cleanup EXIT
 
 # --- pure-data seed: registry + apikey auth snapshots, nothing else ---------
 
@@ -99,16 +107,15 @@ selection_account() {
     > "$demo_home/accounts/$(printf '%s' "$key" | demo_b64url).auth.json"
 
   local usage
-
-    usage=$(cat <<JSON
-{
-        "primary": { "used_percent": $primary, "window_minutes": 300, "resets_at": 4102444800 },
-        "secondary": { "used_percent": $weekly, "window_minutes": 10080, "resets_at": 4103049600 },
-        "credits": null,
-        "reset_credits": $count,
-        "reset_credit": $cards,
-        "plan_type": "$plan"
-      }
+  usage=$(cat <<JSON
+    {
+      "primary": { "used_percent": $primary, "window_minutes": 300, "resets_at": 4102444800 },
+      "secondary": { "used_percent": $weekly, "window_minutes": 10080, "resets_at": 4103049600 },
+      "credits": null,
+      "reset_credits": $count,
+      "reset_credit": $cards,
+      "plan_type": "$plan"
+    }
 JSON
 )
 
@@ -192,12 +199,14 @@ cat <<INFO
 Isolated CODEX_HOME : $demo_home
 Data source         : registry.json only (--skip-api, no backend, no network)
 Active account      : zeta (row 12, table sorts by label) — the cursor opens
-                      there, so `>` and `*` share that row at boot
+                      there, so ">" and "*" share that row at boot
 Redeem              : intentionally impossible (apikey snapshots fail fast,
                       zero requests); this demo tests selection, not redemption
 
 Manual checks in list --live:
-  j / k / Up / Down   ">" moves exactly one row per press, immediately
+  j / k               ">" moves exactly one row per press, immediately
+  Up / Down           scroll the viewport; inside the rail they move the credit
+                      highlight instead
   hold or paste keys  ">" ends on the row the key count implies
   Enter               rail opens under the ">" row (needs a credits row)
   rail j / k          credit ">" moves, the row ">" stays on its anchor
@@ -209,6 +218,8 @@ INFO
 # --- scripted session --------------------------------------------------------
 
 assert_failures=0
+quit_failed=0
+esc_arrow_failed=0
 
 frame_has() { # frame_has <frame> <regex> <what it proves>
   local frame="$demo_home/frames/$1.txt"
@@ -225,9 +236,9 @@ frame_count() { # frame_count <frame> <regex> <count> <what it proves>
   local found
   found=$(grep -cE -- "$2" "$frame" 2>/dev/null || true)
   if [ "$found" = "$3" ]; then
-    printf 'ok    %-26s %s\n' "$1" "$3"
+    printf 'ok    %-26s %s\n' "$1" "$4"
   else
-    printf 'FAIL  %-26s %s (expected %s, found %s)\n' "$1" "$3" "$2" "$found" "$4"
+    printf 'FAIL  %-26s %s (expected %s, found %s)\n' "$1" "$4" "$3" "$found"
     assert_failures=$((assert_failures + 1))
   fi
 }
@@ -242,10 +253,12 @@ run_drive() {
     printf 'tmux is required for --drive\n' >&2
     exit 2
   }
-  local session="codex-auth-selection-demo"
+  # A PID suffix keeps parallel runs and a leftover demo session from
+  # colliding; the EXIT trap still tears it down on a failure path.
+  local session="codex-auth-selection-demo-$$"
+  tmux_session="$session"
   local frames="$demo_home/frames"
   mkdir -p "$frames"
-  tmux kill-session -t "$session" 2>/dev/null || true
 
   local runner="$demo_home/run-live.sh"
   {
@@ -284,8 +297,22 @@ run_drive() {
   capture 07-rail-highlight-up
   send Escape
   capture 08-rail-closed-cursor-kept 0.4
+  # Regression: a fast Esc+Arrow must close the rail and scroll, not read as
+  # Esc+Esc and quit. Enter reopens the rail first so the second key is
+  # visible; one send-keys call lands both inside the same escape window.
+  send Enter
+  capture 08b-rail-reopened
+  tmux send-keys -t "$session" Escape Down
+  sleep 0.5
+  if ! tmux has-session -t "$session" 2>/dev/null; then
+    esc_arrow_failed=1
+  fi
+  capture 09-esc-arrow-still-live 0.2
   send q
   sleep 0.6
+  if tmux has-session -t "$session" 2>/dev/null; then
+    quit_failed=1
+  fi
   tmux kill-session -t "$session" 2>/dev/null || true
 
   local frame
@@ -323,6 +350,19 @@ run_assertions() {
   # Esc closes the rail and the row cursor survives.
   frame_has 08-rail-closed-cursor-kept '^>5[[:space:]]' 'row cursor preserved after Esc'
   frame_count 08-rail-closed-cursor-kept '^>' 1 'still exactly one cursor' 'cursor markers'
+  if [ "$esc_arrow_failed" = 0 ]; then
+    printf 'ok    %-26s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
+  else
+    printf 'FAIL  %-26s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
+    assert_failures=$((assert_failures + 1))
+  fi
+  frame_has 09-esc-arrow-still-live '^>5[[:space:]]' 'Esc+Arrow kept the session and the row cursor'
+  if [ "$quit_failed" = 0 ]; then
+    printf 'ok    %-26s %s\n' "quit" 'q exited the live session'
+  else
+    printf 'FAIL  %-26s %s\n' "quit" 'q exited the live session'
+    assert_failures=$((assert_failures + 1))
+  fi
 
   printf '\n%s\n' "$( [ "$assert_failures" = 0 ] && echo 'all selection assertions passed' || echo "$assert_failures selection assertion(s) failed")"
 }

@@ -6,6 +6,8 @@ const TuiEscapeClassification = cli.tui.TuiEscapeClassification;
 const TuiEscapeAction = cli.tui.TuiEscapeAction;
 const classifyTuiEscapeSuffix = cli.tui.classifyTuiEscapeSuffix;
 const readTuiEscapeAction = cli.tui.readTuiEscapeAction;
+const appendTuiInputKeysFromEscape = cli.tui.appendTuiInputKeysFromEscape;
+const tuiInputKeyFromByte = cli.tui.tuiInputKeyFromByte;
 const writeTuiEnterTo = cli.tui.writeTuiEnterTo;
 const writeTuiExitTo = cli.tui.writeTuiExitTo;
 const writeTuiFrameTo = cli.tui.writeTuiFrameTo;
@@ -72,6 +74,90 @@ test "Scenario: Given a bare Esc followed by a non-sequence byte when reading in
     const bare = try readTuiEscapeAction(std.Io.File.stdin(), "", 0, 0);
     try std.testing.expectEqual(TuiEscapeAction.quit, bare.action);
     try std.testing.expectEqual(@as(?u8, null), bare.pending_byte);
+}
+
+test "Scenario: Given raw bytes when mapping them to input keys then Enter Backspace and Ctrl-C stay canonical" {
+    try std.testing.expectEqual(cli.tui.TuiInputKey.enter, tuiInputKeyFromByte('\r'));
+    try std.testing.expectEqual(cli.tui.TuiInputKey.enter, tuiInputKeyFromByte('\n'));
+    try std.testing.expectEqual(cli.tui.TuiInputKey.backspace, tuiInputKeyFromByte(0x7f));
+    try std.testing.expectEqual(cli.tui.TuiInputKey.backspace, tuiInputKeyFromByte(0x08));
+    // ISIG stays off for the session so Ctrl-C arrives as byte 0x03, mapped to
+    // the same quit key as Esc/q — that is what lets deinit restore the tty.
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, tuiInputKeyFromByte(0x03));
+    switch (tuiInputKeyFromByte('j')) {
+        .byte => |byte| try std.testing.expectEqual(@as(u8, 'j'), byte),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "Scenario: Given a pending byte after a standalone Esc when replaying it then control bytes keep their normal meaning" {
+    const tty = std.Io.File.stdin();
+    var keys: [8]cli.tui.TuiInputKey = undefined;
+    var supported = false;
+
+    // Esc+Enter inside one read batch: the Enter must still be `.enter`, not a
+    // dropped `.byte`, or the key is silently lost.
+    var key_count: usize = 0;
+    const consumed_enter = try appendTuiInputKeysFromEscape(tty, "\r", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 1), consumed_enter);
+    try std.testing.expectEqual(@as(usize, 2), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.enter, keys[1]);
+
+    key_count = 0;
+    const consumed_bs = try appendTuiInputKeysFromEscape(tty, "\x7f", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 1), consumed_bs);
+    try std.testing.expectEqual(@as(usize, 2), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.backspace, keys[1]);
+
+    // A plain byte still replays as a byte.
+    key_count = 0;
+    const consumed_j = try appendTuiInputKeysFromEscape(tty, "j", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 1), consumed_j);
+    try std.testing.expectEqual(@as(usize, 2), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    switch (keys[1]) {
+        .byte => |byte| try std.testing.expectEqual(@as(u8, 'j'), byte),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "Scenario: Given Esc followed by an escape sequence when replaying it then the sequence is not mistaken for a second Esc" {
+    const tty = std.Io.File.stdin();
+    var keys: [8]cli.tui.TuiInputKey = undefined;
+    var supported = false;
+
+    // Esc+Arrow-Up in one batch (fast typing, a paste, or a wheel the terminal
+    // translates): the second Esc heads a real sequence, so the keys are quit
+    // plus move_up — never quit plus quit, which would exit a live session.
+    var key_count: usize = 0;
+    const consumed = try appendTuiInputKeysFromEscape(tty, "\x1b[A", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 3), consumed);
+    try std.testing.expectEqual(@as(usize, 2), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.move_up, keys[1]);
+
+    // SS3 arrows take the same path.
+    key_count = 0;
+    const consumed_ss3 = try appendTuiInputKeysFromEscape(tty, "\x1bOB", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 3), consumed_ss3);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.move_down, keys[1]);
+
+    // Esc Esc Esc then a byte: every standalone Esc is its own quit and the
+    // trailing byte still replays.
+    key_count = 0;
+    const consumed_triple = try appendTuiInputKeysFromEscape(tty, "\x1b\x1bj", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 3), consumed_triple);
+    try std.testing.expectEqual(@as(usize, 4), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[0]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[1]);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.quit, keys[2]);
+    switch (keys[3]) {
+        .byte => |byte| try std.testing.expectEqual(@as(u8, 'j'), byte),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {

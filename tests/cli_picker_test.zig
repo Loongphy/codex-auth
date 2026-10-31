@@ -2295,11 +2295,11 @@ test "reset credits panel splice keeps one line per rendered row" {
     const gpa = std.testing.allocator;
     const body = "header\nrow-a\nrow-b\n";
 
-    const middle = try cli.reset_credits_panel.spliceAfterDataLine(gpa, body, 0, "RAIL\n");
+    const middle = try cli.reset_credits_panel.spliceAfterBodyLine(gpa, body, 0, "RAIL\n");
     defer gpa.free(middle);
     try std.testing.expectEqualStrings("header\nrow-a\nRAIL\nrow-b\n", middle);
 
-    const last = try cli.reset_credits_panel.spliceAfterDataLine(gpa, body, 1, "RAIL\n");
+    const last = try cli.reset_credits_panel.spliceAfterBodyLine(gpa, body, 1, "RAIL\n");
     defer gpa.free(last);
     try std.testing.expectEqualStrings("header\nrow-a\nrow-b\nRAIL\n", last);
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, last, "\n"));
@@ -2331,28 +2331,56 @@ test "live list maps the credits rail cursor to the rendered account row" {
     }
     try std.testing.expectEqual(@as(usize, 1), header_rows);
     try std.testing.expectEqual(@as(usize, 3), cli.render.liveDataRowCount(rows.items, account_count));
+    // The shared email is drawn as one unnumbered line ahead of the group, so
+    // the rendered body is one line longer than the data-row count.
     try std.testing.expectEqual(
+        cli.render.liveDataRowCount(rows.items, account_count) + header_rows,
         std.mem.count(u8, body.written(), "\n") - 1,
-        cli.render.liveDataRowCount(rows.items, account_count),
     );
+    try std.testing.expect(std.mem.indexOf(u8, body.written(), "shared@example.com") != null);
+
+    // The rail's anchor and the viewport-follow span are body lines, so the
+    // data index under a shifted group must map through
+    // liveLineIndexForDataIndex: singleton, header line, then two children.
+    try std.testing.expectEqual(
+        @as(?usize, 0),
+        cli.render.liveLineIndexForDataIndex(rows.items, account_count, 0),
+    );
+    try std.testing.expectEqual(
+        @as(?usize, 2),
+        cli.render.liveLineIndexForDataIndex(rows.items, account_count, 1),
+    );
+    try std.testing.expectEqual(
+        @as(?usize, 3),
+        cli.render.liveLineIndexForDataIndex(rows.items, account_count, 2),
+    );
+    try std.testing.expect(cli.render.liveLineIndexForDataIndex(rows.items, account_count, 3) == null);
 
     var iter = std.mem.splitScalar(u8, body.written(), '\n');
     _ = iter.next(); // column header line
+    var body_lines = std.ArrayList([]const u8).empty;
+    defer body_lines.deinit(gpa);
+    while (iter.next()) |line| {
+        if (line.len == 0) continue;
+        try body_lines.append(gpa, line);
+    }
+    try std.testing.expectEqual(@as(usize, 4), body_lines.items.len);
+    // Line 0 is the singleton, line 1 the group header, lines 2-3 its children.
+    try std.testing.expect(std.mem.indexOf(u8, body_lines.items[1], "shared@example.com") != null);
     var shifted: usize = 0;
-    var naive_hits_header: usize = 0;
     for (0..3) |data_index| {
-        const line = iter.next() orelse return error.TestUnexpectedResult;
+        const line_index = cli.render.liveLineIndexForDataIndex(rows.items, account_count, data_index) orelse
+            return error.TestUnexpectedResult;
+        const line = body_lines.items[line_index];
         const row_index = cli.render.liveRowIndexForDataIndex(rows.items, account_count, data_index) orelse
             return error.TestUnexpectedResult;
         try std.testing.expect(!rows.items[row_index].is_header);
         try std.testing.expect(std.mem.indexOf(u8, line, rows.items[row_index].account) != null);
         if (row_index != data_index) shifted += 1;
-        if (rows.items[data_index].is_header) naive_hits_header += 1;
     }
-    // The header row is not drawn, so the naive `rows.items[data_index]`
-    // indexing both points at a group header and desyncs the rail from the row
-    // it is spliced under.
-    try std.testing.expect(naive_hits_header > 0);
+    // The naive `rows.items[data_index]` indexing still desyncs from the
+    // rendered row once a group header intervenes; the mapping helpers are
+    // what keep the rail under the row the cursor points at.
     try std.testing.expect(shifted > 0);
     try std.testing.expect(cli.render.liveRowIndexForDataIndex(rows.items, account_count, 3) == null);
 }

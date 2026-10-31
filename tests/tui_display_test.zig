@@ -263,3 +263,25 @@ test "Scenario: Given two API key accounts for one email when building display r
     try std.testing.expectEqualStrings("sk-12345***7890", rows.rows[1].account_cell);
     try std.testing.expectEqualStrings("sk-7f3c1***42ce", rows.rows[2].account_cell);
 }
+
+test "Scenario: Given a grouped apikey account with an account name when building display rows then ordering follows the displayed fingerprint" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    // The apikey row displays its masked fingerprint ahead of the account
+    // name, so the sort must key on that fingerprint too: "MMM" sorts before
+    // "sk-zzzaa***abbb" even though the hidden name "AAA" sorts before both.
+    try appendApiKeyAccount(gpa, &reg, "apikey::user_api::zzzaaabbbcc", "user@example.com");
+    reg.accounts.items[0].account_name = try gpa.dupe(u8, "AAA");
+    try appendAccount(gpa, &reg, "user-b::acct-b", "user@example.com", "", .business);
+    reg.accounts.items[1].account_name = try gpa.dupe(u8, "MMM");
+
+    var rows = try display_rows.buildDisplayRows(gpa, &reg, null);
+    defer rows.deinit(gpa);
+
+    try std.testing.expectEqual(@as(usize, 3), rows.rows.len);
+    try std.testing.expectEqualStrings("user@example.com", rows.rows[0].account_cell);
+    try std.testing.expectEqualStrings("MMM", rows.rows[1].account_cell);
+    try std.testing.expectEqualStrings("sk-zzzaa***bbcc", rows.rows[2].account_cell);
+}

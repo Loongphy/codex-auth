@@ -28,6 +28,15 @@ pub const ResponseErrorCode = struct {
     }
 };
 
+/// Injectable form of `fetchUsageForAuthPathDetailed`: callers that refresh
+/// one account outside the shared foreground pass (for example the live list
+/// right after a credit redeem) take this instead of hard-coding the fetcher,
+/// so tests can substitute a scripted backend.
+pub const FetchForAuthPathDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) anyerror!UsageFetchResult;
+
 pub const BatchUsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot = null,
     status_code: ?u16 = null,

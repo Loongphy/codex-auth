@@ -112,16 +112,32 @@ fn lessThanByDisplayOrder(ctx: SortContext, lhs: usize, rhs: usize) bool {
     // Within one email group, rows order alphabetically by the label they
     // display, so the order the user reads is the order the user sees.
     // account_key keeps it stable (and matches the "#N" fallback ordinals).
-    const label_cmp = std.mem.order(u8, groupSortLabel(a), groupSortLabel(b));
+    var a_buf: [apikey_label_len]u8 = undefined;
+    var b_buf: [apikey_label_len]u8 = undefined;
+    const label_cmp = std.mem.order(u8, groupSortLabel(a, &a_buf), groupSortLabel(b, &b_buf));
     if (label_cmp != .eq) return label_cmp == .lt;
 
     return std.mem.lessThan(u8, a.account_key, b.account_key);
 }
 
-/// The label a grouped row displays, as a sort key: alias, else account name,
-/// else the plan fallback that groupFallbackLabelAlloc produces.
-fn groupSortLabel(rec: *const registry.AccountRecord) []const u8 {
+/// "sk-" + 5 fingerprint chars + "***" + 4 fingerprint chars.
+const apikey_label_len = 15;
+
+/// The label a grouped row displays, as a sort key: alias, else the apikey
+/// fingerprint (grouped apikey rows show it ahead of the account name), else
+/// account name, else the plan fallback that groupFallbackLabelAlloc produces.
+/// `buf` backs the formatted fingerprint label so sorting stays
+/// allocation-free; the returned slice borrows either `buf` or the record.
+fn groupSortLabel(rec: *const registry.AccountRecord, buf: *[apikey_label_len]u8) []const u8 {
     if (rec.alias.len != 0) return rec.alias;
+    if (rec.auth_mode != null and rec.auth_mode.? == .apikey) {
+        if (apiKeyFingerprintSlice(rec.account_key)) |fingerprint| {
+            return std.fmt.bufPrint(buf, "sk-{s}***{s}", .{
+                fingerprint[0..5],
+                fingerprint[fingerprint.len - 4 ..],
+            }) catch displayPlan(rec);
+        }
+    }
     if (normalizedAccountName(rec)) |name| return name;
     return displayPlan(rec);
 }
@@ -238,11 +254,18 @@ fn normalizedAccountName(rec: *const registry.AccountRecord) ?[]const u8 {
     return account_name;
 }
 
-fn apiKeyLabelFromAccountKeyAlloc(allocator: std.mem.Allocator, account_key: []const u8) !?[]u8 {
+/// The raw fingerprint an apikey account_key carries (`apikey::<…>::<fp>`);
+/// shared by the displayed `sk-…***…` label and the group sort key.
+fn apiKeyFingerprintSlice(account_key: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, account_key, "apikey::")) return null;
     const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return null;
     const fingerprint = account_key[sep + 2 ..];
     if (fingerprint.len < 9) return null;
+    return fingerprint;
+}
+
+fn apiKeyLabelFromAccountKeyAlloc(allocator: std.mem.Allocator, account_key: []const u8) !?[]u8 {
+    const fingerprint = apiKeyFingerprintSlice(account_key) orelse return null;
     const label = try std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{
         fingerprint[0..5],
         fingerprint[fingerprint.len - 4 ..],

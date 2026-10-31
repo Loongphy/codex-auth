@@ -58,6 +58,37 @@ pub fn writeHeader(writer: *style.StyledWriter, widths: [column_count]usize) !vo
     try writer.out.writeByte('\n');
 }
 
+/// Group header line for the live body: the shared email in the dim role the
+/// pickers give group rows, indented under the ACCOUNT column. It is not a
+/// data row — no number, no marker — but it is one body line for viewport and
+/// rail-splice bookkeeping, so `render.liveLineIndexForDataIndex` counts it.
+/// The line always exists once the caller decides to emit it, even when the
+/// terminal is too narrow for the text: a skipped line would desync the
+/// rendered-line index basis.
+pub fn writeGroupHeader(
+    writer: *style.StyledWriter,
+    email: []const u8,
+    indent: usize,
+    max_cols: ?usize,
+) !void {
+    try writer.writeStyle(style.role.secondary);
+    var i: usize = 0;
+    while (i < indent) : (i += 1) try writer.out.writeByte(' ');
+    if (max_cols) |cols| {
+        const budget = cols -| indent;
+        if (text_width.displayWidth(email) <= budget) {
+            try writer.out.writeAll(email);
+        } else if (budget > 3) {
+            try writer.out.writeAll(email[0..text_width.prefixByteLength(email, budget - 3)]);
+            try writer.out.writeAll("...");
+        }
+    } else {
+        try writer.out.writeAll(email);
+    }
+    try writer.reset();
+    try writer.out.writeByte('\n');
+}
+
 /// `row_style` comes from the caller: deriving it from the marker glyph here
 /// would leave the `>` cursor row unstyled, which is exactly the ambiguity
 /// the picker row styles already avoid.

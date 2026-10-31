@@ -19,8 +19,11 @@ const is_windows = builtin.os.tag == .windows;
 
 /// Refreshes one account's usage snapshot after a successful consume so the
 /// 5H/WEEKLY cells and the remaining card list reflect the reset immediately.
+/// The fetcher is injected for the same reason the foreground refresh takes
+/// one: tests drive it with a scripted backend instead of real curl.
 fn refreshAccountUsageAfterReset(
     allocator: std.mem.Allocator,
+    usage_fetcher: api_usage.FetchForAuthPathDetailedFn,
     reg: *registry.Registry,
     codex_home: []const u8,
     account_key: []const u8,
@@ -28,7 +31,7 @@ fn refreshAccountUsageAfterReset(
     const account_idx = registry.findAccountIndexByAccountKey(reg, account_key) orelse return;
     const auth_path = registry.accountAuthPath(allocator, codex_home, account_key) catch return;
     defer allocator.free(auth_path);
-    const fetched = api_usage.fetchUsageForAuthPathDetailed(allocator, auth_path) catch return;
+    const fetched = usage_fetcher(allocator, auth_path) catch return;
     const snapshot = fetched.snapshot orelse return;
     const rec = &reg.accounts.items[account_idx];
     if (rec.last_usage) |*old| registry.freeRateLimitSnapshot(allocator, old);
@@ -301,6 +304,7 @@ pub fn selectAccountWithLiveUpdates(
 pub fn viewAccountsWithLiveUpdates(
     allocator: std.mem.Allocator,
     transport: transport_mod.Transport,
+    usage_fetcher: api_usage.FetchForAuthPathDetailedFn,
     initial_display: OwnedSwitchSelectionDisplay,
     controller: SwitchLiveController,
 ) !void {
@@ -394,6 +398,15 @@ pub fn viewAccountsWithLiveUpdates(
             const data_rows = render.liveDataRowCount(rows.items, account_count);
             data_row_count = data_rows;
             credit_selection.clampRow(allocator, data_rows);
+            // The rail's splice point and the viewport-follow span are on the
+            // rendered body-line basis: group header lines sit above the
+            // cursor's data row, so the data index maps through
+            // liveLineIndexForDataIndex first.
+            const cursor_line = render.liveLineIndexForDataIndex(
+                rows.items,
+                account_count,
+                credit_selection.row_cursor,
+            ) orelse credit_selection.row_cursor;
             if (credit_selection.expanded and data_rows == 0) {
                 // Without a row to attach to the rail draws nothing, yet staying
                 // expanded would keep swallowing `esc` and `q`.
@@ -449,10 +462,10 @@ pub fn viewAccountsWithLiveUpdates(
                 // on screen: keys arrive in batches that are processed before
                 // the next frame, so a fast double tap must not skip it.
                 armed_hint_rendered = confirm_pending;
-                spliced_panel = try reset_credits_panel.spliceAfterDataLine(
+                spliced_panel = try reset_credits_panel.spliceAfterBodyLine(
                     allocator,
                     body_text,
-                    credit_selection.row_cursor,
+                    cursor_line,
                     credits_panel.written(),
                 );
                 body_text = spliced_panel.?;
@@ -473,11 +486,11 @@ pub fn viewAccountsWithLiveUpdates(
                 // Follow the rail's last line, not just its anchor row: the
                 // confirm hint and the redeem result are drawn below the row.
                 if (panel_lines > 0)
-                    .{ .first = credit_selection.row_cursor, .last = credit_selection.row_cursor + panel_lines }
+                    .{ .first = cursor_line, .last = cursor_line + panel_lines }
                 else if (follow_row_cursor)
                     // A j/k move must stay visible: with the rail closed the
-                    // body is exactly the data rows, so the cursor is its own span.
-                    .{ .first = credit_selection.row_cursor, .last = credit_selection.row_cursor }
+                    // cursor's own line is its span.
+                    .{ .first = cursor_line, .last = cursor_line }
                 else
                     null,
             );
@@ -667,7 +680,7 @@ pub fn viewAccountsWithLiveUpdates(
                             }
                             if (redeem_key) |key| {
                                 const codex_home = registry.resolveCodexHome(allocator) catch |err| {
-                                    try credit_selection.setStatus(allocator, @errorName(err), .fail);
+                                    try credit_selection.setStatus(allocator, reset_credits_api.describeRequestError(@errorName(err)), .fail);
                                     needs_render = true;
                                     continue;
                                 };
@@ -697,7 +710,7 @@ pub fn viewAccountsWithLiveUpdates(
                                         // refresh round, which reloads it from
                                         // disk before saving, so this cannot roll
                                         // back another account's newer snapshot.
-                                        refreshAccountUsageAfterReset(allocator, &current_display.reg, codex_home, current.account_key);
+                                        refreshAccountUsageAfterReset(allocator, usage_fetcher, &current_display.reg, codex_home, current.account_key);
                                         rows_cache.invalidate(allocator);
                                     },
                                     .no_credit => {
@@ -733,7 +746,11 @@ pub fn viewAccountsWithLiveUpdates(
                                         }
                                     },
                                     .request_error => {
-                                        try credit_selection.setStatus(allocator, result.error_name orelse "use failed", .fail);
+                                        const detail = if (result.error_name) |name|
+                                            reset_credits_api.describeRequestError(name)
+                                        else
+                                            "use failed";
+                                        try credit_selection.setStatus(allocator, detail, .fail);
                                     },
                                 }
                             } else {
