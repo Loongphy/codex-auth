@@ -496,6 +496,10 @@ pub fn render(
                 defer allocator.free(rel);
                 try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
             }
+            // The tag carries the success report inline: the struck row itself
+            // says what happened, so a bottom status line is only needed for
+            // outcomes that left no card to point at.
+            try line.writer.print("{s}redeemed", .{g.separator});
             try writeRailLine(writer, opts.indent, line.written(), budget, if (opts.use_color) style.role.spent else "");
             lines += 1;
             continue;

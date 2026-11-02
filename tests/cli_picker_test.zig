@@ -1837,12 +1837,11 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
     defer out.deinit();
     // Two consumed ghosts bracket the live card by expiry: the 5h card sits
     // before "weekly", the month card after it, while the cursor has moved on.
+    // Success writes no bottom status — each ghost's `redeemed` tag is it.
     const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
         .max_cols = 100,
         .now = now,
         .card_cursor = 0,
-        .status = "reset credit redeemed",
-        .status_kind = .ok,
         .spent_cards = &.{
             .{ .title = "Month reset", .epoch = now + 60 * 86400 },
             .{ .title = "5h reset credit", .epoch = now + 7 * 86400 },
@@ -1850,10 +1849,12 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
         .indent = 6,
         .use_color = true,
     });
-    try std.testing.expectEqual(@as(usize, 6), lines);
+    try std.testing.expectEqual(@as(usize, 5), lines);
     const text = out.written();
     try std.testing.expect(std.mem.indexOf(u8, text, "RESETS · 2 available") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[2m\x1b[9m  5h reset credit") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "5h reset credit") != null and std.mem.indexOf(u8, text, "in 7d · redeemed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "in 60d · redeemed") != null);
     const ghost_a = std.mem.indexOf(u8, text, "5h reset credit").?;
     const weekly_at = std.mem.indexOf(u8, text, "Weekly limit reset").?;
     const ghost_b = std.mem.indexOf(u8, text, "Month reset").?;
@@ -1861,7 +1862,7 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
     try std.testing.expect(weekly_at < ghost_b);
     try std.testing.expect(std.mem.indexOf(u8, text, "> Weekly limit reset") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "> 5h") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "✓ reset credit redeemed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "✓") == null);
 }
 
 test "reset credits panel keeps spent ghosts until the selection or refresh drops them" {
