@@ -692,6 +692,20 @@ fn spentIndexLessThan(spent_cards: []const Selection.SpentCard, a: usize, b: usi
     return a_epoch < b_epoch;
 }
 
+/// 0-based line index of `card_index` inside the rendered block: line 0 is the
+/// RESETS heading and every ghost whose expiry sorts at or before the card
+/// lands ahead of it — the same `<=` rule the merge loop above applies. The
+/// live view maps this through the rail's splice point to keep the armed
+/// card's confirm hint inside the viewport.
+pub fn mergedCardLine(cards: []const AvailableCard, spent_cards: []const Selection.SpentCard, card_index: usize) usize {
+    const epoch = cards[card_index].epoch orelse std.math.maxInt(i64);
+    var ghosts_before: usize = 0;
+    for (spent_cards) |spent| {
+        if ((spent.epoch orelse std.math.maxInt(i64)) <= epoch) ghosts_before += 1;
+    }
+    return 1 + card_index + ghosts_before;
+}
+
 fn relativeIn(allocator: std.mem.Allocator, target: i64, now: i64) ![]u8 {
     const delta = target - now;
     if (delta <= 0) return std.fmt.allocPrint(allocator, "expired", .{});

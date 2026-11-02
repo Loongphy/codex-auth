@@ -202,9 +202,9 @@ fn selectInteractiveFromIndices(
             if (rows.selectable_row_indices.len != 0) idx else null,
             number_buf[0..number_len],
         );
-        // Fixed lines are the prompt and the footer; the table viewport
-        // scrolls to keep the cursor inside the terminal frame.
-        const max_rows = tui.terminalRows() -| 2;
+        // Fixed lines are the prompt, the column header, and the footer;
+        // the table viewport scrolls to keep the cursor inside the frame.
+        const max_rows = tui.terminalRows() -| 3;
         viewport_start = render.liveViewportStartForDisplayIndex(rows.items, selected_display_idx, max_rows, viewport_start);
         try tui.resetFrame();
         var styled_frame = style.StyledWriter.init(out, use_color);
@@ -434,9 +434,9 @@ fn selectInteractive(
             if (rows.selectable_row_indices.len != 0) idx else null,
             number_buf[0..number_len],
         );
-        // Fixed lines are the prompt and the footer; the table viewport
-        // scrolls to keep the cursor inside the terminal frame.
-        const max_rows = tui.terminalRows() -| 2;
+        // Fixed lines are the prompt, the column header, and the footer;
+        // the table viewport scrolls to keep the cursor inside the frame.
+        const max_rows = tui.terminalRows() -| 3;
         viewport_start = render.liveViewportStartForDisplayIndex(rows.items, selected_display_idx, max_rows, viewport_start);
         try tui.resetFrame();
         var styled_frame = style.StyledWriter.init(out, use_color);

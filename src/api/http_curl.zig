@@ -144,12 +144,9 @@ pub fn runCurlPostJsonCommand(
 
     var curl_config = std.ArrayList(u8).empty;
     defer curl_config.deinit(allocator);
-    try appendCurlConfigLine(allocator, &curl_config, "url", endpoint);
-    try appendCurlConfigLine(allocator, &curl_config, "header", "User-Agent: " ++ user_agent);
-    try appendCurlConfigLine(allocator, &curl_config, "header", "Accept: application/json");
-    try appendCurlConfigLine(allocator, &curl_config, "header", authorization);
-    try appendCurlConfigLine(allocator, &curl_config, "header", account_header);
-    try appendCurlConfigLine(allocator, &curl_config, "header", "Content-Type: application/json");
+    var resolved_proxy = try proxy.resolve(allocator, endpoint);
+    defer if (resolved_proxy) |*value| value.deinit(allocator);
+    try appendCurlConfig(allocator, &curl_config, endpoint, &[_][]const u8{ authorization, account_header, "Content-Type: application/json" }, resolved_proxy);
     try appendCurlConfigLine(allocator, &curl_config, "data", body_json);
 
     const result = runChildCaptureWithInputAndOutputLimit(

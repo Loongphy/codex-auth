@@ -5361,8 +5361,10 @@ test "Scenario: Given reset credits when running reset then it consumes the soon
 
     logRunResultIfFailed("reset", result);
     try expectSuccess(result);
+    // printResetSummary picks its separator from the platform glyphs.
+    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit redeemed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\u{00b7} 1 left (next exp ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, left_marker) != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 
@@ -5374,8 +5376,10 @@ test "Scenario: Given an already redeemed credit when running reset then it stil
 
     logRunResultIfFailed("reset already_redeemed", result);
     try expectExitCode(result, 0);
+    // printResetSummary picks its separator from the platform glyphs.
+    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit already redeemed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\u{00b7} 1 left (next exp ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, left_marker) != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
 

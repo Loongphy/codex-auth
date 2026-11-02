@@ -244,8 +244,9 @@ frame_count() { # frame_count <frame> <regex> <count> <what it proves>
 }
 
 # expect_cursor <frame> <1-based data row>
+# renderListBody pads single digits to the index width: `> 12` vs `>  5`.
 expect_cursor() {
-  frame_has "$1" "^>${2}[[:space:]]" "cursor is on row $2"
+  frame_has "$1" "^> +${2}[[:space:]]" "cursor is on row $2"
 }
 
 run_drive() {
@@ -325,30 +326,31 @@ run_drive() {
 run_assertions() {
   printf '\n=== assertions ===\n'
   # The cursor opens on the active account row (zeta, 12): `>` covers `*`.
-  frame_has 00-initial '^>12[[:space:]]' 'cursor opens on the active account row'
+  frame_has 00-initial '^> +12[[:space:]]' 'cursor opens on the active account row'
   frame_count 00-initial '^>' 1 'exactly one cursor marker' 'cursor markers'
   frame_count 00-initial '#\*' 0 'no "#*" header text' 'header fragments'
   # Single keys: k moves up one row and the * active marker reappears on zeta.
   expect_cursor 01-single-k 11
-  frame_has 01-single-k '^\*12[[:space:]]' 'active marker reappears once the cursor moves off zeta'
+  frame_has 01-single-k '^\* +12[[:space:]]' 'active marker reappears once the cursor moves off zeta'
   frame_count 01-single-k '^>' 1 'no doubled cursor after a single key' 'cursor markers'
   expect_cursor 02-single-j 12
   # Burst: five pasted keys (4 up, 1 down) land on row 9 (iota-a).
   expect_cursor 03-burst-five-keys 9
   frame_count 03-burst-five-keys '^>' 1 'burst keeps exactly one cursor' 'cursor markers'
-  frame_has 03-burst-five-keys '^\*12[[:space:]]' 'burst did not move the active marker'
+  frame_has 03-burst-five-keys '^\* +12[[:space:]]' 'burst did not move the active marker'
   # Four more ups land on row 5 (eta, 2 cards).
   expect_cursor 04-burst-onto-eta 5
-  # Enter opens the rail under the cursor row; both markers coexist.
-  frame_has 05-rail-on-cursor-row '^>5[[:space:]]' 'rail anchored on the cursor row'
-  frame_has 05-rail-on-cursor-row '^\*12[[:space:]]' 'active marker untouched by the rail'
-  frame_has 05-rail-on-cursor-row 'RESET CREDITS . 2 available' 'rail shows the eta card list'
-  # Inside the rail only the credit highlight moves.
-  frame_has 06-rail-highlight-down '^     > Later card' 'rail j moved the credit highlight'
-  frame_has 06-rail-highlight-down '^>5[[:space:]]' 'row cursor did not move inside the rail'
-  frame_has 07-rail-highlight-up '^     > Workspace reset' 'rail k moved it back'
+  # Enter opens the rail under the cursor row: the row `>` yields to the rail's
+  # own credit cursor (cursor_anchored), so only the `*` marker is checked.
+  frame_has 05-rail-on-cursor-row '^      RESETS' 'rail anchored on the cursor row'
+  frame_has 05-rail-on-cursor-row '^\* +12[[:space:]]' 'active marker untouched by the rail'
+  frame_has 05-rail-on-cursor-row 'RESETS[^0-9]*2 available' 'rail shows the eta card list'
+  # Inside the rail only the credit highlight moves; card lines indent 6.
+  frame_has 06-rail-highlight-down '^      > Later card' 'rail j moved the credit highlight'
+  frame_count 06-rail-highlight-down '^>' 0 'row cursor hidden while the rail is open' 'cursor markers'
+  frame_has 07-rail-highlight-up '^      > Workspace reset' 'rail k moved it back'
   # Esc closes the rail and the row cursor survives.
-  frame_has 08-rail-closed-cursor-kept '^>5[[:space:]]' 'row cursor preserved after Esc'
+  frame_has 08-rail-closed-cursor-kept '^> +5[[:space:]]' 'row cursor preserved after Esc'
   frame_count 08-rail-closed-cursor-kept '^>' 1 'still exactly one cursor' 'cursor markers'
   if [ "$esc_arrow_failed" = 0 ]; then
     printf 'ok    %-26s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
@@ -356,7 +358,7 @@ run_assertions() {
     printf 'FAIL  %-26s %s\n' "esc-arrow" 'Esc+Arrow in one batch closes the rail without quitting'
     assert_failures=$((assert_failures + 1))
   fi
-  frame_has 09-esc-arrow-still-live '^>5[[:space:]]' 'Esc+Arrow kept the session and the row cursor'
+  frame_has 09-esc-arrow-still-live '^> +5[[:space:]]' 'Esc+Arrow kept the session and the row cursor'
   if [ "$quit_failed" = 0 ]; then
     printf 'ok    %-26s %s\n' "quit" 'q exited the live session'
   else

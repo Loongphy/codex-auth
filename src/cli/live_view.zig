@@ -429,6 +429,11 @@ pub fn viewAccountsWithLiveUpdates(
             }
             var panel_lines: usize = 0;
             var panel_account: ?*registry.AccountRecord = null;
+            // Body line of the armed card's confirm hint, when one is pending:
+            // the viewport follows it and the redeem gate reads it, so a card
+            // that scrolled off (or a rail too narrow to draw) can never be
+            // spent by an `Enter` the user could not see confirmed.
+            var armed_hint_line: ?usize = null;
             if (credit_selection.expanded and data_rows > 0) {
                 // The cursor counts data rows; group header lines are rendered
                 // but unnumbered, so map it back before touching rows.items.
@@ -474,10 +479,13 @@ pub fn viewAccountsWithLiveUpdates(
                         .use_color = use_color,
                     },
                 );
-                // A second `Enter` only redeems once the hint it confirms has been
-                // on screen: keys arrive in batches that are processed before
-                // the next frame, so a fast double tap must not skip it.
-                armed_hint_rendered = confirm_pending;
+                if (confirm_pending and panel_lines > 0) {
+                    armed_hint_line = cursor_line + 1 + reset_credits_panel.mergedCardLine(
+                        available_cards,
+                        credit_selection.spent_cards.items,
+                        credit_selection.card_cursor,
+                    );
+                }
                 spliced_panel = try reset_credits_panel.spliceAfterBodyLine(
                     allocator,
                     body_text,
@@ -524,9 +532,12 @@ pub fn viewAccountsWithLiveUpdates(
                 live_tui.listFixedLines(status_line),
                 &viewport_start,
                 // Follow the rail's last line, not just its anchor row: the
-                // confirm hint and the redeem result are drawn below the row.
+                // redeem result is drawn below the row. While a confirmation
+                // is pending the armed card's own line is followed instead —
+                // a rail taller than the frame must not leave its hint above
+                // the window.
                 if (panel_lines > 0)
-                    .{ .first = cursor_line, .last = cursor_line + panel_lines }
+                    .{ .first = cursor_line, .last = armed_hint_line orelse cursor_line + panel_lines }
                 else if (follow_row_cursor)
                     // A j/k move must stay visible: with the rail closed the
                     // cursor's own line is its span.
@@ -537,6 +548,15 @@ pub fn viewAccountsWithLiveUpdates(
             follow_row_cursor = false;
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
+            // A second `Enter` only redeems once the hint it confirms is
+            // actually on screen: keys arrive in batches that are processed
+            // before the next frame, so a fast double tap must not skip it,
+            // and a hint clipped or never drawn must not arm it either.
+            armed_hint_rendered = if (armed_hint_line) |hint_line|
+                hint_line >= viewport.start_row and
+                    hint_line < viewport.start_row + (viewport.max_rows orelse rendered_row_count)
+            else
+                false;
 
             frame.clearRetainingCapacity();
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);

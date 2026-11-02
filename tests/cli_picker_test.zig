@@ -1878,6 +1878,25 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
     try std.testing.expect(std.mem.indexOf(u8, text, "✓") == null);
 }
 
+test "reset credits mergedCardLine reports the armed card's line inside the block" {
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "a", .title = "A", .expires_at = null, .epoch = now + 10 },
+        .{ .id = "b", .title = "B", .expires_at = null, .epoch = now + 20 },
+    };
+    const spent = [_]cli.reset_credits_panel.Selection.SpentCard{
+        .{ .title = "g1", .epoch = now + 5 },
+        .{ .title = "g2", .epoch = now + 10 },
+        .{ .title = "g3", .epoch = now + 30 },
+    };
+    // Merged order: RESETS(0) g1(1) g2(2) A(3) B(4) g3(5) — a ghost on a tied
+    // expiry still lands ahead of the card, matching the `<=` merge rule.
+    try std.testing.expectEqual(@as(usize, 3), cli.reset_credits_panel.mergedCardLine(&cards, &spent, 0));
+    try std.testing.expectEqual(@as(usize, 4), cli.reset_credits_panel.mergedCardLine(&cards, &spent, 1));
+    // No ghosts: the card sits directly under the heading.
+    try std.testing.expectEqual(@as(usize, 2), cli.reset_credits_panel.mergedCardLine(&cards, &.{}, 1));
+}
+
 test "reset credits panel keeps spent ghosts until the selection or refresh drops them" {
     const gpa = std.testing.allocator;
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 3, .valid = true };
