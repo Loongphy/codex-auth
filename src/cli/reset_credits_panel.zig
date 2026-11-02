@@ -212,11 +212,13 @@ pub const Selection = struct {
 
     /// Drops the card highlight and the armed confirmation but keeps the status
     /// line, so a background refresh cannot erase the report of a redeem that
-    /// already happened on this row.
+    /// already happened on this row. The probe note is row-index based, so a
+    /// refresh that may have re-sorted rows clears it too.
     pub fn clearCards(self: *Selection, allocator: std.mem.Allocator) void {
         self.card_cursor = 0;
         self.card_count = 0;
         self.valid = false;
+        self.note_row = null;
         self.clearArmed(allocator);
     }
 

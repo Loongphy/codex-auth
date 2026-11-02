@@ -5361,7 +5361,7 @@ test "Scenario: Given reset credits when running reset then it consumes the soon
 
     logRunResultIfFailed("reset", result);
     try expectSuccess(result);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit used") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit redeemed") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\u{00b7} 1 left (next exp ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }
@@ -5374,7 +5374,7 @@ test "Scenario: Given an already redeemed credit when running reset then it stil
 
     logRunResultIfFailed("reset already_redeemed", result);
     try expectExitCode(result, 0);
-    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit already used") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit already redeemed") != null);
     try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\u{00b7} 1 left (next exp ") != null);
     try std.testing.expectEqualStrings("", result.stderr);
 }

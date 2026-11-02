@@ -1720,23 +1720,23 @@ test "reset summary line matches the documented examples on both platforms" {
 
     const used = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", false);
     defer gpa.free(used);
-    try std.testing.expectEqualStrings("reset credit used \u{00b7} 1 left (next exp 01-01 08:00)", used);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 1 left (next exp 01-01 08:00)", used);
 
     const used_windows = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", true);
     defer gpa.free(used_windows);
-    try std.testing.expectEqualStrings("reset credit used, 1 left (next exp 01-01 08:00)", used_windows);
+    try std.testing.expectEqualStrings("reset credit redeemed, 1 left (next exp 01-01 08:00)", used_windows);
     for (used_windows) |byte| try std.testing.expect(byte < 0x80);
 
     const already = try cli.output.resetSummaryLineAlloc(gpa, true, 0, null, true);
     defer gpa.free(already);
-    try std.testing.expectEqualStrings("reset credit already used, none left", already);
+    try std.testing.expectEqualStrings("reset credit already redeemed, none left", already);
 
     const none_left = try cli.output.resetSummaryLineAlloc(gpa, false, 0, null, false);
     defer gpa.free(none_left);
-    try std.testing.expectEqualStrings("reset credit used \u{00b7} none left", none_left);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} none left", none_left);
 
     // A remaining card without an expiry says so instead of printing a blank.
     const undated = try cli.output.resetSummaryLineAlloc(gpa, false, 2, null, false);
     defer gpa.free(undated);
-    try std.testing.expectEqualStrings("reset credit used \u{00b7} 2 left (no expiry)", undated);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 2 left (no expiry)", undated);
 }

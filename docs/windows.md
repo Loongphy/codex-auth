@@ -92,11 +92,11 @@ refresh to see current resets`.
 Non-Windows:
 
 ```text
-reset credit used · 1 left (next exp 01-01 08:00)
+reset credit redeemed · 1 left (next exp 01-01 08:00)
 ```
 
 Windows:
 
 ```text
-reset credit used, 1 left (next exp 01-01 08:00)
+reset credit redeemed, 1 left (next exp 01-01 08:00)
 ```

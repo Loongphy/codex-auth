@@ -410,11 +410,11 @@ pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
     try out.flush();
 }
 
-/// The one-line summary `reset` prints after a consume: that a credit was used,
-/// how many are left, and when the next one expires. The redeemed card is not
-/// named; `list --json` and the stored snapshot keep that detail. The wording
-/// matches the live rail's status line. Takes the platform explicitly so tests
-/// and the dev preview can render both variants.
+/// The one-line summary `reset` prints after a consume: that a credit was
+/// redeemed, how many are left, and when the next one expires. The redeemed
+/// card is not named; `list --json` and the stored snapshot keep that detail.
+/// The wording matches the live rail's status line. Takes the platform
+/// explicitly so tests and the dev preview can render both variants.
 pub fn resetSummaryLineAlloc(
     allocator: std.mem.Allocator,
     already_used: bool,
@@ -425,7 +425,7 @@ pub fn resetSummaryLineAlloc(
     const separator = style.Glyphs.forPlatform(is_windows).separator;
     var line: std.Io.Writer.Allocating = .init(allocator);
     errdefer line.deinit();
-    try line.writer.writeAll(if (already_used) "reset credit already used" else "reset credit used");
+    try line.writer.writeAll(if (already_used) "reset credit already redeemed" else "reset credit redeemed");
     if (remaining == 0) {
         try line.writer.print("{s}none left", .{separator});
     } else {
