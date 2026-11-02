@@ -371,14 +371,15 @@ pub fn viewAccountsWithLiveUpdates(
             current_display = updated;
             needs_render = true;
             rows_cache.invalidate(allocator);
-            // Keep the status line: a refresh landing right after a redeem must
-            // not erase the report of an action that already happened. The
-            // status is bound to its account key, so a re-sort that slides the
-            // rail onto a different account row hides it instead of misreporting.
-            // The probe note is a bare row-index anchor with no such binding —
-            // drop it here, not in clearCards, which the per-frame
-            // clearSelection path also calls.
+            // A display update reloads the true card list, so everything
+            // anchored to the previous render is rebuilt: the armed
+            // confirmation, the outcome line, and the spent ghosts all go.
+            // A leftover "reset credit redeemed" under a fresh list would
+            // read as a new event instead of the stale report it is. The
+            // probe note is a bare row-index anchor and goes too.
             credit_selection.clearCards(allocator);
+            credit_selection.clearStatus(allocator);
+            credit_selection.clearSpentCards(allocator);
             credit_selection.note_row = null;
         }
 
@@ -458,7 +459,7 @@ pub fn viewAccountsWithLiveUpdates(
                         .confirm_pending = confirm_pending,
                         .status = credit_selection.statusFor(account.account_key),
                         .status_kind = credit_selection.status_kind,
-                        .spent = credit_selection.spent_card,
+                        .spent_cards = credit_selection.spent_cards.items,
                         .indent = list_index_width + 4,
                         .is_windows = is_windows,
                         .use_color = use_color,
@@ -759,7 +760,7 @@ pub fn viewAccountsWithLiveUpdates(
                                                 if (usage.reset_credit) |credits| {
                                                     for (credits) |credit| {
                                                         if (!std.mem.eql(u8, credit.id, current.credit_id)) continue;
-                                                        try credit_selection.setSpentCard(allocator, credit.title, timestamp.parseIso8601(credit.expires_at orelse ""));
+                                                        try credit_selection.addSpentCard(allocator, credit.title, timestamp.parseIso8601(credit.expires_at orelse ""));
                                                         break;
                                                     }
                                                 }

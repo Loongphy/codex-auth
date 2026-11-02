@@ -120,11 +120,13 @@ pub const Selection = struct {
     status: ?[]u8 = null,
     status_account: ?[]u8 = null,
     status_kind: StatusKind = .info,
-    /// A credit just redeemed this session, kept as a struck-through ghost
-    /// line inside the rail so the consume reads as an action on a card, not
-    /// a silent disappearance. Shares the status line's lifecycle: replaced
-    /// by the next report, cleared with it.
-    spent_card: ?SpentCard = null,
+    /// Credits redeemed this session, kept as struck-through ghost lines at
+    /// their sorted slots so each consume reads as an action on a card, not
+    /// a silent disappearance. They accumulate while the rail stays on its
+    /// account: a card move only re-anchors the highlight, so the ghosts of
+    /// earlier consumes keep their slots. Cleared with the selection and by
+    /// the refresh path, which reloads the true card list.
+    spent_cards: std.ArrayList(SpentCard) = .empty,
     /// Data-row index probed with `Enter` that has no available credits: a
     /// passive `no reset credits` note renders under it. Cleared when the row
     /// cursor moves so the note never floats under a different row.
@@ -133,6 +135,7 @@ pub const Selection = struct {
     pub fn deinit(self: *Selection, allocator: std.mem.Allocator) void {
         self.clearArmed(allocator);
         self.clearStatus(allocator);
+        self.clearSpentCards(allocator);
     }
 
     /// True only when `identity` is the exact credit the confirmation is armed
@@ -157,6 +160,7 @@ pub const Selection = struct {
         self.expanded = false;
         self.clearArmed(allocator);
         self.clearStatus(allocator);
+        self.clearSpentCards(allocator);
     }
 
     pub fn moveRow(self: *Selection, allocator: std.mem.Allocator, direction: Direction, row_count: usize) void {
@@ -237,10 +241,13 @@ pub const Selection = struct {
     }
 
     /// The cursor row has no consumable credit: keep the row cursor, drop the
-    /// card highlight, the armed confirmation, and any status line.
+    /// card highlight, the armed confirmation, any status line, and the
+    /// session's spent ghosts — they belong to the account this selection
+    /// was anchored to, not to whatever row the cursor lands on next.
     pub fn clearSelection(self: *Selection, allocator: std.mem.Allocator) void {
         self.clearCards(allocator);
         self.clearStatus(allocator);
+        self.clearSpentCards(allocator);
     }
 
     /// Two-step confirmation for the highlighted credit.
@@ -289,31 +296,31 @@ pub const Selection = struct {
         const key_copy = try allocator.dupe(u8, account_key);
         if (self.status) |old| allocator.free(old);
         if (self.status_account) |old| allocator.free(old);
-        self.freeSpentCard(allocator);
         self.status = copy;
         self.status_account = key_copy;
         self.status_kind = kind;
     }
 
-    /// Keeps the just-redeemed card's ghost line alongside the new status.
-    /// Must run after `setStatusFor`, which drops the previous ghost so an
-    /// older success cannot sit under a newer failure.
-    pub fn setSpentCard(
+    /// Appends the just-redeemed card's ghost line. Earlier ghosts stay:
+    /// each one still marks the card it was consumed from, so a following
+    /// consume must not erase the record of the previous one.
+    pub fn addSpentCard(
         self: *Selection,
         allocator: std.mem.Allocator,
         title: ?[]const u8,
         epoch: ?i64,
     ) !void {
         const title_copy: ?[]const u8 = if (title) |value| try allocator.dupe(u8, value) else null;
-        self.freeSpentCard(allocator);
-        self.spent_card = .{ .title = title_copy, .epoch = epoch };
+        errdefer if (title_copy) |value| allocator.free(value);
+        try self.spent_cards.append(allocator, .{ .title = title_copy, .epoch = epoch });
     }
 
-    fn freeSpentCard(self: *Selection, allocator: std.mem.Allocator) void {
-        if (self.spent_card) |card| {
+    pub fn clearSpentCards(self: *Selection, allocator: std.mem.Allocator) void {
+        for (self.spent_cards.items) |card| {
             if (card.title) |title| allocator.free(title);
-            self.spent_card = null;
         }
+        self.spent_cards.deinit(allocator);
+        self.spent_cards = .empty;
     }
 
     /// `setStatusFor` from a formatted message, freeing the temporary.
@@ -347,7 +354,6 @@ pub const Selection = struct {
             allocator.free(old);
             self.status_account = null;
         }
-        self.freeSpentCard(allocator);
     }
 
     fn clearArmed(self: *Selection, allocator: std.mem.Allocator) void {
@@ -423,9 +429,10 @@ pub const RenderOptions = struct {
     confirm_pending: bool = false,
     status: ?[]const u8 = null,
     status_kind: StatusKind = .info,
-    /// A just-redeemed card drawn struck-through where it sorted in the list,
-    /// so the consume reads as an action on it instead of a disappearance.
-    spent: ?Selection.SpentCard = null,
+    /// Just-redeemed cards drawn struck-through where their expiry sorted
+    /// them, so each consume reads as an action on a card instead of a
+    /// disappearance. Unsorted; render merges them by epoch like the cards.
+    spent_cards: []const Selection.SpentCard = &.{},
     indent: usize = 0,
     is_windows: bool = false,
     use_color: bool = false,
@@ -459,40 +466,39 @@ pub fn render(
     try writeRailLine(writer, opts.indent, header, budget, if (opts.use_color) style.role.heading else "");
     lines += 1;
 
-    // The spent ghost keeps the slot its expiry sorted into, so the line the
-    // user confirmed still sits where it was while the cursor has moved on.
-    const spent_at: usize = if (opts.spent) |spent| blk: {
-        const spent_epoch = spent.epoch orelse std.math.maxInt(i64);
-        var at = cards.len;
-        for (cards, 0..) |card, i| {
-            const card_epoch = card.epoch orelse std.math.maxInt(i64);
-            if (card_epoch >= spent_epoch) {
-                at = i;
-                break;
-            }
-        }
-        break :blk at;
-    } else cards.len;
+    // Spent ghosts keep the slots their expiry sorted into, so the lines the
+    // user confirmed still sit where they were while the cursor has moved on.
+    // Cards arrive sorted; ghosts merge by epoch through a sorted index list
+    // so the caller's slice stays untouched.
+    const spent_order = try allocator.alloc(usize, opts.spent_cards.len);
+    defer allocator.free(spent_order);
+    for (spent_order, 0..) |*slot, i| slot.* = i;
+    std.mem.sort(usize, spent_order, opts.spent_cards, spentIndexLessThan);
 
+    var spent_index: usize = 0;
     var card_index: usize = 0;
-    for (0..cards.len + @intFromBool(opts.spent != null)) |row| {
-        if (opts.spent) |spent| {
-            if (row == spent_at) {
-                var line: std.Io.Writer.Allocating = .init(allocator);
-                defer line.deinit();
-                try line.writer.writeAll("  ");
-                try line.writer.writeAll(spent.title orelse "untitled");
-                if (spent.epoch) |epoch| {
-                    const compact = try rows.formatCompactTimestampAlloc(allocator, epoch);
-                    defer allocator.free(compact);
-                    const rel = try relativeIn(allocator, epoch, opts.now);
-                    defer allocator.free(rel);
-                    try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
-                }
-                try writeRailLine(writer, opts.indent, line.written(), budget, if (opts.use_color) style.role.spent else "");
-                lines += 1;
-                continue;
+    const total_rows = cards.len + spent_order.len;
+    for (0..total_rows) |_| {
+        const card_epoch: ?i64 = if (card_index < cards.len) cards[card_index].epoch else null;
+        const next_card_epoch = card_epoch orelse std.math.maxInt(i64);
+        const next_spent_epoch = if (spent_index < spent_order.len) opts.spent_cards[spent_order[spent_index]].epoch orelse std.math.maxInt(i64) else std.math.maxInt(i64);
+        if (spent_index < spent_order.len and next_spent_epoch <= next_card_epoch) {
+            const spent = opts.spent_cards[spent_order[spent_index]];
+            spent_index += 1;
+            var line: std.Io.Writer.Allocating = .init(allocator);
+            defer line.deinit();
+            try line.writer.writeAll("  ");
+            try line.writer.writeAll(spent.title orelse "untitled");
+            if (spent.epoch) |epoch| {
+                const compact = try rows.formatCompactTimestampAlloc(allocator, epoch);
+                defer allocator.free(compact);
+                const rel = try relativeIn(allocator, epoch, opts.now);
+                defer allocator.free(rel);
+                try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
             }
+            try writeRailLine(writer, opts.indent, line.written(), budget, if (opts.use_color) style.role.spent else "");
+            lines += 1;
+            continue;
         }
         const card = cards[card_index];
         const index = card_index;
@@ -642,6 +648,12 @@ pub fn spliceAfterBodyLine(allocator: std.mem.Allocator, body: []const u8, data_
 fn cardLessThan(_: void, a: AvailableCard, b: AvailableCard) bool {
     const a_epoch = a.epoch orelse std.math.maxInt(i64);
     const b_epoch = b.epoch orelse std.math.maxInt(i64);
+    return a_epoch < b_epoch;
+}
+
+fn spentIndexLessThan(spent_cards: []const Selection.SpentCard, a: usize, b: usize) bool {
+    const a_epoch = spent_cards[a].epoch orelse std.math.maxInt(i64);
+    const b_epoch = spent_cards[b].epoch orelse std.math.maxInt(i64);
     return a_epoch < b_epoch;
 }
 
