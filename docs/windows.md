@@ -63,24 +63,24 @@ Launching Codex App...
 The `list --live` reset credits rail is borderless on every platform. It nests
 under its account row by indentation, uses an uppercase heading, and relies on
 the footer for the key hints. The same state on both platforms, with the rail
-indented four columns under its account row:
+indented four columns under its account row — the consumed card stays as a
+struck-through, dimmed line tagged `redeemed`, which is drawn in success green
+outside the strike:
 
 Non-Windows:
 
 ```text
-    RESETS · 2 available
-    > Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d · Enter again to redeem
-      untitled
-    ✓ reset credit redeemed
+    RESETS · 1 available
+    Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d redeemed
+    > untitled
 ```
 
 Windows:
 
 ```text
-    RESETS, 2 available
-    > Full reset (Weekly + 5 hr), 11-01 08:00, in 9d, Enter again to redeem
-      untitled
-    OK reset credit redeemed
+    RESETS, 1 available
+    Full reset (Weekly + 5 hr), 11-01 08:00, in 9d redeemed
+    > untitled
 ```
 
 A failure line carries no marker on Windows, because its sentence already says

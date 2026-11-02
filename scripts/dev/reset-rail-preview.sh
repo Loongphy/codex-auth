@@ -105,6 +105,14 @@ test "reset credits rail preview" {
         .{ .id = "soon", .title = "Full reset (Weekly + 5 hr)", .expires_at = "2026-11-01T00:00:00Z", .epoch = soon },
         .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
     };
+    const remaining = [_]Card{
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    // What the rail looks like right after "soon" was consumed: the spent
+    // ghost keeps its sorted slot tagged `redeemed`, no status line.
+    const spent = [_]cli.reset_credits_panel.Selection.SpentCard{
+        .{ .title = "Full reset (Weekly + 5 hr)", .epoch = soon },
+    };
     const no_cards = [_]Card{};
     const row = "*1   work-main@example…              Business  100%          58% (14:20)";
 
@@ -124,19 +132,18 @@ test "reset credits rail preview" {
             .indent = 6,
             .is_windows = is_windows,
         });
-        try show(gpa, "after a successful redeem, " ++ platform, row, &cards, .{
+        try show(gpa, "after a successful redeem, " ++ platform, row, &remaining, .{
             .max_cols = 100,
             .now = preview_now,
-            .card_cursor = 1,
-            .status = "reset credit used",
-            .status_kind = .ok,
+            .card_cursor = 0,
+            .spent_cards = &spent,
             .indent = 6,
             .is_windows = is_windows,
         });
         try show(gpa, "after a failed redeem, " ++ platform, row, &cards, .{
             .max_cols = 100,
             .now = preview_now,
-            .status = "use failed (HTTP 500)",
+            .status = "redeem failed (HTTP 500)",
             .status_kind = .fail,
             .indent = 6,
             .is_windows = is_windows,
@@ -164,11 +171,10 @@ test "reset credits rail preview" {
             .indent = 6,
             .is_windows = is_windows,
         });
-        try show(gpa, "color roles (needs a color terminal), " ++ platform, row, &cards, .{
+        try show(gpa, "color roles (needs a color terminal), " ++ platform, row, &remaining, .{
             .max_cols = 100,
             .now = preview_now,
-            .status = "reset credit used",
-            .status_kind = .ok,
+            .spent_cards = &spent,
             .indent = 6,
             .is_windows = is_windows,
             .use_color = true,

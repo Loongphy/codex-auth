@@ -74,20 +74,22 @@ The reset credits rail is borderless on every platform:
 
 | UI element | Color |
 | --- | --- |
-| `RESET CREDITS` heading | bold `cyan` |
+| `RESETS` heading | bold `cyan` |
 | Selected credit | `green` |
 | Other credit rows | Default terminal foreground |
-| Success status line | `green` |
+| Spent (just-redeemed) card line | `dim` + strikethrough |
+| `redeemed` tag on a spent line | `green` |
 | Failure status line | `red` |
 | Informational status line | `cyan` |
 | Rail key legend | `dim` |
 
 The rail draws inside the live list body, so its status line follows the shared
-success and error roles instead of introducing its own palette. `Enter` and the
-`>` cursor mark are spelled the same on every platform, matching the footers and
-the switch and remove tables. On Windows the rail keeps the same borderless
-layout, spells the separator as a comma, marks success with `OK` and leaves
-failures unmarked; see `docs/windows.md`.
+error role instead of introducing its own palette; a successful redeem needs no
+status line at all because the struck card tagged `redeemed` is the report.
+`Enter` and the `>` cursor mark are spelled the same on every platform, matching
+the footers and the switch and remove tables. On Windows the rail keeps the
+same borderless layout, spells the separator as a comma, and leaves failures
+unmarked; see `docs/windows.md`.
 
 # Avoid
 

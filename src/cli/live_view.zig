@@ -413,6 +413,15 @@ pub fn viewAccountsWithLiveUpdates(
                 account_count,
                 credit_selection.row_cursor,
             ) orelse credit_selection.row_cursor;
+            // The rail and the probe note hang under the cursor row's label:
+            // a grouped member indents two columns deeper, matching the
+            // account cell, so the block still reads as belonging to that
+            // account rather than to the group header above it.
+            const cursor_row_depth: u8 = if (render.liveRowIndexForDataIndex(rows.items, account_count, credit_selection.row_cursor)) |row_idx|
+                rows.items[row_idx].depth
+            else
+                0;
+            const rail_indent = list_index_width + 4 + @as(usize, cursor_row_depth) * 2;
             if (credit_selection.expanded and data_rows == 0) {
                 // Without a row to attach to the rail draws nothing, yet staying
                 // expanded would keep swallowing `esc` and `q`.
@@ -460,7 +469,7 @@ pub fn viewAccountsWithLiveUpdates(
                         .status = credit_selection.statusFor(account.account_key),
                         .status_kind = credit_selection.status_kind,
                         .spent_cards = credit_selection.spent_cards.items,
-                        .indent = list_index_width + 4,
+                        .indent = rail_indent,
                         .is_windows = is_windows,
                         .use_color = use_color,
                     },
@@ -491,7 +500,7 @@ pub fn viewAccountsWithLiveUpdates(
                     credits_panel.clearRetainingCapacity();
                     panel_lines = try reset_credits_panel.renderEmptyNote(
                         &credits_panel.writer,
-                        list_index_width + 4,
+                        rail_indent,
                         tui.terminalCols(),
                         use_color,
                     );
