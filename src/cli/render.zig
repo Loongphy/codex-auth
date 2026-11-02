@@ -559,6 +559,7 @@ pub fn renderListBody(
             .rate_5h = row.rate_5h,
             .rate_week = row.rate_week,
             .last = row.last,
+            .depth = row.depth,
         }, column_widths, row_style);
     }
 }

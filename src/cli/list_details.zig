@@ -125,7 +125,13 @@ pub fn write(
         if (widths[index] == 0) continue;
         if (wrote_any) try writer.out.writeAll("  ");
         wrote_any = true;
-        const written = try table_layout.writeCellFor(id, writer.out, values[index], widths[index]);
+        // Group members indent inside the account column — the same depth*2
+        // the pickers and the plain table give them; the column width already
+        // reserves it (rows.zig counts depth*2 into widths.email), so every
+        // later column keeps its alignment and only the label text shrinks.
+        const indent: usize = if (id == .account) @min(@as(usize, row.depth) * 2, widths[index]) else 0;
+        try writer.out.splatByteAll(' ', indent);
+        const written = indent + try table_layout.writeCellFor(id, writer.out, values[index], widths[index] - indent);
         if (index != last_visible) try writer.out.splatByteAll(' ', widths[index] - written);
     }
     try writer.reset();

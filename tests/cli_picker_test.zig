@@ -2507,6 +2507,41 @@ test "live list maps the credits rail cursor to the rendered account row" {
     try std.testing.expect(cli.render.liveRowIndexForDataIndex(rows.items, account_count, 3) == null);
 }
 
+test "live list indents grouped account labels inside the account column" {
+    const gpa = std.testing.allocator;
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acct-a", "shared@example.com", "team-a", .pro);
+    try appendTestAccount(gpa, &reg, "user-1::acct-b", "shared@example.com", "team-b", .plus);
+    try appendTestAccount(gpa, &reg, "user-2::acct-c", "other@example.com", "solo", .pro);
+
+    var rows = try buildSwitchRows(gpa, &reg);
+    defer rows.deinit(gpa);
+    var body: std.Io.Writer.Allocating = .init(gpa);
+    defer body.deinit();
+    var writer = StyledWriter.init(&body.writer, false);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null, false);
+
+    const lineCol = struct {
+        fn of(text: []const u8, needle: []const u8) usize {
+            const at = std.mem.indexOf(u8, text, needle).?;
+            const line_start = (std.mem.lastIndexOfScalar(u8, text[0..at], '\n') orelse 0) + @intFromBool(at != 0);
+            return at - line_start;
+        }
+    }.of;
+
+    const text = body.written();
+    const solo_col = lineCol(text, "solo");
+    // Members sit two columns right of the column edge; the group header
+    // stays flush with singleton labels.
+    try std.testing.expectEqual(solo_col + 2, lineCol(text, "team-a"));
+    try std.testing.expectEqual(solo_col + 2, lineCol(text, "team-b"));
+    try std.testing.expectEqual(solo_col, lineCol(text, "shared@example.com"));
+    // The indent lives inside ACCOUNT: the next column keeps its x position
+    // on every row ("Pro" is the singleton's plan, "Plus" the member's).
+    try std.testing.expectEqual(lineCol(text, "Pro"), lineCol(text, "Plus"));
+}
+
 test "live list renders the bare count when available reset credits have no expiry" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
