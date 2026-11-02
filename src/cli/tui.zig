@@ -821,6 +821,18 @@ fn isEnhancedArrowSuffix(seq: []const u8) bool {
     return has_separator;
 }
 
+/// Event type carried in a kitty `key;mods:event` parameter tail: 1 press,
+/// 2 repeat, 3 release. Legacy sequences carry none and count as a press.
+/// The same check the CSI-u decoder applies, for the CSI-letter forms.
+fn csiKeyEventType(params: []const u8) usize {
+    const last_field = if (std.mem.lastIndexOfScalar(u8, params, ';')) |semi|
+        params[semi + 1 ..]
+    else
+        params;
+    const colon = std.mem.indexOfScalar(u8, last_field, ':') orelse return 1;
+    return std.fmt.parseInt(usize, last_field[colon + 1 ..], 10) catch 1;
+}
+
 /// Decodes a `CSI <key>;<modifiers>:<event-type> u` key event (the kitty
 /// keyboard protocol the `\x1b[>7u` push enables). Disambiguate moves Escape,
 /// Enter and Backspace off their legacy bytes — Esc arrives as `27u`, and
@@ -885,25 +897,36 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                 };
             }
             if (final == 'A' or final == 'B') {
+                const params = seq[1 .. seq.len - 1];
                 if (isEnhancedArrowSuffix(seq)) {
+                    // Kitty reports a key release as `1;mods:3 A/B`; without
+                    // this filter a single press moves twice.
+                    if (csiKeyEventType(params) == 3) break :blk .ignore;
                     break :blk .{ .navigation = if (final == 'A') .keyboard_up else .keyboard_down };
                 }
-                for (seq[1 .. seq.len - 1]) |ch| {
+                for (params) |ch| {
                     if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
                 }
                 break :blk .{ .navigation = if (final == 'A') .up else .down };
             }
             if (final == 'H' or final == 'F') {
-                for (seq[1 .. seq.len - 1]) |ch| {
-                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                const params = seq[1 .. seq.len - 1];
+                for (params) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';' and ch != ':') break :blk .ignore;
                 }
+                if (csiKeyEventType(params) == 3) break :blk .ignore;
                 break :blk .{ .navigation = if (final == 'H') .home else .end };
             }
             if (final == '~') {
-                for (seq[1 .. seq.len - 1]) |ch| {
-                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                const params = seq[1 .. seq.len - 1];
+                for (params) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';' and ch != ':') break :blk .ignore;
                 }
-                const code = std.fmt.parseInt(usize, seq[1 .. seq.len - 1], 10) catch break :blk .ignore;
+                if (csiKeyEventType(params) == 3) break :blk .ignore;
+                // The key number is the first field; modifiers and the event
+                // type live in later fields the TUI does not bind.
+                const key_end = std.mem.indexOfScalar(u8, params, ';') orelse params.len;
+                const code = std.fmt.parseInt(usize, params[0..key_end], 10) catch break :blk .ignore;
                 break :blk switch (code) {
                     1, 7 => .{ .navigation = .home },
                     4, 8 => .{ .navigation = .end },

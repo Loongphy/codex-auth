@@ -83,6 +83,39 @@ test "Scenario: Given kitty CSI-u key events when classifying them then disambig
     try std.testing.expectEqual(TuiEscapeAction.enter, enter_result.action);
 }
 
+test "Scenario: Given kitty letter-form key events when classifying them then releases are ignored" {
+    // Kitty reports a release as `key;mods:3` in the CSI-letter forms — the
+    // same event type the CSI-u decoder filters. One physical press+release
+    // must produce exactly one navigation, not two.
+    for ([_][]const u8{ "[1;1:3B", "[1;1:3A", "[1;1:3H", "[1;1:3F", "[5;1:3~", "[6;1:3~" }) |seq| {
+        try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix(seq));
+    }
+
+    // Press (1) and repeat (2) still fire — a held key must keep moving.
+    for ([_][]const u8{ "[1;1:1B", "[1;1:2B" }) |seq| {
+        switch (classifyTuiEscapeSuffix(seq)) {
+            .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_down, direction),
+            else => return error.TestUnexpectedResult,
+        }
+    }
+
+    // Event-typed or modified home/end/page keys reach the parser instead of
+    // being dropped by the old digits-only scan; modifiers stay unbound.
+    const nav_cases = .{
+        .{ "[1;1:1H", TuiNavigation.home },
+        .{ "[1;5F", TuiNavigation.end },
+        .{ "[5;1:1~", TuiNavigation.page_up },
+        .{ "[6;3~", TuiNavigation.page_down },
+        .{ "[6~", TuiNavigation.page_down },
+    };
+    inline for (nav_cases) |case| {
+        switch (classifyTuiEscapeSuffix(case[0])) {
+            .navigation => |direction| try std.testing.expectEqual(case[1], direction),
+            else => return error.TestUnexpectedResult,
+        }
+    }
+}
+
 test "Scenario: Given a bare Esc followed by a non-sequence byte when reading input then the Esc quits and the byte replays" {
     const gpa = std.testing.allocator;
     _ = gpa;
