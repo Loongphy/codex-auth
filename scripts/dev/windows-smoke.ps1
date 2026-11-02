@@ -69,6 +69,10 @@ if ($Scenario -eq "ok") {
     $log = Join-Path $FixtureDir "requests.log"
     Check "consume POST logged" ((Test-Path $log) -and ((Get-Content $log -Raw) -match "consume") -and ((Get-Content $log -Raw) -match "credit_id")) ""
     if (Test-Path $log) { Check "no credential in request log" ((Get-Content $log -Raw) -notmatch "Bearer|access-") "" }
+} elseif ($Scenario -eq "already_redeemed") {
+    # already_redeemed is a success path too: the CLI exits 0 with its own line.
+    $r = Invoke-Native @("reset", "ok")
+    Check "reset reports already redeemed" (($r.Code -eq 0) -and ($r.Out -match "reset credit already redeemed")) "exit $($r.Code)"
 } else {
     $r = Invoke-Native @("reset", "ok")
     Check "reset reports scenario $Scenario" ($r.Code -ne 0) "exit $($r.Code); stdout: $($r.Out.Trim())"
