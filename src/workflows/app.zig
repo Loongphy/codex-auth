@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const app_runtime = @import("../core/runtime.zig");
 const http_child = @import("../api/http_child.zig");
+const http_proxy = @import("../api/http_proxy.zig");
+const http_types = @import("../api/http_types.zig");
 const registry = @import("../registry/root.zig");
 const types = @import("../cli/types.zig");
 const io_util = @import("../core/io_util.zig");
@@ -962,7 +964,7 @@ const CodextRelease = struct {
 };
 
 fn fetchLatestCodextRelease(allocator: std.mem.Allocator) !CodextRelease {
-    var result = try http_child.runChildCapture(allocator, &[_][]const u8{ curlExecutable(), "-L", "--fail", "--silent", codext_repo_latest_url }, 15000, null);
+    var result = try runCurlRequest(allocator, codext_repo_latest_url, &.{ "-L", "--fail", "--silent" }, 15000);
     defer result.deinit(allocator);
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, result.stdout, .{});
     defer parsed.deinit();
@@ -1035,7 +1037,14 @@ fn downloadAndInstallCodextAsset(
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
     const archive_path = try std.fs.path.join(allocator, &.{ extract_dir, archive_name });
     defer allocator.free(archive_path);
-    try runChecked(allocator, &[_][]const u8{ curlExecutable(), "-L", "--fail", "--silent", "--show-error", "-o", archive_path, asset.url }, 120000);
+    var download = try runCurlRequest(
+        allocator,
+        asset.url,
+        &.{ "-L", "--fail", "--silent", "--show-error", "-o", archive_path },
+        120000,
+    );
+    defer download.deinit(allocator);
+    try checkedChildResult(download);
     if (platform == .win) {
         const archive_quoted = try psSingleQuoteAlloc(allocator, archive_path);
         defer allocator.free(archive_quoted);
@@ -1068,12 +1077,42 @@ fn writeManagedCodextVersion(
 fn runChecked(allocator: std.mem.Allocator, argv: []const []const u8, timeout_ms: u64) !void {
     var result = try http_child.runChildCapture(allocator, argv, timeout_ms, null);
     defer result.deinit(allocator);
+    try checkedChildResult(result);
+}
+
+fn checkedChildResult(result: http_types.ChildCaptureResult) !void {
     if (result.timed_out) return error.ChildProcessTimedOut;
     switch (result.term) {
         .exited => |code| if (code == 0) return,
         else => {},
     }
     return error.ChildProcessFailed;
+}
+
+/// Run `curl` for a release lookup or download, translating the platform proxy
+/// settings into curl options exactly like the API request path does. Without
+/// this, `codex-auth app` stalls on a machine whose browser traffic is proxied.
+fn runCurlRequest(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    option_args: []const []const u8,
+    timeout_ms: u64,
+) !http_types.ChildCaptureResult {
+    var resolved_proxy = try http_proxy.resolve(allocator, endpoint);
+    defer if (resolved_proxy) |*value| value.deinit(allocator);
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+
+    try argv.append(allocator, curlExecutable());
+    try argv.appendSlice(allocator, option_args);
+    if (resolved_proxy) |value| {
+        try argv.appendSlice(allocator, &.{ "--proxy", value.url });
+        if (value.noproxy) |noproxy| try argv.appendSlice(allocator, &.{ "--noproxy", noproxy });
+    }
+    try argv.append(allocator, endpoint);
+
+    return try http_child.runChildCapture(allocator, argv.items, timeout_ms, null);
 }
 
 fn codextPlatformCacheName(platform: types.AppPlatform) []const u8 {
