@@ -3,11 +3,15 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Stripped binaries start faster cold: non-loadable DWARF sections still
+    // get pulled in by kernel readahead around demand-paged .text pages.
+    const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .Debug);
     const package_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
 
     const main_module = b.createModule(.{
@@ -15,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
     const exe = b.addExecutable(.{
         .name = "codex-auth",
