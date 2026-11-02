@@ -1521,7 +1521,7 @@ test "Scenario: Given Windows console labels when rendering unicode-prone output
         listTuiFooterText(true),
     );
     try std.testing.expectEqualStrings(
-        "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n",
+        "Keys: Up/Down or j/k credit, Enter redeem, Esc/q back\n",
         listCreditsTuiFooterText(true),
     );
 }
@@ -1540,7 +1540,7 @@ test "Scenario: Given non-Windows console labels when rendering unicode-prone ou
         listTuiFooterText(false),
     );
     try std.testing.expectEqualStrings(
-        "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n",
+        "Keys: ↑/↓ or j/k credit, Enter redeem, Esc/q back\n",
         listCreditsTuiFooterText(false),
     );
 }
@@ -1658,7 +1658,7 @@ test "live list details show reset credits cell and scroll within the viewport" 
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     for ([_][]const u8{ "ACCOUNT", "PLAN", "test@e", "TOKEN EXPIRE", "RESETS", "1 (exp 10-01)" }) |expected| {
         try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
     }
@@ -1678,14 +1678,14 @@ test "live list details show reset credits cell and scroll within the viewport" 
     try std.testing.expect(std.mem.count(u8, frame.written(), "\n") <= 7);
 
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, 40, null, false);
     var lines = std.mem.splitScalar(u8, body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 40);
 
     var color_body: std.Io.Writer.Allocating = .init(gpa);
     defer color_body.deinit();
     var colored_writer = StyledWriter.init(&color_body.writer, true);
-    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120, null, false);
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
     try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.bold) != null);
 }
@@ -1713,7 +1713,7 @@ test "live list derives the reset credits count from available cards when the su
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
@@ -1733,7 +1733,7 @@ test "Scenario: Given a live list cursor when rendering the body then the cursor
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var colored = StyledWriter.init(&body.writer, true);
-    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 0);
+    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 0, false);
 
     // Cursor row: the ">" glyph wears the same green as the active row — the
     // glyph, not the color, says which row Enter acts on (the pickers' rule).
@@ -1742,7 +1742,7 @@ test "Scenario: Given a live list cursor when rendering the body then the cursor
 
     // Cursor on the active row: ">" wins the marker, the green survives.
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 1);
+    try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 1, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ ">  2") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "*  2") == null);
 }
@@ -1784,7 +1784,7 @@ test "reset credits panel renders the remaining rail and compact rows" {
         .now = now,
         .card_cursor = 0,
         .confirm_pending = true,
-        .status = "used",
+        .status = "reset credit redeemed",
         .status_kind = .ok,
         .indent = 6,
     });
@@ -1793,9 +1793,9 @@ test "reset credits panel renders the remaining rail and compact rows" {
     const text = out.written();
     try std.testing.expect(std.mem.indexOf(u8, text, "      RESETS · 2 available") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr) · ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · Enter again to use") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled · -") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "      ✓ used") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · Enter again to redeem") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "      ✓ reset credit redeemed") != null);
     try std.testing.expect(!std.mem.endsWith(u8, text, "└\n"));
 }
 
@@ -1812,7 +1812,7 @@ test "reset credits panel uses heading and selected color roles" {
         .max_cols = 100,
         .now = now,
         .card_cursor = 0,
-        .status = "reset credit used",
+        .status = "reset credit redeemed",
         .status_kind = .ok,
         .indent = 4,
         .use_color = true,
@@ -1821,9 +1821,9 @@ test "reset credits panel uses heading and selected color roles" {
     // Borderless design D: the heading carries weight/color, the selected
     // credit is green, and the other credit stays at the default foreground.
     try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[1m\x1b[36mRESETS · 2 available\x1b[0m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m> Full reset · -\x1b[0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m> Full reset\x1b[0m") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m  Later card") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m✓ reset credit used\x1b[0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m✓ reset credit redeemed\x1b[0m") != null);
 }
 
 test "reset credits panel stays ASCII on Windows" {
@@ -1842,7 +1842,7 @@ test "reset credits panel stays ASCII on Windows" {
         .now = now,
         .card_cursor = 0,
         .confirm_pending = true,
-        .status = "reset credit used",
+        .status = "reset credit redeemed",
         .status_kind = .ok,
         .indent = 6,
         .is_windows = true,
@@ -1851,9 +1851,9 @@ test "reset credits panel stays ASCII on Windows" {
     const text = out.written();
     try std.testing.expect(std.mem.indexOf(u8, text, "      RESETS, 2 available") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr), ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, ", in 9d, Enter again to use") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled, -") != null);
-    try std.testing.expect(std.mem.endsWith(u8, text, "      OK reset credit used\n"));
+    try std.testing.expect(std.mem.indexOf(u8, text, ", in 9d, Enter again to redeem") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled") != null);
+    try std.testing.expect(std.mem.endsWith(u8, text, "      OK reset credit redeemed\n"));
     // docs/windows.md: no box-drawing, bullets, arrows or marks in the output.
     for (text) |byte| try std.testing.expect(byte < 0x80);
 }
@@ -1871,7 +1871,7 @@ test "reset credits panel keeps every line inside a narrow width budget" {
         _ = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
             .max_cols = max_cols,
             .now = 1_800_000_000,
-            .status = "reset credit used",
+            .status = "reset credit redeemed",
             .status_kind = .ok,
             .is_windows = true,
         });
@@ -2218,13 +2218,13 @@ test "reset credits panel reports the last redeem without an empty-list placehol
     const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &.{}, .{
         .max_cols = 100,
         .now = 1_800_000_000,
-        .status = "reset credit used",
+        .status = "reset credit redeemed",
         .status_kind = .ok,
         .indent = 4,
     });
     try std.testing.expectEqual(@as(usize, 2), lines);
     try std.testing.expectEqualStrings(
-        "    RESETS · 0 available\n    ✓ reset credit used\n",
+        "    RESETS · 0 available\n    ✓ reset credit redeemed\n",
         out.written(),
     );
     try std.testing.expect(std.mem.indexOf(u8, out.written(), "no available reset credits") == null);
@@ -2248,7 +2248,7 @@ test "reset credits panel close drops the pending confirm and the status line" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit used", .ok);
+    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.close(gpa);
     try std.testing.expect(!sel.expanded);
@@ -2266,10 +2266,10 @@ test "reset credits panel clears the status line when the account row moves" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit used", .ok);
+    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
     sel.moveRow(gpa, .down, 5);
     try std.testing.expect(sel.status == null);
-    try sel.setStatus(gpa, "✗ use failed (HTTP 500)", .fail);
+    try sel.setStatus(gpa, "✗ redeem failed (HTTP 500)", .fail);
     sel.clearSelection(gpa);
     try std.testing.expect(sel.status == null);
 }
@@ -2281,13 +2281,13 @@ test "reset credits panel keeps the redeem report across a card list refresh" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit used", .ok);
+    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     // A background refresh landing right after a redeem replaces the card list
     // under the cursor: it must disarm the confirmation but keep the report of
     // the action that already happened.
     sel.clearCards(gpa);
-    try std.testing.expectEqualStrings("✓ reset credit used", sel.status orelse "");
+    try std.testing.expectEqualStrings("✓ reset credit redeemed", sel.status orelse "");
     try std.testing.expectEqual(cli.reset_credits_panel.StatusKind.ok, sel.status_kind);
     try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expect(!sel.valid);
@@ -2324,7 +2324,7 @@ test "live list maps the credits rail cursor to the rendered account row" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null, false);
 
     const account_count = reg.accounts.items.len;
     var header_rows: usize = 0;
@@ -2409,7 +2409,7 @@ test "live list renders the bare count when available reset credits have no expi
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "(-)") == null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "(exp") == null);
 }
@@ -2430,13 +2430,13 @@ test "live list shows plan expiry only when it is still in the future" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXP") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
 
     reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXP") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
 }
@@ -2453,7 +2453,7 @@ test "live list keeps the active marker visible for double-digit accounts" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
 
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "* 10") != null);
 }
@@ -2468,7 +2468,7 @@ test "live list distinguishes unavailable reset details from an empty server lis
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
     reg.accounts.items[0].last_usage = .{
@@ -2481,7 +2481,7 @@ test "live list distinguishes unavailable reset details from an empty server lis
         ),
     };
     body.clearRetainingCapacity();
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
 }
@@ -2508,7 +2508,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
         var body: std.Io.Writer.Allocating = .init(gpa);
         defer body.deinit();
         var writer = StyledWriter.init(&body.writer, false);
-        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width, null);
+        try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, width, null, false);
 
         var lines = std.mem.splitScalar(u8, body.written(), '\n');
         const header = lines.next() orelse "";
@@ -2524,7 +2524,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var narrow_body: std.Io.Writer.Allocating = .init(gpa);
     defer narrow_body.deinit();
     var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
-    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 60, null);
+    try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 60, null, false);
     try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXP") == null);
     var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 60);
@@ -2532,7 +2532,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var wide_body: std.Io.Writer.Allocating = .init(gpa);
     defer wide_body.deinit();
     var wide_writer = StyledWriter.init(&wide_body.writer, false);
-    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200, null);
+    try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200, null, false);
     const body = wide_body.written();
     try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXP") != null);
     var last_index: usize = 0;
@@ -2565,7 +2565,7 @@ test "live list renders zero reset credits without an expiry marker" {
     var body: std.Io.Writer.Allocating = .init(gpa);
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
-    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null);
+    try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null, false);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
     try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
 }

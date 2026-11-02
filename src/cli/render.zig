@@ -486,6 +486,9 @@ pub fn liveLineIndexForDataIndex(
 /// `cursor` is an optional data-row index on the `liveDataRowCount` basis
 /// (0-based, group header lines excluded); the matching row draws `>` instead
 /// of the `*`/space marker, so the row `Enter` acts on is always visible.
+/// `cursor_anchored` keeps that row's green but yields the `>` glyph to a
+/// nested cursor: while the reset-credit rail is open the card highlight owns
+/// `>`, so two cursor glyphs never compete on screen.
 /// A group header draws one unnumbered dim line ahead of its first rendered
 /// child so grouped rows keep their shared email in view.
 pub fn renderListBody(
@@ -497,6 +500,7 @@ pub fn renderListBody(
     widths: SwitchWidths,
     max_cols: ?usize,
     cursor: ?usize,
+    cursor_anchored: bool,
 ) !void {
     const details = @import("list_details.zig");
 
@@ -520,7 +524,9 @@ pub fn renderListBody(
         displayed_counter += 1;
         const account = reg.accounts.items[idx];
         var number_buf: [32]u8 = undefined;
-        const marker: u8 = if (is_cursor) '>' else if (row.is_active) '*' else ' ';
+        const marker: u8 = if (is_cursor)
+            (if (cursor_anchored) ' ' else '>')
+        else if (row.is_active) '*' else ' ';
         var number_len: usize = 0;
         number_buf[number_len] = marker;
         number_len += 1;

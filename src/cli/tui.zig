@@ -367,13 +367,13 @@ pub fn listTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
 
 fn listCreditsFooterLadder(is_windows: bool) FooterLadder {
     return if (is_windows) .{
-        .full = "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n",
-        .mid = "Up/Down - Enter use - Esc back\n",
-        .compact = "Enter use - Esc\n",
+        .full = "Keys: Up/Down or j/k credit, Enter redeem, Esc/q back\n",
+        .mid = "Up/Down - Enter redeem - Esc back\n",
+        .compact = "Enter redeem - Esc\n",
     } else .{
-        .full = "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n",
-        .mid = "↑/↓ · Enter use · Esc back\n",
-        .compact = "Enter use · Esc\n",
+        .full = "Keys: ↑/↓ or j/k credit, Enter redeem, Esc/q back\n",
+        .mid = "↑/↓ · Enter redeem · Esc back\n",
+        .compact = "Enter redeem · Esc\n",
     };
 }
 

@@ -388,7 +388,7 @@ pub fn viewAccountsWithLiveUpdates(
             const list_index_width = indexWidth(rows.selectable_row_indices.len);
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
-            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols(), credit_selection.row_cursor);
+            try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols(), credit_selection.row_cursor, credit_selection.expanded);
             var body_text: []const u8 = body.written();
             var spliced_panel: ?[]u8 = null;
             defer if (spliced_panel) |panel_buf| allocator.free(panel_buf);
@@ -474,6 +474,30 @@ pub fn viewAccountsWithLiveUpdates(
                 credit_selection.clearSelection(allocator);
                 armed_hint_rendered = false;
                 rendered_identity.clear(allocator);
+                // An `Enter` probe on a credit-less row gets a passive note in
+                // the rail's spot instead of silence. It is not a mode: the
+                // footer and every key keep their account-list meanings, and
+                // moving the row cursor drops the note.
+                if (!credit_selection.expanded and credit_selection.note_row != null and
+                    credit_selection.note_row.? == credit_selection.row_cursor)
+                {
+                    credits_panel.clearRetainingCapacity();
+                    panel_lines = try reset_credits_panel.renderEmptyNote(
+                        &credits_panel.writer,
+                        list_index_width + 4,
+                        tui.terminalCols(),
+                        use_color,
+                    );
+                    if (panel_lines > 0) {
+                        spliced_panel = try reset_credits_panel.spliceAfterBodyLine(
+                            allocator,
+                            body_text,
+                            cursor_line,
+                            credits_panel.written(),
+                        );
+                        body_text = spliced_panel.?;
+                    }
+                }
             }
             rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
             const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed(), tui.terminalCols());
@@ -594,6 +618,13 @@ pub fn viewAccountsWithLiveUpdates(
                                         needs_render = true;
                                         continue;
                                     },
+                                    '1'...'9' => {
+                                        // Digit jump: the Nth card, 1-based like
+                                        // the numbered account rows.
+                                        credit_selection.moveCardTo(allocator, ch - '1', &rendered_identity);
+                                        needs_render = true;
+                                        continue;
+                                    },
                                     else => {},
                                 },
                                 else => {},
@@ -626,8 +657,13 @@ pub fn viewAccountsWithLiveUpdates(
                                     consumed_ids.items,
                                 )) {
                                     credit_selection.toggleExpanded(allocator);
-                                    needs_render = true;
+                                } else {
+                                    // No rail to open: leave a `no reset
+                                    // credits` note under the probed row so
+                                    // the keypress visibly did something.
+                                    credit_selection.note_row = credit_selection.row_cursor;
                                 }
+                                needs_render = true;
                                 continue;
                             },
                             .byte => |ch| {
@@ -704,7 +740,7 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatus(allocator, "reset credit used", .ok);
+                                        try credit_selection.setStatus(allocator, "reset credit redeemed", .ok);
                                         // Refresh the row in place for this frame
                                         // only. The registry is left to the next
                                         // refresh round, which reloads it from
@@ -733,28 +769,28 @@ pub fn viewAccountsWithLiveUpdates(
                                     },
                                     .unexpected_response => {
                                         if (result.status_code) |code| {
-                                            try credit_selection.setStatusf(allocator, .fail, "use failed (HTTP {d}, unexpected response)", .{code});
+                                            try credit_selection.setStatusf(allocator, .fail, "redeem failed (HTTP {d}, unexpected response)", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "use failed (unexpected response)", .fail);
+                                            try credit_selection.setStatus(allocator, "redeem failed (unexpected response)", .fail);
                                         }
                                     },
                                     .http_error => {
                                         if (result.status_code) |code| {
-                                            try credit_selection.setStatusf(allocator, .fail, "use failed (HTTP {d})", .{code});
+                                            try credit_selection.setStatusf(allocator, .fail, "redeem failed (HTTP {d})", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "use failed", .fail);
+                                            try credit_selection.setStatus(allocator, "redeem failed", .fail);
                                         }
                                     },
                                     .request_error => {
                                         const detail = if (result.error_name) |name|
                                             reset_credits_api.describeRequestError(name)
                                         else
-                                            "use failed";
+                                            "redeem failed";
                                         try credit_selection.setStatus(allocator, detail, .fail);
                                     },
                                 }
                             } else {
-                                try credit_selection.setStatus(allocator, "use failed (idempotency key unavailable)", .fail);
+                                try credit_selection.setStatus(allocator, "redeem failed (idempotency key unavailable)", .fail);
                             }
                             needs_render = true;
                         }

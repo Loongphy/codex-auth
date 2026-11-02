@@ -111,6 +111,10 @@ pub const Selection = struct {
     /// cannot describe a credit from another account row.
     status: ?[]u8 = null,
     status_kind: StatusKind = .info,
+    /// Data-row index probed with `Enter` that has no available credits: a
+    /// passive `no reset credits` note renders under it. Cleared when the row
+    /// cursor moves so the note never floats under a different row.
+    note_row: ?usize = null,
 
     pub fn deinit(self: *Selection, allocator: std.mem.Allocator) void {
         self.clearArmed(allocator);
@@ -129,6 +133,7 @@ pub const Selection = struct {
 
     pub fn toggleExpanded(self: *Selection, allocator: std.mem.Allocator) void {
         self.expanded = !self.expanded;
+        self.note_row = null;
         if (!self.expanded) self.close(allocator);
     }
 
@@ -143,6 +148,7 @@ pub const Selection = struct {
     pub fn moveRow(self: *Selection, allocator: std.mem.Allocator, direction: Direction, row_count: usize) void {
         const next = movedIndex(self.row_cursor, direction, row_count) orelse return;
         self.row_cursor = next;
+        self.note_row = null;
         self.clearSelection(allocator);
     }
 
@@ -168,10 +174,26 @@ pub const Selection = struct {
         if (self.card_cursor != before) rendered.clear(allocator);
     }
 
+    /// Jumps the card highlight to `index` for the digit keys: a moved cursor
+    /// drops the armed confirmation and the batch-cached identity, exactly
+    /// like `moveCardAndInvalidate` does for an actual move.
+    pub fn moveCardTo(
+        self: *Selection,
+        allocator: std.mem.Allocator,
+        index: usize,
+        rendered: *RenderedIdentity,
+    ) void {
+        if (index >= self.card_count or index == self.card_cursor) return;
+        self.card_cursor = index;
+        self.clearArmed(allocator);
+        rendered.clear(allocator);
+    }
+
     /// Keeps the row cursor inside the rendered table after a refresh.
     pub fn clampRow(self: *Selection, allocator: std.mem.Allocator, row_count: usize) void {
         if (self.row_cursor < row_count) return;
         self.row_cursor = if (row_count == 0) 0 else row_count - 1;
+        self.note_row = null;
         self.clearSelection(allocator);
     }
 
@@ -383,8 +405,6 @@ pub fn render(
             const rel = try relativeIn(allocator, epoch, opts.now);
             defer allocator.free(rel);
             try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
-        } else {
-            try line.writer.print("{s}-", .{g.separator});
         }
         const line_style = if (selected and opts.use_color) style.role.success else "";
         if (selected and opts.confirm_pending) {
@@ -393,7 +413,7 @@ pub fn render(
             // second Enter is armed, so truncating it away would turn the
             // two-step confirm into a blind one.
             var hint_buf: [48]u8 = undefined;
-            const hint = std.fmt.bufPrint(&hint_buf, "{s}Enter again to use", .{g.separator}) catch "Enter again to use";
+            const hint = std.fmt.bufPrint(&hint_buf, "{s}Enter again to redeem", .{g.separator}) catch "Enter again to redeem";
             try writeRailLineWithHint(writer, opts.indent, line.written(), hint, budget, line_style);
         } else {
             try writeRailLine(writer, opts.indent, line.written(), budget, line_style);
@@ -416,6 +436,15 @@ pub fn render(
         lines += 1;
     }
     return lines;
+}
+
+/// One dim line for an `Enter` probe on a credit-less row: it answers the
+/// probe in the same spot a rail would open, but is not interactive — every
+/// key keeps its account-list meaning while the note is on screen.
+pub fn renderEmptyNote(writer: *std.Io.Writer, indent: usize, max_cols: usize, use_color: bool) !usize {
+    if (max_cols <= indent) return 0;
+    try writeRailLine(writer, indent, "no reset credits", max_cols - indent, if (use_color) style.role.secondary else "");
+    return 1;
 }
 
 fn writeRailLine(

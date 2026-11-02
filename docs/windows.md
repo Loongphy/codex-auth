@@ -69,22 +69,22 @@ Non-Windows:
 
 ```text
     RESETS · 2 available
-    > Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d · Enter again to use
-      untitled · -
-    ✓ reset credit used
+    > Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d · Enter again to redeem
+      untitled
+    ✓ reset credit redeemed
 ```
 
 Windows:
 
 ```text
     RESETS, 2 available
-    > Full reset (Weekly + 5 hr), 11-01 08:00, in 9d, Enter again to use
-      untitled, -
-    OK reset credit used
+    > Full reset (Weekly + 5 hr), 11-01 08:00, in 9d, Enter again to redeem
+      untitled
+    OK reset credit redeemed
 ```
 
 A failure line carries no marker on Windows, because its sentence already says
-what happened: `use failed (HTTP 500)`, or `reset credit is no longer available;
+what happened: `redeem failed (HTTP 500)`, or `reset credit is no longer available;
 refresh to see current resets`.
 
 `codex-auth reset` prints the same separator difference outside the TUI.
