@@ -496,11 +496,10 @@ pub fn render(
                 defer allocator.free(rel);
                 try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
             }
-            // The tag carries the success report inline: the struck row itself
-            // says what happened, so a bottom status line is only needed for
-            // outcomes that left no card to point at.
-            try line.writer.print("{s}redeemed", .{g.separator});
-            try writeRailLine(writer, opts.indent, line.written(), budget, if (opts.use_color) style.role.spent else "");
+            // The tag is the success report, drawn outside the strike in the
+            // success role: the row itself says what happened, so a bottom
+            // status line is only needed for outcomes that left no card.
+            try writeSpentLine(writer, opts.indent, line.written(), " redeemed", budget, opts.use_color);
             lines += 1;
             continue;
         }
@@ -573,6 +572,38 @@ fn writeRailLine(
     if (ansi_style.len != 0) try writer.writeAll(ansi_style);
     try writeBounded(writer, text, budget);
     if (ansi_style.len != 0) try writer.writeAll(style.ansi.reset);
+    try writer.writeByte('\n');
+}
+
+/// The spent-card line is two styled spans: the card text stays struck+dim
+/// while `tag` — the success report the struck row carries — is drawn in the
+/// success role after a plain space, outside the strike. Like the armed hint
+/// it keeps its own width: a tight line gives up card text, never the tag.
+fn writeSpentLine(
+    writer: *std.Io.Writer,
+    indent: usize,
+    text: []const u8,
+    tag: []const u8,
+    budget: usize,
+    use_color: bool,
+) !void {
+    try writeIndent(writer, indent);
+    const tag_width = text_width.displayWidth(tag);
+    if (tag_width >= budget) {
+        // Too narrow for card text — the tag is the whole line.
+        if (use_color) try writer.writeAll(style.role.success);
+        try writeBounded(writer, tag, budget);
+        if (use_color) try writer.writeAll(style.ansi.reset);
+    } else {
+        if (use_color) try writer.writeAll(style.role.spent);
+        try writeBounded(writer, text, budget - tag_width);
+        if (use_color) {
+            try writer.writeAll(style.ansi.reset);
+            try writer.writeAll(style.role.success);
+        }
+        try writer.writeAll(tag);
+        if (use_color) try writer.writeAll(style.ansi.reset);
+    }
     try writer.writeByte('\n');
 }
 

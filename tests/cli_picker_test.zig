@@ -1853,8 +1853,21 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
     const text = out.written();
     try std.testing.expect(std.mem.indexOf(u8, text, "RESETS · 2 available") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[2m\x1b[9m  5h reset credit") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "5h reset credit") != null and std.mem.indexOf(u8, text, "in 7d · redeemed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "in 60d · redeemed") != null);
+    // The `redeemed` tag is the success report: a plain space, green, and
+    // crucially OUTSIDE the strike — the reset+green SGR pair between the
+    // struck span and the tag is what keeps it from being struck through.
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[0m\x1b[32m redeemed\x1b[0m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "· redeemed") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "redeemed") != null);
+    // `redeemed` must not sit inside any struck span: every `redeemed` is
+    // preceded by a reset since the last strike-open.
+    var scan_at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, scan_at, "redeemed")) |tag_at| {
+        const strike_open = std.mem.lastIndexOf(u8, text[0..tag_at], "\x1b[9m") orelse 0;
+        const last_reset = std.mem.lastIndexOf(u8, text[0..tag_at], "\x1b[0m") orelse 0;
+        try std.testing.expect(last_reset > strike_open);
+        scan_at = tag_at + 1;
+    }
     const ghost_a = std.mem.indexOf(u8, text, "5h reset credit").?;
     const weekly_at = std.mem.indexOf(u8, text, "Weekly limit reset").?;
     const ghost_b = std.mem.indexOf(u8, text, "Month reset").?;
