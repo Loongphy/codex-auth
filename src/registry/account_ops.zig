@@ -133,7 +133,7 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
     const info = @import("../auth/auth.zig").parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
-            std.log.warn("auth.json sync skipped: {s}", .{@errorName(err)});
+            std.log.warn("auth.json sync skipped ({s}): {s}", .{ auth_path, @errorName(err) });
             return false;
         },
     };
