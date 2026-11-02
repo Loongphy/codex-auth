@@ -2248,7 +2248,7 @@ test "reset credits panel close drops the pending confirm and the status line" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
+    try sel.setStatusFor(gpa, "acct-a", "✓ reset credit redeemed", .ok);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     sel.close(gpa);
     try std.testing.expect(!sel.expanded);
@@ -2266,10 +2266,10 @@ test "reset credits panel clears the status line when the account row moves" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
+    try sel.setStatusFor(gpa, "acct-a", "✓ reset credit redeemed", .ok);
     sel.moveRow(gpa, .down, 5);
     try std.testing.expect(sel.status == null);
-    try sel.setStatus(gpa, "✗ redeem failed (HTTP 500)", .fail);
+    try sel.setStatusFor(gpa, "acct-a", "✗ redeem failed (HTTP 500)", .fail);
     sel.clearSelection(gpa);
     try std.testing.expect(sel.status == null);
 }
@@ -2281,7 +2281,7 @@ test "reset credits panel keeps the redeem report across a card list refresh" {
     var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
     defer sel.deinit(gpa);
 
-    try sel.setStatus(gpa, "✓ reset credit redeemed", .ok);
+    try sel.setStatusFor(gpa, "acct-a", "✓ reset credit redeemed", .ok);
     try std.testing.expectEqual(Step.armed, sel.confirm(gpa, card));
     // A background refresh landing right after a redeem replaces the card list
     // under the cursor: it must disarm the confirmation but keep the report of
@@ -2291,6 +2291,24 @@ test "reset credits panel keeps the redeem report across a card list refresh" {
     try std.testing.expectEqual(cli.reset_credits_panel.StatusKind.ok, sel.status_kind);
     try std.testing.expect(!sel.isPendingFor(card));
     try std.testing.expect(!sel.valid);
+}
+
+test "reset credits panel binds the status line to its account" {
+    const gpa = std.testing.allocator;
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 2, .valid = true };
+    defer sel.deinit(gpa);
+
+    try sel.setStatusFor(gpa, "acct-a", "✗ redeem failed (HTTP 500)", .fail);
+    try std.testing.expectEqualStrings("✗ redeem failed (HTTP 500)", sel.statusFor("acct-a") orelse "");
+    // A refresh can re-sort the rows so the same index resolves to another
+    // account: the report belongs to acct-a and must not render under acct-b.
+    try std.testing.expect(sel.statusFor("acct-b") == null);
+    try sel.setStatusFor(gpa, "acct-b", "✓ reset credit redeemed", .ok);
+    try std.testing.expectEqualStrings("✓ reset credit redeemed", sel.statusFor("acct-b") orelse "");
+    try std.testing.expect(sel.statusFor("acct-a") == null);
+    sel.clearStatus(gpa);
+    try std.testing.expect(sel.status == null);
+    try std.testing.expect(sel.status_account == null);
 }
 
 test "reset credits panel splice keeps one line per rendered row" {

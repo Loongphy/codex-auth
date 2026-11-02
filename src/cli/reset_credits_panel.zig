@@ -107,9 +107,11 @@ pub const Selection = struct {
     /// The credit a confirmation is pending for; `null` means nothing is
     /// pending. Owning the copies keeps the invariant local to this struct.
     armed: ?Armed = null,
-    /// Status line rendered inside the rail, owned by the selection so it
-    /// cannot describe a credit from another account row.
+    /// Status line rendered inside the rail, owned by the selection and bound
+    /// to the account it reports on. A refresh may re-sort the rows, so the
+    /// text alone cannot be trusted to still sit under the same account.
     status: ?[]u8 = null,
+    status_account: ?[]u8 = null,
     status_kind: StatusKind = .info,
     /// Data-row index probed with `Enter` that has no available credits: a
     /// passive `no reset credits` note renders under it. Cleared when the row
@@ -212,13 +214,11 @@ pub const Selection = struct {
 
     /// Drops the card highlight and the armed confirmation but keeps the status
     /// line, so a background refresh cannot erase the report of a redeem that
-    /// already happened on this row. The probe note is row-index based, so a
-    /// refresh that may have re-sorted rows clears it too.
+    /// already happened on this row.
     pub fn clearCards(self: *Selection, allocator: std.mem.Allocator) void {
         self.card_cursor = 0;
         self.card_count = 0;
         self.valid = false;
-        self.note_row = null;
         self.clearArmed(allocator);
     }
 
@@ -260,30 +260,56 @@ pub const Selection = struct {
         return matches;
     }
 
-    pub fn setStatus(self: *Selection, allocator: std.mem.Allocator, text: []const u8, kind: StatusKind) !void {
+    /// Records a report for `account_key`: the rail draws it only while the
+    /// cursor row still resolves to that account, so a post-redeem refresh
+    /// cannot leave the message floating under a different account row.
+    pub fn setStatusFor(
+        self: *Selection,
+        allocator: std.mem.Allocator,
+        account_key: []const u8,
+        text: []const u8,
+        kind: StatusKind,
+    ) !void {
         const copy = try allocator.dupe(u8, text);
+        errdefer allocator.free(copy);
+        const key_copy = try allocator.dupe(u8, account_key);
         if (self.status) |old| allocator.free(old);
+        if (self.status_account) |old| allocator.free(old);
         self.status = copy;
+        self.status_account = key_copy;
         self.status_kind = kind;
     }
 
-    /// `setStatus` from a formatted message, freeing the temporary.
-    pub fn setStatusf(
+    /// `setStatusFor` from a formatted message, freeing the temporary.
+    pub fn setStatusForf(
         self: *Selection,
         allocator: std.mem.Allocator,
+        account_key: []const u8,
         kind: StatusKind,
         comptime fmt: []const u8,
         args: anytype,
     ) !void {
         const text = try std.fmt.allocPrint(allocator, fmt, args);
         defer allocator.free(text);
-        try self.setStatus(allocator, text, kind);
+        try self.setStatusFor(allocator, account_key, text, kind);
+    }
+
+    /// The status text only for the account the rail is attached to; any
+    /// other account row sees no message.
+    pub fn statusFor(self: *const Selection, account_key: []const u8) ?[]const u8 {
+        const saved = self.status_account orelse return null;
+        if (!std.mem.eql(u8, saved, account_key)) return null;
+        return self.status;
     }
 
     pub fn clearStatus(self: *Selection, allocator: std.mem.Allocator) void {
         if (self.status) |old| {
             allocator.free(old);
             self.status = null;
+        }
+        if (self.status_account) |old| {
+            allocator.free(old);
+            self.status_account = null;
         }
     }
 

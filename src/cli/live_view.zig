@@ -371,10 +371,14 @@ pub fn viewAccountsWithLiveUpdates(
             needs_render = true;
             rows_cache.invalidate(allocator);
             // Keep the status line: a refresh landing right after a redeem must
-            // not erase the report of an action that already happened. The row
-            // cursor is re-clamped on the next render, which drops the status if
-            // the rail ends up on a different account.
+            // not erase the report of an action that already happened. The
+            // status is bound to its account key, so a re-sort that slides the
+            // rail onto a different account row hides it instead of misreporting.
+            // The probe note is a bare row-index anchor with no such binding —
+            // drop it here, not in clearCards, which the per-frame
+            // clearSelection path also calls.
             credit_selection.clearCards(allocator);
+            credit_selection.note_row = null;
         }
 
         const now_second = live_tui.nowSecond();
@@ -451,7 +455,7 @@ pub fn viewAccountsWithLiveUpdates(
                         .now = now_second,
                         .card_cursor = credit_selection.card_cursor,
                         .confirm_pending = confirm_pending,
-                        .status = credit_selection.status,
+                        .status = credit_selection.statusFor(account.account_key),
                         .status_kind = credit_selection.status_kind,
                         .indent = list_index_width + 4,
                         .is_windows = is_windows,
@@ -596,8 +600,9 @@ pub fn viewAccountsWithLiveUpdates(
                                             },
                                             .ignored => {},
                                             .out_of_memory => {
-                                                try credit_selection.setStatus(
+                                                try credit_selection.setStatusFor(
                                                     allocator,
+                                                    identity.account_key,
                                                     "credit selection unavailable (out of memory)",
                                                     .fail,
                                                 );
@@ -657,10 +662,12 @@ pub fn viewAccountsWithLiveUpdates(
                                     consumed_ids.items,
                                 )) {
                                     credit_selection.toggleExpanded(allocator);
-                                } else {
+                                } else if (data_row_count > 0) {
                                     // No rail to open: leave a `no reset
                                     // credits` note under the probed row so
-                                    // the keypress visibly did something.
+                                    // the keypress visibly did something. On
+                                    // an empty list there is no row to anchor
+                                    // the note to.
                                     credit_selection.note_row = credit_selection.row_cursor;
                                 }
                                 needs_render = true;
@@ -716,7 +723,7 @@ pub fn viewAccountsWithLiveUpdates(
                             }
                             if (redeem_key) |key| {
                                 const codex_home = registry.resolveCodexHome(allocator) catch |err| {
-                                    try credit_selection.setStatus(allocator, reset_credits_api.describeRequestError(@errorName(err)), .fail);
+                                    try credit_selection.setStatusFor(allocator, current.account_key, reset_credits_api.describeRequestError(@errorName(err)), .fail);
                                     needs_render = true;
                                     continue;
                                 };
@@ -740,7 +747,7 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatus(allocator, "reset credit redeemed", .ok);
+                                        try credit_selection.setStatusFor(allocator, current.account_key, "reset credit redeemed", .ok);
                                         // Refresh the row in place for this frame
                                         // only. The registry is left to the next
                                         // refresh round, which reloads it from
@@ -758,27 +765,28 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatus(
+                                        try credit_selection.setStatusFor(
                                             allocator,
+                                            current.account_key,
                                             "reset credit is no longer available; refresh to see current resets",
                                             .fail,
                                         );
                                     },
                                     .nothing_to_reset => {
-                                        try credit_selection.setStatus(allocator, "usage does not need a reset right now", .info);
+                                        try credit_selection.setStatusFor(allocator, current.account_key, "usage does not need a reset right now", .info);
                                     },
                                     .unexpected_response => {
                                         if (result.status_code) |code| {
-                                            try credit_selection.setStatusf(allocator, .fail, "redeem failed (HTTP {d}, unexpected response)", .{code});
+                                            try credit_selection.setStatusForf(allocator, current.account_key, .fail, "redeem failed (HTTP {d}, unexpected response)", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "redeem failed (unexpected response)", .fail);
+                                            try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed (unexpected response)", .fail);
                                         }
                                     },
                                     .http_error => {
                                         if (result.status_code) |code| {
-                                            try credit_selection.setStatusf(allocator, .fail, "redeem failed (HTTP {d})", .{code});
+                                            try credit_selection.setStatusForf(allocator, current.account_key, .fail, "redeem failed (HTTP {d})", .{code});
                                         } else {
-                                            try credit_selection.setStatus(allocator, "redeem failed", .fail);
+                                            try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed", .fail);
                                         }
                                     },
                                     .request_error => {
@@ -786,11 +794,11 @@ pub fn viewAccountsWithLiveUpdates(
                                             reset_credits_api.describeRequestError(name)
                                         else
                                             "redeem failed";
-                                        try credit_selection.setStatus(allocator, detail, .fail);
+                                        try credit_selection.setStatusFor(allocator, current.account_key, detail, .fail);
                                     },
                                 }
                             } else {
-                                try credit_selection.setStatus(allocator, "redeem failed (idempotency key unavailable)", .fail);
+                                try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed (idempotency key unavailable)", .fail);
                             }
                             needs_render = true;
                         }
