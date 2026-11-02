@@ -3,6 +3,7 @@ const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const style = @import("style.zig");
 const io = @import("io.zig");
+const text_width = @import("../tui/text_width.zig");
 const windows = std.os.windows;
 
 const readFileOnce = io.readFileOnce;
@@ -277,64 +278,118 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
     return line_count;
 }
 
-pub fn switchTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n"
-    else
-        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n";
+/// Footer legends shrink in three semantic tiers instead of hard-truncating:
+/// the full legend, a mid variant keeping the mode's verbs, and a compact
+/// variant keeping only the commit and exit keys. `·`/`↑` stay out of the
+/// Windows set per docs/windows.md.
+const FooterLadder = struct {
+    full: []const u8,
+    mid: []const u8,
+    compact: []const u8,
+};
+
+fn footerFor(ladder: FooterLadder, max_cols: ?usize) []const u8 {
+    const limit = max_cols orelse return ladder.full;
+    if (text_width.displayWidth(ladder.full) <= limit) return ladder.full;
+    if (text_width.displayWidth(ladder.mid) <= limit) return ladder.mid;
+    return ladder.compact;
 }
 
-pub fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeSwitchTuiFooterBounded(out, use_color, null);
+fn switchFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        .mid = "Up/Down - Enter select - Esc quit\n",
+        .compact = "Enter select - Esc quit\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        .mid = "↑/↓ · Enter select · Esc quit\n",
+        .compact = "Enter select · Esc quit\n",
+    };
+}
+
+pub fn switchTuiFooterText(is_windows: bool) []const u8 {
+    return switchFooterLadder(is_windows).full;
+}
+
+/// Widest switch legend that fits `max_cols`, so narrow terminals still show
+/// the select/quit keys instead of a sliced sentence.
+pub fn switchTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(switchFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterText(builtin.os.tag == .windows), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+}
+
+fn removeFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        .mid = "Up/Down - Space - Enter delete - Esc quit\n",
+        .compact = "Enter delete - Esc quit\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        .mid = "↑/↓ · Space · Enter delete · Esc quit\n",
+        .compact = "Enter delete · Esc quit\n",
+    };
 }
 
 pub fn removeTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n"
-    else
-        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n";
+    return removeFooterLadder(is_windows).full;
 }
 
-pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeRemoveTuiFooterBounded(out, use_color, null);
+pub fn removeTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(removeFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterText(builtin.os.tag == .windows), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+}
+
+fn listFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        .mid = "j/k row - Enter credits - Esc quit\n",
+        .compact = "Enter - Esc\n",
+    } else .{
+        .full = "Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        .mid = "j/k row · Enter credits · Esc quit\n",
+        .compact = "Enter · Esc\n",
+    };
 }
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n"
-    else
-        "Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n";
+    return listFooterLadder(is_windows).full;
+}
+
+pub fn listTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(listFooterLadder(is_windows), max_cols);
+}
+
+fn listCreditsFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n",
+        .mid = "Up/Down - Enter use - Esc back\n",
+        .compact = "Enter use - Esc\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n",
+        .mid = "↑/↓ · Enter use · Esc back\n",
+        .compact = "Enter use · Esc\n",
+    };
 }
 
 /// Footer while the reset credits rail owns the navigation keys. It replaces
 /// the account-list legend entirely, so the rail mode shows only its own
 /// actions and cannot imply that `j`/`k` still move account rows.
 pub fn listCreditsTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down or j/k credit, Enter use, Esc/q back\n"
-    else
-        "Keys: ↑/↓ or j/k credit, Enter use, Esc/q back\n";
+    return listCreditsFooterLadder(is_windows).full;
 }
 
-pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeListTuiFooterBounded(out, use_color, null);
+pub fn listCreditsTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(listCreditsFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeListTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterText(builtin.os.tag == .windows), max_cols);
-}
-
-pub fn writeTuiLineBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usize) !void {
-    try writeTuiLineContentBounded(out, text, max_cols);
-    try out.writeAll("\n");
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
 }
 
 pub fn writeStyledTuiLineBounded(out: *std.Io.Writer, ansi_style: []const u8, text: []const u8, max_cols: ?usize) !void {
@@ -350,22 +405,51 @@ fn writeTuiLineContentBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?
         try out.writeAll(line);
         return;
     };
-    if (line.len <= limit) {
+    if (text_width.displayWidth(line) <= limit) {
         try out.writeAll(line);
-    } else if (limit == 1) {
-        try out.writeAll(".");
-    } else if (limit > 1) {
-        try out.writeAll(line[0 .. limit - 1]);
-        try out.writeAll(".");
+        return;
     }
+    // Line-level truncation keeps a `...` tail — unlike the single `.` used
+    // inside table cells, a cut sentence still reads as one.
+    if (limit <= 3) {
+        try out.writeAll(line[0..text_width.prefixByteLength(line, limit)]);
+        return;
+    }
+    try out.writeAll(line[0..text_width.prefixByteLength(line, limit - 3)]);
+    try out.writeAll("...");
 }
 
 pub fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u8) !void {
-    try out.writeAll(prompt);
-    if (digits.len != 0) {
-        try out.writeAll(" ");
-        try out.writeAll(digits);
+    try writeTuiPromptLineBounded(out, prompt, digits, null);
+}
+
+/// Prompt plus the in-progress digit echo, bounded to `max_cols`. Typed digits
+/// are the live feedback the user is watching, so on a tight line the prompt
+/// is what gives way — same priority split as the rail's confirm hint.
+pub fn writeTuiPromptLineBounded(out: *std.Io.Writer, prompt: []const u8, digits: []const u8, max_cols: ?usize) !void {
+    const limit = max_cols orelse {
+        try out.writeAll(prompt);
+        if (digits.len != 0) {
+            try out.writeAll(" ");
+            try out.writeAll(digits);
+        }
+        try out.writeAll("\n");
+        return;
+    };
+    if (digits.len == 0) {
+        try writeTuiLineContentBounded(out, prompt, limit);
+        try out.writeAll("\n");
+        return;
     }
+    const digits_width = text_width.displayWidth(digits);
+    if (digits_width + 1 >= limit) {
+        try writeTuiLineContentBounded(out, digits, limit);
+        try out.writeAll("\n");
+        return;
+    }
+    try writeTuiLineContentBounded(out, prompt, limit - digits_width - 1);
+    try out.writeAll(" ");
+    try out.writeAll(digits);
     try out.writeAll("\n");
 }
 
@@ -514,11 +598,15 @@ pub const TuiSession = struct {
     }
 
     pub fn terminalRows(self: *@This()) usize {
-        return if (terminalSize(self.output)) |size| size.rows else 24;
+        // A terminal may report only one dimension (rows or cols as 0), so
+        // each accessor falls back independently instead of losing both.
+        const rows = if (terminalSize(self.output)) |size| size.rows else 0;
+        return if (rows != 0) rows else 24;
     }
 
     pub fn terminalCols(self: *@This()) usize {
-        return if (terminalSize(self.output)) |size| size.cols else 80;
+        const cols = if (terminalSize(self.output)) |size| size.cols else 0;
+        return if (cols != 0) cols else 80;
     }
 
     pub fn readWindowsKey(self: *@This()) !TuiInputKey {
@@ -686,10 +774,11 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
         }
         const rows = @as(i32, get_console_info.Data.dwWindowSize.Y);
         const cols = @as(i32, get_console_info.Data.dwWindowSize.X);
-        if (rows <= 0 or cols <= 0) return null;
+        // 0 means "unknown" for that dimension; only fail when both are.
+        if (rows <= 0 and cols <= 0) return null;
         return .{
-            .rows = @intCast(rows),
-            .cols = @intCast(cols),
+            .rows = @intCast(@max(0, rows)),
+            .cols = @intCast(@max(0, cols)),
         };
     } else {
         var wsz: std.posix.winsize = .{
@@ -699,7 +788,7 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
             .ypixel = 0,
         };
         const rc = std.posix.system.ioctl(file.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&wsz));
-        if (std.posix.errno(rc) != .SUCCESS or wsz.row == 0 or wsz.col == 0) return null;
+        if (std.posix.errno(rc) != .SUCCESS or (wsz.row == 0 and wsz.col == 0)) return null;
         return .{
             .rows = @intCast(wsz.row),
             .cols = @intCast(wsz.col),

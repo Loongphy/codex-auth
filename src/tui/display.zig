@@ -142,7 +142,7 @@ fn groupSortLabel(rec: *const registry.AccountRecord, buf: *[apikey_label_len]u8
     return displayPlan(rec);
 }
 
-fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
+pub fn displayPlan(rec: *const registry.AccountRecord) []const u8 {
     if (rec.auth_mode != null and rec.auth_mode.? == .apikey) return "API_KEY";
     return if (registry.resolveDisplayPlan(rec)) |plan| registry.planLabel(plan) else "-";
 }

@@ -68,18 +68,18 @@ indented four columns under its account row:
 Non-Windows:
 
 ```text
-    RESET CREDITS · 2 available
+    RESETS · 2 available
     > Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d · Enter again to use
-      (untitled) · -
+      untitled · -
     ✓ reset credit used
 ```
 
 Windows:
 
 ```text
-    RESET CREDITS, 2 available
+    RESETS, 2 available
     > Full reset (Weekly + 5 hr), 11-01 08:00, in 9d, Enter again to use
-      (untitled), -
+      untitled, -
     OK reset credit used
 ```
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const app_runtime = @import("../core/runtime.zig");
 const account_api = @import("../api/account.zig");
 const transport = @import("../api/transport.zig");
@@ -111,9 +112,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
 }
 
 fn runMain(init: std.process.Init.Minimal) !void {
+    // DebugAllocator bookkeeping only pays off in Debug builds; release takes
+    // the contention-free SMP allocator.
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
+    defer if (builtin.mode == .Debug) std.debug.assert(gpa.deinit() == .ok);
+    const allocator = if (comptime builtin.mode == .Debug) gpa.allocator() else std.heap.smp_allocator;
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();

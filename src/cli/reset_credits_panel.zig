@@ -341,7 +341,7 @@ pub const RenderOptions = struct {
     use_color: bool = false,
 };
 
-/// Renders the borderless RESET CREDITS block and returns its line count,
+/// Renders the borderless RESETS block and returns its line count,
 /// which the caller needs to keep the whole block inside the viewport. Lines
 /// are bounded to `max_cols` and '\n'-terminated. `card_cursor` marks the
 /// selected credit; the selected line appends the two-step confirm hint when
@@ -363,9 +363,9 @@ pub fn render(
     var header_buf: [128]u8 = undefined;
     const header = std.fmt.bufPrint(
         &header_buf,
-        "RESET CREDITS{s}{d} available",
+        "RESETS{s}{d} available",
         .{ g.separator, cards.len },
-    ) catch "RESET CREDITS";
+    ) catch "RESETS";
     try writeRailLine(writer, opts.indent, header, budget, if (opts.use_color) style.role.heading else "");
     lines += 1;
 
@@ -376,7 +376,7 @@ pub fn render(
         // `>` is the cursor mark style.md already establishes for the switch
         // and remove tables, so the rail uses it on every platform.
         try line.writer.writeAll(if (selected) "> " else "  ");
-        try line.writer.writeAll(card.title orelse "(untitled)");
+        try line.writer.writeAll(card.title orelse "untitled");
         if (card.epoch) |epoch| {
             const compact = try rows.formatCompactTimestampAlloc(allocator, epoch);
             defer allocator.free(compact);
@@ -386,16 +386,18 @@ pub fn render(
         } else {
             try line.writer.print("{s}-", .{g.separator});
         }
+        const line_style = if (selected and opts.use_color) style.role.success else "";
         if (selected and opts.confirm_pending) {
-            try line.writer.print("{s}Enter again to use", .{g.separator});
+            // The re-confirm hint is drawn after the card text, outside the
+            // bounded span: it is the only thing that tells the user the
+            // second Enter is armed, so truncating it away would turn the
+            // two-step confirm into a blind one.
+            var hint_buf: [48]u8 = undefined;
+            const hint = std.fmt.bufPrint(&hint_buf, "{s}Enter again to use", .{g.separator}) catch "Enter again to use";
+            try writeRailLineWithHint(writer, opts.indent, line.written(), hint, budget, line_style);
+        } else {
+            try writeRailLine(writer, opts.indent, line.written(), budget, line_style);
         }
-        try writeRailLine(
-            writer,
-            opts.indent,
-            line.written(),
-            budget,
-            if (selected and opts.use_color) style.role.success else "",
-        );
         lines += 1;
     }
 
@@ -426,6 +428,30 @@ fn writeRailLine(
     try writeIndent(writer, indent);
     if (ansi_style.len != 0) try writer.writeAll(ansi_style);
     try writeBounded(writer, text, budget);
+    if (ansi_style.len != 0) try writer.writeAll(style.ansi.reset);
+    try writer.writeByte('\n');
+}
+
+/// Like `writeRailLine` but `hint` is appended after the bounded `text` and
+/// always survives: the card text is what gives way when the line is tight.
+fn writeRailLineWithHint(
+    writer: *std.Io.Writer,
+    indent: usize,
+    text: []const u8,
+    hint: []const u8,
+    budget: usize,
+    ansi_style: []const u8,
+) !void {
+    try writeIndent(writer, indent);
+    if (ansi_style.len != 0) try writer.writeAll(ansi_style);
+    const hint_width = text_width.displayWidth(hint);
+    if (hint_width >= budget) {
+        // Too narrow for any card text — the hint is the whole line.
+        try writeBounded(writer, hint, budget);
+    } else {
+        try writeBounded(writer, text, budget - hint_width);
+        try writer.writeAll(hint);
+    }
     if (ansi_style.len != 0) try writer.writeAll(style.ansi.reset);
     try writer.writeByte('\n');
 }

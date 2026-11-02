@@ -10,11 +10,10 @@ pub const indexWidth = row_data.indexWidth;
 pub const LiveListViewport = table_layout.LiveListViewport;
 pub const StyledWriter = style.StyledWriter;
 const SwitchRow = row_data.SwitchRow;
-const writeTuiPromptLine = tui_mod.writeTuiPromptLine;
+const writeTuiPromptLineBounded = tui_mod.writeTuiPromptLineBounded;
 const writeSwitchTuiFooterBounded = tui_mod.writeSwitchTuiFooterBounded;
 const writeListTuiFooterBounded = tui_mod.writeListTuiFooterBounded;
 const writeRemoveTuiFooterBounded = tui_mod.writeRemoveTuiFooterBounded;
-const writeTuiLineBounded = tui_mod.writeTuiLineBounded;
 const writeStyledTuiLineBounded = tui_mod.writeStyledTuiLineBounded;
 
 fn activeRowMarker(is_cursor: bool, is_active: bool) []const u8 {
@@ -60,7 +59,7 @@ pub fn renderSwitchScreenViewport(
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(writer.out, "Select account to activate:", number_input);
+    try writeTuiPromptLineBounded(writer.out, "Select account to activate:", number_input, viewport.max_cols);
     try renderSwitchListViewport(writer, reg, rows, idx_width, widths, selected, viewport);
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
@@ -69,27 +68,6 @@ pub fn renderSwitchScreenViewport(
     if (action_line.len != 0) {
         try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
-}
-
-pub fn renderListScreen(
-    out: *std.Io.Writer,
-    reg: *registry.Registry,
-    rows: []const SwitchRow,
-    idx_width: usize,
-    widths: SwitchWidths,
-    use_color: bool,
-    status_line: []const u8,
-) !void {
-    var writer = style.StyledWriter.init(out, use_color);
-    try renderListScreenViewport(
-        &writer,
-        reg,
-        rows,
-        idx_width,
-        widths,
-        status_line,
-        .{},
-    );
 }
 
 pub fn renderListScreenViewport(
@@ -150,7 +128,7 @@ pub fn renderRemoveScreenViewport(
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(writer.out, "Select accounts to delete:", number_input);
+    try writeTuiPromptLineBounded(writer.out, "Select accounts to delete:", number_input, viewport.max_cols);
     try renderRemoveListViewport(writer, reg, rows, idx_width, widths, cursor, checked, viewport);
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
@@ -335,18 +313,17 @@ fn liveAccountCells(row: SwitchRow) [table_layout.live_column_count]table_layout
     };
 }
 
+// Error stays red under the cursor, same as the live list: the `>` glyph
+// alone marks focus, and hiding the alarm would invite acting on a broken row.
 fn switchRowStyle(row: SwitchRow, is_cursor: bool, is_active: bool) []const u8 {
-    if (is_active) return style.ansi.green;
-    if (is_cursor) return style.ansi.green;
     if (row.has_error) return style.ansi.red;
+    if (is_active or is_cursor) return style.ansi.green;
     return "";
 }
 
 fn removeRowStyle(row: SwitchRow, is_cursor: bool, is_checked: bool, is_active: bool) []const u8 {
-    if (is_active) return style.ansi.green;
-    if (is_cursor) return style.ansi.green;
     if (row.has_error) return style.ansi.red;
-    if (is_checked) return style.ansi.green;
+    if (is_active or is_cursor or is_checked) return style.ansi.green;
     return "";
 }
 
@@ -389,12 +366,7 @@ fn liveTableRemovePrefix(
 }
 
 fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
-    var buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
-    if (idx_str.len < width) {
-        try out.splatByteAll('0', width - idx_str.len);
-    }
-    try out.writeAll(idx_str);
+    try table_layout.writeIndexAligned(out, idx, width);
 }
 
 fn writeSwitchRow(
@@ -513,7 +485,7 @@ pub fn liveLineIndexForDataIndex(
 /// Render the compact live account table.
 /// `cursor` is an optional data-row index on the `liveDataRowCount` basis
 /// (0-based, group header lines excluded); the matching row draws `>` instead
-/// of the `!`/`*`/space marker, so the row `Enter` acts on is always visible.
+/// of the `*`/space marker, so the row `Enter` acts on is always visible.
 /// A group header draws one unnumbered dim line ahead of its first rendered
 /// child so grouped rows keep their shared email in view.
 pub fn renderListBody(
@@ -528,7 +500,7 @@ pub fn renderListBody(
 ) !void {
     const details = @import("list_details.zig");
 
-    const number_width = idx_width + 1;
+    const number_width = idx_width + 2;
     const column_widths = details.computeWidths(number_width, widths, max_cols);
     try details.writeHeader(writer, column_widths);
     var displayed_counter: usize = 0;
@@ -548,8 +520,22 @@ pub fn renderListBody(
         displayed_counter += 1;
         const account = reg.accounts.items[idx];
         var number_buf: [32]u8 = undefined;
-        const marker: []const u8 = if (is_cursor) ">" else if (row.has_error) "!" else if (row.is_active) "*" else " ";
-        const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
+        const marker: u8 = if (is_cursor) '>' else if (row.is_active) '*' else ' ';
+        var number_len: usize = 0;
+        number_buf[number_len] = marker;
+        number_len += 1;
+        number_buf[number_len] = ' ';
+        number_len += 1;
+        var digit_buf: [16]u8 = undefined;
+        const digits = std.fmt.bufPrint(&digit_buf, "{d}", .{displayed_counter}) catch "0";
+        var pad = idx_width - @min(idx_width, digits.len);
+        while (pad > 0) : (pad -= 1) {
+            number_buf[number_len] = ' ';
+            number_len += 1;
+        }
+        @memcpy(number_buf[number_len .. number_len + digits.len], digits);
+        number_len += digits.len;
+        const number = number_buf[0..number_len];
         // Style precedence deliberately differs from the marker's: an error row
         // stays red under the cursor (the glyph already marks the focus, the
         // alarm must not be hidden), while cursor and active share the green the

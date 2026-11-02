@@ -808,7 +808,7 @@ test "buildStatusLine releases mutex on allocation failure" {
         runtime.buildStatusLine(failing_allocator, .{
             .reg = &reg,
             .usage_overrides = null,
-        }),
+        }, null),
     );
 
     try std.testing.expect(runtime.mutex.tryLock());

@@ -126,7 +126,7 @@ pub fn runSwitchLiveActions(
             const rows = try rows_cache.ensureSelectable(allocator, borrowed);
             const total_accounts = accountRowCount(rows.items);
             const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
-            const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
+            const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed, tui.terminalCols());
             defer allocator.free(status_line);
             const selected_display_idx = selectedDisplayIndexForRender(rows, selected_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectableViewport(
@@ -146,7 +146,7 @@ pub fn runSwitchLiveActions(
                 &styled_frame,
                 borrowed.reg,
                 rows.items,
-                @max(@as(usize, 2), indexWidth(total_accounts)),
+                indexWidth(total_accounts),
                 rows.widths,
                 selected_display_idx,
                 status_line,

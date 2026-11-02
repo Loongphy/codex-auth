@@ -31,7 +31,7 @@ Issued for every account whose usage refresh returned a usable snapshot, in the 
 refresh pass and under the same concurrency limit. The card list is read from
 `credits[]` (`id`, `status`, `expires_at`, `title`) and stored as
 `last_usage.reset_credit`. An empty, failed, or non-`2xx` response is non-fatal: the
-stored card list stays as it was, so `RESET CREDITS` keeps showing the summary count
+stored card list stays as it was, so `RESETS` keeps showing the summary count
 that came from the usage response.
 
 ### Account Metadata Refresh

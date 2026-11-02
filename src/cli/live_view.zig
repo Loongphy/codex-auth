@@ -160,7 +160,7 @@ pub fn selectAccountWithLiveUpdates(
             if (total_accounts == 0) return null;
 
             const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
-            const status_line = try controller.build_status_line(controller.context, allocator, borrowed);
+            const status_line = try controller.build_status_line(controller.context, allocator, borrowed, tui.terminalCols());
             defer allocator.free(status_line);
             const selected_display_idx = selectedDisplayIndexForRender(rows, selected_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectedViewport(
@@ -179,7 +179,7 @@ pub fn selectAccountWithLiveUpdates(
                 &styled_frame,
                 borrowed.reg,
                 rows.items,
-                @max(@as(usize, 2), indexWidth(total_accounts)),
+                indexWidth(total_accounts),
                 rows.widths,
                 selected_display_idx,
                 status_line,
@@ -385,7 +385,7 @@ pub fn viewAccountsWithLiveUpdates(
         }
         if (needs_render or now_second != last_render_second) {
             const rows = try rows_cache.ensure(allocator, current_display.borrowed());
-            const list_index_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+            const list_index_width = indexWidth(rows.selectable_row_indices.len);
             body.clearRetainingCapacity();
             var styled_body = style.StyledWriter.init(&body.writer, use_color);
             try render.renderListBody(allocator, &styled_body, &current_display.reg, rows.items, list_index_width, rows.widths, tui.terminalCols(), credit_selection.row_cursor);
@@ -453,7 +453,7 @@ pub fn viewAccountsWithLiveUpdates(
                         .confirm_pending = confirm_pending,
                         .status = credit_selection.status,
                         .status_kind = credit_selection.status_kind,
-                        .indent = list_index_width + 3,
+                        .indent = list_index_width + 4,
                         .is_windows = is_windows,
                         .use_color = use_color,
                     },
@@ -476,7 +476,7 @@ pub fn viewAccountsWithLiveUpdates(
                 rendered_identity.clear(allocator);
             }
             rendered_row_count = std.mem.count(u8, body_text, "\n") -| 1;
-            const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed());
+            const status_line = try controller.build_status_line(controller.context, allocator, current_display.borrowed(), tui.terminalCols());
             defer allocator.free(status_line);
             const viewport = live_tui.listViewportFollowing(
                 tui.terminalRows(),
@@ -501,9 +501,9 @@ pub fn viewAccountsWithLiveUpdates(
             frame.clearRetainingCapacity();
             var styled_frame = style.StyledWriter.init(&frame.writer, use_color);
             const footer_text = if (credit_selection.expanded)
-                tui_mod.listCreditsTuiFooterText(is_windows)
+                tui_mod.listCreditsTuiFooterTextFor(is_windows, tui.terminalCols())
             else
-                tui_mod.listTuiFooterText(is_windows);
+                tui_mod.listTuiFooterTextFor(is_windows, tui.terminalCols());
             render.renderListBodyViewportWithFooter(
                 &styled_frame,
                 body_text,

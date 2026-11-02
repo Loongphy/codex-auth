@@ -88,7 +88,7 @@ terminal views render in local time.
 `id_token` claim `https://api.openai.com/auth.chatgpt_subscription_active_until`
 and normalized to Unix seconds. It is `null` when the claim is absent, for
 example for API-key or free-plan accounts. The value is a snapshot: it changes
-only when the stored auth token is refreshed. The `PLAN EXPIRE` terminal column
+only when the stored auth token is refreshed. The `PLAN EXP` terminal column
 hides timestamps that are not in the future and renders `-`; JSON keeps the raw
 timestamp so callers can detect stale data.
 
