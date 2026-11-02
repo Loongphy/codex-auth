@@ -158,6 +158,7 @@ pub const Selection = struct {
         const next = movedIndex(self.card_cursor, direction, self.card_count) orelse return;
         self.card_cursor = next;
         self.clearArmed(allocator);
+        self.clearStatus(allocator);
     }
 
     /// `moveCard` for one input batch. If the cursor actually moved, the
@@ -188,6 +189,7 @@ pub const Selection = struct {
         if (index >= self.card_count or index == self.card_cursor) return;
         self.card_cursor = index;
         self.clearArmed(allocator);
+        self.clearStatus(allocator);
         rendered.clear(allocator);
     }
 

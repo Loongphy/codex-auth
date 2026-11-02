@@ -2311,6 +2311,32 @@ test "reset credits panel binds the status line to its account" {
     try std.testing.expect(sel.status_account == null);
 }
 
+test "reset credits panel clears the status when the card cursor moves" {
+    const gpa = std.testing.allocator;
+    var sel: cli.reset_credits_panel.Selection = .{ .expanded = true, .card_count = 3, .valid = true };
+    defer sel.deinit(gpa);
+    var rendered: cli.reset_credits_panel.RenderedIdentity = .{};
+
+    // A card move re-anchors the highlight: a stale error left under it would
+    // read as the new card's failure, and an identical retry error would be
+    // indistinguishable from a leftover, so the report must drop with the move.
+    try sel.setStatusFor(gpa, "acct-a", "✗ redeem failed (HTTP 500)", .fail);
+    sel.moveCardAndInvalidate(gpa, &rendered, .down);
+    try std.testing.expect(sel.status == null);
+    try std.testing.expect(sel.status_account == null);
+
+    // Digit jumps take the same path as arrows.
+    try sel.setStatusFor(gpa, "acct-a", "✗ redeem failed (HTTP 500)", .fail);
+    sel.moveCardTo(gpa, 2, &rendered);
+    try std.testing.expect(sel.status == null);
+
+    // A move key at the bottom boundary does not move the cursor, so the
+    // still-current card keeps its report instead of losing feedback.
+    try sel.setStatusFor(gpa, "acct-a", "✗ redeem failed (HTTP 500)", .fail);
+    sel.moveCardAndInvalidate(gpa, &rendered, .down);
+    try std.testing.expect(sel.statusFor("acct-a") != null);
+}
+
 test "reset credits panel splice keeps one line per rendered row" {
     const gpa = std.testing.allocator;
     const body = "header\nrow-a\nrow-b\n";
