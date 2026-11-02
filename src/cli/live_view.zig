@@ -14,6 +14,7 @@ const reset_credits_api = @import("../api/reset_credits.zig");
 const transport_mod = @import("../api/transport.zig");
 const registry = @import("../registry/root.zig");
 const api_usage = @import("../api/usage.zig");
+const timestamp = @import("../time/timestamp.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -457,6 +458,7 @@ pub fn viewAccountsWithLiveUpdates(
                         .confirm_pending = confirm_pending,
                         .status = credit_selection.statusFor(account.account_key),
                         .status_kind = credit_selection.status_kind,
+                        .spent = credit_selection.spent_card,
                         .indent = list_index_width + 4,
                         .is_windows = is_windows,
                         .use_color = use_color,
@@ -748,6 +750,21 @@ pub fn viewAccountsWithLiveUpdates(
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
                                         try credit_selection.setStatusFor(allocator, current.account_key, "reset credit redeemed", .ok);
+                                        // Keep the consumed card as a struck ghost where it sorted: the
+                                        // cursor lands on the next available card while the line the
+                                        // user confirmed stays visible until they move on.
+                                        if (registry.findAccountIndexByAccountKey(&current_display.reg, current.account_key)) |spent_idx| {
+                                            const spent_rec = &current_display.reg.accounts.items[spent_idx];
+                                            if (spent_rec.last_usage) |usage| {
+                                                if (usage.reset_credit) |credits| {
+                                                    for (credits) |credit| {
+                                                        if (!std.mem.eql(u8, credit.id, current.credit_id)) continue;
+                                                        try credit_selection.setSpentCard(allocator, credit.title, timestamp.parseIso8601(credit.expires_at orelse ""));
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         // Refresh the row in place for this frame
                                         // only. The registry is left to the next
                                         // refresh round, which reloads it from

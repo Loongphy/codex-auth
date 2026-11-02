@@ -4,6 +4,7 @@ pub const ansi = struct {
     pub const reset = "\x1b[0m";
     pub const bold = "\x1b[1m";
     pub const dim = "\x1b[2m";
+    pub const strike = "\x1b[9m";
     pub const red = "\x1b[31m";
     pub const green = "\x1b[32m";
     pub const cyan = "\x1b[36m";
@@ -17,6 +18,9 @@ pub const role = struct {
     pub const success = ansi.green;
     pub const warning = ansi.cyan;
     pub const error_text = ansi.red;
+    /// A credit that was just redeemed: struck through and dimmed. Terminals
+    /// that ignore SGR 9 still show it dim, which reads as spent either way.
+    pub const spent = ansi.dim ++ ansi.strike;
 };
 
 /// Platform variants of the few marks that user-facing output needs. Windows

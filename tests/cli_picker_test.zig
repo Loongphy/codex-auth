@@ -1826,6 +1826,60 @@ test "reset credits panel uses heading and selected color roles" {
     try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m✓ reset credit redeemed\x1b[0m") != null);
 }
 
+test "reset credits panel draws the redeemed card as a struck ghost in its slot" {
+    const gpa = std.testing.allocator;
+    const now: i64 = 1_800_000_000;
+    const cards = [_]cli.reset_credits_panel.AvailableCard{
+        .{ .id = "weekly", .title = "Weekly limit reset", .expires_at = "2027-01-01T00:00:00Z", .epoch = now + 30 * 86400 },
+        .{ .id = "undated", .title = null, .expires_at = null, .epoch = null },
+    };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    // The consumed card expired sooner than "weekly", so its ghost line keeps
+    // the first slot while the cursor already sits on the next available card.
+    const lines = try cli.reset_credits_panel.render(gpa, &out.writer, &cards, .{
+        .max_cols = 100,
+        .now = now,
+        .card_cursor = 0,
+        .status = "reset credit redeemed",
+        .status_kind = .ok,
+        .spent = .{ .title = "5h reset credit", .epoch = now + 7 * 86400 },
+        .indent = 6,
+        .use_color = true,
+    });
+    try std.testing.expectEqual(@as(usize, 5), lines);
+    const text = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, text, "RESETS · 2 available") != null);
+    // Ghost is struck+dim, carries no cursor, and precedes the weekly card.
+    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[2m\x1b[9m  5h reset credit") != null);
+    const ghost_at = std.mem.indexOf(u8, text, "5h reset credit").?;
+    const weekly_at = std.mem.indexOf(u8, text, "Weekly limit reset").?;
+    try std.testing.expect(ghost_at < weekly_at);
+    try std.testing.expect(std.mem.indexOf(u8, text, "> Weekly limit reset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "> 5h") == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "✓ reset credit redeemed") != null);
+}
+
+test "reset credits panel replaces and clears the spent ghost with the status" {
+    const gpa = std.testing.allocator;
+    var sel: cli.reset_credits_panel.Selection = .{};
+    defer sel.deinit(gpa);
+
+    try sel.setStatusFor(gpa, "acct-a", "reset credit redeemed", .ok);
+    try sel.setSpentCard(gpa, "5h reset credit", 123);
+    try std.testing.expect(sel.spent_card != null);
+    try std.testing.expectEqualStrings("5h reset credit", sel.spent_card.?.title.?);
+
+    // A newer report drops the older ghost: a spent card must not sit under
+    // an unrelated status such as a following failure.
+    try sel.setStatusFor(gpa, "acct-a", "redeem failed", .fail);
+    try std.testing.expect(sel.spent_card == null);
+
+    try sel.setSpentCard(gpa, "5h reset credit", 123);
+    sel.clearStatus(gpa);
+    try std.testing.expect(sel.spent_card == null);
+}
+
 test "reset credits panel stays ASCII on Windows" {
     const gpa = std.testing.allocator;
     const now: i64 = 1_800_000_000;

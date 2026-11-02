@@ -99,6 +99,13 @@ pub const Selection = struct {
         credit_id: []u8,
     };
 
+    /// The parts of a redeemed card needed to draw its ghost line after the
+    /// card list no longer contains it.
+    pub const SpentCard = struct {
+        title: ?[]const u8,
+        epoch: ?i64,
+    };
+
     expanded: bool = false,
     row_cursor: usize = 0,
     card_cursor: usize = 0,
@@ -113,6 +120,11 @@ pub const Selection = struct {
     status: ?[]u8 = null,
     status_account: ?[]u8 = null,
     status_kind: StatusKind = .info,
+    /// A credit just redeemed this session, kept as a struck-through ghost
+    /// line inside the rail so the consume reads as an action on a card, not
+    /// a silent disappearance. Shares the status line's lifecycle: replaced
+    /// by the next report, cleared with it.
+    spent_card: ?SpentCard = null,
     /// Data-row index probed with `Enter` that has no available credits: a
     /// passive `no reset credits` note renders under it. Cleared when the row
     /// cursor moves so the note never floats under a different row.
@@ -277,9 +289,31 @@ pub const Selection = struct {
         const key_copy = try allocator.dupe(u8, account_key);
         if (self.status) |old| allocator.free(old);
         if (self.status_account) |old| allocator.free(old);
+        self.freeSpentCard(allocator);
         self.status = copy;
         self.status_account = key_copy;
         self.status_kind = kind;
+    }
+
+    /// Keeps the just-redeemed card's ghost line alongside the new status.
+    /// Must run after `setStatusFor`, which drops the previous ghost so an
+    /// older success cannot sit under a newer failure.
+    pub fn setSpentCard(
+        self: *Selection,
+        allocator: std.mem.Allocator,
+        title: ?[]const u8,
+        epoch: ?i64,
+    ) !void {
+        const title_copy: ?[]const u8 = if (title) |value| try allocator.dupe(u8, value) else null;
+        self.freeSpentCard(allocator);
+        self.spent_card = .{ .title = title_copy, .epoch = epoch };
+    }
+
+    fn freeSpentCard(self: *Selection, allocator: std.mem.Allocator) void {
+        if (self.spent_card) |card| {
+            if (card.title) |title| allocator.free(title);
+            self.spent_card = null;
+        }
     }
 
     /// `setStatusFor` from a formatted message, freeing the temporary.
@@ -313,6 +347,7 @@ pub const Selection = struct {
             allocator.free(old);
             self.status_account = null;
         }
+        self.freeSpentCard(allocator);
     }
 
     fn clearArmed(self: *Selection, allocator: std.mem.Allocator) void {
@@ -388,6 +423,9 @@ pub const RenderOptions = struct {
     confirm_pending: bool = false,
     status: ?[]const u8 = null,
     status_kind: StatusKind = .info,
+    /// A just-redeemed card drawn struck-through where it sorted in the list,
+    /// so the consume reads as an action on it instead of a disappearance.
+    spent: ?Selection.SpentCard = null,
     indent: usize = 0,
     is_windows: bool = false,
     use_color: bool = false,
@@ -421,7 +459,44 @@ pub fn render(
     try writeRailLine(writer, opts.indent, header, budget, if (opts.use_color) style.role.heading else "");
     lines += 1;
 
-    for (cards, 0..) |card, index| {
+    // The spent ghost keeps the slot its expiry sorted into, so the line the
+    // user confirmed still sits where it was while the cursor has moved on.
+    const spent_at: usize = if (opts.spent) |spent| blk: {
+        const spent_epoch = spent.epoch orelse std.math.maxInt(i64);
+        var at = cards.len;
+        for (cards, 0..) |card, i| {
+            const card_epoch = card.epoch orelse std.math.maxInt(i64);
+            if (card_epoch >= spent_epoch) {
+                at = i;
+                break;
+            }
+        }
+        break :blk at;
+    } else cards.len;
+
+    var card_index: usize = 0;
+    for (0..cards.len + @intFromBool(opts.spent != null)) |row| {
+        if (opts.spent) |spent| {
+            if (row == spent_at) {
+                var line: std.Io.Writer.Allocating = .init(allocator);
+                defer line.deinit();
+                try line.writer.writeAll("  ");
+                try line.writer.writeAll(spent.title orelse "untitled");
+                if (spent.epoch) |epoch| {
+                    const compact = try rows.formatCompactTimestampAlloc(allocator, epoch);
+                    defer allocator.free(compact);
+                    const rel = try relativeIn(allocator, epoch, opts.now);
+                    defer allocator.free(rel);
+                    try line.writer.print("{s}{s}{s}{s}", .{ g.separator, compact, g.separator, rel });
+                }
+                try writeRailLine(writer, opts.indent, line.written(), budget, if (opts.use_color) style.role.spent else "");
+                lines += 1;
+                continue;
+            }
+        }
+        const card = cards[card_index];
+        const index = card_index;
+        card_index += 1;
         const selected = index == opts.card_cursor;
         var line: std.Io.Writer.Allocating = .init(allocator);
         defer line.deinit();
