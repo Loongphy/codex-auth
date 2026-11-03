@@ -120,7 +120,11 @@ pub fn build(b: *std.Build) void {
         const test_artifact = b.addTest(.{
             .root_module = test_module,
         });
-        const run_test = b.addRunArtifact(test_artifact);
+        // Plain Run step instead of addRunArtifact: the default server-mode
+        // test runner (--listen=-) can deadlock the build runner on Windows
+        // (upstream Zig 0.16 std.zig.Server race). Exit code decides pass/fail.
+        const run_test = std.Build.Step.Run.create(b, b.fmt("run test {s}", .{test_file}));
+        run_test.addArtifactArg(test_artifact);
         run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT", b.pathFromRoot("."));
         test_step.dependOn(&run_test.step);
     }
