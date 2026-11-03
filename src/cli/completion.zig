@@ -81,7 +81,10 @@ const bash_script =
     \\        compopt -o filenames 2>/dev/null
     \\    elif (( ${#cands[@]} )); then
     \\        for cand in "${cands[@]}"; do
-    \\            [[ "$cand" == "$cur"* ]] && COMPREPLY+=("${cand#"$before"}")
+    \\            if [[ "$cand" == "$cur"* ]]; then
+    \\                printf -v cand '%q' "${cand#"$before"}"
+    \\                COMPREPLY+=("$cand")
+    \\            fi
     \\        done
     \\    fi
     \\    (( directive & 2 )) && compopt -o nospace 2>/dev/null
@@ -109,6 +112,7 @@ const zsh_script =
     \\  done <<< "$out"
     \\  (( directive == 1 )) && return 1
     \\  if (( directive & 16 )); then
+    \\    compset -P '*='
     \\    _files -/
     \\    return
     \\  fi
@@ -119,7 +123,7 @@ const zsh_script =
     \\      compadd -d descs -- "${cands[@]}"
     \\    fi
     \\  fi
-    \\  (( directive & 4 )) || _files
+    \\  (( directive & 4 )) || { compset -P '*='; _files; }
     \\}
     \\
     \\compdef _codex-auth codex-auth

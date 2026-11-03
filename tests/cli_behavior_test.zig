@@ -787,7 +787,7 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "while IFS= read -r cand") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o filenames") != null);
     try std.testing.expect(std.mem.find(u8, script, "for cand in \"${cands[@]}\"") != null);
-    try std.testing.expect(std.mem.find(u8, script, "COMPREPLY+=(\"${cand#\"$before\"}\")") != null);
+    try std.testing.expect(std.mem.find(u8, script, "printf -v cand '%q' \"${cand#\"$before\"}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "join_next=1") != null);
     try std.testing.expect(std.mem.find(u8, script, "buf\" == *[:=]") == null);
 }
@@ -807,6 +807,7 @@ test "Scenario: Given zsh completion when rendering then the script is a __compl
     try std.testing.expect(std.mem.find(u8, script, "compadd -d descs -- \"${cands[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "compadd -Q") == null);
     try std.testing.expect(std.mem.find(u8, script, "_files -/") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compset -P '*='") != null);
 }
 
 test "Scenario: Given fish completion when rendering then the script is a __complete trampoline" {
