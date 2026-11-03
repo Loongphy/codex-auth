@@ -451,8 +451,13 @@ fn positionalSpec(spec: *const CmdSpec, pos_count: usize) ?*const PosSpec {
 
 fn writeCand(out: *std.Io.Writer, value: []const u8, desc: []const u8, cur: []const u8, descriptions: bool) !void {
     if (!std.mem.startsWith(u8, value, cur)) return;
+    if (!lineSafe(value)) return;
     if (descriptions) {
-        try out.print("{s}\t{s}\n", .{ value, desc });
+        try out.print("{s}\t", .{value});
+        for (desc) |c| {
+            try out.writeByte(if (c < 0x20 or c == 0x7f) ' ' else c);
+        }
+        try out.writeByte('\n');
     } else {
         try out.print("{s}\n", .{value});
     }
@@ -636,7 +641,16 @@ fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecor
 }
 
 fn usableHint(reg: *const registry.Registry, label: []const u8) bool {
-    return label.len != 0 and label[0] != '-' and label[0] != ':' and labelMatchCount(reg, label) == 1;
+    return label.len != 0 and label[0] != '-' and label[0] != ':' and lineSafe(label) and labelMatchCount(reg, label) == 1;
+}
+
+// Candidate rows are `value<TAB>description` lines; a value carrying control
+// characters would split the row and offer a truncated alias.
+fn lineSafe(value: []const u8) bool {
+    for (value) |c| {
+        if (c < 0x20 or c == 0x7f) return false;
+    }
+    return true;
 }
 
 fn labelMatchCount(reg: *const registry.Registry, label: []const u8) usize {
@@ -660,15 +674,12 @@ fn writeUniqueCandidate(
 ) !void {
     if (value.len == 0) return;
     if (!std.mem.startsWith(u8, value, cur)) return;
+    if (!lineSafe(value)) return;
     if (seen.contains(value)) return;
 
     const owned_value = try allocator.dupe(u8, value);
     errdefer allocator.free(owned_value);
 
-    if (descriptions) {
-        try out.print("{s}\t{s}\n", .{ value, description });
-    } else {
-        try out.print("{s}\n", .{value});
-    }
+    try writeCand(out, value, description, cur, descriptions);
     try seen.putNoClobber(owned_value, {});
 }
