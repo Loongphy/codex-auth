@@ -2446,6 +2446,79 @@ test "reset credits panel splice keeps one line per rendered row" {
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, last, "\n"));
 }
 
+test "reset credits panel maps each consume outcome to its status line" {
+    const gpa = std.testing.allocator;
+    const panel = cli.reset_credits_panel;
+    const ConsumeResult = codex_auth.api.reset_credits.ConsumeResult;
+
+    // A fresh redeem reports in place through the spent ghost, not the line.
+    var reset_result = ConsumeResult{ .outcome = .reset };
+    defer reset_result.deinit(gpa);
+    try std.testing.expect((try panel.consumeStatus(gpa, &reset_result)) == null);
+
+    const cases = [_]struct {
+        outcome: codex_auth.api.reset_credits.ConsumeOutcome,
+        status_code: ?u16 = null,
+        error_name: ?[]const u8 = null,
+        text: []const u8,
+        kind: panel.StatusKind,
+    }{
+        // already_redeemed consumed nothing this attempt, so unlike a fresh
+        // redeem it still needs a line — informational, not a failure.
+        .{ .outcome = .already_redeemed, .text = "reset credit already redeemed", .kind = .info },
+        .{ .outcome = .nothing_to_reset, .text = "usage does not need a reset right now", .kind = .info },
+        .{ .outcome = .no_credit, .text = "reset credit is no longer available; refresh to see current resets", .kind = .fail },
+        .{ .outcome = .http_error, .status_code = 500, .text = "redeem failed (HTTP 500)", .kind = .fail },
+        .{ .outcome = .http_error, .text = "redeem failed", .kind = .fail },
+        .{ .outcome = .unexpected_response, .status_code = 200, .text = "redeem failed (HTTP 200, unexpected response)", .kind = .fail },
+        .{ .outcome = .unexpected_response, .text = "redeem failed (unexpected response)", .kind = .fail },
+        // Known transport failures use their friendly phrasing; unknown names
+        // pass through, and a missing name gets the generic line.
+        .{ .outcome = .request_error, .error_name = "TimedOut", .text = "request timed out", .kind = .fail },
+        .{ .outcome = .request_error, .error_name = "MissingAuth", .text = "no ChatGPT login on this account", .kind = .fail },
+        .{ .outcome = .request_error, .error_name = "WeirdNewError", .text = "WeirdNewError", .kind = .fail },
+        .{ .outcome = .request_error, .text = "redeem failed", .kind = .fail },
+    };
+    for (cases) |case| {
+        var result = ConsumeResult{
+            .outcome = case.outcome,
+            .status_code = case.status_code,
+            .error_name = if (case.error_name) |name| try gpa.dupe(u8, name) else null,
+        };
+        defer result.deinit(gpa);
+        const report = (try panel.consumeStatus(gpa, &result)) orelse
+            return error.TestUnexpectedResult;
+        defer gpa.free(report.text);
+        try std.testing.expectEqualStrings(case.text, report.text);
+        try std.testing.expectEqual(case.kind, report.kind);
+    }
+}
+
+test "reset credits panel empty note stays inside the width budget" {
+    const gpa = std.testing.allocator;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+
+    // The probe note is a passive line in the rail's spot: indented like the
+    // rail, dim when color is on, and gone entirely when it cannot fit.
+    const lines = try cli.reset_credits_panel.renderEmptyNote(&out.writer, 4, 100, false);
+    try std.testing.expectEqual(@as(usize, 1), lines);
+    try std.testing.expectEqualStrings("    no reset credits\n", out.written());
+
+    out.clearRetainingCapacity();
+    _ = try cli.reset_credits_panel.renderEmptyNote(&out.writer, 4, 100, true);
+    try std.testing.expectEqualStrings("    \x1b[2mno reset credits\x1b[0m\n", out.written());
+
+    out.clearRetainingCapacity();
+    _ = try cli.reset_credits_panel.renderEmptyNote(&out.writer, 0, 6, false);
+    try std.testing.expectEqualStrings("no ...\n", out.written());
+
+    // At or below the indent there is no room for the note at all.
+    out.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), try cli.reset_credits_panel.renderEmptyNote(&out.writer, 4, 4, false));
+    try std.testing.expectEqualStrings("", out.written());
+}
+
 test "live list maps the credits rail cursor to the rendered account row" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();

@@ -159,7 +159,7 @@ prefix, so a narrow column never shows a mid-word cut:
 | `CREDITS` | `unlimited` becomes `inf` below its natural width |
 | `RESETS` | `N (exp MM-DD)` degrades to the bare count `N` |
 | `5H`, `WEEKLY` | `N% (HH:MM on D Mon)` drops the clock (`N% (D Mon)`), then the parenthetical (`N%`) |
-| `ACCOUNT` | `prefix…suffix` truncation (`very-l…ample.com`) once the column is wide enough for a useful suffix |
+| `ACCOUNT` | prefix + `.` + suffix truncation (`very-l.ple.com`) once the column is wide enough for a useful suffix; see [table-layout.md](table-layout.md) |
 | everything | `prefix.` truncation, display-width and UTF-8 safe |
 
 Missing or invalid values always render `-`, in every view.

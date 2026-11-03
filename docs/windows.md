@@ -23,83 +23,17 @@ Windows Terminal, `cmd.exe`, and CI logs stay readable.
   arrows, or box-drawing characters in Windows default output.
 - Unicode may be used for non-Windows output when it is already part of an
   established command style.
+- In-flight steps are announced with a `- ` prefix and a completed step with an
+  `OK ` prefix instead of a check mark.
 
-Recommended Windows status markers:
+### Reset credits rail and `reset` output
 
-```text
-Codex App is already running, launch skipped.
-- Checking latest https://github.com/Loongphy/codext release...
-  Downloading Codext CLI for WSL (v0.3.0)
-OK Downloaded Codext CLI for WSL (v0.3.0)
-```
-
-### App command examples
-
-Already running:
-
-```text
-Codex App is already running, launch skipped.
-```
-
-Launch with a managed CLI download:
-
-```text
-- Checking latest https://github.com/Loongphy/codext release...
-  Downloading Codext CLI for WSL (v0.3.0)
-  https://github.com/Loongphy/codext/releases/download/.../codext-linux-x64.tar.gz
-OK Downloaded Codext CLI for WSL (v0.3.0)
-
-- Environment Configuration ------------------------------------------------
-  Platform: WSL (auto-detected)
-  Codex Home: C:\Users\Loong\.codext (explicit)
-  App ID: Loongphy.Codext (explicit)
-  CLI Path: C:\Users\Loong\.codext\accounts\codext-cli\codex-linux-x64 (downloaded)
-----------------------------------------------------------------------------
-Launching Codex App...
-```
-
-### Reset credits rail examples
-
-The `list --live` reset credits rail is borderless on every platform. It nests
-under its account row by indentation, uses an uppercase heading, and relies on
-the footer for the key hints. The same state on both platforms, with the rail
-indented four columns under its account row — the consumed card stays as a
-struck-through, dimmed line tagged `redeemed`, which is drawn in success green
-outside the strike:
-
-Non-Windows:
-
-```text
-    RESETS · 1 available
-    Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d redeemed
-    > untitled
-```
-
-Windows:
-
-```text
-    RESETS, 1 available
-    Full reset (Weekly + 5 hr), 11-01 08:00, in 9d redeemed
-    > untitled
-```
-
-A failure line carries no marker on Windows, because its sentence already says
-what happened: `redeem failed (HTTP 500)`, or `reset credit is no longer available;
-refresh to see current resets`.
-
-`codex-auth reset` prints the same separator difference outside the TUI.
-
-Non-Windows:
-
-```text
-reset credit redeemed · 1 left (next exp 01-01 08:00)
-```
-
-Windows:
-
-```text
-reset credit redeemed, 1 left (next exp 01-01 08:00)
-```
+The `list --live` reset credits rail is borderless on every platform; Windows
+only changes the shared glyph set: the `·` field separator becomes `, `, a
+success status marker becomes `OK `, and a failure line carries no marker at
+all because its sentence already says what happened. `codex-auth reset` prints
+the same separator difference outside the TUI. The exact rendering of both is
+pinned by tests (`tests/cli_picker_test.zig`, `tests/cli_behavior_test.zig`).
 
 ## System proxy
 
