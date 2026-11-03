@@ -236,11 +236,12 @@ else
 
 pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h");
+    try out.writeAll("\x1b[?u\x1b[>7u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
 pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[?1007l\x1b[?25h\x1b[?1049l");
+    try out.writeAll("\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l");
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
