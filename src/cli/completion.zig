@@ -684,8 +684,9 @@ pub fn writeCompleteResponse(
     } else {
         const spec = ctx.spec.?;
         if (spec == &empty_spec) {
-            // `codex-auth -` accepts only the one-shot switch flags.
-            if (cur.len == 0 or std.mem.startsWith(u8, cur, "-"))
+            // `codex-auth -` accepts only the one-shot switch flags, and no
+            // positional word may follow them.
+            if (ctx.pos_count == 0 and (cur.len == 0 or std.mem.startsWith(u8, cur, "-")))
                 try writeFlagCands(out, spec, cur, &ctx, descriptions);
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
