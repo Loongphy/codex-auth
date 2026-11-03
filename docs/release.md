@@ -12,7 +12,7 @@ This document describes the repository's CI, preview package publishing, and tag
 
 ## Manual Release Checklist
 
-1. Sync `main` and confirm CI is green before changing any versioned file.
+1. Sync `main` and confirm CI is green before tagging or changing any versioned file.
    - Run `git fetch origin main --tags`.
    - Run `git switch main`.
    - Run `git pull --ff-only origin main`.
@@ -23,10 +23,21 @@ This document describes the repository's CI, preview package publishing, and tag
    - For a prerelease or test release, inspect the latest reachable release tag from `main`.
    - If the latest reachable tag is a stable tag such as `v1.2.3`, bump the patch version and start a new alpha line such as `1.2.4-alpha.1`.
    - If the latest reachable tag is already an alpha prerelease such as `v1.2.4-alpha.1`, keep the same core version and bump the alpha suffix, such as `1.2.4-alpha.2`.
+
+### Prereleases (tag-only, no version commit)
+
+- Prerelease tags (any `v*` tag containing `-`, such as `v1.2.4-alpha.1`, `v1.2.4-beta.1`, `v1.2.4-rc.1`) do not need a version-bump commit.
+- Prereleases do not need hand-written release notes: the generated changelog is sufficient for test releases. Only supply an annotated-tag message (see Tag Release Workflow) when there is something specific worth highlighting; a lightweight tag is fine otherwise.
+- Create the tag on the latest green `main` commit and push it:
+  - `git tag -a v<version> -m "Release <version>"` (the annotation may contain release notes; see Tag Release Workflow)
+  - `git push origin v<version>`
+- The tag is the version source of truth. The release workflow runs `scripts/npm/set-version.mjs` inside the CI checkout to stamp `src/version.zig`, `package.json`, and `optionalDependencies` with the tag version before building and publishing. Committed files on `main` are unchanged.
+- Stable releases still require the version-bump commit flow below so the tag always matches committed files.
+
+### Stable releases
+
 3. Update the local version files.
-   - Update `src/version.zig`.
-   - Update `package.json`.
-   - Update every platform package version under `package.json.optionalDependencies` to the same version.
+   - Run `node scripts/npm/set-version.mjs <version>` (without the `v` prefix) to update `src/version.zig`, `package.json`, and every platform package version under `package.json.optionalDependencies`.
 4. Validate the version change before committing.
    - Keep the version values aligned across `src/version.zig`, `package.json`, and the release tag you intend to create.
    - Run `node scripts/npm/check-versions.mjs v<version>`.
@@ -71,7 +82,7 @@ This document describes the repository's CI, preview package publishing, and tag
 
 - Branch and pull request validation runs in `.github/workflows/ci.yml`.
 - The `build-test` matrix runs on `ubuntu-latest`, `macos-latest`, and `windows-latest`.
-- CI installs Zig [`0.16.0`](https://ziglang.org/download/) and runs `zig build test`; if Zig is missing locally, download the matching `0.16.0` build from that page.
+- CI installs Zig [`0.17.0`](https://ziglang.org/download/) and runs `zig build test`; if Zig is missing locally, download the matching `0.17.0` build from that page.
 
 ## Preview Packages for Pull Requests
 
@@ -91,7 +102,10 @@ This document describes the repository's CI, preview package publishing, and tag
 - The release workflow validates the code with the same OS matrix used by CI and also builds a native `ReleaseSafe` binary on each matrix host.
 - It then cross-builds release assets for the six supported targets on Ubuntu.
 - Release metadata is checked against `scripts/npm/metadata.mjs` before publishing GitHub release assets or npm packages.
-- Release notes are generated from git tags and commit history.
+- For prerelease tags (tag names containing `-`), the workflow stamps the tag version into `src/version.zig` and `package.json` in the CI checkout via `scripts/npm/set-version.mjs`; stable tags must match the committed versions exactly.
+- Release notes are produced by GitHub's generate-release-notes API: newest entries first, each linked to its pull request and author, with the Full Changelog compare link appended automatically. If the pushed tag is annotated, its message is prepended to the generated notes (separated by `---`).
+- The recommended way to supply hand-written release notes is a local Markdown file passed with `git tag -a v<version> -F <file>`; the gitignored `release-notes/` directory at the repo root is the conventional scratch location (for example `release-notes/v1.2.4.md`). A file keeps Markdown formatting intact and avoids shell quoting and clipboard issues that come with `-m` or pasting from note-taking apps.
+- Boilerplate messages matching `release v<version>` and lightweight tags produce only the generated changelog.
 - GitHub releases are published automatically from the tag pipeline.
 - Stable tags create normal GitHub releases.
 - Prerelease tags such as `v1.2.4-rc.1`, `v1.2.4-beta.1`, and `v1.2.4-alpha.1` create GitHub releases marked as prereleases, not drafts.

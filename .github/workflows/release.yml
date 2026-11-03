@@ -100,7 +100,7 @@ jobs:
       - name: Setup Zig
         uses: Loongphy/setup-zig@node24-lts-runtime
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Zig test
         if: ${{ matrix.os != 'windows-latest' }}
@@ -157,13 +157,18 @@ jobs:
       - name: Setup Zig
         uses: Loongphy/setup-zig@node24-lts-runtime
         with:
-          version: 0.16.0
+          version: 0.17.0
+          cache-key: ${{ matrix.zig_target }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: 24
           package-manager-cache: false
+
+      - name: Apply prerelease tag version
+        if: ${{ contains(github.ref_name, '-') }}
+        run: node scripts/npm/set-version.mjs ${{ github.ref_name }}
 
       - name: Check versions
         run: node scripts/npm/check-versions.mjs ${{ github.ref_name }}
@@ -296,50 +301,45 @@ jobs:
               ? choosePreviousTag(parsedTags, parsedCurrentTag)
               : allTags.find((t) => t !== currentTag) ?? null;
 
-            let compareCommits = [];
-            if (previousTag) {
-              const compare = await github.rest.repos.compareCommitsWithBasehead({
+            // GitHub's generated notes list the newest changes first, link each
+            // entry to its pull request and author, and append the Full
+            // Changelog compare link automatically.
+            const generated = await github.rest.repos.generateReleaseNotes({
+              owner,
+              repo,
+              tag_name: currentTag,
+              ...(previousTag ? { previous_tag_name: previousTag } : {}),
+            });
+            const generatedBody = (generated.data.body ?? "").trim();
+
+            let tagNotes = "";
+            try {
+              const ref = await github.rest.git.getRef({
                 owner,
                 repo,
-                basehead: `${previousTag}...${currentTag}`,
+                ref: `tags/${currentTag}`,
               });
-              compareCommits = compare.data.commits ?? [];
-            } else {
-              const commits = await github.rest.repos.listCommits({
-                owner,
-                repo,
-                sha: currentTag,
-                per_page: 100,
-              });
-              compareCommits = (commits.data ?? []).reverse();
+              if (ref.data.object.type === "tag") {
+                const tagObject = await github.rest.git.getTag({
+                  owner,
+                  repo,
+                  tag_sha: ref.data.object.sha,
+                });
+                tagNotes = (tagObject.data.message ?? "").trim();
+              }
+            } catch (error) {
+              core.info(`Could not read tag annotation for ${currentTag}: ${error.message}`);
             }
 
-            const releaseOnlyCommitPattern = /^chore: release v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-            const commitLines = compareCommits
-              .map((commit) => {
-                const shortSha = commit.sha.slice(0, 7);
-                const msg = (commit.commit?.message ?? "").split("\n")[0].trim() || shortSha;
-                return { shortSha, msg };
-              })
-              .filter(({ msg }) => !releaseOnlyCommitPattern.test(msg))
-              .map(({ shortSha, msg }) => `- ${msg} (${shortSha})`);
+            if (/^release\s+v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/i.test(tagNotes)) {
+              tagNotes = "";
+            }
 
             const lines = [];
-            lines.push("## Changelog");
-            lines.push("");
-
-            if (previousTag) {
-              lines.push(`Full Changelog: <a href="https://github.com/${owner}/${repo}/compare/${previousTag}...${currentTag}"><code>${previousTag}...${currentTag}</code></a>`);
-            } else {
-              lines.push(`Full Changelog: <a href="https://github.com/${owner}/${repo}/commits/${currentTag}"><code>${currentTag}</code></a>`);
+            if (tagNotes) {
+              lines.push(tagNotes, "", "---", "");
             }
-            lines.push("");
-
-            if (commitLines.length > 0) {
-              lines.push(...commitLines);
-            } else {
-              lines.push("- No code changes detected.");
-            }
+            lines.push(generatedBody || "- No code changes detected.");
 
             fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
 
@@ -375,6 +375,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Apply prerelease tag version
+        if: ${{ contains(github.ref_name, '-') }}
+        run: node scripts/npm/set-version.mjs ${{ github.ref_name }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v8

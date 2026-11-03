@@ -2,14 +2,19 @@ const std = @import("std");
 const auth = @import("../auth/auth.zig");
 const chatgpt_http = @import("http.zig");
 const registry = @import("../registry/root.zig");
+const registry_parse = @import("../registry/parse.zig");
 
 pub const default_usage_endpoint = "https://chatgpt.com/backend-api/wham/usage";
+pub const default_reset_credits_endpoint = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 pub const UsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot,
     status_code: ?u16,
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
+    access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 };
 
 pub const max_response_error_code_bytes: usize = 64;
@@ -23,12 +28,24 @@ pub const ResponseErrorCode = struct {
     }
 };
 
+/// Injectable form of `fetchUsageForAuthPathDetailed`: callers that refresh
+/// one account outside the shared foreground pass (for example the live list
+/// right after a credit redeem) take this instead of hard-coding the fetcher,
+/// so tests can substitute a scripted backend.
+pub const FetchForAuthPathDetailedFn = *const fn (
+    allocator: std.mem.Allocator,
+    auth_path: []const u8,
+) anyerror!UsageFetchResult;
+
 pub const BatchUsageFetchResult = struct {
     snapshot: ?registry.RateLimitSnapshot = null,
     status_code: ?u16 = null,
     error_code: ?ResponseErrorCode = null,
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
+    access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -68,19 +85,67 @@ pub fn fetchUsageForAuthPath(allocator: std.mem.Allocator, auth_path: []const u8
 pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []const u8) !UsageFetchResult {
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
+    const plan_expires_at = info.plan_expires_at;
 
-    if (info.auth_mode == .apikey) return .{ .snapshot = null, .status_code = null };
-    if (info.auth_mode != .chatgpt) return .{ .snapshot = null, .status_code = null, .missing_auth = true };
-    const access_token = info.access_token orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
-    const chatgpt_account_id = info.chatgpt_account_id orelse return .{ .snapshot = null, .status_code = null, .missing_auth = true };
+    if (info.auth_mode == .apikey) return .{
+        .snapshot = null,
+        .status_code = null,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    if (info.auth_mode != .chatgpt) return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    const access_token = info.access_token orelse return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
+    const chatgpt_account_id = info.chatgpt_account_id orelse return .{
+        .snapshot = null,
+        .status_code = null,
+        .missing_auth = true,
+        .plan_expires_at = plan_expires_at,
+        .plan_expires_at_known = true,
+    };
 
-    return try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+    var result = try fetchUsageForTokenDetailed(allocator, default_usage_endpoint, access_token, chatgpt_account_id);
+    result.access_token_expires_at = auth.accessTokenExpiresAt(allocator, access_token) catch null;
+    result.plan_expires_at = plan_expires_at;
+    result.plan_expires_at_known = true;
+    return result;
 }
+
+/// Injectable form of the shared batch transport: the usage path shells out
+/// twice (usage, then reset credits), and tests substitute a scripted runner
+/// to cover failures the live subprocess rarely produces — including the
+/// cancellation path between the two calls.
+pub const GetJsonBatchFn = *const fn (
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const chatgpt_http.BatchRequest,
+    max_concurrency: usize,
+) anyerror!chatgpt_http.BatchHttpResult;
 
 pub fn fetchUsageForAuthPathsDetailedBatch(
     allocator: std.mem.Allocator,
     auth_paths: []const []const u8,
     max_concurrency: usize,
+) ![]BatchUsageFetchResult {
+    return fetchUsageForAuthPathsDetailedBatchWithRunner(allocator, auth_paths, max_concurrency, chatgpt_http.runGetJsonBatchCommand);
+}
+
+pub fn fetchUsageForAuthPathsDetailedBatchWithRunner(
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+    get_json_batch: GetJsonBatchFn,
 ) ![]BatchUsageFetchResult {
     const results = try allocator.alloc(BatchUsageFetchResult, auth_paths.len);
     errdefer allocator.free(results);
@@ -100,10 +165,14 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     for (auth_paths, 0..) |auth_path, idx| {
         var info = auth.parseAuthInfo(arena, auth_path) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
             results[idx].error_name = @errorName(err);
             continue;
         };
         defer info.deinit(arena);
+        results[idx].access_token_expires_at = info.access_token_expires_at;
+        results[idx].plan_expires_at = info.plan_expires_at;
+        results[idx].plan_expires_at_known = true;
 
         if (info.auth_mode == .apikey) {
             continue;
@@ -145,7 +214,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     if (requests.items.len == 0) return results;
 
-    var http_results = try chatgpt_http.runGetJsonBatchCommand(
+    var http_results = try get_json_batch(
         allocator,
         default_usage_endpoint,
         requests.items,
@@ -169,6 +238,38 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
             .timeout => results[result_idx].error_name = @errorName(error.TimedOut),
             .failed => results[result_idx].error_name = @errorName(error.RequestFailed),
         }
+    }
+
+    var has_snapshot = false;
+    for (results) |result| {
+        if (result.snapshot != null) {
+            has_snapshot = true;
+            break;
+        }
+    }
+    if (!has_snapshot) return results;
+
+    var reset_credit_http_results = get_json_batch(
+        allocator,
+        default_reset_credits_endpoint,
+        requests.items,
+        max_concurrency,
+    ) catch |err| {
+        if (err == error.Canceled) {
+            for (results) |*result| result.deinit(allocator);
+            return error.Canceled;
+        }
+        return results;
+    };
+    defer reset_credit_http_results.deinit(allocator);
+
+    for (request_indexes, 0..) |request_idx, result_idx| {
+        const unique_idx = request_idx orelse continue;
+        if (results[result_idx].snapshot == null) continue;
+        const http_result = reset_credit_http_results.items[unique_idx];
+        if (http_result.outcome != .ok or http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) continue;
+        const details = parseResetCreditResponse(allocator, http_result.body) catch null;
+        if (details) |value| results[result_idx].snapshot.?.reset_credit = value;
     }
 
     return results;
@@ -200,11 +301,32 @@ pub fn fetchUsageForTokenDetailed(
         return .{ .snapshot = null, .status_code = http_result.status_code, .error_code = error_code };
     }
 
+    var snapshot = try parseUsageResponse(allocator, http_result.body);
+    if (snapshot) |*value| {
+        errdefer registry.freeRateLimitSnapshot(allocator, value);
+        if (fetchResetCreditDetailsForToken(allocator, access_token, account_id) catch |err| blk: {
+            if (err == error.Canceled) return error.Canceled;
+            break :blk null;
+        }) |details| {
+            value.reset_credit = details;
+        }
+    }
     return .{
-        .snapshot = try parseUsageResponse(allocator, http_result.body),
+        .snapshot = snapshot,
         .status_code = http_result.status_code,
         .error_code = error_code,
     };
+}
+
+fn fetchResetCreditDetailsForToken(
+    allocator: std.mem.Allocator,
+    access_token: []const u8,
+    account_id: []const u8,
+) !?[]registry.ResetCreditCard {
+    const http_result = try chatgpt_http.runGetJsonCommand(allocator, default_reset_credits_endpoint, access_token, account_id);
+    defer allocator.free(http_result.body);
+    if (http_result.body.len == 0 or isNonSuccessStatus(http_result.status_code)) return null;
+    return try parseResetCreditResponse(allocator, http_result.body);
 }
 
 fn isNonSuccessStatus(status_code: ?u16) bool {
@@ -249,7 +371,7 @@ fn codeFromNestedObject(root_obj: std.json.ObjectMap, key: []const u8) ?[]const 
 }
 
 pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?registry.RateLimitSnapshot {
-    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{ .parse_numbers = false });
     defer parsed.deinit();
 
     const root_obj = switch (parsed.value) {
@@ -288,7 +410,8 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
         }
     }
 
-    if (snapshot.primary == null and snapshot.secondary == null and snapshot.reset_credits == null) {
+    const has_credit_balance = if (snapshot.credits) |credits| credits.balance != null else false;
+    if (snapshot.primary == null and snapshot.secondary == null and snapshot.reset_credits == null and !has_credit_balance) {
         if (snapshot.credits) |*credits| {
             if (credits.balance) |balance| allocator.free(balance);
         }
@@ -298,15 +421,27 @@ pub fn parseUsageResponse(allocator: std.mem.Allocator, body: []const u8) !?regi
     return snapshot;
 }
 
+pub fn parseResetCreditResponse(allocator: std.mem.Allocator, body: []const u8) !?[]registry.ResetCreditCard {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{ .parse_numbers = false });
+    defer parsed.deinit();
+    const obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return null,
+    };
+    const credits = obj.get("credits") orelse return null;
+    const items = switch (credits) {
+        .array => |array| array.items,
+        else => return null,
+    };
+    return try registry_parse.parseResetCreditCards(allocator, items);
+}
+
 fn parseResetCredits(v: std.json.Value) ?i64 {
     const obj = switch (v) {
         .object => |o| o,
         else => return null,
     };
-    return switch (obj.get("available_count") orelse return null) {
-        .integer => |i| i,
-        else => null,
-    };
+    return parseIntValue(obj.get("available_count") orelse return null);
 }
 
 fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
@@ -315,23 +450,17 @@ fn parseWindow(v: std.json.Value) ?registry.RateLimitWindow {
         else => return null,
     };
 
-    const used_percent = if (obj.get("used_percent")) |used| switch (used) {
-        .float => |f| f,
-        .integer => |i| @as(f64, @floatFromInt(i)),
-        else => return null,
-    } else return null;
+    const used_percent = if (obj.get("used_percent")) |used| parseFloatValue(used) else null;
+    if (used_percent == null) return null;
 
-    const window_minutes = if (obj.get("limit_window_seconds")) |seconds| switch (seconds) {
-        .integer => |value| ceilMinutes(value),
-        else => null,
-    } else null;
-    const resets_at = if (obj.get("reset_at")) |reset_at| switch (reset_at) {
-        .integer => |value| value,
-        else => null,
-    } else null;
+    const window_minutes = if (obj.get("limit_window_seconds")) |seconds|
+        if (parseIntValue(seconds)) |value| ceilMinutes(value) else null
+    else
+        null;
+    const resets_at = if (obj.get("reset_at")) |reset_at| parseIntValue(reset_at) else null;
 
     return .{
-        .used_percent = used_percent,
+        .used_percent = used_percent.?,
         .window_minutes = window_minutes,
         .resets_at = resets_at,
     };
@@ -351,15 +480,40 @@ fn parseCredits(allocator: std.mem.Allocator, v: std.json.Value) !?registry.Cred
         .bool => |b| b,
         else => false,
     } else false;
-    const balance = if (obj.get("balance")) |value| switch (value) {
-        .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
-        else => null,
-    } else null;
+    const balance = if (obj.get("balance")) |value| try parseBalance(allocator, value) else null;
 
     return .{
         .has_credits = has_credits,
         .unlimited = unlimited,
         .balance = balance,
+    };
+}
+
+fn parseBalance(allocator: std.mem.Allocator, value: std.json.Value) !?[]u8 {
+    return switch (value) {
+        .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
+        .integer => |i| try allocator.print("{d}", .{i}),
+        .float => |f| if (std.math.isFinite(f)) try allocator.print("{d}", .{f}) else null,
+        .number_string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
+        else => null,
+    };
+}
+
+fn parseFloatValue(value: std.json.Value) ?f64 {
+    return switch (value) {
+        .float => |f| if (std.math.isFinite(f)) f else null,
+        .integer => |i| @as(f64, @floatFromInt(i)),
+        .number_string, .string => |s| std.fmt.parseFloat(f64, s) catch null,
+        else => null,
+    };
+}
+
+fn parseIntValue(value: std.json.Value) ?i64 {
+    return switch (value) {
+        .integer => |i| i,
+        .number_string, .string => |s| std.fmt.parseInt(i64, s, 10) catch null,
+        .float => |f| if (std.math.isFinite(f) and @floor(f) == f and f >= @as(f64, @floatFromInt(std.math.minInt(i64))) and f <= @as(f64, @floatFromInt(std.math.maxInt(i64)))) @as(i64, @intFromFloat(f)) else null,
+        else => null,
     };
 }
 

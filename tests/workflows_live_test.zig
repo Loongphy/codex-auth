@@ -127,7 +127,7 @@ fn appendLiveMergeTestAccount(
     email: []const u8,
     alias: []const u8,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, account_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, account_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = account_key[0..sep];
     const chatgpt_account_id = account_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -162,8 +162,8 @@ fn writeLiveActionTestSnapshot(
     try std.Io.Dir.cwd().writeFile(app_runtime.io(), .{ .sub_path = auth_path, .data = auth_json });
 }
 
-fn sleepLiveRefreshTask(io: std.Io) void {
-    std.Io.sleep(io, .fromMilliseconds(800), .awake) catch {};
+fn sleepLiveRefreshTask(io: std.Io) error{Canceled}!void {
+    try std.Io.sleep(io, .fromMilliseconds(800), .awake);
 }
 
 test "live refresh interval uses the shared live config cadence" {
@@ -268,6 +268,7 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
     defer refreshed.deinit(gpa);
     try appendLiveMergeTestAccount(gpa, &refreshed, "user-alpha::acct-alpha", "alpha@example.com", "alpha");
     refreshed.accounts.items[0].account_name = try gpa.dupe(u8, "Alpha Workspace");
+    refreshed.accounts.items[0].access_token_expires_at = 1790000000;
 
     var latest: registry.Registry = .{
         .schema_version = registry.current_schema_version,
@@ -287,6 +288,7 @@ test "live refresh merge preserves accounts newly added to the latest registry" 
     const alpha_idx = findAccountIndexByAccountKeyConst(&latest, "user-alpha::acct-alpha") orelse return error.TestExpectedEqual;
     const beta_idx = findAccountIndexByAccountKeyConst(&latest, "user-beta::acct-beta") orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("Alpha Workspace", latest.accounts.items[alpha_idx].account_name.?);
+    try std.testing.expectEqual(@as(?i64, 1790000000), latest.accounts.items[alpha_idx].access_token_expires_at);
     try std.testing.expect(latest.accounts.items[beta_idx].account_name == null);
 
     const usage_overrides = try gpa.alloc(?[]const u8, refreshed.accounts.items.len);
@@ -806,7 +808,7 @@ test "buildStatusLine releases mutex on allocation failure" {
         runtime.buildStatusLine(failing_allocator, .{
             .reg = &reg,
             .usage_overrides = null,
-        }),
+        }, null),
     );
 
     try std.testing.expect(runtime.mutex.tryLock());

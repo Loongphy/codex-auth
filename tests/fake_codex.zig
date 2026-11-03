@@ -1,11 +1,7 @@
 const std = @import("std");
-const app_runtime = @import("app_runtime");
 
-fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    var env_map = try app_runtime.currentEnviron().createMap(allocator);
-    defer env_map.deinit();
-
-    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
+fn getEnvVarOwned(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Map, name: []const u8) ![]u8 {
+    const value = environ_map.get(name) orelse return error.EnvironmentVariableNotFound;
     return try allocator.dupe(u8, value);
 }
 
@@ -14,9 +10,9 @@ pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
 
-    const home_root = try getEnvVarOwned(arena, "HOME");
-    const codex_home = getEnvVarOwned(arena, "CODEX_HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try std.fs.path.join(arena, &[_][]const u8{ home_root, ".codex" }),
+    const home_root = try getEnvVarOwned(arena, init.environ_map, "HOME");
+    const codex_home = getEnvVarOwned(arena, init.environ_map, "CODEX_HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try std.Io.Dir.path.join(arena, &[_][]const u8{ home_root, ".codex" }),
         else => return err,
     };
 

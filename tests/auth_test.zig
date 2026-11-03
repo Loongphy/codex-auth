@@ -24,13 +24,18 @@ test "parse auth info from jwt" {
     const p64 = try b64url(gpa, payload);
     defer gpa.free(p64);
 
+    const access_payload = "{\"exp\":1773491460}";
+    const access_p64 = try b64url(gpa, access_payload);
+    defer gpa.free(access_p64);
+    const access_jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", access_p64, ".sig" });
+    defer gpa.free(access_jwt);
+
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
-    const json = try std.fmt.allocPrint(
-        gpa,
-        "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
-        .{ chatgpt_account_id, jwt },
+    const json = try gpa.print(
+        "{{\"tokens\":{{\"access_token\":\"{s}\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
+        .{ access_jwt, chatgpt_account_id, jwt },
     );
     defer gpa.free(json);
 
@@ -49,11 +54,12 @@ test "parse auth info from jwt" {
     try std.testing.expect(info.chatgpt_user_id != null);
     try std.testing.expect(std.mem.eql(u8, info.chatgpt_user_id.?, chatgpt_user_id));
     try std.testing.expect(info.record_key != null);
-    const expected_record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    const expected_record_key = try gpa.print("{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
     defer gpa.free(expected_record_key);
     try std.testing.expect(std.mem.eql(u8, info.record_key.?, expected_record_key));
     try std.testing.expect(info.access_token != null);
-    try std.testing.expect(std.mem.eql(u8, info.access_token.?, "access-user@example.com"));
+    try std.testing.expect(std.mem.eql(u8, info.access_token.?, access_jwt));
+    try std.testing.expectEqual(@as(?i64, 1773491460), info.access_token_expires_at);
 }
 
 test "parse auth info uses default organization when account id is missing" {
@@ -72,8 +78,7 @@ test "parse auth info uses default organization when account id is missing" {
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
-    const json = try std.fmt.allocPrint(
-        gpa,
+    const json = try gpa.print(
         "{{\"tokens\":{{\"access_token\":\"access-org-user@example.com\",\"account_id\":\"\",\"id_token\":\"{s}\"}}}}",
         .{jwt},
     );
@@ -88,7 +93,7 @@ test "parse auth info uses default organization when account id is missing" {
     try std.testing.expect(info.chatgpt_user_id != null);
     try std.testing.expect(std.mem.eql(u8, info.chatgpt_user_id.?, chatgpt_user_id));
     try std.testing.expect(info.record_key != null);
-    const expected_record_key = try std.fmt.allocPrint(gpa, "{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
+    const expected_record_key = try gpa.print("{s}::{s}", .{ chatgpt_user_id, chatgpt_account_id });
     defer gpa.free(expected_record_key);
     try std.testing.expect(std.mem.eql(u8, info.record_key.?, expected_record_key));
 }
@@ -139,8 +144,7 @@ test "parse auth info frees allocations on account mismatch" {
     const jwt = try std.mem.concat(gpa, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer gpa.free(jwt);
 
-    const json = try std.fmt.allocPrint(
-        gpa,
+    const json = try gpa.print(
         "{{\"tokens\":{{\"access_token\":\"access-user@example.com\",\"account_id\":\"{s}\",\"id_token\":\"{s}\"}}}}",
         .{ token_account_id, jwt },
     );
@@ -163,9 +167,9 @@ test "convert cpa auth json produces a parseable standard auth snapshot" {
     const converted = try auth.convertCpaAuthJson(gpa, cpa_json);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"auth_mode\": \"chatgpt\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\": \"refresh-cpa@example.com\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"account_id\":") != null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"auth_mode\": \"chatgpt\"") != null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"refresh_token\": \"refresh-cpa@example.com\"") != null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"account_id\":") != null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -191,7 +195,7 @@ test "convert cpa auth json omits empty last refresh" {
     const converted = try auth.convertCpaAuthJson(gpa, empty_last_refresh);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"last_refresh\"") == null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -214,7 +218,7 @@ test "convert cpa auth json omits missing last refresh" {
     const converted = try auth.convertCpaAuthJson(gpa, without_last_refresh);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"last_refresh\"") == null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -236,13 +240,13 @@ test "convert cpa auth json derives missing account id from id token" {
 
     const expected_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "missing-account-id@example.com");
     defer gpa.free(expected_account_id);
-    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{expected_account_id});
+    const expected_json = try gpa.print("\"account_id\": \"{s}\"", .{expected_account_id});
     defer gpa.free(expected_json);
 
     const converted = try auth.convertCpaAuthJson(gpa, without_account_id);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
+    try std.testing.expect(std.mem.find(u8, converted, expected_json) != null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -256,7 +260,7 @@ test "convert cpa auth json ignores top-level account id" {
     defer gpa.free(cpa_json);
     const source_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "mismatched-account-id@example.com");
     defer gpa.free(source_account_id);
-    const source_json = try std.fmt.allocPrint(gpa, "\"account_id\":\"{s}\"", .{source_account_id});
+    const source_json = try gpa.print("\"account_id\":\"{s}\"", .{source_account_id});
     defer gpa.free(source_json);
     const mismatched = try std.mem.replaceOwned(
         u8,
@@ -267,14 +271,14 @@ test "convert cpa auth json ignores top-level account id" {
     );
     defer gpa.free(mismatched);
 
-    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{source_account_id});
+    const expected_json = try gpa.print("\"account_id\": \"{s}\"", .{source_account_id});
     defer gpa.free(expected_json);
 
     const converted = try auth.convertCpaAuthJson(gpa, mismatched);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "wrong-account-id") == null);
+    try std.testing.expect(std.mem.find(u8, converted, expected_json) != null);
+    try std.testing.expect(std.mem.find(u8, converted, "wrong-account-id") == null);
 }
 
 test "convert cpa auth json omits missing refresh token" {
@@ -285,7 +289,7 @@ test "convert cpa auth json omits missing refresh token" {
     const converted = try auth.convertCpaAuthJson(gpa, cpa_json);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"refresh_token\"") == null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -343,8 +347,8 @@ test "convert cpa auth json trims required token fields" {
     const converted = try auth.convertCpaAuthJson(gpa, spaced_tokens);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"id_token\": \"  ") == null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"access_token\": \" access-trimmed-tokens@example.com \"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"id_token\": \"  ") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"access_token\": \" access-trimmed-tokens@example.com \"") == null);
 
     const info = try auth.parseAuthInfoData(gpa, converted);
     defer info.deinit(gpa);
@@ -361,10 +365,10 @@ test "convert standard auth json to cpa omits optional empty fields" {
     const converted = try auth.convertStandardAuthJsonToCpa(gpa, standard_json);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"id_token\": \"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"access_token\": \"access-standard-no-refresh@example.com\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"refresh_token\"") == null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "\"last_refresh\"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"id_token\": \"") != null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"access_token\": \"access-standard-no-refresh@example.com\"") != null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"refresh_token\"") == null);
+    try std.testing.expect(std.mem.find(u8, converted, "\"last_refresh\"") == null);
 }
 
 test "convert standard auth json to cpa derives account id from id token" {
@@ -373,7 +377,7 @@ test "convert standard auth json to cpa derives account id from id token" {
     defer gpa.free(standard_json);
     const expected_account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, "standard-mismatched-account@example.com");
     defer gpa.free(expected_account_id);
-    const stale_account_id_json = try std.fmt.allocPrint(gpa, "\"account_id\":\"{s}\"", .{expected_account_id});
+    const stale_account_id_json = try gpa.print("\"account_id\":\"{s}\"", .{expected_account_id});
     defer gpa.free(stale_account_id_json);
     const mismatched = try std.mem.replaceOwned(
         u8,
@@ -384,12 +388,54 @@ test "convert standard auth json to cpa derives account id from id token" {
     );
     defer gpa.free(mismatched);
 
-    const expected_json = try std.fmt.allocPrint(gpa, "\"account_id\": \"{s}\"", .{expected_account_id});
+    const expected_json = try gpa.print("\"account_id\": \"{s}\"", .{expected_account_id});
     defer gpa.free(expected_json);
 
     const converted = try auth.convertStandardAuthJsonToCpa(gpa, mismatched);
     defer gpa.free(converted);
 
-    try std.testing.expect(std.mem.indexOf(u8, converted, expected_json) != null);
-    try std.testing.expect(std.mem.indexOf(u8, converted, "stale-account-id") == null);
+    try std.testing.expect(std.mem.find(u8, converted, expected_json) != null);
+    try std.testing.expect(std.mem.find(u8, converted, "stale-account-id") == null);
+}
+
+fn authJsonWithSubscriptionUntil(allocator: std.mem.Allocator, claim_literal: []const u8) ![]u8 {
+    const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
+    const payload = try allocator.print(
+        "{{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"acc\",\"chatgpt_user_id\":\"user\",\"user_id\":\"user\",\"chatgpt_plan_type\":\"plus\",\"chatgpt_subscription_active_until\":{s}}}}}",
+        .{claim_literal},
+    );
+    defer allocator.free(payload);
+
+    const h64 = try b64url(allocator, header);
+    defer allocator.free(h64);
+    const p64 = try b64url(allocator, payload);
+    defer allocator.free(p64);
+    const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
+    defer allocator.free(jwt);
+
+    return try allocator.print(
+        "{{\"tokens\":{{\"access_token\":\"access\",\"account_id\":\"acc\",\"id_token\":\"{s}\"}}}}",
+        .{jwt},
+    );
+}
+
+test "parse auth info reads plan expiry from the id token subscription claim" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct {
+        claim: []const u8,
+        expected: ?i64,
+    }{
+        .{ .claim = "\"2026-07-29T12:09:00Z\"", .expected = 1785326940 },
+        .{ .claim = "\"2026-08-25T09:36:13.284171+00:00\"", .expected = 1787650573 },
+        .{ .claim = "1785326940000", .expected = 1785326940 },
+        .{ .claim = "null", .expected = null },
+    };
+
+    for (cases) |case| {
+        const json = try authJsonWithSubscriptionUntil(gpa, case.claim);
+        defer gpa.free(json);
+        const info = try auth.parseAuthInfoData(gpa, json);
+        defer info.deinit(gpa);
+        try std.testing.expectEqual(case.expected, info.plan_expires_at);
+    }
 }

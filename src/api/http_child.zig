@@ -81,10 +81,14 @@ pub fn runChildCaptureWithInputAndOutputLimit(
             defer std.heap.page_allocator.free(stdout);
             const stderr = try multi_reader.toOwnedSlice(1);
             defer std.heap.page_allocator.free(stderr);
+            const owned_stdout = try allocator.dupe(u8, stdout);
+            errdefer allocator.free(owned_stdout);
+            const owned_stderr = try allocator.dupe(u8, stderr);
+            errdefer allocator.free(owned_stderr);
             return .{
                 .term = .{ .unknown = 0 },
-                .stdout = try allocator.dupe(u8, stdout),
-                .stderr = try allocator.dupe(u8, stderr),
+                .stdout = owned_stdout,
+                .stderr = owned_stderr,
                 .timed_out = true,
             };
         },
@@ -99,10 +103,15 @@ pub fn runChildCaptureWithInputAndOutputLimit(
     const stderr = try multi_reader.toOwnedSlice(1);
     defer std.heap.page_allocator.free(stderr);
 
+    const owned_stdout = try allocator.dupe(u8, stdout);
+    errdefer allocator.free(owned_stdout);
+    const owned_stderr = try allocator.dupe(u8, stderr);
+    errdefer allocator.free(owned_stderr);
+
     return .{
         .term = term,
-        .stdout = try allocator.dupe(u8, stdout),
-        .stderr = try allocator.dupe(u8, stderr),
+        .stdout = owned_stdout,
+        .stderr = owned_stderr,
         .timed_out = false,
     };
 }

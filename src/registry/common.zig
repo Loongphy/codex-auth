@@ -2,33 +2,26 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const account_api = @import("../api/account.zig");
-const c_time = @cImport({
-    @cInclude("time.h");
-});
 
 pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, edu, unknown };
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
-pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.target.os.tag) {
     .windows => .default_file,
     else => .fromMode(0o600),
 };
-pub const private_dir_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+pub const private_dir_permissions: std.Io.File.Permissions = switch (builtin.target.os.tag) {
     .windows => .default_dir,
     else => .fromMode(0o700),
 };
 
 pub fn getEnvMap(allocator: std.mem.Allocator) !std.process.Environ.Map {
-    return try app_runtime.currentEnviron().createMap(allocator);
+    return app_runtime.getEnvMap(allocator);
 }
 
 pub fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
-    var env_map = try getEnvMap(allocator);
-    defer env_map.deinit();
-
-    const value = env_map.get(name) orelse return error.EnvironmentVariableNotFound;
-    return try allocator.dupe(u8, value);
+    return app_runtime.getEnvVarOwned(allocator, name);
 }
 
 pub fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
@@ -40,7 +33,7 @@ pub fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u
 }
 
 pub fn realPathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) {
+    if (std.Io.Dir.path.isAbsolute(path)) {
         return try app_runtime.realPathFileAbsoluteAlloc(allocator, path);
     }
     return try app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
@@ -64,11 +57,19 @@ pub const CreditsSnapshot = struct {
     balance: ?[]u8,
 };
 
+pub const ResetCreditCard = struct {
+    id: []u8,
+    status: []u8,
+    expires_at: ?[]u8,
+    title: ?[]u8,
+};
+
 pub const RateLimitSnapshot = struct {
     primary: ?RateLimitWindow,
     secondary: ?RateLimitWindow,
     credits: ?CreditsSnapshot,
     reset_credits: ?i64 = null,
+    reset_credit: ?[]ResetCreditCard = null,
     plan_type: ?PlanType,
 };
 
@@ -99,6 +100,8 @@ pub const AccountRecord = struct {
     account_name: ?[]u8,
     plan: ?PlanType,
     auth_mode: ?AuthMode,
+    access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
     created_at: i64,
     last_used_at: ?i64,
     last_usage: ?RateLimitSnapshot,
@@ -177,6 +180,17 @@ pub fn freeRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: *const Rate
     if (snapshot.credits) |*c| {
         if (c.balance) |b| allocator.free(b);
     }
+    if (snapshot.reset_credit) |cards| {
+        for (cards) |card| freeResetCreditCard(allocator, card);
+        allocator.free(cards);
+    }
+}
+
+pub fn freeResetCreditCard(allocator: std.mem.Allocator, card: ResetCreditCard) void {
+    allocator.free(card.id);
+    allocator.free(card.status);
+    if (card.expires_at) |value| allocator.free(value);
+    if (card.title) |value| allocator.free(value);
 }
 
 pub fn freeRolloutSignature(allocator: std.mem.Allocator, signature: *const RolloutSignature) void {
@@ -213,13 +227,36 @@ pub fn cloneRateLimitSnapshot(allocator: std.mem.Allocator, snapshot: RateLimitS
         if (credits.balance) |balance| allocator.free(balance);
     };
 
+    var cloned_reset_credit: ?[]ResetCreditCard = null;
+    if (snapshot.reset_credit) |cards| {
+        cloned_reset_credit = try cloneResetCreditCards(allocator, cards);
+    }
+
     return .{
         .primary = snapshot.primary,
         .secondary = snapshot.secondary,
         .credits = cloned_credits,
         .reset_credits = snapshot.reset_credits,
+        .reset_credit = cloned_reset_credit,
         .plan_type = snapshot.plan_type,
     };
+}
+
+pub fn cloneResetCreditCards(allocator: std.mem.Allocator, cards: []const ResetCreditCard) ![]ResetCreditCard {
+    var cloned = try allocator.alloc(ResetCreditCard, cards.len);
+    errdefer allocator.free(cloned);
+    var cloned_count: usize = 0;
+    errdefer for (cloned[0..cloned_count]) |card| freeResetCreditCard(allocator, card);
+    for (cards, 0..) |card, idx| {
+        cloned[idx] = .{
+            .id = try allocator.dupe(u8, card.id),
+            .status = try allocator.dupe(u8, card.status),
+            .expires_at = if (card.expires_at) |value| try allocator.dupe(u8, value) else null,
+            .title = if (card.title) |value| try allocator.dupe(u8, value) else null,
+        };
+        cloned_count += 1;
+    }
+    return cloned;
 }
 
 pub fn setRolloutSignature(
@@ -264,7 +301,27 @@ pub fn rateLimitSnapshotEqual(a: RateLimitSnapshot, b: RateLimitSnapshot) bool {
         rateLimitWindowEqual(a.secondary, b.secondary) and
         creditsEqual(a.credits, b.credits) and
         a.reset_credits == b.reset_credits and
+        resetCreditEqual(a.reset_credit, b.reset_credit) and
         a.plan_type == b.plan_type;
+}
+
+pub fn resetCreditEqual(a: ?[]const ResetCreditCard, b: ?[]const ResetCreditCard) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    if (a.?.len != b.?.len) return false;
+    for (a.?, b.?) |left, right| {
+        if (!std.mem.eql(u8, left.id, right.id) or
+            !std.mem.eql(u8, left.status, right.status)) return false;
+        if ((left.expires_at == null) != (right.expires_at == null)) return false;
+        if (left.expires_at) |l| {
+            if (!std.mem.eql(u8, l, right.expires_at.?)) return false;
+        }
+        if ((left.title == null) != (right.title == null)) return false;
+        if (left.title) |l| {
+            if (!std.mem.eql(u8, l, right.title.?)) return false;
+        }
+    }
+    return true;
 }
 
 pub fn rateLimitWindowEqual(a: ?RateLimitWindow, b: ?RateLimitWindow) bool {
@@ -362,10 +419,10 @@ pub fn resolveCodexHomeFromEnv(
         if (path.len != 0) return try resolveExistingCodexHomeOverride(allocator, path);
     }
     if (home) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.Io.Dir.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     if (user_profile) |path| {
-        if (path.len != 0) return try std.fs.path.join(allocator, &[_][]const u8{ path, ".codex" });
+        if (path.len != 0) return try std.Io.Dir.path.join(allocator, &[_][]const u8{ path, ".codex" });
     }
     return error.EnvironmentVariableNotFound;
 }
@@ -392,7 +449,7 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
 }
 
 pub fn hardenPathPermissions(path: []const u8, permissions: std.Io.File.Permissions) !void {
-    if (builtin.os.tag == .windows) return;
+    if (builtin.target.os.tag == .windows) return;
     try std.Io.Dir.cwd().setFilePermissions(app_runtime.io(), path, permissions, .{});
 }
 
@@ -411,13 +468,13 @@ pub fn ensurePrivateDir(path: []const u8) !void {
 }
 
 pub fn ensureAccountsDir(allocator: std.mem.Allocator, codex_home: []const u8) !void {
-    const accounts_dir = try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
+    const accounts_dir = try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
     defer allocator.free(accounts_dir);
     try ensurePrivateDir(accounts_dir);
 }
 
 pub fn registryPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "registry.json" });
 }
 
 pub fn encodedFileKey(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -456,7 +513,7 @@ pub fn accountSnapshotFileName(allocator: std.mem.Allocator, account_key: []cons
 pub fn accountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, account_key: []const u8) ![]u8 {
     const filename = try accountSnapshotFileName(allocator, account_key);
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u8, email: []const u8) ![]u8 {
@@ -464,11 +521,11 @@ pub fn legacyAccountAuthPath(allocator: std.mem.Allocator, codex_home: []const u
     defer allocator.free(key);
     const filename = try std.mem.concat(allocator, u8, &[_][]const u8{ key, ".auth.json" });
     defer allocator.free(filename);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", filename });
 }
 
 pub fn activeAuthPath(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "auth.json" });
 }
 
 pub fn copyFileWithPermissions(src: []const u8, dest: []const u8, permissions: ?std.Io.File.Permissions) !void {

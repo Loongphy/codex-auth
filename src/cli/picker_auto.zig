@@ -8,7 +8,7 @@ const nav = @import("picker_nav.zig");
 const SwitchRows = row_data.SwitchRows;
 const SwitchSelectionDisplay = selection.SwitchSelectionDisplay;
 const accountKeyForSelectableAlloc = nav.accountKeyForSelectableAlloc;
-const resolveRateWindow = row_data.resolveRateWindow;
+const resolveRateWindow = registry.resolveRateWindow;
 
 fn accountHasNoRemaining(rec: *const registry.AccountRecord, now: i64) bool {
     const rate_5h = resolveRateWindow(rec.last_usage, 300, true);

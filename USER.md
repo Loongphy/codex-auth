@@ -42,7 +42,11 @@ edge-scroll compensation behavior.
 - Without a keyboard-enhancement response, traditional Up/Down input keeps the
   legacy behavior so unsupported terminals do not lose keyboard navigation.
 - `list --live` treats that Up/Down-style input as viewport scrolling so the
-  translated wheel input remains responsive.
+  translated wheel input remains responsive. `Enter` opens the reset-credit rail
+  for an account row that has at least one available credit; while the rail is
+  open, the same Up/Down-style input, including `j`/`k`, moves the credit
+  highlight instead, and a wheel that the terminal translates into arrows follows
+  it. `Esc` closes the rail and returns to account-row movement.
 
 ### Problems Solved
 

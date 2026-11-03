@@ -7,7 +7,7 @@ This document is the implementation index for `codex-auth`. Command-specific beh
 - Command behavior: [docs/commands/README.md](./commands/README.md)
 - API refresh and endpoint rules: [docs/api.md](./api.md)
 - File permissions: [docs/permissions.md](./permissions.md)
-- Schema migration: [docs/schema-migration.md](./schema-migration.md)
+- Registry schema and compatibility: [docs/schema.md](./schema.md)
 - Test organization: [docs/tests.md](./tests.md)
 - Release and CI: [docs/release.md](./release.md)
 
@@ -31,14 +31,15 @@ Managed files:
 
 ## Registry Compatibility
 
-- `registry.json.schema_version` is the on-disk migration gate.
+- `registry.json.schema_version` is the on-disk compatibility gate.
 - `version = 2` registries using `active_email` and email-keyed snapshots are migrated to the current schema.
 - Current-layout files that still use the top-level `version = 3` key are rewritten to the current schema.
 - Loading a supported older schema performs the migration in memory and rewrites `registry.json` in the current format.
 - Loading a newer `schema_version` is rejected with `UnsupportedRegistryVersion`.
+- Additive optional derived/cache fields stay within the current schema when missing data is safe and recoverable; see [docs/schema.md](./schema.md).
 - Saving always rewrites `registry.json` into the current schema field set.
 
-See [docs/schema-migration.md](./schema-migration.md) for versioning policy and migration rules.
+See [docs/schema.md](./schema.md) for the compatibility policy, data classification, and migration rules.
 
 ## Account Identity
 
@@ -76,6 +77,8 @@ If `OPENAI_API_KEY` is present, the account is treated as API-key auth. Otherwis
 - `tokens.id_token`
 - a ChatGPT account context from `tokens.account_id`, JWT `https://api.openai.com/auth.chatgpt_account_id`, or JWT `https://api.openai.com/auth.organizations[].id`
 - JWT user identity from `chatgpt_user_id` or `user_id`
+- Optional plan expiry from JWT `https://api.openai.com/auth.chatgpt_subscription_active_until`
+  (ISO-8601 string or epoch seconds/milliseconds)
 
 If required identity fields are missing or mismatched, import/login fails. Existing-registry foreground sync skips unsyncable auth files and continues with registry state already on disk.
 
@@ -86,7 +89,7 @@ Foreground account commands sync `auth.json` before their main work when the cur
 The sync flow is:
 
 1. Read `~/.codex/auth.json`.
-2. Parse email, plan, auth mode, `chatgpt_user_id`, and `chatgpt_account_id`.
+2. Parse email, plan, plan expiry, auth mode, `chatgpt_user_id`, and `chatgpt_account_id`.
 3. Match by `record_key`.
 4. Update the matching account and active key, or create a new account record when no match exists.
 5. Rewrite the managed account snapshot when contents changed.
@@ -124,6 +127,8 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Alias labels take precedence for child rows.
 - Duplicate workspace-style plan labels may use stable numbered labels.
 - `PLAN` comes from the auth claim when available, then falls back to usage snapshot plan data.
+- `PLAN EXPIRE` comes from the stored `id_token` subscription claim. Missing or already-expired
+  timestamps render as `-`; the column is omitted on narrow terminals.
 - Usage cells show remaining percentage plus reset time when reset data is known.
 - `LAST ACTIVITY` is rendered as relative time from `last_usage_at`.
 

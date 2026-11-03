@@ -31,14 +31,14 @@ pub fn apiKeyAccountKeyAlloc(allocator: std.mem.Allocator, user_id: []const u8, 
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "apikey::{s}::{s}", .{ user_id, hex[0..] });
+    return allocator.print("apikey::{s}::{s}", .{ user_id, hex[0..] });
 }
 
 pub fn apiKeyAccountNameAlloc(allocator: std.mem.Allocator, api_key: []const u8) ![]u8 {
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(api_key, &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(allocator, "sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
+    return allocator.print("sk-{s}***{s}", .{ hex[0..5], hex[hex.len - 4 ..] });
 }
 
 pub fn findAccountIndexByAccountKey(reg: *const Registry, account_key: []const u8) ?usize {
@@ -108,9 +108,7 @@ pub fn updateUsage(allocator: std.mem.Allocator, reg: *Registry, account_key: []
     for (reg.accounts.items) |*rec| {
         if (std.mem.eql(u8, rec.account_key, account_key)) {
             if (rec.last_usage) |*u| {
-                if (u.credits) |*c| {
-                    if (c.balance) |b| allocator.free(b);
-                }
+                freeRateLimitSnapshot(allocator, u);
             }
             rec.last_usage = snapshot;
             rec.last_usage_at = now;
@@ -135,7 +133,7 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
     const info = @import("../auth/auth.zig").parseAuthInfo(allocator, auth_path) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => {
-            std.log.warn("auth.json sync skipped: {s}", .{@errorName(err)});
+            std.log.warn("auth.json sync skipped ({s}): {s}", .{ auth_path, @errorName(err) });
             return false;
         },
     };
@@ -194,6 +192,14 @@ pub fn syncActiveAccountFromAuthWithImporter(allocator: std.mem.Allocator, codex
         changed = true;
     }
     reg.accounts.items[idx].auth_mode = info.auth_mode;
+    if (reg.accounts.items[idx].access_token_expires_at != info.access_token_expires_at) {
+        changed = true;
+    }
+    reg.accounts.items[idx].access_token_expires_at = info.access_token_expires_at;
+    if (reg.accounts.items[idx].plan_expires_at != info.plan_expires_at) {
+        changed = true;
+    }
+    reg.accounts.items[idx].plan_expires_at = info.plan_expires_at;
 
     const dest = try accountAuthPath(allocator, codex_home, rec_account_key);
     defer allocator.free(dest);
@@ -366,7 +372,7 @@ pub fn deleteRemovedAccountBackups(
         if (entry.kind != .file and entry.kind != .sym_link) continue;
         if (!std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        const path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
         defer allocator.free(path);
 
         var info = @import("../auth/auth.zig").parseAuthInfo(allocator, path) catch continue;
@@ -603,6 +609,8 @@ pub fn accountFromAuth(
         .account_name = null,
         .plan = info.plan,
         .auth_mode = info.auth_mode,
+        .access_token_expires_at = info.access_token_expires_at,
+        .plan_expires_at = info.plan_expires_at,
         .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
@@ -640,6 +648,8 @@ pub fn accountFromApiKeyMe(
         .account_name = owned_account_name,
         .plan = null,
         .auth_mode = .apikey,
+        .access_token_expires_at = null,
+        .plan_expires_at = null,
         .created_at = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds(),
         .last_used_at = null,
         .last_usage = null,
@@ -679,6 +689,7 @@ pub fn mergeAccountRecord(allocator: std.mem.Allocator, dest: *AccountRecord, in
     }
     if (dest.plan == null) dest.plan = merged_incoming.plan;
     if (dest.auth_mode == null) dest.auth_mode = merged_incoming.auth_mode;
+    if (dest.plan_expires_at == null) dest.plan_expires_at = merged_incoming.plan_expires_at;
     freeAccountRecord(allocator, &merged_incoming);
 }
 

@@ -87,7 +87,7 @@ fn findJsonObjectFieldSlice(data: []const u8, field_name: []const u8) ?[]const u
     const pattern = pattern_buffer[0 .. field_name.len + 2];
 
     var search_start: usize = 0;
-    while (std.mem.indexOfPos(u8, data, search_start, pattern)) |name_idx| {
+    while (std.mem.findPos(u8, data, search_start, pattern)) |name_idx| {
         search_start = name_idx + pattern.len;
         var idx = skipJsonWhitespace(data, search_start);
         if (idx >= data.len or data[idx] != ':') continue;
@@ -107,7 +107,7 @@ fn findJsonScalarFieldSlice(data: []const u8, field_name: []const u8) ?[]const u
     pattern_buffer[1 + field_name.len] = '"';
     const pattern = pattern_buffer[0 .. field_name.len + 2];
 
-    const name_idx = std.mem.indexOf(u8, data, pattern) orelse return null;
+    const name_idx = std.mem.find(u8, data, pattern) orelse return null;
     var idx = skipJsonWhitespace(data, name_idx + pattern.len);
     if (idx >= data.len or data[idx] != ':') return null;
     idx = skipJsonWhitespace(data, idx + 1);

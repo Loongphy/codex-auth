@@ -9,8 +9,11 @@ pub fn isQuitInput(input: []const u8) bool {
     return input.len == 1 and (input[0] == 'q' or input[0] == 'Q');
 }
 
+/// `q`/`Q` quit, and so does Ctrl-C: ISIG stays off for the whole TUI
+/// session, so it arrives as raw byte 0x03 in the pickers that read bytes
+/// instead of `tuiInputKeyFromByte` keys.
 pub fn isQuitKey(key: u8) bool {
-    return key == 'q' or key == 'Q';
+    return key == 'q' or key == 'Q' or key == 0x03;
 }
 
 pub fn activeSelectableIndex(rows: *const SwitchRows) ?usize {

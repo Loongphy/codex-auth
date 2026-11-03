@@ -3,11 +3,27 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const package_module = b.createModule(.{
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run tests matching these substrings") orelse &.{};
+    // Stripped binaries start faster cold: non-loadable DWARF sections still
+    // get pulled in by kernel readahead around demand-paged .text pages.
+    const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .debug);
+    const c_time_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/c_time.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const c_time_module = c_time_translate.createModule();
+
+    const package_module = b.addModule("codex_auth", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "c_time", .module = c_time_module },
+        },
     });
 
     const main_module = b.createModule(.{
@@ -15,6 +31,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
+        .imports = &.{
+            .{ .name = "codex_auth", .module = package_module },
+        },
     });
     const exe = b.addExecutable(.{
         .name = "codex-auth",
@@ -47,14 +67,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{
-            .{ .name = "app_runtime", .module = b.createModule(.{
-                .root_source_file = b.path("src/core/runtime.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-            }) },
-        },
     });
     const fake_codex_exe = b.addExecutable(.{
         .name = "fake-codex",
@@ -68,9 +80,7 @@ pub fn build(b: *std.Build) void {
     test_helpers_step.dependOn(&install_fake_codex.step);
 
     const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run codex-auth");
     run_step.dependOn(&run_cmd.step);
 
@@ -78,6 +88,8 @@ pub fn build(b: *std.Build) void {
         "tests/api_account_test.zig",
         "tests/api_http_test.zig",
         "tests/api_me_test.zig",
+        "tests/api_proxy_test.zig",
+        "tests/api_reset_credits_test.zig",
         "tests/api_usage_test.zig",
         "tests/auth_test.zig",
         "tests/cli_behavior_test.zig",
@@ -89,13 +101,19 @@ pub fn build(b: *std.Build) void {
         "tests/registry_test.zig",
         "tests/session_test.zig",
         "tests/time_relative_test.zig",
+        "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
         "tests/tui_display_test.zig",
         "tests/tui_session_test.zig",
         "tests/tui_table_test.zig",
         "tests/workflows_core_test.zig",
+        "tests/workflows_daemon_test.zig",
         "tests/workflows_live_test.zig",
     };
+
+    const test_options = b.addOptions();
+    test_options.addOptionPathUntracked("zig_exe", .zig_exe);
+    test_options.addOptionPathUntracked("project_root", b.path("."));
 
     const test_step = b.step("test", "Run tests");
     for (test_files) |test_file| {
@@ -108,11 +126,28 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "codex_auth", .module = package_module },
             },
         });
+        test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
             .root_module = test_module,
+            .filters = test_filters,
         });
-        const run_test = b.addRunArtifact(test_artifact);
-        run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT", b.pathFromRoot("."));
+        // Plain Run step instead of addRunArtifact: the default server-mode
+        // test runner (--listen=-) can deadlock the build runner on Windows
+        // (upstream Zig std.zig.Server race). Exit code decides pass/fail.
+        const run_test = std.Build.Step.Run.create(b, b.fmt("run test {s}", .{test_file}));
+        run_test.addArtifactArg(test_artifact);
+        run_test.setEnvironmentVariable(
+            "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT",
+            b.root.joinString(b.allocator, &.{}) catch @panic("OOM"),
+        );
+        if (std.mem.eql(u8, test_file, "tests/cli_integration_test.zig")) {
+            run_test.addFileInput(exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_fail_exe.getEmittedBin());
+            run_test.addFileInput(fake_codex_exe.getEmittedBin());
+            run_test.addFileInput(b.path("build.zig"));
+            run_test.addFileInput(b.path("build.zig.zon"));
+        }
         test_step.dependOn(&run_test.step);
     }
 }

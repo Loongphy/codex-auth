@@ -35,6 +35,7 @@ pub const SwitchLiveController = struct {
         context: *anyopaque,
         allocator: std.mem.Allocator,
         display: SwitchSelectionDisplay,
+        max_cols: ?usize,
     ) anyerror![]u8,
 };
 

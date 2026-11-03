@@ -25,6 +25,9 @@ const ForegroundUsageWorkerResult = struct {
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     snapshot: ?registry.RateLimitSnapshot = null,
+    access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -316,6 +319,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
 
         const refresh_result = refreshActiveUsageFromLocalSessions(allocator, codex_home, reg) catch |err| switch (err) {
             error.OutOfMemory => return err,
+            error.Canceled => return err,
             else => {
                 outcome.error_name = @errorName(err);
                 state.failed += 1;
@@ -385,6 +389,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
             @min(fetch_account_indices.items.len, foreground_usage_refresh_concurrency),
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
+            error.Canceled => return err,
             else => {
                 if (batch_fetch_failures_are_fatal) return err;
                 const error_name = @errorName(err);
@@ -409,6 +414,9 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 .missing_auth = batch_result.missing_auth,
                 .error_name = batch_result.error_name,
                 .snapshot = batch_result.snapshot,
+                .access_token_expires_at = batch_result.access_token_expires_at,
+                .plan_expires_at = batch_result.plan_expires_at,
+                .plan_expires_at_known = batch_result.plan_expires_at_known,
             };
             batch_result.snapshot = null;
         }
@@ -421,6 +429,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 @min(refresh_job_count, foreground_usage_refresh_concurrency),
             ) catch |err| switch (err) {
                 error.OutOfMemory => return err,
+                error.Canceled => return err,
                 else => use_concurrent_usage_refresh = false,
             };
         }
@@ -436,7 +445,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 active_only,
             );
         } else {
-            runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, active_account_key, active_only);
+            try runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, worker_results, active_account_key, active_only);
         }
     }
 
@@ -448,6 +457,18 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         }
         const outcome = &state.outcomes[idx];
         if (!worker_result.requested) continue;
+        if (worker_result.access_token_expires_at) |expiry| {
+            if (reg.accounts.items[idx].access_token_expires_at != expiry) {
+                reg.accounts.items[idx].access_token_expires_at = expiry;
+                registry_changed = true;
+            }
+        }
+        if (worker_result.plan_expires_at_known) {
+            if (reg.accounts.items[idx].plan_expires_at != worker_result.plan_expires_at) {
+                reg.accounts.items[idx].plan_expires_at = worker_result.plan_expires_at;
+                registry_changed = true;
+            }
+        }
         outcome.* = .{
             .attempted = true,
             .method = .api,
@@ -546,9 +567,10 @@ const ForegroundUsageWorkerQueue = struct {
     active_account_key: ?[]const u8,
     active_only: bool,
     next_index: std.atomic.Value(usize) = .init(0),
+    canceled: std.atomic.Value(bool) = .init(false),
 
     fn run(self: *ForegroundUsageWorkerQueue) void {
-        while (true) {
+        while (!self.canceled.load(.monotonic)) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.reg.accounts.items.len) return;
             if (self.active_only) {
@@ -563,7 +585,12 @@ const ForegroundUsageWorkerQueue = struct {
                 idx,
                 self.usage_fetcher,
                 self.results,
-            );
+            ) catch |err| switch (err) {
+                error.Canceled => {
+                    self.canceled.store(true, .monotonic);
+                    return;
+                },
+            };
         }
     }
 };
@@ -579,7 +606,7 @@ fn runForegroundUsageRefreshWorkersConcurrently(
 ) !void {
     const worker_count = @min(if (active_only) 1 else reg.accounts.items.len, foreground_usage_refresh_concurrency);
     if (worker_count <= 1) {
-        runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, active_account_key, active_only);
+        try runForegroundUsageRefreshWorkersSerially(allocator, codex_home, reg, usage_fetcher, results, active_account_key, active_only);
         return;
     }
 
@@ -611,6 +638,9 @@ fn runForegroundUsageRefreshWorkersConcurrently(
     }
 
     queue.run();
+    for (threads[0..spawned_count]) |thread| thread.join();
+    spawned_count = 0;
+    if (queue.canceled.load(.monotonic)) return error.Canceled;
 }
 
 fn runForegroundUsageRefreshWorkersSerially(
@@ -621,13 +651,13 @@ fn runForegroundUsageRefreshWorkersSerially(
     results: []ForegroundUsageWorkerResult,
     active_account_key: ?[]const u8,
     active_only: bool,
-) void {
+) error{Canceled}!void {
     for (reg.accounts.items, 0..) |account, idx| {
         if (active_only) {
             const key = active_account_key.?;
             if (!std.mem.eql(u8, account.account_key, key)) continue;
         }
-        foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
+        try foregroundUsageRefreshWorker(allocator, codex_home, reg, idx, usage_fetcher, results);
     }
 }
 
@@ -638,7 +668,7 @@ fn foregroundUsageRefreshWorker(
     account_idx: usize,
     usage_fetcher: UsageFetchDetailedFn,
     results: []ForegroundUsageWorkerResult,
-) void {
+) error{Canceled}!void {
     if (skipsChatGptUsage(&reg.accounts.items[account_idx])) {
         results[account_idx] = .{};
         return;
@@ -651,11 +681,13 @@ fn foregroundUsageRefreshWorker(
     const arena = arena_state.allocator();
 
     const auth_path = registry.accountAuthPath(arena, codex_home, reg.accounts.items[account_idx].account_key) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
 
     const fetch_result = usage_fetcher(arena, auth_path) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         results[account_idx] = .{ .requested = true, .error_name = @errorName(err) };
         return;
     };
@@ -665,15 +697,22 @@ fn foregroundUsageRefreshWorker(
         .status_code = fetch_result.status_code,
         .error_code = fetch_result.error_code,
         .missing_auth = fetch_result.missing_auth,
+        .access_token_expires_at = fetch_result.access_token_expires_at,
+        .plan_expires_at = fetch_result.plan_expires_at,
+        .plan_expires_at_known = fetch_result.plan_expires_at_known,
     };
 
     if (fetch_result.snapshot) |snapshot| {
         result.snapshot = registry.cloneRateLimitSnapshot(allocator, snapshot) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
             results[account_idx] = .{
                 .requested = true,
                 .status_code = fetch_result.status_code,
                 .error_code = fetch_result.error_code,
                 .missing_auth = fetch_result.missing_auth,
+                .access_token_expires_at = fetch_result.access_token_expires_at,
+                .plan_expires_at = fetch_result.plan_expires_at,
+                .plan_expires_at_known = fetch_result.plan_expires_at_known,
                 .error_name = @errorName(err),
             };
             return;
@@ -689,7 +728,14 @@ fn setForegroundUsageOverrideForOutcome(
     outcome: ForegroundUsageOutcome,
 ) !bool {
     if (outcome.error_name) |error_name| {
-        slot.* = try allocator.dupe(u8, error_name);
+        if (error_name.len > max_usage_override_display_width) {
+            slot.* = try allocator.print(
+                "{s}...",
+                .{error_name[0 .. max_usage_override_display_width - 3]},
+            );
+        } else {
+            slot.* = try allocator.dupe(u8, error_name);
+        }
         return true;
     }
     if (outcome.missing_auth) {
@@ -722,10 +768,10 @@ pub fn formatStatusOverrideAlloc(
 
     const max_code_len = max_usage_override_display_width - status_text.len - 1;
     if (code.len <= max_code_len) {
-        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, code });
+        return allocator.print("{s} {s}", .{ status_text, code });
     }
     if (max_code_len <= 3) {
-        return std.fmt.allocPrint(allocator, "{s} {s}", .{ status_text, "..."[0..max_code_len] });
+        return allocator.print("{s} {s}", .{ status_text, "..."[0..max_code_len] });
     }
-    return std.fmt.allocPrint(allocator, "{s} {s}...", .{ status_text, code[0 .. max_code_len - 3] });
+    return allocator.print("{s} {s}...", .{ status_text, code[0 .. max_code_len - 3] });
 }

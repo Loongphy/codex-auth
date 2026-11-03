@@ -26,31 +26,11 @@ Launches the official Codex App with per-process environment overrides.
   - `mac` launches the macOS app directly.
 - `--std` resolves the packaged app executable, then starts it with stdout/stderr attached to the current terminal. Use it for debugging app logs; normal launches stay quiet and use the platform GUI launcher.
 
-`app` prints its launch plan and managed CLI resolution to stderr before
-starting the GUI launcher. Example output:
-
-```text
-Codex App is already running, launch skipped.
-```
-
-When the app is not already running, the output continues with launch planning:
-
-```text
-- Checking latest https://github.com/Loongphy/codext release...
-  Downloading Codext CLI for WSL (v0.3.0)
-  https://github.com/Loongphy/codext/releases/download/.../codext-linux-x64.tar.gz
-OK Downloaded Codext CLI for WSL (v0.3.0)
-
-- Environment Configuration ------------------------------------------------
-  Platform: WSL (auto-detected)
-  Codex Home: C:\Users\Alice\.codext (explicit)
-  App ID: Loongphy.Codext (explicit)
-  CLI Path: C:\Users\Alice\.codext\accounts\codext-cli\codex-linux-x64 (downloaded)
-----------------------------------------------------------------------------
-Launching Codex App...
-```
-
-See [Windows](../windows.md) for Windows console color and character rules.
+`app` prints its progress and launch plan to stderr before starting the GUI
+launcher: whether the app was already running, whether a managed CLI download
+was needed, and the resolved platform, app ID, and CLI path. The Codex home is
+shown when `--codex-home` is supplied. See [Windows](../windows.md) for Windows
+console color and character rules.
 
 If `--platform` is omitted, Windows reads
 `$CODEX_HOME/config.toml` and uses `wsl` when
@@ -58,12 +38,19 @@ If `--platform` is omitted, Windows reads
 `win`. macOS defaults to `mac`. Explicit `--platform win|wsl` updates that same
 desktop setting before launch.
 
-Default downloaded CLIs are cached directly under:
+Default downloaded CLIs are cached under:
 
 ```text
-$CODEX_HOME/accounts/codext-cli/codex-<platform>
+$CODEX_HOME/accounts/codext-cli/codex-<platform>-package/   # codex-package tree (bin/, codex-path/, codex-resources/, codex-package.json)
 $CODEX_HOME/accounts/codext-cli/codex-<platform>.version
 ```
+
+Current codext releases ship the package layout, so the managed CLI path is
+`codex-<platform>-package/bin/codext.exe` on Windows and
+`codex-<platform>-package/bin/codex` on Linux/macOS. Archives without
+`codex-package.json` are rejected. Installing a package also removes the
+legacy flat binary at `$CODEX_HOME/accounts/codext-cli/codex-<platform>` left
+behind by older installs.
 
 The default download prepares only the selected platform's
 [`Loongphy/codext`](https://github.com/Loongphy/codext) asset for the current

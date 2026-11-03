@@ -45,9 +45,9 @@ pub fn saveRegistry(allocator: std.mem.Allocator, codex_home: []const u8, reg: *
 
 fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
     const allocator = std.heap.page_allocator;
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
+    const temp_path = try allocator.print("{s}.tmp.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
     defer allocator.free(temp_path);
-    const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
+    const backup_path = try allocator.print("{s}.bak.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
     defer allocator.free(backup_path);
 
     {
@@ -84,7 +84,7 @@ fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
 }
 
 fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         return writeRegistryFileReplace(path, data);
     }
     var buf: [4096]u8 = undefined;

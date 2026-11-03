@@ -23,37 +23,50 @@ Windows Terminal, `cmd.exe`, and CI logs stay readable.
   arrows, or box-drawing characters in Windows default output.
 - Unicode may be used for non-Windows output when it is already part of an
   established command style.
+- In-flight steps are announced with a `- ` prefix and a completed step with an
+  `OK ` prefix instead of a check mark.
 
-Recommended Windows status markers:
+### Reset credits rail and `reset` output
 
-```text
-Codex App is already running, launch skipped.
-- Checking latest https://github.com/Loongphy/codext release...
-  Downloading Codext CLI for WSL (v0.3.0)
-OK Downloaded Codext CLI for WSL (v0.3.0)
-```
+The `list --live` reset credits rail is borderless on every platform; Windows
+only changes the shared glyph set: the `·` field separator becomes `, `, a
+success status marker becomes `OK `, and a failure line carries no marker at
+all because its sentence already says what happened. `codex-auth reset` prints
+the same separator difference outside the TUI. The exact rendering of both is
+pinned by tests (`tests/cli_picker_test.zig`, `tests/cli_behavior_test.zig`).
 
-### App command examples
+## System proxy
 
-Already running:
+`curl` only discovers proxies from its own environment variables, so the system
+proxy that a browser or `Invoke-WebRequest` honours was previously invisible to
+API refresh. `codex-auth` reads it through WinHTTP and passes it to the curl
+child process explicitly.
 
-```text
-Codex App is already running, launch skipped.
-```
+- The static proxy comes from `WinHttpGetIEProxyConfigForCurrentUser`, which
+  already accounts for `ProxyEnable`, so a disabled entry is not mistaken for a
+  configured one.
+- An explicit auto-config URL is resolved per request by `WinHttpGetProxyForUrl`,
+  which evaluates the PAC script in-process.
+- WPAD auto-detection is deliberately not requested. It probes DHCP and DNS and
+  can stall for seconds on a network with no WPAD server, and local forwarders
+  such as mihomo do not rely on it.
+- `ProxyOverride` becomes curl's `noproxy` option, with `<local>` mapped to
+  `localhost`.
+- An existing `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY` still wins, so nothing
+  changes for a shell that already exports them. To force a direct connection,
+  set `NO_PROXY=*`.
 
-Launch with a managed CLI download:
+The same translation applies to the Codext release lookup and download in
+`codex-auth app`.
 
-```text
-- Checking latest https://github.com/Loongphy/codext release...
-  Downloading Codext CLI for WSL (v0.3.0)
-  https://github.com/Loongphy/codext/releases/download/.../codext-linux-x64.tar.gz
-OK Downloaded Codext CLI for WSL (v0.3.0)
+See [api.md](./api.md) for the full resolution order.
 
-- Environment Configuration ------------------------------------------------
-  Platform: WSL (auto-detected)
-  Codex Home: C:\Users\Loong\.codext (explicit)
-  App ID: Loongphy.Codext (explicit)
-  CLI Path: C:\Users\Loong\.codext\accounts\codext-cli\codex-linux-x64 (downloaded)
-----------------------------------------------------------------------------
-Launching Codex App...
-```
+## Test runner deadlock (Zig 0.16)
+
+Zig 0.16's server-mode test runner (`--listen=-`, `std.zig.Server` over stdio)
+can deadlock the build runner on Windows: the spawned `test.exe` waits on
+stdin forever while the runner prints nothing, so CI appears stuck right
+after `zig version`. `zig build test` therefore runs test binaries through
+plain `Step.Run` steps (exit code verdict) rather than `addRunArtifact`. See
+[tests.md](./tests.md#why-tests-use-plain-steprun-instead-of-addrunartifact)
+before touching the run-test wiring in `build.zig`.

@@ -11,9 +11,9 @@ const refreshAccountNamesAfterLogin = account_names.refreshAccountNamesAfterLogi
 
 fn loginScratchCodexHomeAlloc(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     const stamp = std.Io.Timestamp.now(app_runtime.io(), .real).toMilliseconds();
-    const name = try std.fmt.allocPrint(allocator, "login-{d}", .{stamp});
+    const name = try allocator.print("login-{d}", .{stamp});
     defer allocator.free(name);
-    return try std.fs.path.join(allocator, &[_][]const u8{ codex_home, "accounts", name });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", name });
 }
 
 pub fn handleLogin(allocator: std.mem.Allocator, codex_home: []const u8, opts: cli.types.LoginOptions) !void {

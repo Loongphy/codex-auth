@@ -8,6 +8,8 @@ const RateLimitSnapshot = common.RateLimitSnapshot;
 const RateLimitWindow = common.RateLimitWindow;
 const RolloutSignature = common.RolloutSignature;
 const CreditsSnapshot = common.CreditsSnapshot;
+const RateLimitResetCredit = common.RateLimitResetCredit;
+const ResetCreditCard = common.ResetCreditCard;
 
 pub fn normalizePlanType(s: []const u8) PlanType {
     if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
@@ -50,7 +52,7 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
         .object => |o| o,
         else => return null,
     };
-    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .plan_type = null };
+    var snap = RateLimitSnapshot{ .primary = null, .secondary = null, .credits = null, .reset_credits = null, .reset_credit = null, .plan_type = null };
 
     if (obj.get("plan_type")) |p| {
         switch (p) {
@@ -62,7 +64,98 @@ pub fn parseUsage(allocator: std.mem.Allocator, v: std.json.Value, schema_versio
     if (obj.get("secondary")) |p| snap.secondary = parseWindow(p);
     if (obj.get("credits")) |c| snap.credits = parseCredits(allocator, c);
     snap.reset_credits = readInt(obj.get("reset_credits"));
+    if (obj.get("reset_credit")) |details| {
+        snap.reset_credit = parseResetCreditList(allocator, details) catch null;
+    }
     return snap;
+}
+
+pub fn parseResetCreditList(allocator: std.mem.Allocator, v: std.json.Value) !?[]ResetCreditCard {
+    // The persisted registry shape is a flat array of cards.
+    const items = switch (v) {
+        .array => |array| array.items,
+        else => return null,
+    };
+    return try parseResetCreditCards(allocator, items);
+}
+
+/// Parses an array of reset-credit card objects (from the backend wire format).
+pub fn parseResetCreditCards(allocator: std.mem.Allocator, items: []std.json.Value) ![]ResetCreditCard {
+    var cards = std.ArrayList(ResetCreditCard).empty;
+    errdefer {
+        for (cards.items) |card| common.freeResetCreditCard(allocator, card);
+        cards.deinit(allocator);
+    }
+    for (items) |item| {
+        const item_obj = switch (item) {
+            .object => |item_obj| item_obj,
+            else => continue,
+        };
+        const card = try parseResetCreditCard(allocator, item_obj) orelse continue;
+        cards.append(allocator, card) catch |err| {
+            common.freeResetCreditCard(allocator, card);
+            return err;
+        };
+    }
+    // Persist in ascending expires_at order — soonest first, cards without an
+    // expiry last (upstream's picker sorts the same way). Storage order is
+    // render order.
+    std.mem.sort(ResetCreditCard, cards.items, {}, cardByExpiryLessThan);
+    return try cards.toOwnedSlice(allocator);
+}
+
+fn cardByExpiryLessThan(_: void, a: ResetCreditCard, b: ResetCreditCard) bool {
+    // Backend ISO-8601 strings compare chronologically as bytes (uniform Z form).
+    if (a.expires_at == null) return false;
+    if (b.expires_at == null) return true;
+    return std.mem.order(u8, a.expires_at.?, b.expires_at.?) == .lt;
+}
+
+fn parseResetCreditCard(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !?ResetCreditCard {
+    const id = try requiredStringAlloc(allocator, obj.get("id")) orelse return null;
+    errdefer allocator.free(id);
+    const status = try requiredStringAlloc(allocator, obj.get("status")) orelse {
+        allocator.free(id);
+        return null;
+    };
+    errdefer allocator.free(status);
+    const expires_at = optionalStringAlloc(allocator, obj.get("expires_at"));
+    errdefer if (expires_at) |value| allocator.free(value);
+    const title = optionalStringAlloc(allocator, obj.get("title"));
+    errdefer if (title) |value| allocator.free(value);
+    return .{
+        .id = id,
+        .status = status,
+        .expires_at = expires_at,
+        .title = title,
+    };
+}
+
+fn optionalStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) ?[]u8 {
+    const text = switch (value orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    if (text.len == 0) return null;
+    return allocator.dupe(u8, text) catch null;
+}
+
+fn requiredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
+    const text = switch (value orelse return null) {
+        .string => |s| s,
+        else => return null,
+    };
+    return try allocator.dupe(u8, text);
+}
+
+fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !?[]u8 {
+    const text = switch (value orelse return null) {
+        .string => |s| s,
+        .null => return null,
+        else => return null,
+    };
+    if (text.len == 0) return null;
+    return try allocator.dupe(u8, text);
 }
 
 pub fn parseLiveConfig(cfg: *LiveConfig, v: std.json.Value) void {
@@ -155,6 +248,7 @@ pub fn readInt(v: ?std.json.Value) ?i64 {
     if (v == null) return null;
     switch (v.?) {
         .integer => |i| return i,
+        .number_string, .string => |s| return std.fmt.parseInt(i64, s, 10) catch null,
         else => return null,
     }
 }

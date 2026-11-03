@@ -92,7 +92,7 @@ pub fn runRemoveLiveActions(
                 flag.* = containsOwnedAccountKey(&checked_account_keys, accountIdForSelectable(rows, borrowed.reg, selectable_idx));
             }
 
-            const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed);
+            const status_line = try controller.refresh.build_status_line(controller.refresh.context, allocator, borrowed, tui.terminalCols());
             defer allocator.free(status_line);
             const cursor_display_idx = selectedDisplayIndexForRender(rows, cursor_idx, number_buf[0..number_len]);
             const viewport = live_tui.selectableViewport(
@@ -112,7 +112,7 @@ pub fn runRemoveLiveActions(
                 &styled_frame,
                 borrowed.reg,
                 rows.items,
-                @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len)),
+                indexWidth(rows.selectable_row_indices.len),
                 rows.widths,
                 cursor_idx,
                 checked_flags,
@@ -219,7 +219,7 @@ pub fn runRemoveLiveActions(
                                     replaceOptionalOwnedString(
                                         allocator,
                                         &action_message,
-                                        try std.fmt.allocPrint(allocator, "Delete failed: {s}", .{@errorName(err)}),
+                                        try allocator.print("Delete failed: {s}", .{@errorName(err)}),
                                     );
                                     needs_render = true;
                                     break;

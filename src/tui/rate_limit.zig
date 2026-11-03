@@ -1,103 +1,93 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
-const builtin = @import("builtin");
 const registry = @import("../registry/root.zig");
-const c = @cImport({
-    @cInclude("time.h");
-});
+const localtime = @import("../time/localtime.zig");
 
 const ResetParts = struct {
     time: []u8,
     date: []u8,
     same_day: bool,
 
-    fn deinit(self: *ResetParts) void {
-        std.heap.page_allocator.free(self.time);
-        std.heap.page_allocator.free(self.date);
+    fn deinit(self: *ResetParts, allocator: std.mem.Allocator) void {
+        allocator.free(self.time);
+        allocator.free(self.date);
     }
 };
 
-pub fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
-    if (usage == null) return null;
-    if (usage.?.primary) |p| {
-        if (p.window_minutes != null and p.window_minutes.? == minutes) return p;
-    }
-    if (usage.?.secondary) |s| {
-        if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
-    }
-    return if (fallback_primary) usage.?.primary else usage.?.secondary;
-}
+/// Single source of truth is `registry.resolveRateWindow`; this alias keeps
+/// the TUI call sites on the same resolution without a second implementation.
+pub const resolveRateWindow = registry.resolveRateWindow;
 
-pub fn formatRateLimitFullAlloc(window: ?registry.RateLimitWindow) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
+pub fn formatRateLimitFullAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow) ![]u8 {
+    if (window == null) return try allocator.print("-", .{});
+    if (window.?.resets_at == null) return try allocator.print("-", .{});
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
+        return try allocator.print("100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
-    var parts = try resetPartsAlloc(reset_at, now);
-    defer parts.deinit();
+    var parts = try resetPartsAlloc(allocator, reset_at, now);
+    defer parts.deinit(allocator);
     if (parts.same_day) {
-        return std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time });
+        return allocator.print("{d}% ({s})", .{ remaining, parts.time });
     }
-    return std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
+    return allocator.print("{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
 }
 
-pub fn formatRateLimitUiAlloc(window: ?registry.RateLimitWindow, width: usize) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(std.heap.page_allocator, "-", .{});
+pub fn formatRateLimitUiAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow, width: usize) ![]u8 {
+    if (window == null) return try allocator.print("-", .{});
+    if (window.?.resets_at == null) return try allocator.print("-", .{});
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const reset_at = window.?.resets_at.?;
     if (now >= reset_at) {
-        return try std.fmt.allocPrint(std.heap.page_allocator, "100%", .{});
+        return try allocator.print("100%", .{});
     }
     const remaining = remainingPercent(window.?.used_percent);
-    var parts = try resetPartsAlloc(reset_at, now);
-    defer parts.deinit();
+    var parts = try resetPartsAlloc(allocator, reset_at, now);
+    defer parts.deinit(allocator);
 
     const candidates_same = [_][]const u8{
-        try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time }),
-        try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining}),
+        try allocator.print("{d}% ({s})", .{ remaining, parts.time }),
+        try allocator.print("{d}%", .{remaining}),
     };
-    defer std.heap.page_allocator.free(candidates_same[0]);
-    defer std.heap.page_allocator.free(candidates_same[1]);
+    defer allocator.free(candidates_same[0]);
+    defer allocator.free(candidates_same[1]);
 
     if (parts.same_day) {
-        if (width >= candidates_same[0].len or width == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidates_same[0]});
-        return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidates_same[1]});
+        if (width >= candidates_same[0].len or width == 0) return allocator.print("{s}", .{candidates_same[0]});
+        return allocator.print("{s}", .{candidates_same[1]});
     }
 
-    const candidate_full = try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
-    defer std.heap.page_allocator.free(candidate_full);
-    const candidate_date = try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.date });
-    defer std.heap.page_allocator.free(candidate_date);
-    const candidate_time = try std.fmt.allocPrint(std.heap.page_allocator, "{d}% ({s})", .{ remaining, parts.time });
-    defer std.heap.page_allocator.free(candidate_time);
-    const candidate_percent = try std.fmt.allocPrint(std.heap.page_allocator, "{d}%", .{remaining});
-    defer std.heap.page_allocator.free(candidate_percent);
+    const candidate_full = try allocator.print("{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
+    defer allocator.free(candidate_full);
+    const candidate_date = try allocator.print("{d}% ({s})", .{ remaining, parts.date });
+    defer allocator.free(candidate_date);
+    const candidate_time = try allocator.print("{d}% ({s})", .{ remaining, parts.time });
+    defer allocator.free(candidate_time);
+    const candidate_percent = try allocator.print("{d}%", .{remaining});
+    defer allocator.free(candidate_percent);
 
-    if (width >= candidate_full.len or width == 0) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_full});
-    if (width >= candidate_date.len) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_date});
-    if (width >= candidate_time.len) return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_time});
-    return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{candidate_percent});
+    if (width >= candidate_full.len or width == 0) return allocator.print("{s}", .{candidate_full});
+    if (width >= candidate_date.len) return allocator.print("{s}", .{candidate_date});
+    if (width >= candidate_time.len) return allocator.print("{s}", .{candidate_time});
+    return allocator.print("{s}", .{candidate_percent});
 }
 
-fn resetPartsAlloc(reset_at: i64, now: i64) !ResetParts {
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(reset_at, &tm)) {
+fn resetPartsAlloc(allocator: std.mem.Allocator, reset_at: i64, now: i64) !ResetParts {
+    var tm: localtime.struct_tm = undefined;
+    if (!localtime.compat(reset_at, &tm)) {
         return ResetParts{
-            .time = try std.fmt.allocPrint(std.heap.page_allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(std.heap.page_allocator, "-", .{}),
+            .time = try allocator.print("-", .{}),
+            .date = try allocator.print("-", .{}),
             .same_day = true,
         };
     }
-    var now_tm: c.struct_tm = undefined;
-    if (!localtimeCompat(now, &now_tm)) {
+    var now_tm: localtime.struct_tm = undefined;
+    if (!localtime.compat(now, &now_tm)) {
         return ResetParts{
-            .time = try std.fmt.allocPrint(std.heap.page_allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(std.heap.page_allocator, "-", .{}),
+            .time = try allocator.print("-", .{}),
+            .date = try allocator.print("-", .{}),
             .same_day = true,
         };
     }
@@ -122,34 +112,10 @@ fn resetPartsAlloc(reset_at: i64, now: i64) !ResetParts {
     };
     const month_idx: usize = if (tm.tm_mon < 0) 0 else @min(@as(usize, @intCast(tm.tm_mon)), months.len - 1);
     return ResetParts{
-        .time = try std.fmt.allocPrint(std.heap.page_allocator, "{d:0>2}:{d:0>2}", .{ hour, min }),
-        .date = try std.fmt.allocPrint(std.heap.page_allocator, "{d} {s}", .{ day, months[month_idx] }),
+        .time = try allocator.print("{d:0>2}:{d:0>2}", .{ hour, min }),
+        .date = try allocator.print("{d} {s}", .{ day, months[month_idx] }),
         .same_day = same_day,
     };
-}
-
-fn localtimeCompat(ts: i64, out_tm: *c.struct_tm) bool {
-    if (comptime builtin.os.tag == .windows) {
-        if (comptime @hasDecl(c, "_localtime64_s") and @hasDecl(c, "__time64_t")) {
-            var t64 = std.math.cast(c.__time64_t, ts) orelse return false;
-            return c._localtime64_s(out_tm, &t64) == 0;
-        }
-        return false;
-    }
-
-    var t = std.math.cast(c.time_t, ts) orelse return false;
-    if (comptime @hasDecl(c, "localtime_r")) {
-        return c.localtime_r(&t, out_tm) != null;
-    }
-
-    if (comptime @hasDecl(c, "localtime")) {
-        const tm_ptr = c.localtime(&t);
-        if (tm_ptr == null) return false;
-        out_tm.* = tm_ptr.*;
-        return true;
-    }
-
-    return false;
 }
 
 fn remainingPercent(used: f64) i64 {
