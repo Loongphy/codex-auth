@@ -649,6 +649,23 @@ test "Scenario: Given switch query with a nonnumeric colon prefix when resolving
     }
 }
 
+test "Scenario: Given switch query matching a shared numbered alias when resolving locally then it reports ambiguity" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "01:team", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "01:team", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "01:team");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .multiple => |matches| try std.testing.expectEqual(@as(usize, 2), matches.items.len),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given switch query matching a numeric alias when resolving locally then the row number wins" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();

@@ -31,8 +31,15 @@ pub fn resolveSwitchQueryLocally(
         }
     }
 
-    if (findAccountIndexByExactLabel(reg, query)) |account_idx| {
-        return .{ .direct = reg.accounts.items[account_idx].account_key };
+    var exact = try findExactLabelIndices(allocator, reg, query);
+    switch (exact.items.len) {
+        1 => {
+            const account_idx = exact.items[0];
+            exact.deinit(allocator);
+            return .{ .direct = reg.accounts.items[account_idx].account_key };
+        },
+        0 => exact.deinit(allocator),
+        else => return .{ .multiple = exact },
     }
 
     if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
@@ -106,6 +113,24 @@ pub fn parseDisplayNumber(selector: []const u8) ?usize {
     const parsed = std.fmt.parseInt(usize, number, 10) catch return null;
     if (parsed == 0) return null;
     return parsed;
+}
+
+// All accounts whose alias or email exactly matches the selector. Callers must
+// distinguish "no match" from "ambiguous" — an ambiguous label that fell
+// through to a row-number lookup could act on an unrelated account.
+pub fn findExactLabelIndices(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    selector: []const u8,
+) !std.ArrayList(usize) {
+    var matches = std.ArrayList(usize).empty;
+    errdefer matches.deinit(allocator);
+    for (reg.accounts.items, 0..) |*rec, idx| {
+        const alias_hit = rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, selector);
+        const email_hit = std.ascii.eqlIgnoreCase(rec.email, selector);
+        if (alias_hit or email_hit) try matches.append(allocator, idx);
+    }
+    return matches;
 }
 
 pub fn findAccountIndexByExactLabel(reg: *const registry.Registry, selector: []const u8) ?usize {
