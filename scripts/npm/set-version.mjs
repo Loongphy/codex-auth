@@ -15,7 +15,10 @@ function fail(message) {
 
 const rawVersion = process.argv[2] ?? process.env.GITHUB_REF_NAME ?? "";
 const version = normalizeTagVersion(rawVersion);
-const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const numericIdentifier = "(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)";
+const semverPattern = new RegExp(
+  `^(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-${numericIdentifier}(?:\\.${numericIdentifier})*)?$`
+);
 
 if (!version || !semverPattern.test(version)) {
   fail(`Expected a semver version or v-prefixed tag, got '${rawVersion}'`);
@@ -33,13 +36,15 @@ for (const pkg of platformPackages) {
 writeJson(rootPackagePath, rootPackage);
 
 const zigContents = fs.readFileSync(zigVersionPath, "utf8");
+if (!/app_version\s*=\s*"[^"]+"/.test(zigContents)) {
+  fail(`Unable to find app_version in ${zigVersionPath}`);
+}
 const updatedZigContents = zigContents.replace(
   /app_version\s*=\s*"[^"]+"/,
   `app_version = "${version}"`
 );
-if (updatedZigContents === zigContents) {
-  fail(`Unable to update app_version in ${zigVersionPath}`);
+if (updatedZigContents !== zigContents) {
+  fs.writeFileSync(zigVersionPath, updatedZigContents);
 }
-fs.writeFileSync(zigVersionPath, updatedZigContents);
 
 console.log(`Set version to ${version}`);
