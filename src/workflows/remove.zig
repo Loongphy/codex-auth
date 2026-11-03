@@ -325,6 +325,14 @@ fn resolveRemoveSelectors(
             continue;
         }
 
+        if (query_mod.selectorIsBareRowNumber(selector)) {
+            if (try findAccountIndexByDisplayNumber(allocator, reg, selector)) |account_idx| {
+                try appendSelectedIndex(allocator, &selected, account_idx);
+                try resolutions.append(allocator, .{ .selector = selector, .match = .{ .resolved = account_idx } });
+                continue;
+            }
+        }
+
         if (findAccountIndexByExactLabel(reg, selector)) |account_idx| {
             try appendSelectedIndex(allocator, &selected, account_idx);
             try resolutions.append(allocator, .{ .selector = selector, .match = .{ .resolved = account_idx } });

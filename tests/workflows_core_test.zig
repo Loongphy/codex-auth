@@ -649,6 +649,23 @@ test "Scenario: Given switch query with a nonnumeric colon prefix when resolving
     }
 }
 
+test "Scenario: Given switch query matching a numeric alias when resolving locally then the row number wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "2", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "2");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given switch query with an exact alias shared with an email prefix when resolving locally then the alias wins" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();

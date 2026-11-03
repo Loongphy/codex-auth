@@ -25,6 +25,12 @@ pub fn resolveSwitchQueryLocally(
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }
 
+    if (selectorIsBareRowNumber(query)) {
+        if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
+            return .{ .direct = reg.accounts.items[account_idx].account_key };
+        }
+    }
+
     if (findAccountIndexByExactLabel(reg, query)) |account_idx| {
         return .{ .direct = reg.accounts.items[account_idx].account_key };
     }
@@ -116,6 +122,12 @@ pub fn findAccountIndexByExactLabel(reg: *const registry.Registry, selector: []c
         }
     }
     return if (ambiguous) null else match;
+}
+
+// A bare digit selector names a displayed row before it can name an alias;
+// imported numeric aliases must not shadow row numbers.
+pub fn selectorIsBareRowNumber(selector: []const u8) bool {
+    return std.mem.indexOfScalar(u8, selector, ':') == null and parseDisplayNumber(selector) != null;
 }
 
 pub fn findAccountIndexByDisplayNumber(

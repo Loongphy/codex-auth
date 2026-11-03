@@ -2259,6 +2259,60 @@ test "Scenario: Given an empty joined freeform flag when completing then the fla
     try std.testing.expect(std.mem.endsWith(u8, out, ":0\n"));
 }
 
+test "Scenario: Given conflicting flags when completing then rejected combinations are suppressed" {
+    const gpa = std.testing.allocator;
+
+    {
+        const args = [_][]const u8{ "switch", "work", "--l" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "--live") == null);
+    }
+    {
+        const args = [_][]const u8{ "switch", "--api", "--s" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "--skip-api") == null);
+    }
+    {
+        const args = [_][]const u8{ "switch", "--api", "wo" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "work") == null);
+    }
+    {
+        const args = [_][]const u8{ "switch", "--json", "-" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "-\t") == null);
+    }
+    {
+        const args = [_][]const u8{ "switch", "-", "--j" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "--json") == null);
+    }
+    {
+        const args = [_][]const u8{ "remove", "--all", "" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expectEqualStrings(":36\n", out);
+    }
+    {
+        const args = [_][]const u8{ "remove", "--all", "--l" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "--live") == null);
+    }
+    {
+        const args = [_][]const u8{ "remove", "work", "--a" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.find(u8, out, "--all") == null);
+        try std.testing.expect(std.mem.find(u8, out, "--api") == null);
+    }
+}
+
 test "Scenario: Given an inline flag value when completing then joined candidates are emitted" {
     const gpa = std.testing.allocator;
     const args = [_][]const u8{ "app", "--platform=w" };

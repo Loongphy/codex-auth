@@ -239,12 +239,21 @@ const FlagSpec = struct {
     desc: []const u8,
     value: ValueKind = .none,
     choices: []const []const u8 = &.{},
+    // Flags the parser rejects alongside this one (checked both directions).
+    conflicts: []const []const u8 = &.{},
 };
-const Cand = struct { value: []const u8, desc: []const u8 };
+const Cand = struct {
+    value: []const u8,
+    desc: []const u8,
+    // Flags that make this literal an invalid argument when already seen.
+    blocked_by: []const []const u8 = &.{},
+};
 const PosSpec = struct {
     kind: PosKind,
     literals: []const Cand = &.{},
     repeat: bool = false,
+    // Flags that make any positional of this command invalid when seen.
+    blocked_by: []const []const u8 = &.{},
 };
 const CmdSpec = struct {
     name: []const u8,
@@ -252,6 +261,10 @@ const CmdSpec = struct {
     flags: []const FlagSpec = &.{},
     subs: []const CmdSpec = &.{},
     positionals: []const PosSpec = &.{},
+    // Flags the parser rejects once a positional selector has been typed.
+    pos_blocks_flags: []const []const u8 = &.{},
+    // Flags the parser rejects once the `-` previous-account literal is typed.
+    dash_blocks_flags: []const []const u8 = &.{},
 };
 
 const help_flags = [_]FlagSpec{
@@ -269,8 +282,8 @@ const global_cands = [_]Cand{
 const list_flags = [_]FlagSpec{
     .{ .name = "--live", .desc = "Open a live-updating table" },
     .{ .name = "--active", .desc = "Refresh only the active account before rendering" },
-    .{ .name = "--api", .desc = "Load usage and account data from APIs" },
-    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only" },
+    .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{"--skip-api"} },
+    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{"--api"} },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document" },
 };
 const login_flags = [_]FlagSpec{
@@ -285,16 +298,16 @@ const export_flags = [_]FlagSpec{
     .{ .name = "--cpa", .desc = "Export CPA flat token JSON" },
 };
 const switch_flags = [_]FlagSpec{
-    .{ .name = "--live", .desc = "Open the live switch UI" },
-    .{ .name = "--api", .desc = "Load usage and account data from APIs" },
-    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only" },
+    .{ .name = "--live", .desc = "Open the live switch UI", .conflicts = &.{ "--restart-daemon", "--json" } },
+    .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{"--skip-api"} },
+    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{"--api"} },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
     .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
 };
 const remove_flags = [_]FlagSpec{
-    .{ .name = "--live", .desc = "Open the live remove UI" },
-    .{ .name = "--api", .desc = "Load usage and account data from APIs" },
-    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only" },
+    .{ .name = "--live", .desc = "Open the live remove UI", .conflicts = &.{ "--json", "--all" } },
+    .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{ "--skip-api", "--all" } },
+    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{ "--api", "--all" } },
     .{ .name = "--all", .desc = "Remove every stored account" },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive remove" },
 };
@@ -309,7 +322,7 @@ const config_live_flags = [_]FlagSpec{
     .{ .name = "--interval", .desc = "Set the live refresh interval in seconds", .value = .freeform },
 };
 
-const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account" }};
+const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account", .blocked_by = &.{"--json"} }};
 const clean_cands = [_]Cand{.{ .value = "background", .desc = "Delete stale background files" }};
 const shell_cands = [_]Cand{
     .{ .value = "bash", .desc = "Print Bash completion script" },
@@ -321,8 +334,8 @@ const shell_cands = [_]Cand{
 const help_positionals = [_]PosSpec{.{ .kind = .command_name }};
 const import_positionals = [_]PosSpec{.{ .kind = .path }};
 const export_positionals = [_]PosSpec{.{ .kind = .path }};
-const switch_positionals = [_]PosSpec{.{ .kind = .account, .literals = &dash_cands }};
-const remove_positionals = [_]PosSpec{.{ .kind = .account, .repeat = true }};
+const switch_positionals = [_]PosSpec{.{ .kind = .account, .literals = &dash_cands, .blocked_by = &.{ "--live", "--api", "--skip-api" } }};
+const remove_positionals = [_]PosSpec{.{ .kind = .account, .repeat = true, .blocked_by = &.{ "--live", "--api", "--skip-api", "--all" } }};
 const reset_positionals = [_]PosSpec{.{ .kind = .account }};
 const clean_positionals = [_]PosSpec{.{ .kind = .literal, .literals = &clean_cands }};
 const completion_positionals = [_]PosSpec{.{ .kind = .literal, .literals = &shell_cands }};
@@ -343,8 +356,8 @@ const command_specs = [_]CmdSpec{
     .{ .name = "login", .desc = "Login and add the current account", .flags = &login_flags },
     .{ .name = "import", .desc = "Import auth files or rebuild the registry", .flags = &import_flags, .positionals = &import_positionals },
     .{ .name = "export", .desc = "Export stored account auth files", .flags = &export_flags, .positionals = &export_positionals },
-    .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals },
-    .{ .name = "remove", .desc = "Remove one or more accounts", .flags = &remove_flags, .positionals = &remove_positionals },
+    .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api" }, .dash_blocks_flags = &.{"--json"} },
+    .{ .name = "remove", .desc = "Remove one or more accounts", .flags = &remove_flags, .positionals = &remove_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api", "--all" } },
     .{ .name = "reset", .desc = "Use the available reset credit that expires first", .positionals = &reset_positionals },
     .{ .name = "alias", .desc = "Set or clear account aliases", .subs = &alias_subs },
     .{ .name = "clean", .desc = "Delete backup and stale files under accounts/", .positionals = &clean_positionals },
@@ -360,6 +373,7 @@ const Context = struct {
     pos_count: usize = 0,
     sub_pending: bool = false,
     unknown: bool = false,
+    dash_seen: bool = false,
     seen_buf: [32]*const FlagSpec = undefined,
     seen_len: usize = 0,
 
@@ -445,6 +459,7 @@ fn resolveContext(prev: []const []const u8) Context {
             continue;
         }
         ctx.pos_count += 1;
+        if (std.mem.eql(u8, tok, "-")) ctx.dash_seen = true;
     }
     if (ctx.spec) |spec| {
         ctx.sub_pending = spec.subs.len > 0 and !sub_taken;
@@ -474,17 +489,54 @@ fn writeCand(out: *std.Io.Writer, value: []const u8, desc: []const u8, cur: []co
     }
 }
 
-fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8, descriptions: bool) !void {
-    for (cands) |cand| try writeCand(out, cand.value, cand.desc, cur, descriptions);
+fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8, seen: []const *const FlagSpec, descriptions: bool) !void {
+    outer: for (cands) |cand| {
+        for (cand.blocked_by) |name| {
+            if (seenFlagNamed(seen, name)) continue :outer;
+        }
+        try writeCand(out, cand.value, cand.desc, cur, descriptions);
+    }
 }
 
-fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, seen: []const *const FlagSpec, descriptions: bool) !void {
+fn seenFlagNamed(seen: []const *const FlagSpec, name: []const u8) bool {
+    for (seen) |flag| {
+        if (std.mem.eql(u8, flag.name, name)) return true;
+    }
+    return false;
+}
+
+// Suggestions must not assemble a command the parser would reject: conflicts
+// are declared on flags, and mode flags are also blocked by typed selectors.
+fn flagBlocked(spec: *const CmdSpec, flag: *const FlagSpec, ctx: *const Context) bool {
+    if (ctx.pos_count > 0) {
+        for (spec.pos_blocks_flags) |name| {
+            if (std.mem.eql(u8, flag.name, name)) return true;
+        }
+    }
+    if (ctx.dash_seen) {
+        for (spec.dash_blocks_flags) |name| {
+            if (std.mem.eql(u8, flag.name, name)) return true;
+        }
+    }
+    for (flag.conflicts) |name| {
+        if (seenFlagNamed(ctx.seenFlags(), name)) return true;
+    }
+    for (ctx.seenFlags()) |seen| {
+        for (seen.conflicts) |name| {
+            if (std.mem.eql(u8, flag.name, name)) return true;
+        }
+    }
+    return false;
+}
+
+fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, ctx: *const Context, descriptions: bool) !void {
     outer: for (spec.flags) |*flag| {
-        for (seen) |s| if (s == flag) continue :outer;
+        for (ctx.seenFlags()) |s| if (s == flag) continue :outer;
+        if (flagBlocked(spec, flag, ctx)) continue :outer;
         try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
     outer: for (&help_flags) |*flag| {
-        for (seen) |s| if (s == flag) continue :outer;
+        for (ctx.seenFlags()) |s| if (s == flag) continue :outer;
         try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
 }
@@ -538,23 +590,29 @@ fn writePositionalCands(
     spec: *const CmdSpec,
     pos: *const PosSpec,
     cur: []const u8,
-    seen: []const *const FlagSpec,
+    ctx: *const Context,
     descriptions: bool,
 ) !u6 {
+    var blocked = false;
+    for (pos.blocked_by) |name| {
+        if (seenFlagNamed(ctx.seenFlags(), name)) blocked = true;
+    }
     switch (pos.kind) {
         .account => {
-            try writeAccountCandidates(out, allocator, codex_home, cur, descriptions);
-            try writeCands(out, pos.literals, cur, descriptions);
+            if (!blocked) {
+                try writeAccountCandidates(out, allocator, codex_home, cur, descriptions);
+                try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions);
+            }
         },
-        .literal => try writeCands(out, pos.literals, cur, descriptions),
+        .literal => if (!blocked) try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions),
         .command_name => try writeSpecNames(out, &command_specs, cur, descriptions),
         .freeform => {},
         .path => {
-            try writeFlagCands(out, spec, cur, seen, descriptions);
+            try writeFlagCands(out, spec, cur, ctx, descriptions);
             return Directive.none;
         },
         .dir => {
-            try writeFlagCands(out, spec, cur, seen, descriptions);
+            try writeFlagCands(out, spec, cur, ctx, descriptions);
             return Directive.filter_dirs;
         },
     }
@@ -586,24 +644,24 @@ pub fn writeCompleteResponse(
         directive = try writeInlineFlagValueCands(out, flag, cur, descriptions);
     } else if (ctx.spec == null) {
         if (std.mem.startsWith(u8, cur, "-") and cur.len > 0) {
-            try writeCands(out, &global_cands, cur, descriptions);
+            try writeCands(out, &global_cands, cur, ctx.seenFlags(), descriptions);
         } else {
             try writeSpecNames(out, &command_specs, cur, descriptions);
-            try writeCands(out, &dash_cands, cur, descriptions);
+            try writeCands(out, &dash_cands, cur, ctx.seenFlags(), descriptions);
         }
     } else {
         const spec = ctx.spec.?;
         if (spec == &empty_spec) {
             // `codex-auth -` takes no further arguments.
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
-            try writeFlagCands(out, spec, cur, ctx.seenFlags(), descriptions);
-            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
+            try writeFlagCands(out, spec, cur, &ctx, descriptions);
+            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions);
         } else if (ctx.sub_pending) {
             try writeSpecNames(out, spec.subs, cur, descriptions);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {
-            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, ctx.seenFlags(), descriptions);
+            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, &ctx, descriptions);
         } else {
-            try writeFlagCands(out, spec, cur, ctx.seenFlags(), descriptions);
+            try writeFlagCands(out, spec, cur, &ctx, descriptions);
         }
     }
     try out.print(":{d}\n", .{directive});
