@@ -147,11 +147,18 @@ const fish_script =
 const pwsh_script =
     \\function __codex_auth_complete {
     \\    param($wordToComplete, $commandAst, $cursorPosition)
-    \\    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
+    \\    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | Where-Object { $_.Extent.StartOffset -lt $cursorPosition } | ForEach-Object { $_.ToString() })
     \\    if ($wordToComplete.Length -gt 0 -and $words.Count -gt 0 -and $words[-1] -eq $wordToComplete) {
     \\        $words = @($words | Select-Object -First ($words.Count - 1))
     \\    }
     \\    $words += $wordToComplete
+    \\    $quote = {
+    \\        param($text)
+    \\        if ($text -match '[\s''"`$;|&<>(){}\[\],#*?~^!]') {
+    \\            return "'" + ($text -replace "'", "''") + "'"
+    \\        }
+    \\        return $text
+    \\    }
     \\    $directive = 0
     \\    $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
     \\    foreach ($line in (codex-auth __complete @words 2>$null)) {
@@ -161,18 +168,22 @@ const pwsh_script =
     \\        }
     \\        $parts = $line -split "`t", 2
     \\        $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
-    \\        $results.Add([System.Management.Automation.CompletionResult]::new($parts[0], $parts[0], 'ParameterValue', $desc))
+    \\        $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $parts[0]), $parts[0], 'ParameterValue', $desc))
     \\    }
     \\    if ($directive -eq 1) { return }
+    \\    $dirPart = [System.IO.Path]::GetDirectoryName($wordToComplete)
+    \\    $sep = if ($wordToComplete.Contains('/')) { '/' } else { [IO.Path]::DirectorySeparatorChar }
     \\    if ($directive -band 16) {
     \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*" -Directory -ErrorAction SilentlyContinue)) {
-    \\            $value = "$entry$([IO.Path]::DirectorySeparatorChar)"
-    \\            $results.Add([System.Management.Automation.CompletionResult]::new($value, $value, 'ProviderContainer', $entry))
+    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
+    \\            $value = "$joined$sep"
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $value), $value, 'ProviderContainer', $entry))
     \\        }
     \\    } elseif (-not ($directive -band 4)) {
-    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*")) {
-    \\            $type = if (Test-Path -LiteralPath $entry -PathType Container) { 'ProviderContainer' } else { 'ProviderItem' }
-    \\            $results.Add([System.Management.Automation.CompletionResult]::new($entry, $entry, $type, $entry))
+    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*" -ErrorAction SilentlyContinue)) {
+    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
+    \\            $type = if (Test-Path -LiteralPath $joined -PathType Container) { 'ProviderContainer' } else { 'ProviderItem' }
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $joined), $joined, $type, $entry))
     \\        }
     \\    }
     \\    return $results

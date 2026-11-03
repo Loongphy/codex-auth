@@ -124,12 +124,12 @@ pub fn findAccountIndexByDisplayNumber(
     selector: []const u8,
 ) !?usize {
     if (std.mem.indexOfScalar(u8, selector, ':')) |colon_idx| {
+        const display_number = parseDisplayNumber(selector[0..colon_idx]) orelse return null;
         const hint = selector[colon_idx + 1 ..];
         if (hint.len != 0) {
             if (registry.findAccountIndexByAccountKey(reg, hint)) |account_idx| return account_idx;
             if (findAccountIndexByExactLabel(reg, hint)) |account_idx| return account_idx;
         }
-        const display_number = parseDisplayNumber(selector[0..colon_idx]) orelse return null;
         return findAccountIndexByRowNumber(allocator, reg, display_number);
     }
 

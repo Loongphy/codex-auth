@@ -833,6 +833,9 @@ test "Scenario: Given pwsh completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "CompletionResult") != null);
     try std.testing.expect(std.mem.find(u8, script, "Register-ArgumentCompleter -Native -CommandName 'codex-auth'") != null);
     try std.testing.expect(std.mem.find(u8, script, "Get-ChildItem") != null);
+    try std.testing.expect(std.mem.find(u8, script, "Where-Object { $_.Extent.StartOffset -lt $cursorPosition }") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$text -replace \"'\", \"''\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "GetDirectoryName($wordToComplete)") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
