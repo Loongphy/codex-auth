@@ -400,8 +400,7 @@ test "convert standard auth json to cpa derives account id from id token" {
 
 fn authJsonWithSubscriptionUntil(allocator: std.mem.Allocator, claim_literal: []const u8) ![]u8 {
     const header = "{\"alg\":\"none\",\"typ\":\"JWT\"}";
-    const payload = try std.fmt.allocPrint(
-        allocator,
+    const payload = try allocator.print(
         "{{\"email\":\"user@example.com\",\"https://api.openai.com/auth\":{{\"chatgpt_account_id\":\"acc\",\"chatgpt_user_id\":\"user\",\"user_id\":\"user\",\"chatgpt_plan_type\":\"plus\",\"chatgpt_subscription_active_until\":{s}}}}}",
         .{claim_literal},
     );
@@ -414,8 +413,7 @@ fn authJsonWithSubscriptionUntil(allocator: std.mem.Allocator, claim_literal: []
     const jwt = try std.mem.concat(allocator, u8, &[_][]const u8{ h64, ".", p64, ".sig" });
     defer allocator.free(jwt);
 
-    return try std.fmt.allocPrint(
-        allocator,
+    return try allocator.print(
         "{{\"tokens\":{{\"access_token\":\"access\",\"account_id\":\"acc\",\"id_token\":\"{s}\"}}}}",
         .{jwt},
     );

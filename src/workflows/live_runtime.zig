@@ -216,8 +216,7 @@ pub const SwitchLiveRuntime = struct {
             try allocator.dupe(u8, "");
         defer allocator.free(error_suffix);
 
-        const full = try std.fmt.allocPrint(
-            allocator,
+        const full = try allocator.print(
             "Live refresh: {s} | {s}{s}",
             .{ mode_label, refresh_state, error_suffix },
         );
@@ -226,7 +225,7 @@ pub const SwitchLiveRuntime = struct {
         // prefix but keeps the mode, state, and error — the parts that change.
         if (max_cols != null and full.len > max_cols.?) {
             defer allocator.free(full);
-            return std.fmt.allocPrint(allocator, "{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
+            return allocator.print( "{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
         }
         return full;
     }

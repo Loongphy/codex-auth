@@ -133,9 +133,9 @@ pub fn runCurlPostJsonCommand(
     const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
     defer allocator.free(curl_executable);
 
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print( "Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
-    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    const account_header = try allocator.print( "ChatGPT-Account-Id: {s}", .{account_id});
     defer allocator.free(account_header);
 
     var argv = std.ArrayList([]const u8).empty;

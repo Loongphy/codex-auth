@@ -405,7 +405,7 @@ fn pathEntryHostsCodexBinary(dir_path: []const u8) bool {
     for (names) |name| {
         const candidate = fs.path.join(std.heap.page_allocator, &[_][]const u8{ dir_path, name }) catch continue;
         defer std.heap.page_allocator.free(candidate);
-        if (std.fs.path.isAbsolute(candidate)) {
+        if (std.Io.Dir.path.isAbsolute(candidate)) {
             std.Io.Dir.accessAbsolute(fs.io(), candidate, .{}) catch continue;
         } else {
             std.Io.Dir.cwd().access(fs.io(), candidate, .{}) catch continue;
@@ -852,8 +852,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
             reg.previous_active_account_key = try gpa.dupe(u8, beta_key);
             try registry.saveRegistry(gpa, home, &reg);
         }
-        const body = try std.fmt.allocPrint(
-            gpa,
+        const body = try gpa.print(
             "{s}" ++
                 "[ \"$3\" = restart ] || exit 91\n" ++
                 "grep -F 'access-beta@example.com' \"$CODEX_HOME/auth.json\" >/dev/null || exit 92\n" ++
@@ -973,7 +972,7 @@ test "Scenario: Given a non-executable codex first in PATH then daemon restart u
     defer gpa.free(decoy);
     const fallback = try tmp.dir.realpathAlloc(gpa, "fallback");
     defer gpa.free(fallback);
-    const path = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ decoy, fallback });
+    const path = try gpa.print( "{s}:{s}", .{ decoy, fallback });
     defer gpa.free(path);
     const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, root, home, path, &.{ "switch", "beta", "--restart-daemon" });
     defer gpa.free(result.stdout);
@@ -5487,7 +5486,7 @@ fn writeMockFixtureNamed(
     args: anytype,
     data: []const u8,
 ) !void {
-    const sub_path = try std.fmt.allocPrint(gpa, "fixtures/" ++ name_fmt, args);
+    const sub_path = try gpa.print( "fixtures/" ++ name_fmt, args);
     defer gpa.free(sub_path);
     try tmp_dir.makePath("fixtures");
     try tmp_dir.writeFile(.{ .sub_path = sub_path, .data = data });
@@ -5723,7 +5722,7 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     if (builtin.os.tag == .windows) {
         // `cmd /c` quote-parses its own argv badly, so put the redirections
         // in a batch file where the text is taken verbatim.
-        const script = try std.fmt.allocPrint(gpa, "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
+        const script = try gpa.print( "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
         defer gpa.free(script);
         try tmp.dir.writeFile(.{ .sub_path = "append-run.cmd", .data = script });
         var child = try std.process.spawn(fs.io(), .{
@@ -5743,7 +5742,7 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
         }
     } else {
         for (0..2) |_| {
-            const command = try std.fmt.allocPrint(gpa, "\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
+            const command = try gpa.print( "\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
             defer gpa.free(command);
             var child = try std.process.spawn(fs.io(), .{
                 .argv = &[_][]const u8{ "sh", "-c", command },

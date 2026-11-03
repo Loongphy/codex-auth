@@ -297,7 +297,7 @@ test "writeAccountsTable shows API_KEY in the plan column for API key auth" {
 
 fn appendTestAccountWithUsage(allocator: std.mem.Allocator, reg: *registry.Registry, email: []const u8) !void {
     const sep = std.mem.find(u8, email, "@").?;
-    const record_key = try std.fmt.allocPrint(allocator, "user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
+    const record_key = try allocator.print( "user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
     defer allocator.free(record_key);
     try appendTestAccount(allocator, reg, record_key, email, email[0..sep], .pro);
     reg.accounts.items[reg.accounts.items.len - 1].last_usage = .{

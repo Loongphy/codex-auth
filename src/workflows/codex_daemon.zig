@@ -31,7 +31,7 @@ pub const Client = struct {
     /// is a best-effort absence check; errors and stale endpoints stay unknown.
     pub fn probe(self: *const Client) !Outcome {
         if (!supported()) return .unsupported;
-        const socket = try std.fs.path.join(self.allocator, &.{ self.codex_home, "app-server-control", "app-server-control.sock" });
+        const socket = try std.Io.Dir.path.join(self.allocator, &.{ self.codex_home, "app-server-control", "app-server-control.sock" });
         defer self.allocator.free(socket);
         std.Io.Dir.cwd().access(runtime.io(), socket, .{}) catch |err| switch (err) {
             error.FileNotFound => return .not_running,
@@ -157,9 +157,9 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
         &.{ "packages", "standalone", "current" },
     };
     for (layouts) |layout| {
-        const dir = try std.fs.path.join(allocator, layout);
+        const dir = try std.Io.Dir.path.join(allocator, layout);
         defer allocator.free(dir);
-        const path = try std.fs.path.join(allocator, &.{ home, dir, name });
+        const path = try std.Io.Dir.path.join(allocator, &.{ home, dir, name });
         if (isExecutable(path)) return path;
         allocator.free(path);
     }
@@ -167,7 +167,7 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
     defer env.deinit();
     var paths = std.mem.splitScalar(u8, env.get("PATH") orelse "", if (builtin.os.tag == .windows) ';' else ':');
     while (paths.next()) |dir| {
-        const path = try std.fs.path.join(allocator, &.{ dir, name });
+        const path = try std.Io.Dir.path.join(allocator, &.{ dir, name });
         if (isExecutable(path)) {
             defer allocator.free(path);
             return try runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);

@@ -727,8 +727,7 @@ fn setForegroundUsageOverrideForOutcome(
 ) !bool {
     if (outcome.error_name) |error_name| {
         if (error_name.len > max_usage_override_display_width) {
-            slot.* = try std.fmt.allocPrint(
-                allocator,
+            slot.* = try allocator.print(
                 "{s}...",
                 .{error_name[0 .. max_usage_override_display_width - 3]},
             );
