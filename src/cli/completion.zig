@@ -121,9 +121,7 @@ const fish_script =
     \\        set -e tokens[1]
     \\    end
     \\    set -l cur (commandline -ct)
-    \\    if test (count $tokens) -eq 0; or test "$tokens[-1]" != "$cur"
-    \\        set -a tokens "$cur"
-    \\    end
+    \\    set -a tokens "$cur"
     \\    set -l directive 0
     \\    for line in (codex-auth __complete $tokens 2>/dev/null)
     \\        if string match -q ':*' -- $line

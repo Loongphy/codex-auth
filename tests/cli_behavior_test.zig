@@ -818,6 +818,8 @@ test "Scenario: Given fish completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "commandline -opc") != null);
     try std.testing.expect(std.mem.find(u8, script, "commandline -ct") != null);
     try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete $tokens") != null);
+    try std.testing.expect(std.mem.find(u8, script, "set -a tokens \"$cur\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$tokens[-1]\" != \"$cur") == null);
     try std.testing.expect(std.mem.find(u8, script, "__fish_complete_path") != null);
     try std.testing.expect(std.mem.find(u8, script, "complete -c codex-auth -f -a '(__fish_codex_auth_complete)'") != null);
 }
