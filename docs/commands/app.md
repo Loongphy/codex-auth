@@ -28,8 +28,8 @@ Launches the official Codex App with per-process environment overrides.
 
 `app` prints its progress and launch plan to stderr before starting the GUI
 launcher: whether the app was already running, whether a managed CLI download
-was needed, and the resolved platform, Codex home, app ID, and CLI path (each
-marked auto-detected or explicit). See [Windows](../windows.md) for Windows
+was needed, and the resolved platform, app ID, and CLI path. The Codex home is
+shown when `--codex-home` is supplied. See [Windows](../windows.md) for Windows
 console color and character rules.
 
 If `--platform` is omitted, Windows reads
