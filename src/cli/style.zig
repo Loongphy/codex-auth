@@ -4,6 +4,7 @@ pub const ansi = struct {
     pub const reset = "\x1b[0m";
     pub const bold = "\x1b[1m";
     pub const dim = "\x1b[2m";
+    pub const strike = "\x1b[9m";
     pub const red = "\x1b[31m";
     pub const green = "\x1b[32m";
     pub const cyan = "\x1b[36m";
@@ -13,9 +14,47 @@ pub const role = struct {
     pub const key = ansi.bold;
     pub const secondary = ansi.dim;
     pub const status = ansi.cyan;
+    pub const heading = ansi.bold ++ ansi.cyan;
     pub const success = ansi.green;
     pub const warning = ansi.cyan;
     pub const error_text = ansi.red;
+    /// A credit that was just redeemed: struck through and dimmed. Terminals
+    /// that ignore SGR 9 still show it dim, which reads as spent either way.
+    pub const spent = ansi.dim ++ ansi.strike;
+};
+
+/// Platform variants of the few marks that user-facing output needs. Windows
+/// default output must stay ASCII and free of check marks, bullets, arrows and
+/// box-drawing characters (docs/windows.md); the borderless reset-credit rail
+/// therefore uses indentation and color on every platform, and only swaps the
+/// separator and success marker here. Every other difference follows a marker
+/// the docs or an existing command already use.
+///
+/// Marks that are already ASCII and established repo-wide are deliberately not
+/// part of this set: the cursor `>` of the switch and remove tables, and the
+/// `Enter` / `Esc` key names the footers spell out on every platform.
+pub const Glyphs = struct {
+    /// Separator between compact fields on one line, spacing included.
+    separator: []const u8,
+    /// Status markers, trailing space included. Windows has no failure marker:
+    /// its documented non-success lines are plain sentences.
+    success: []const u8,
+    failure: []const u8,
+
+    pub fn forPlatform(is_windows: bool) Glyphs {
+        if (is_windows) {
+            return .{
+                .separator = ", ",
+                .success = "OK ",
+                .failure = "",
+            };
+        }
+        return .{
+            .separator = " \u{00b7} ",
+            .success = "\u{2713} ",
+            .failure = "\u{2717} ",
+        };
+    }
 };
 
 pub const StyledWriter = struct {

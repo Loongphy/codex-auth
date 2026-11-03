@@ -1661,3 +1661,82 @@ test "Scenario: Given selector environment when deciding switch or remove UI the
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(false, true, true));
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(true, true, true));
 }
+
+test "Scenario: Given a reset selector when parsing then the selector is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| try std.testing.expectEqualStrings("work@example.com", opts.selector),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset without a selector when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "requires an account selector");
+}
+
+test "Scenario: Given reset with a leading dash selector when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    // Unlike `switch -`, `reset` has no previous-account form: a leading dash is
+    // reported as an unknown flag instead of being read as a selector.
+    const args = [_][:0]const u8{ "codex-auth", "reset", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "unknown flag `-`");
+}
+
+test "Scenario: Given reset with extra args when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "one@example.com", "two@example.com" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "unexpected extra argument");
+}
+
+test "Scenario: Given reset help when parsing then the reset credits topic is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "--help" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectHelp(result, .reset_credits);
+}
+
+test "reset summary line matches the documented examples on both platforms" {
+    const gpa = std.testing.allocator;
+
+    const used = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", false);
+    defer gpa.free(used);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 1 left (next exp 01-01 08:00)", used);
+
+    const used_windows = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", true);
+    defer gpa.free(used_windows);
+    try std.testing.expectEqualStrings("reset credit redeemed, 1 left (next exp 01-01 08:00)", used_windows);
+    for (used_windows) |byte| try std.testing.expect(byte < 0x80);
+
+    const already = try cli.output.resetSummaryLineAlloc(gpa, true, 0, null, true);
+    defer gpa.free(already);
+    try std.testing.expectEqualStrings("reset credit already redeemed, none left", already);
+
+    const none_left = try cli.output.resetSummaryLineAlloc(gpa, false, 0, null, false);
+    defer gpa.free(none_left);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} none left", none_left);
+
+    // A remaining card without an expiry says so instead of printing a blank.
+    const undated = try cli.output.resetSummaryLineAlloc(gpa, false, 2, null, false);
+    defer gpa.free(undated);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 2 left (no expiry)", undated);
+}

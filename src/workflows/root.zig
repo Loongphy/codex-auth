@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const app_runtime = @import("../core/runtime.zig");
 const account_api = @import("../api/account.zig");
+const transport = @import("../api/transport.zig");
 const cli = @import("../cli/root.zig");
 const chatgpt_http = @import("../api/http.zig");
 const display_rows = @import("../tui/display.zig");
@@ -23,6 +25,7 @@ const import_workflow = @import("import.zig");
 const export_workflow = @import("export.zig");
 const switch_workflow = @import("switch.zig");
 const remove_workflow = @import("remove.zig");
+const reset_workflow = @import("reset.zig");
 const alias_workflow = @import("alias.zig");
 const workflow_env = @import("env.zig");
 const targets = @import("targets.zig");
@@ -109,9 +112,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
 }
 
 fn runMain(init: std.process.Init.Minimal) !void {
+    // DebugAllocator bookkeeping only pays off in Debug builds; release takes
+    // the contention-free SMP allocator.
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
+    defer if (builtin.mode == .Debug) std.debug.assert(gpa.deinit() == .ok);
+    const allocator = if (comptime builtin.mode == .Debug) gpa.allocator() else std.heap.smp_allocator;
 
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -152,12 +157,13 @@ fn runMain(init: std.process.Init.Minimal) !void {
         },
         .config => |opts| try config_workflow.handleConfig(allocator, codex_home.?, opts),
         .app => |opts| try app_workflow.handleApp(allocator, codex_home.?, opts),
-        .list => |opts| try list_workflow.handleList(allocator, codex_home.?, opts),
+        .list => |opts| try list_workflow.handleList(allocator, transport.Transport.curl(), codex_home.?, opts),
         .login => |opts| try login_workflow.handleLogin(allocator, codex_home.?, opts),
         .import_auth => |opts| try import_workflow.handleImport(allocator, codex_home.?, opts),
         .export_auth => |opts| try export_workflow.handleExport(allocator, codex_home.?, opts),
         .switch_account => |opts| try switch_workflow.handleSwitch(allocator, codex_home.?, opts),
         .remove_account => |opts| try remove_workflow.handleRemove(allocator, codex_home.?, opts),
+        .reset_credits => |opts| try reset_workflow.handleReset(allocator, transport.Transport.curl(), codex_home.?, opts),
         .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
     }

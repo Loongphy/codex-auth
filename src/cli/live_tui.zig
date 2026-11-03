@@ -17,38 +17,6 @@ pub fn mouseWheelRows(max_rows: usize) usize {
     return @min(max_mouse_wheel_rows, @max(min_mouse_wheel_rows, max_rows / 3));
 }
 
-test "mouse wheel step scales with visible rows" {
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(1));
-    try std.testing.expectEqual(@as(usize, 6), mouseWheelRows(18));
-    try std.testing.expectEqual(@as(usize, 10), mouseWheelRows(30));
-    try std.testing.expectEqual(@as(usize, 12), mouseWheelRows(80));
-}
-
-test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
-    var viewport_start: usize = 9;
-    const row_count: usize = 105;
-    const max_rows: usize = 20;
-    const wheel_rows: usize = mouseWheelRows(max_rows);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
-    try std.testing.expectEqual(@as(usize, 3), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
-    try std.testing.expectEqual(@as(usize, 29), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
-    try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
-    try std.testing.expectEqual(@as(usize, 0), viewport_start);
-    try std.testing.expect(applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
-    try std.testing.expectEqual(@as(usize, 85), viewport_start);
-}
-
 pub fn nowSecond() i64 {
     return std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
 }
@@ -133,8 +101,60 @@ pub fn listViewport(
     fixed_lines: usize,
     viewport_start: *usize,
 ) render.LiveListViewport {
+    return listViewportFollowing(terminal_rows, row_count, fixed_lines, viewport_start, null);
+}
+
+/// A range of rendered body lines that must stay visible together.
+pub const BodySpan = struct {
+    first: usize,
+    last: usize,
+};
+
+/// Keeps a span of body lines visible with the smallest scroll: a span above the
+/// viewport is top-aligned, a span reaching below it is bottom-aligned. When the
+/// span is taller than the viewport its end wins, because that is where the reset
+/// credits rail draws the redeem result.
+///
+/// `span` and the returned start share `renderListBodyViewport`'s index basis:
+/// lines of the rendered body after its column header, which include group
+/// header lines and any spliced rail lines. That is deliberately not
+/// `rows.items`, and not the data-row basis either: callers map a data index
+/// through `render.liveLineIndexForDataIndex` before building a span.
+pub fn followViewportStart(
+    row_count: usize,
+    max_rows: usize,
+    current_start: usize,
+    span: ?BodySpan,
+) usize {
+    const start = render.clampLiveViewportStart(row_count, max_rows, current_start);
+    const target = span orelse return start;
+    if (max_rows == 0 or row_count == 0) return start;
+    const last = @min(target.last, row_count - 1);
+    var followed = start;
+    if (last < followed) {
+        followed = target.first;
+    } else if (last >= followed + max_rows) {
+        followed = last + 1 -| max_rows;
+    } else if (target.first < followed and target.first + max_rows > last) {
+        // The rail's end is visible but its anchor row scrolled off, and the
+        // whole span fits: pull the window back up to the anchor row.
+        followed = target.first;
+    }
+    return render.clampLiveViewportStart(row_count, max_rows, followed);
+}
+
+/// Like `listViewport`, but scrolls the given body lines into view first. The
+/// reset credits rail uses this so a redeem can never be confirmed or reported
+/// on a line the user cannot see.
+pub fn listViewportFollowing(
+    terminal_rows: usize,
+    row_count: usize,
+    fixed_lines: usize,
+    viewport_start: *usize,
+    span: ?BodySpan,
+) render.LiveListViewport {
     const max_rows = maxTableRows(terminal_rows, fixed_lines);
-    viewport_start.* = render.clampLiveViewportStart(row_count, max_rows, viewport_start.*);
+    viewport_start.* = followViewportStart(row_count, max_rows, viewport_start.*, span);
     return .{
         .start_row = viewport_start.*,
         .max_rows = max_rows,

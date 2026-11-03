@@ -305,14 +305,23 @@ fn fakeCurlCommandPath() []const u8 {
     return if (builtin.os.tag == .windows) "fake-curl-bin/curl.exe" else "fake-curl-bin/curl";
 }
 
+/// Installs a built helper binary under `dir` so it can shadow PATH. Copies
+/// instead of reading into memory: these binaries outgrew `readFileAlloc`'s cap.
+fn installBuiltBinary(source_path: []const u8, dir: fs.Dir, sub_path: []const u8) !void {
+    try fs.cwd().copyFile(source_path, dir, sub_path, .{});
+    if (builtin.os.tag != .windows) {
+        var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+        defer file.close();
+        try file.chmod(0o755);
+    }
+}
+
 fn writeFailingFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     try dir.makePath("fake-curl-bin");
     if (builtin.os.tag == .windows) {
         const built_fake_curl = try builtFakeCurlFailPathAlloc(allocator, project_root);
         defer allocator.free(built_fake_curl);
-        const fake_curl_data = try fixtures.readFileAlloc(allocator, built_fake_curl);
-        defer allocator.free(fake_curl_data);
-        try dir.writeFile(.{ .sub_path = fakeCurlCommandPath(), .data = fake_curl_data });
+        try installBuiltBinary(built_fake_curl, dir, fakeCurlCommandPath());
         return;
     }
 
@@ -331,9 +340,7 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
     if (builtin.os.tag == .windows) {
         const built_fake_curl = try builtFakeCurlPathAlloc(allocator, project_root);
         defer allocator.free(built_fake_curl);
-        const fake_curl_data = try fixtures.readFileAlloc(allocator, built_fake_curl);
-        defer allocator.free(fake_curl_data);
-        try dir.writeFile(.{ .sub_path = fakeCurlCommandPath(), .data = fake_curl_data });
+        try installBuiltBinary(built_fake_curl, dir, fakeCurlCommandPath());
         return;
     }
 
@@ -396,12 +403,44 @@ fn builtFakeCodexPathAlloc(allocator: std.mem.Allocator, project_root: []const u
     return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
+fn pathEntryHostsCodexBinary(dir_path: []const u8) bool {
+    const names: []const []const u8 = if (builtin.os.tag == .windows)
+        &.{ "codex.exe", "codex.cmd", "codex.bat", "codex.ps1" }
+    else
+        &.{"codex"};
+    for (names) |name| {
+        const candidate = fs.path.join(std.heap.page_allocator, &[_][]const u8{ dir_path, name }) catch continue;
+        defer std.heap.page_allocator.free(candidate);
+        if (std.fs.path.isAbsolute(candidate)) {
+            std.Io.Dir.accessAbsolute(fs.io(), candidate, .{}) catch continue;
+        } else {
+            std.Io.Dir.cwd().access(fs.io(), candidate, .{}) catch continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+/// Prepends the fixture directory to PATH, dropping inherited entries that
+/// contain a real `codex` binary. Native wrappers outrank `codex.ps1` during
+/// resolution, so a machine that has Codex installed would otherwise shadow
+/// the fixture's fake wrappers and launch the real CLI in tests that assert
+/// lower-priority launchers.
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
-    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
+    var kept = std.ArrayList(u8).empty;
+    defer kept.deinit(allocator);
+    var it = std.mem.splitScalar(u8, inherited_path, fs.path.delimiter);
+    while (it.next()) |path_entry| {
+        if (path_entry.len == 0) continue;
+        if (pathEntryHostsCodexBinary(path_entry)) continue;
+        if (kept.items.len != 0) try kept.append(allocator, fs.path.delimiter);
+        try kept.appendSlice(allocator, path_entry);
+    }
+    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, kept.items });
 }
 
 fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
@@ -686,6 +725,13 @@ fn expectSuccess(result: std.process.RunResult) !void {
 fn expectFailure(result: std.process.RunResult) !void {
     switch (result.term) {
         .exited => |code| try std.testing.expect(code != 0),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+fn expectExitCode(result: std.process.RunResult, expected: u8) !void {
+    switch (result.term) {
+        .exited => |code| try std.testing.expectEqual(expected, code),
         else => return error.TestUnexpectedResult,
     }
 }
@@ -4521,8 +4567,8 @@ test "Scenario: Given remove query with duplicate-email accounts when running re
     try expectFailure(result);
     try std.testing.expectEqualStrings(
         "Matched multiple accounts:\n" ++
-            "- alice@example.com / work\n" ++
             "- alice@example.com / personal\n" ++
+            "- alice@example.com / work\n" ++
             "error: multiple accounts match the query in non-interactive mode.\n" ++
             "hint: Refine the query to match one account, or run the command in a TTY.\n",
         result.stderr,
@@ -5180,4 +5226,556 @@ test "Scenario: Given unsupported native host with missing explicit codex CLI pa
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "ERROR: --codex-cli-path: Path does not exist\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, missing_cli_path) == null);
     try std.testing.expect(std.mem.indexOf(u8, result.stderr, "Environment Configuration") == null);
+}
+
+fn seedResetCreditsFixture(allocator: std.mem.Allocator, home_root: []const u8, email: []const u8) !void {
+    try seedRegistryWithAccounts(allocator, home_root, email, &.{
+        .{ .email = email, .alias = "reset" },
+    });
+    const home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(home);
+
+    var reg = try registry.loadRegistry(allocator, home);
+    defer reg.deinit(allocator);
+    const key = try fixtures.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(key);
+    const idx = registry.findAccountIndexByAccountKey(&reg, key) orelse return error.TestUnexpectedResult;
+
+    const cards = try allocator.alloc(registry.ResetCreditCard, 2);
+    cards[0] = .{
+        .id = try allocator.dupe(u8, "credit-later"),
+        .status = try allocator.dupe(u8, "available"),
+        .expires_at = try allocator.dupe(u8, "2027-01-01T00:00:00Z"),
+        .title = try allocator.dupe(u8, "Later card"),
+    };
+    cards[1] = .{
+        .id = try allocator.dupe(u8, "credit-soon"),
+        .status = try allocator.dupe(u8, "available"),
+        .expires_at = try allocator.dupe(u8, "2026-11-01T00:00:00Z"),
+        .title = try allocator.dupe(u8, "Full reset (Weekly + 5 hr)"),
+    };
+    reg.accounts.items[idx].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .reset_credits = 2,
+        .reset_credit = cards,
+        .plan_type = .plus,
+    };
+    try registry.saveRegistry(allocator, home, &reg);
+}
+
+/// Runs the CLI with the built mock backend (`tests/fake_curl.zig`) installed as
+/// `curl` on PATH and pointed at `<tmp>/fixtures`, so the reset tests and the dev
+/// demo scripts drive the same mock.
+fn runCliWithMockBackend(
+    allocator: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    tmp_dir: fs.Dir,
+    scenario: []const u8,
+    args: []const []const u8,
+) !std.process.RunResult {
+    const exe_path = try builtCliPathAlloc(allocator, project_root);
+    defer allocator.free(exe_path);
+    const built_curl = try builtFakeCurlPathAlloc(allocator, project_root);
+    defer allocator.free(built_curl);
+
+    try tmp_dir.makePath("mock-bin");
+    try tmp_dir.makePath("fixtures");
+    const curl_sub_path = if (builtin.os.tag == .windows) "mock-bin/curl.exe" else "mock-bin/curl";
+    try installBuiltBinary(built_curl, tmp_dir, curl_sub_path);
+
+    const mock_bin = try tmp_dir.realpathAlloc(allocator, "mock-bin");
+    defer allocator.free(mock_bin);
+    const path_override = try prependPathEntryAlloc(allocator, mock_bin);
+    defer allocator.free(path_override);
+    const fixture_dir = try tmp_dir.realpathAlloc(allocator, "fixtures");
+    defer allocator.free(fixture_dir);
+
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, exe_path);
+    try argv.appendSlice(allocator, args);
+
+    var env_map = try getEnvMap(allocator);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+    try env_map.put("PATH", path_override);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+    try env_map.put("CODEX_AUTH_FAKE_CURL_DIR", fixture_dir);
+    try env_map.put("CODEX_AUTH_FAKE_CURL_SCENARIO", scenario);
+
+    return try runCapture(allocator, project_root, &env_map, argv.items);
+}
+
+fn isUuidV4(text: []const u8) bool {
+    if (text.len != 36) return false;
+    for (text, 0..) |ch, index| {
+        if (index == 8 or index == 13 or index == 18 or index == 23) {
+            if (ch != '-') return false;
+            continue;
+        }
+        const hex = (ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f');
+        if (!hex) return false;
+    }
+    if (text[14] != '4') return false;
+    return switch (text[19]) {
+        '8', '9', 'a', 'b' => true,
+        else => false,
+    };
+}
+
+fn loggedValueAfter(log: []const u8, needle: []const u8) ?[]const u8 {
+    const start = (std.mem.indexOf(u8, log, needle) orelse return null) + needle.len;
+    const end = std.mem.indexOfScalarPos(u8, log, start, '"') orelse return null;
+    return log[start..end];
+}
+
+/// Asserts the consume request the mock logged: the endpoint, a UUID v4
+/// idempotency key, the chosen credit, and no credential.
+fn expectConsumeRequestLogged(allocator: std.mem.Allocator, tmp_dir: fs.Dir, credit_id: []const u8) !void {
+    const log_path = try tmp_dir.realpathAlloc(allocator, "fixtures/requests.log");
+    defer allocator.free(log_path);
+    const log = try fixtures.readFileAlloc(allocator, log_path);
+    defer allocator.free(log);
+
+    try std.testing.expect(std.mem.indexOf(u8, log, "POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume") != null);
+    const redeem_key = loggedValueAfter(log, "\"redeem_request_id\":\"") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(isUuidV4(redeem_key));
+    const logged_credit = loggedValueAfter(log, "\"credit_id\":\"") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(credit_id, logged_credit);
+    // The mock logs request bodies, so a leaked credential would show up here.
+    try std.testing.expect(std.mem.indexOf(u8, log, "Bearer") == null);
+    try std.testing.expect(std.mem.indexOf(u8, log, "access-") == null);
+}
+
+/// Runs `reset <email>` against a two-card fixture with the mock backend
+/// answering `scenario`. The caller owns the returned stdout and stderr.
+fn runResetScenario(
+    gpa: std.mem.Allocator,
+    scenario: []const u8,
+    email: []const u8,
+) !std.process.RunResult {
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+    return runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, scenario, &[_][]const u8{ "reset", email });
+}
+
+fn writeResetCreditsAuthFile(allocator: std.mem.Allocator, home_root: []const u8, email: []const u8) !void {
+    const home = try codexHomeAlloc(allocator, home_root);
+    defer allocator.free(home);
+    const key = try fixtures.accountKeyForEmailAlloc(allocator, email);
+    defer allocator.free(key);
+    const path = try registry.accountAuthPath(allocator, home, key);
+    defer allocator.free(path);
+    const data = try fixtures.authJsonWithEmailPlan(allocator, email, "plus");
+    defer allocator.free(data);
+    try fs.cwd().writeFile(.{ .sub_path = path, .data = data });
+}
+
+test "Scenario: Given reset credits when running reset then it consumes the soonest-expiring card and lists the rest" {
+    const gpa = std.testing.allocator;
+    const result = try runResetScenario(gpa, "ok", "reset-user@example.com");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset", result);
+    try expectSuccess(result);
+    // printResetSummary picks its separator from the platform glyphs.
+    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit redeemed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, left_marker) != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
+test "Scenario: Given an already redeemed credit when running reset then it still exits zero" {
+    const gpa = std.testing.allocator;
+    const result = try runResetScenario(gpa, "already_redeemed", "already-reset@example.com");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset already_redeemed", result);
+    try expectExitCode(result, 0);
+    // printResetSummary picks its separator from the platform glyphs.
+    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "reset credit already redeemed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, left_marker) != null);
+    try std.testing.expectEqualStrings("", result.stderr);
+}
+
+test "Scenario: Given a spent credit when running reset then it asks for a refresh and fails" {
+    const gpa = std.testing.allocator;
+    const result = try runResetScenario(gpa, "no_credit", "gone-reset@example.com");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    try std.testing.expectEqualStrings("", result.stdout);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "reset credit is no longer available; run `codex-auth list --api` to refresh.") != null);
+}
+
+test "Scenario: Given nothing to reset when running reset then it reports usage and fails" {
+    const gpa = std.testing.allocator;
+    const result = try runResetScenario(gpa, "nothing_to_reset", "noop-reset@example.com");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "usage does not need a reset right now.") != null);
+}
+
+test "Scenario: Given a failing consume request when running reset then it reports the HTTP status" {
+    const gpa = std.testing.allocator;
+    const result = try runResetScenario(gpa, "http500", "http500-reset@example.com");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "reset failed (HTTP 500).") != null);
+}
+
+test "Scenario: Given a redeem when reading the mock request log then it carries a UUID v4 key and no credential" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "logged-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset request log", result);
+    try expectSuccess(result);
+    try expectConsumeRequestLogged(gpa, tmp.dir, "credit-soon");
+}
+
+test "Scenario: Given no available reset credits when running reset then it reports and fails" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "empty-reset@example.com";
+    try seedRegistryWithAccounts(gpa, home_root, email, &.{
+        .{ .email = email, .alias = "empty" },
+    });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "reset", email });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectFailure(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "no available reset credits") != null);
+}
+
+fn writeMockFixtureNamed(
+    gpa: std.mem.Allocator,
+    tmp_dir: fs.Dir,
+    comptime name_fmt: []const u8,
+    args: anytype,
+    data: []const u8,
+) !void {
+    const sub_path = try std.fmt.allocPrint(gpa, "fixtures/" ++ name_fmt, args);
+    defer gpa.free(sub_path);
+    try tmp_dir.makePath("fixtures");
+    try tmp_dir.writeFile(.{ .sub_path = sub_path, .data = data });
+}
+
+fn mockUsageBodyAlloc(gpa: std.mem.Allocator, primary_used: u32, secondary_used: u32, available: u32) ![]u8 {
+    // Written with a writer instead of one format string: the JSON braces would
+    // otherwise all need doubling, which is easy to get wrong.
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    errdefer out.deinit();
+    const w = &out.writer;
+    try w.writeAll("{\"plan_type\":\"plus\",\"rate_limit\":{\"primary_window\":{\"used_percent\":");
+    try w.print("{d}", .{primary_used});
+    try w.writeAll(",\"limit_window_seconds\":18000,\"reset_at\":4102444800},\"secondary_window\":{\"used_percent\":");
+    try w.print("{d}", .{secondary_used});
+    try w.writeAll(",\"limit_window_seconds\":604800,\"reset_at\":4103049600}},\"rate_limit_reset_credits\":{\"available_count\":");
+    try w.print("{d}", .{available});
+    try w.writeAll("}}");
+    const copy = try gpa.dupe(u8, out.written());
+    out.deinit();
+    return copy;
+}
+
+fn mockCreditsBodyAlloc(gpa: std.mem.Allocator, cards_json: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    errdefer out.deinit();
+    try out.writer.writeAll("{\"credits\":");
+    try out.writer.writeAll(cards_json);
+    try out.writer.writeAll("}");
+    const copy = try gpa.dupe(u8, out.written());
+    out.deinit();
+    return copy;
+}
+
+test "Scenario: Given one account whose usage refresh fails when listing with api then only that row reports it" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const healthy = "healthy@example.com";
+    const failing = "failing@example.com";
+    try seedRegistryWithAccounts(gpa, home_root, healthy, &.{
+        .{ .email = healthy, .alias = "healthy" },
+        .{ .email = failing, .alias = "failing" },
+    });
+    try writeResetCreditsAuthFile(gpa, home_root, healthy);
+    try writeResetCreditsAuthFile(gpa, home_root, failing);
+
+    const healthy_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, healthy);
+    defer gpa.free(healthy_id);
+    const failing_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, failing);
+    defer gpa.free(failing_id);
+
+    const healthy_body = try mockUsageBodyAlloc(gpa, 20, 40, 2);
+    defer gpa.free(healthy_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "usage-{s}.json", .{healthy_id}, healthy_body);
+
+    // The failing account answers HTTP 500, so its row must carry the status
+    // while the healthy row keeps its own refreshed values.
+    const failing_body = try mockUsageBodyAlloc(gpa, 90, 95, 1);
+    defer gpa.free(failing_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "usage-{s}.json", .{failing_id}, failing_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "usage-{s}.status", .{failing_id}, "500");
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "list", "--api" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("list --api mixed batch", result);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "healthy") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "80%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "60%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "500") != null);
+    // The healthy account's card summary survived the other account's failure.
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "90%") == null);
+}
+
+test "Scenario: Given refreshed reset credits when listing json then the cards and count are exposed" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "json-reset@example.com";
+    try seedRegistryWithAccounts(gpa, home_root, email, &.{
+        .{ .email = email, .alias = "json" },
+    });
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, email);
+    defer gpa.free(account_id);
+    const usage_body = try mockUsageBodyAlloc(gpa, 50, 25, 2);
+    defer gpa.free(usage_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "usage-{s}.json", .{account_id}, usage_body);
+    const credits_body = try mockCreditsBodyAlloc(
+        gpa,
+        "[{\"id\":\"credit-soon\",\"status\":\"available\",\"expires_at\":\"2026-11-01T00:00:00Z\",\"title\":\"Full reset (Weekly + 5 hr)\"}," ++
+            "{\"id\":\"credit-spent\",\"status\":\"consumed\",\"expires_at\":\"2026-10-01T00:00:00Z\",\"title\":\"Used card\"}]",
+    );
+    defer gpa.free(credits_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "credits-{s}.json", .{account_id}, credits_body);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "list", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("list --json reset credits", result);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "\"reset_credits\":2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "credit-soon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "Full reset (Weekly + 5 hr)") != null);
+    // The spent card stays in the payload so callers can see why the count differs.
+    try std.testing.expect(std.mem.indexOf(u8, result.stdout, "credit-spent") != null);
+}
+
+test "Scenario: Given a redeemed credit when the next api refresh runs then the registry reconciles" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "reconcile@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const account_id = try fixtures.chatgptAccountIdForEmailAlloc(gpa, email);
+    defer gpa.free(account_id);
+    const usage_body = try mockUsageBodyAlloc(gpa, 92, 61, 2);
+    defer gpa.free(usage_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "usage-{s}.json", .{account_id}, usage_body);
+    const after_usage = try mockUsageBodyAlloc(gpa, 4, 2, 1);
+    defer gpa.free(after_usage);
+    try writeMockFixtureNamed(gpa, tmp.dir, "after-consume-usage-{s}.json", .{account_id}, after_usage);
+    const credits_body = try mockCreditsBodyAlloc(
+        gpa,
+        "[{\"id\":\"credit-soon\",\"status\":\"available\",\"expires_at\":\"2026-11-01T00:00:00Z\",\"title\":\"Full reset (Weekly + 5 hr)\"}," ++
+            "{\"id\":\"credit-later\",\"status\":\"available\",\"expires_at\":\"2027-01-01T00:00:00Z\",\"title\":\"Later card\"}]",
+    );
+    defer gpa.free(credits_body);
+    try writeMockFixtureNamed(gpa, tmp.dir, "credits-{s}.json", .{account_id}, credits_body);
+    const after_credits = try mockCreditsBodyAlloc(
+        gpa,
+        "[{\"id\":\"credit-soon\",\"status\":\"consumed\",\"expires_at\":\"2026-11-01T00:00:00Z\",\"title\":\"Full reset (Weekly + 5 hr)\"}," ++
+            "{\"id\":\"credit-later\",\"status\":\"available\",\"expires_at\":\"2027-01-01T00:00:00Z\",\"title\":\"Later card\"}]",
+    );
+    defer gpa.free(after_credits);
+    try writeMockFixtureNamed(gpa, tmp.dir, "after-consume-credits-{s}.json", .{account_id}, after_credits);
+
+    // `reset` must not rewrite the registry: the consumed card is still stored.
+    const redeemed = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email });
+    defer gpa.free(redeemed.stdout);
+    defer gpa.free(redeemed.stderr);
+    logRunResultIfFailed("reset before reconcile", redeemed);
+    try expectSuccess(redeemed);
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+    const registry_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "accounts", "registry.json" });
+    defer gpa.free(registry_path);
+    const before = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(before);
+    try std.testing.expect(std.mem.indexOf(u8, before, "credit-soon") != null);
+    try std.testing.expect(std.mem.indexOf(u8, before, "consumed") == null);
+
+    // The documented reconciliation happens on the next api refresh.
+    const refreshed = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "list", "--api" });
+    defer gpa.free(refreshed.stdout);
+    defer gpa.free(refreshed.stderr);
+    logRunResultIfFailed("list --api reconcile", refreshed);
+    try expectSuccess(refreshed);
+
+    // The refreshed snapshot now records the redeemed card as consumed and keeps
+    // the surviving one, and the table shows the reset usage.
+    const after = try fixtures.readFileAlloc(gpa, registry_path);
+    defer gpa.free(after);
+    try std.testing.expect(std.mem.indexOf(u8, after, "consumed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after, "credit-later") != null);
+    try std.testing.expect(std.mem.indexOf(u8, refreshed.stdout, "96%") != null);
+}
+
+test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" {
+    // Regression for redirected stdout: the two child processes share one file
+    // description, so a positional writer would rewind to offset 0 and erase
+    // the first process's output. Streaming stdout must append both lines.
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home);
+    const exe_path = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe_path);
+    const output_path = try fs.path.join(gpa, &[_][]const u8{ home, "version.log" });
+    defer gpa.free(output_path);
+
+    // The children open this path through shell redirection; keep no handle
+    // open so Windows share-mode checks cannot reject their create.
+    (try tmp.dir.createFile("version.log", .{})).close();
+
+    var env_map = try getEnvMap(gpa);
+    defer env_map.deinit();
+    try env_map.put("HOME", home);
+    try env_map.put("USERPROFILE", home);
+    try env_map.put("CODEX_HOME", home);
+    try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
+
+    // Go through a real shell `>>` redirect: std.process.spawn's `.file`
+    // stdio reopens the handle into a fresh file object on Windows, so a
+    // nonzero inherited offset cannot be passed to the child there. A
+    // shell performs the append redirection itself and gives the child a
+    // handle already positioned at the end, which is the scenario the
+    // streaming writer must honor.
+    if (builtin.os.tag == .windows) {
+        // `cmd /c` quote-parses its own argv badly, so put the redirections
+        // in a batch file where the text is taken verbatim.
+        const script = try std.fmt.allocPrint(gpa, "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
+        defer gpa.free(script);
+        try tmp.dir.writeFile(.{ .sub_path = "append-run.cmd", .data = script });
+        var child = try std.process.spawn(fs.io(), .{
+            .argv = &[_][]const u8{ "cmd.exe", "/d", "/c", "append-run.cmd" },
+            // A `.dir` cwd becomes a `\\?\`-prefixed path that cmd.exe cannot
+            // use as its working directory; pass the resolved path instead.
+            .cwd = .{ .path = home },
+            .environ_map = &env_map,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
+        const term = try child.wait(fs.io());
+        switch (term) {
+            .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+            else => return error.TestUnexpectedResult,
+        }
+    } else {
+        for (0..2) |_| {
+            const command = try std.fmt.allocPrint(gpa, "\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
+            defer gpa.free(command);
+            var child = try std.process.spawn(fs.io(), .{
+                .argv = &[_][]const u8{ "sh", "-c", command },
+                .cwd = .{ .path = project_root },
+                .environ_map = &env_map,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            });
+            const term = try child.wait(fs.io());
+            switch (term) {
+                .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+                else => return error.TestUnexpectedResult,
+            }
+        }
+    }
+
+    const contents = try fixtures.readFileAlloc(gpa, output_path);
+    defer gpa.free(contents);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, contents, "codex-auth "));
 }

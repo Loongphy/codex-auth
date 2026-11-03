@@ -13,13 +13,10 @@ const nav = @import("picker_nav.zig");
 
 const buildSwitchRowsWithUsageOverrides = row_data.buildSwitchRowsWithUsageOverrides;
 const indexWidth = row_data.indexWidth;
-const renderRemoveList = render.renderRemoveList;
 const TuiSession = tui_mod.TuiSession;
 const readTuiEscapeAction = tui_mod.readTuiEscapeAction;
 const tui_poll_error_mask = tui_mod.tui_poll_error_mask;
 const tui_escape_sequence_timeout_ms = tui_mod.tui_escape_sequence_timeout_ms;
-const writeTuiPromptLine = tui_mod.writeTuiPromptLine;
-const writeRemoveTuiFooter = tui_mod.writeRemoveTuiFooter;
 const mapTuiOutputError = tui_mod.mapTuiOutputError;
 const readFileOnce = io.readFileOnce;
 const accountIndexForSelectable = nav.accountIndexForSelectable;
@@ -64,15 +61,19 @@ fn selectRemoveWithNumbers(
     var rows = try buildSwitchRowsWithUsageOverrides(allocator, reg, usage_overrides);
     defer rows.deinit(allocator);
     var styled_out = style.StyledWriter.init(out, stdout.color_enabled);
-    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    const idx_width = indexWidth(rows.selectable_row_indices.len);
     const widths = rows.widths;
 
     var checked = try allocator.alloc(bool, rows.selectable_row_indices.len);
     defer allocator.free(checked);
     @memset(checked, false);
 
+    const stdout_cols: ?usize = if (tui_mod.terminalSize(std.Io.File.stdout())) |size|
+        (if (size.cols != 0) size.cols else null)
+    else
+        null;
     try out.writeAll("Select accounts to delete:\n\n");
-    try renderRemoveList(&styled_out, reg, rows.items, idx_width, widths, null, checked);
+    try render.renderRemoveListViewport(&styled_out, reg, rows.items, idx_width, widths, null, checked, .{ .max_cols = stdout_cols });
     try out.writeAll("Enter account numbers (comma/space separated, empty to cancel): ");
     try out.flush();
 
@@ -146,17 +147,34 @@ fn selectRemoveInteractive(
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
     const use_color = terminal_color.fileColorEnabled(tui.output);
-    const idx_width = @max(@as(usize, 2), indexWidth(rows.selectable_row_indices.len));
+    const idx_width = indexWidth(rows.selectable_row_indices.len);
     const widths = rows.widths;
+    var viewport_start: usize = 0;
 
     while (true) {
+        // Fixed lines are the prompt, the column header, and the footer;
+        // the table viewport scrolls to keep the cursor inside the frame.
+        const max_rows = tui.terminalRows() -| 3;
+        viewport_start = render.liveViewportStartForDisplayIndex(rows.items, idx, max_rows, viewport_start);
         try tui.resetFrame();
-        writeTuiPromptLine(out, "Select accounts to delete:", number_buf[0..number_len]) catch |err| return mapTuiOutputError(err);
-        out.writeAll("\n") catch |err| return mapTuiOutputError(err);
         var styled_out = style.StyledWriter.init(out, use_color);
-        renderRemoveList(&styled_out, reg, rows.items, idx_width, widths, idx, checked) catch |err| return mapTuiOutputError(err);
-        out.writeAll("\n") catch |err| return mapTuiOutputError(err);
-        writeRemoveTuiFooter(out, use_color) catch |err| return mapTuiOutputError(err);
+        render.renderRemoveScreenViewport(
+            &styled_out,
+            reg,
+            rows.items,
+            idx_width,
+            widths,
+            idx,
+            checked,
+            "",
+            "",
+            number_buf[0..number_len],
+            .{
+                .start_row = viewport_start,
+                .max_rows = max_rows,
+                .max_cols = tui.terminalCols(),
+            },
+        ) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
 
         if (comptime builtin.os.tag == .windows) {
@@ -263,6 +281,32 @@ fn selectRemoveInteractive(
                         if (idx + 1 < rows.selectable_row_indices.len) {
                             idx = if (escape.action == .end) rows.selectable_row_indices.len - 1 else idx + 1;
                             number_len = 0;
+                        }
+                    },
+                    .enter => {
+                        var count: usize = 0;
+                        for (checked) |flag| {
+                            if (flag) count += 1;
+                        }
+                        if (count == 0) return null;
+                        var selected = try allocator.alloc(usize, count);
+                        var out_idx: usize = 0;
+                        for (checked, 0..) |flag, sel_idx| {
+                            if (!flag) continue;
+                            selected[out_idx] = accountIndexForSelectable(&rows, sel_idx);
+                            out_idx += 1;
+                        }
+                        return selected;
+                    },
+                    .backspace => {
+                        if (number_len > 0) {
+                            number_len -= 1;
+                            if (number_len > 0) {
+                                const parsed = std.fmt.parseInt(usize, number_buf[0..number_len], 10) catch 0;
+                                if (parsed >= 1 and parsed <= rows.selectable_row_indices.len) {
+                                    idx = parsed - 1;
+                                }
+                            }
                         }
                     },
                     .quit => return null,

@@ -397,6 +397,65 @@ pub fn printAliasCleared(rec: *const registry.AccountRecord, old_alias: []const 
     try out.flush();
 }
 
+/// Prints a `reset` command failure to stderr with the standard error prefix.
+pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" ");
+    try out.print(fmt, args);
+    try out.writeAll("\n");
+    try out.flush();
+}
+
+/// The one-line summary `reset` prints after a consume: that a credit was
+/// redeemed, how many are left, and when the next one expires. The redeemed
+/// card is not named; `list --json` and the stored snapshot keep that detail.
+/// The wording matches the live rail's status line. Takes the platform
+/// explicitly so tests and the dev preview can render both variants.
+pub fn resetSummaryLineAlloc(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+    is_windows: bool,
+) ![]u8 {
+    const separator = style.Glyphs.forPlatform(is_windows).separator;
+    var line: std.Io.Writer.Allocating = .init(allocator);
+    errdefer line.deinit();
+    try line.writer.writeAll(if (already_used) "reset credit already redeemed" else "reset credit redeemed");
+    if (remaining == 0) {
+        try line.writer.print("{s}none left", .{separator});
+    } else {
+        try line.writer.print("{s}{d} left", .{ separator, remaining });
+        if (next_expiry) |expiry| {
+            try line.writer.print(" (next exp {s})", .{expiry});
+        } else {
+            try line.writer.writeAll(" (no expiry)");
+        }
+    }
+    return line.toOwnedSlice();
+}
+
+/// Prints the `reset` summary line. `next_expiry` is the compact local
+/// `MM-DD HH:MM` of the soonest-expiring remaining card, or null when that card
+/// carries no expiry.
+pub fn printResetSummary(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+) !void {
+    const line = try resetSummaryLineAlloc(allocator, already_used, remaining, next_expiry, builtin.os.tag == .windows);
+    defer allocator.free(line);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try stdout.out().print("{s}\n", .{line});
+    try stdout.out().flush();
+}
+
 pub fn printInvalidRemoveSelectionError() !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();

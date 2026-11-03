@@ -58,6 +58,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | [`codex-auth remove [--live] [--api\|--skip-api]`](./docs/commands/remove.md) | Remove accounts interactively |
 | [`codex-auth remove <query> [<query>...]`](./docs/commands/remove.md) | Remove accounts by selector |
 | [`codex-auth remove --all`](./docs/commands/remove.md) | Remove all stored accounts |
+| [`codex-auth reset <query>`](./docs/commands/reset.md) | Use the soonest-expiring reset credit for one account |
 | [`codex-auth alias set <query> <alias>`](./docs/commands/alias.md) | Set an alias for an account |
 | [`codex-auth alias clear <query>`](./docs/commands/alias.md) | Clear the alias for an account |
 
@@ -160,6 +161,8 @@ This project is provided as-is and use is at your own risk.
 **API Call Declaration:**
 By using the default API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers for usage limit and team name refresh. The exact endpoints are:
 - `GET https://chatgpt.com/backend-api/wham/usage`
+- `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
 - `GET https://chatgpt.com/backend-api/accounts`
+- `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume` (only when you explicitly redeem a reset credit with `codex-auth reset` or in the `list --live` rail; never during a refresh)
 
 This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.

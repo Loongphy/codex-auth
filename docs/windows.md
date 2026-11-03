@@ -58,6 +58,49 @@ OK Downloaded Codext CLI for WSL (v0.3.0)
 Launching Codex App...
 ```
 
+### Reset credits rail examples
+
+The `list --live` reset credits rail is borderless on every platform. It nests
+under its account row by indentation, uses an uppercase heading, and relies on
+the footer for the key hints. The same state on both platforms, with the rail
+indented four columns under its account row — the consumed card stays as a
+struck-through, dimmed line tagged `redeemed`, which is drawn in success green
+outside the strike:
+
+Non-Windows:
+
+```text
+    RESETS · 1 available
+    Full reset (Weekly + 5 hr) · 11-01 08:00 · in 9d redeemed
+    > untitled
+```
+
+Windows:
+
+```text
+    RESETS, 1 available
+    Full reset (Weekly + 5 hr), 11-01 08:00, in 9d redeemed
+    > untitled
+```
+
+A failure line carries no marker on Windows, because its sentence already says
+what happened: `redeem failed (HTTP 500)`, or `reset credit is no longer available;
+refresh to see current resets`.
+
+`codex-auth reset` prints the same separator difference outside the TUI.
+
+Non-Windows:
+
+```text
+reset credit redeemed · 1 left (next exp 01-01 08:00)
+```
+
+Windows:
+
+```text
+reset credit redeemed, 1 left (next exp 01-01 08:00)
+```
+
 ## System proxy
 
 `curl` only discovers proxies from its own environment variables, so the system
@@ -83,3 +126,13 @@ The same translation applies to the Codext release lookup and download in
 `codex-auth app`.
 
 See [api.md](./api.md) for the full resolution order.
+
+## Test runner deadlock (Zig 0.16)
+
+Zig 0.16's server-mode test runner (`--listen=-`, `std.zig.Server` over stdio)
+can deadlock the build runner on Windows: the spawned `test.exe` waits on
+stdin forever while the runner prints nothing, so CI appears stuck right
+after `zig version`. `zig build test` therefore runs test binaries through
+plain `Step.Run` steps (exit code verdict) rather than `addRunArtifact`. See
+[tests.md](./tests.md#why-tests-use-plain-steprun-instead-of-addrunartifact)
+before touching the run-test wiring in `build.zig`.

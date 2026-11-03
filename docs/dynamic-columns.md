@@ -1,9 +1,9 @@
 # Dynamic Column Layout
 
 All table views use one responsive allocator in `src/cli/table_layout.zig`.
-The allocator separates a column's semantic identity from its position on
-screen, so each view can keep its own visual order while sharing the same width
-policy and hide order.
+The allocator separates a column's semantic identity (`ColumnId`) from its
+position on screen, so each view keeps its own visual order while sharing the
+same width policy, header ladders, and cell truncation rules.
 
 ## Model
 
@@ -14,9 +14,13 @@ Each view supplies:
 - `prefix_width`: width of the row prefix (`#`, checkbox, index);
 - `separator_width`: width of the separator between visible columns.
 
-A column with content width `0` is unsupported or hidden by that view. Hidden
-columns are skipped completely, including their header, cells, and separators.
-Their width and separator budget is redistributed to the remaining columns.
+A column with width `0` is hidden by that view. Hidden columns are skipped
+completely — header, cells, and separators — and their budget redistributes to
+the remaining columns.
+
+Content width measures **cells, never headers**. A header can no longer inflate
+its column: `RESETS` sizes to the credit count, not to a 13-character label.
+Compact header ladders (below) keep a column named at any width.
 
 ## Visual Order
 
@@ -24,9 +28,13 @@ The order of each view is fixed. Unsupported columns are simply omitted.
 
 | View | Visual order |
 |---|---|
-| `list` | `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `CREDITS`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST ACTIVITY` |
-| `list --live` | `#*`, `ACCOUNT`, `PLAN`, `PLAN EXPIRE`, `RESET CREDITS`, `5H`, `WEEKLY`, `AUTH EXPIRE`, `LAST` |
+| `list` | `ACCOUNT`, `PLAN`, `PLAN EXP`, `CREDITS`, `RESETS`, `5H`, `WEEKLY`, `TOKEN EXPIRE`, `LAST` |
+| `list --live` | marker, `ACCOUNT`, `PLAN`, `PLAN EXP`, `RESETS`, `5H`, `WEEKLY`, `TOKEN EXPIRE`, `LAST` |
 | `switch`, `remove` | `ACCOUNT`, `PLAN`, `5H`, `WEEKLY`, `LAST` |
+
+The tables in this document name columns, not rendered headers: `TOKEN EXPIRE`
+is the access-token expiry column and `LAST` is the column whose wide header
+reads `LAST ACTIVITY`. See [Headers](#headers).
 
 ## Shared Priority
 
@@ -37,42 +45,45 @@ Every view uses the same ordered lists. A view with an unsupported column
 
 ```text
 #* -> ACCOUNT (10) -> 5H (4) -> WEEKLY (6) -> PLAN (4)
-   -> RESET CREDITS (2) -> CREDITS (2)
+   -> RESETS (2) -> CREDITS (2)
 ```
 
-`PLAN EXPIRE`, `AUTH EXPIRE`, and `LAST` are not in this list; they are deferred.
+`PLAN EXP`, `TOKEN EXPIRE`, and `LAST` are not in this list; they are deferred.
 
 ### Grow order
 
 ```text
-5H -> WEEKLY -> PLAN -> RESET CREDITS -> CREDITS
+5H -> WEEKLY -> PLAN -> RESETS -> CREDITS
 ```
 
 ### Deferred order
 
 ```text
-AUTH EXPIRE (10) -> PLAN EXPIRE (10) -> LAST (4)
+PLAN EXP (10) -> LAST (4) -> TOKEN EXPIRE (10)
 ```
 
 Deferred columns are considered only after every normal column has grown. Each
 still needs its target width and separator to fit, so deferred columns never
-become one-column dot cells.
+become one-column dot cells. `PLAN EXP` returns first because the subscription
+date is the only forward-looking business fact; `TOKEN EXPIRE` returns last
+because the access token refreshes automatically and is the widest, lowest-value
+detail.
 
 `ACCOUNT` is expanded last, after the deferred pass, using only leftover width.
-A long account label therefore cannot hide `AUTH EXPIRE`, `PLAN EXPIRE`, or
-`LAST ACTIVITY`.
+A long account label therefore cannot hide `PLAN EXP`, `TOKEN EXPIRE`, or
+`LAST`.
 
 ## Shared Hide Order
 
-From wide to narrow, columns disappear in the reverse priority order. The
+From wide to narrow, columns disappear in the reverse admission order. The
 complete shared order is:
 
 ```text
-LAST
--> PLAN EXPIRE
--> AUTH EXPIRE
+TOKEN EXPIRE
+-> LAST
+-> PLAN EXP
 -> CREDITS
--> RESET CREDITS
+-> RESETS
 -> PLAN
 -> WEEKLY
 -> 5H
@@ -82,13 +93,13 @@ LAST
 
 Unsupported columns are already absent from a view:
 
-- plain `list` has no `#*`: `LAST -> PLAN EXPIRE -> AUTH EXPIRE -> CREDITS -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
-- `list --live` has no `CREDITS`: `LAST -> PLAN EXPIRE -> AUTH EXPIRE -> RESET CREDITS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
-- `switch` / `remove` support none of the credits, auth-expiry, or plan-expiry columns: `LAST -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+- plain `list` has no `#*`: `TOKEN EXPIRE -> LAST -> PLAN EXP -> CREDITS -> RESETS -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
+- `list --live` has no `CREDITS`: `TOKEN EXPIRE -> LAST -> PLAN EXP -> RESETS -> PLAN -> WEEKLY -> 5H -> ACCOUNT -> #*`.
+- `switch` / `remove` support none of the credits or expiry columns: `LAST -> PLAN -> WEEKLY -> 5H -> ACCOUNT`.
 
-`LAST` is the absolute lowest-priority column and hides first. `CREDITS` sits
-just above the deferred expiry fields; `RESET CREDITS`, which carries the
-actionable reset count, stays above it.
+`TOKEN EXPIRE` is the absolute lowest-priority detail and hides first.
+`RESETS`, which carries the actionable reset count, stays above `CREDITS` and
+the scan-critical usage columns.
 
 ## Allocation Phases
 
@@ -100,33 +111,58 @@ actionable reset count, stays above it.
    width and separator still fit after every normal column has grown.
 
 Separators are charged only when a column becomes visible. A line never exceeds
-the requested terminal width.
+the requested terminal width, and the final visible column is never padded, so
+rows carry no trailing whitespace.
 
 ## Target Widths
 
 | Column | Target |
 |---|---:|
-| `#*` | index width (at least `#*`) |
+| `#*` | index width + marker |
 | `ACCOUNT` | 10 (minimum 2) |
 | `PLAN` | 4 |
-| `PLAN EXPIRE` | 10, deferred |
+| `PLAN EXP` | 10, deferred |
 | `CREDITS` | 2 |
-| `RESET CREDITS` | 2 |
+| `RESETS` | 2 |
 | `5H` | 4 |
 | `WEEKLY` | 6 |
 | `LAST` | 4, deferred |
-| `AUTH EXPIRE` | 10, deferred |
+| `TOKEN EXPIRE` | 10, deferred |
 
 ## Headers
 
-Wide headers use their full label. Narrow columns use compact labels:
+Headers shrink through a semantic ladder before they ever prefix-truncate.
+Each rung is chosen by the column's rendered width:
 
-| Column | Compact labels |
+| Column | Ladder (wide → narrow) |
 |---|---|
-| `CREDITS` | `CR` |
-| `RESET CREDITS` | `RESET`, then `RC` |
-| `AUTH EXPIRE` | `AUTH EXP`, then `AUTH` |
-| `PLAN EXPIRE` | `PLAN EXP`, then `PLAN` |
+| `PLAN EXP` | `PLAN EXPIRE` → `PLAN EXP` → `PLAN` → `PE` → `P` |
+| `CREDITS` | `CREDITS` → `CR` → `C` |
+| `RESETS` | `RESETS` → `RESET` → `RST` → `R` |
+| `TOKEN EXPIRE` | `TOKEN EXPIRE` → `TOKEN EXP` → `TOKEN` → `TK` → `T` |
+| `LAST` | `LAST ACTIVITY` → `LAST` |
+| `5H`, `WEEKLY`, `PLAN`, `ACCOUNT` | fixed label, prefix-truncated if needed |
+
+`TOKEN EXPIRE` (not `AUTH EXPIRE`) names what the column contains: the
+access-token expiry, which refreshing credentials can extend. `RESETS` (not
+`RESET CREDITS`) is the count of redeemable reset credits.
+
+## Width-Aware Cells
+
+Cells prefer a semantic compact form before falling back to a `.`-terminated
+prefix, so a narrow column never shows a mid-word cut:
+
+| Column | Compact behavior |
+|---|---|
+| `PLAN EXP`, `TOKEN EXPIRE` | `YYYY-MM-DD HH:MM` drops the time, keeping the full date, before truncating |
+| `LAST` | `Nd ago`/`Nh ago` drops ` ago` before truncating |
+| `CREDITS` | `unlimited` becomes `inf` below its natural width |
+| `RESETS` | `N (exp MM-DD)` degrades to the bare count `N` |
+| `5H`, `WEEKLY` | `N% (HH:MM on D Mon)` drops the clock (`N% (D Mon)`), then the parenthetical (`N%`) |
+| `ACCOUNT` | `prefix…suffix` truncation (`very-l…ample.com`) once the column is wide enough for a useful suffix |
+| everything | `prefix.` truncation, display-width and UTF-8 safe |
+
+Missing or invalid values always render `-`, in every view.
 
 ## Adding a Column
 
@@ -135,7 +171,8 @@ Wide headers use their full label. Narrow columns use compact labels:
    pass content width `0`.
 3. Add it to the shared `first_order`, `grow_order`, or `deferred_order`
    according to its priority.
-4. Add width-aware cell formatting and a compact header when needed.
+4. Add a `headerFor` ladder rung and a `writeCellFor` case when the generic
+   truncation would be misleading.
 5. Add a width-sweep test for hidden/visible behavior, line length, and any
    value that must stay complete (for example `100%`).
 

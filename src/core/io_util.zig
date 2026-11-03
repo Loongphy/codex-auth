@@ -9,7 +9,9 @@ pub const Stdout = struct {
 
     pub fn init(self: *Stdout) void {
         const file = std.Io.File.stdout();
-        self.writer = file.writer(app_runtime.io(), &self.buffer);
+        // stdout is a stream even when redirected, so every writer must append
+        // at the inherited file offset instead of overwriting from offset 0.
+        self.writer = file.writerStreaming(app_runtime.io(), &self.buffer);
         self.color_enabled = terminal_color.fileColorEnabled(file);
     }
 
@@ -25,7 +27,9 @@ pub const Stderr = struct {
 
     pub fn init(self: *Stderr) void {
         const file = std.Io.File.stderr();
-        self.writer = file.writer(app_runtime.io(), &self.buffer);
+        // stderr is a stream too; a redirected log must not be rewound by a
+        // second writer (for example a warning printed after an error).
+        self.writer = file.writerStreaming(app_runtime.io(), &self.buffer);
         self.color_enabled = terminal_color.fileColorEnabled(file);
     }
 

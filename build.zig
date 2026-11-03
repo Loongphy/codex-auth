@@ -3,11 +3,15 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Stripped binaries start faster cold: non-loadable DWARF sections still
+    // get pulled in by kernel readahead around demand-paged .text pages.
+    const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .Debug);
     const package_module = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
 
     const main_module = b.createModule(.{
@@ -15,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
     const exe = b.addExecutable(.{
         .name = "codex-auth",
@@ -79,6 +84,7 @@ pub fn build(b: *std.Build) void {
         "tests/api_http_test.zig",
         "tests/api_me_test.zig",
         "tests/api_proxy_test.zig",
+        "tests/api_reset_credits_test.zig",
         "tests/api_usage_test.zig",
         "tests/auth_test.zig",
         "tests/cli_behavior_test.zig",
@@ -114,7 +120,11 @@ pub fn build(b: *std.Build) void {
         const test_artifact = b.addTest(.{
             .root_module = test_module,
         });
-        const run_test = b.addRunArtifact(test_artifact);
+        // Plain Run step instead of addRunArtifact: the default server-mode
+        // test runner (--listen=-) can deadlock the build runner on Windows
+        // (upstream Zig 0.16 std.zig.Server race). Exit code decides pass/fail.
+        const run_test = std.Build.Step.Run.create(b, b.fmt("run test {s}", .{test_file}));
+        run_test.addArtifactArg(test_artifact);
         run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT", b.pathFromRoot("."));
         test_step.dependOn(&run_test.step);
     }

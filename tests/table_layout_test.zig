@@ -233,7 +233,7 @@ test "Scenario: Given a FileNotFound override and a long account when rendering 
     try std.testing.expect(std.mem.indexOf(u8, output, "FileNotFound") != null);
 }
 
-test "Scenario: Given compact list widths when rendering then headers use CR, RC and RESET fallbacks" {
+test "Scenario: Given compact list widths when rendering then headers use CR, R and RESETS fallbacks" {
     const gpa = std.testing.allocator;
     var reg = makeTestRegistry();
     defer reg.deinit(gpa);
@@ -245,23 +245,26 @@ test "Scenario: Given compact list widths when rendering then headers use CR, RC
     var output = writer.buffered();
     try expectLinesWithin(output, 40);
     try std.testing.expect(std.mem.indexOf(u8, output, "PLAN") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RC") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, " R ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "RESETS") == null);
 
     buffer = undefined;
     writer = .fixed(&buffer);
     try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 46);
     output = writer.buffered();
     try expectLinesWithin(output, 46);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RC") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "RESET CREDITS") == null);
 
     reg.accounts.items[0].last_usage = null;
     buffer = undefined;
     writer = .fixed(&buffer);
-    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 60);
+    try table_format.writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, 70);
     output = writer.buffered();
-    try expectLinesWithin(output, 60);
-    try std.testing.expect(std.mem.indexOf(u8, output, "RESET") != null);
+    try expectLinesWithin(output, 70);
+    // A dash-only RESETS column sizes to its content, so the header falls
+    // back to the RST rung; the full name returns when credit rows exist.
+    try std.testing.expect(std.mem.indexOf(u8, output, "RST") != null);
 }
 
 test "Scenario: Given unlimited credits when rendering at 120 columns then the value is not collapsed to u." {
@@ -302,4 +305,34 @@ test "Scenario: Given low-priority metadata when narrowing then LAST hides befor
     try expectLinesWithin(output, 48);
     try std.testing.expect(std.mem.indexOf(u8, output, "LAST") == null);
     try std.testing.expect(std.mem.indexOf(u8, output, "CR") != null);
+}
+
+test "plain and live views keep shared columns in the same relative order" {
+    const table_layout = cli.table_layout;
+    var previous: ?usize = null;
+    for (table_layout.list_detail_columns) |id| {
+        if (id == .number) continue;
+        const position = std.mem.indexOfScalar(table_layout.ColumnId, &table_layout.plain_columns, id) orelse
+            return error.TestUnexpectedResult;
+        if (previous) |prev| try std.testing.expect(position > prev);
+        previous = position;
+    }
+}
+
+test "account cell truncation avoids a doubled dot before a dotted suffix" {
+    const table_layout = cli.table_layout;
+    var buffer: [256]u8 = undefined;
+
+    // `acct01(user01@example.com)` at width 11 keeps suffix `.com)`: the
+    // suffix opens with a dot, which already reads as the truncation marker,
+    // so the cell must not emit `acct01..com)`.
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const written = try table_layout.writeCellFor(.account, &writer, "acct01(user01@example.com)", 11);
+    try std.testing.expectEqual(@as(usize, 11), written);
+    try std.testing.expectEqualStrings("acct01.com)", writer.buffered());
+
+    // A suffix that does not start with a dot still gets the separator dot.
+    writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.account, &writer, "work(work-main@example.com)", 20);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "..") == null);
 }

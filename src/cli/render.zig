@@ -10,11 +10,10 @@ pub const indexWidth = row_data.indexWidth;
 pub const LiveListViewport = table_layout.LiveListViewport;
 pub const StyledWriter = style.StyledWriter;
 const SwitchRow = row_data.SwitchRow;
-const writeTuiPromptLine = tui_mod.writeTuiPromptLine;
+const writeTuiPromptLineBounded = tui_mod.writeTuiPromptLineBounded;
 const writeSwitchTuiFooterBounded = tui_mod.writeSwitchTuiFooterBounded;
 const writeListTuiFooterBounded = tui_mod.writeListTuiFooterBounded;
 const writeRemoveTuiFooterBounded = tui_mod.writeRemoveTuiFooterBounded;
-const writeTuiLineBounded = tui_mod.writeTuiLineBounded;
 const writeStyledTuiLineBounded = tui_mod.writeStyledTuiLineBounded;
 
 fn activeRowMarker(is_cursor: bool, is_active: bool) []const u8 {
@@ -60,7 +59,7 @@ pub fn renderSwitchScreenViewport(
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(writer.out, "Select account to activate:", number_input);
+    try writeTuiPromptLineBounded(writer.out, "Select account to activate:", number_input, viewport.max_cols);
     try renderSwitchListViewport(writer, reg, rows, idx_width, widths, selected, viewport);
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
@@ -69,27 +68,6 @@ pub fn renderSwitchScreenViewport(
     if (action_line.len != 0) {
         try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) actionLineStyle(action_line) else "", action_line, viewport.max_cols);
     }
-}
-
-pub fn renderListScreen(
-    out: *std.Io.Writer,
-    reg: *registry.Registry,
-    rows: []const SwitchRow,
-    idx_width: usize,
-    widths: SwitchWidths,
-    use_color: bool,
-    status_line: []const u8,
-) !void {
-    var writer = style.StyledWriter.init(out, use_color);
-    try renderListScreenViewport(
-        &writer,
-        reg,
-        rows,
-        idx_width,
-        widths,
-        status_line,
-        .{},
-    );
 }
 
 pub fn renderListScreenViewport(
@@ -150,7 +128,7 @@ pub fn renderRemoveScreenViewport(
     number_input: []const u8,
     viewport: LiveListViewport,
 ) !void {
-    try writeTuiPromptLine(writer.out, "Select accounts to delete:", number_input);
+    try writeTuiPromptLineBounded(writer.out, "Select accounts to delete:", number_input, viewport.max_cols);
     try renderRemoveListViewport(writer, reg, rows, idx_width, widths, cursor, checked, viewport);
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
@@ -255,6 +233,13 @@ pub fn clampLiveViewportStart(row_count: usize, max_rows: usize, current_start: 
     return @min(current_start, row_count - max_rows);
 }
 
+/// Viewport start that keeps the selected display index visible on the screens
+/// that render group header rows (switch, remove).
+///
+/// Both the clamp and the resolved row index use the `rows.items` basis, which
+/// matches those screens one line per row. Do not feed it the live list rail
+/// cursor: that one counts body lines without header rows, and is followed with
+/// `live_tui.followViewportStart` instead.
 pub fn liveViewportStartForDisplayIndex(
     rows: []const SwitchRow,
     selected_display_idx: ?usize,
@@ -291,6 +276,12 @@ fn visibleRowRange(row_count: usize, viewport: LiveListViewport) VisibleRowRange
     };
 }
 
+/// Maps a selectable display index to its index in `rows`.
+///
+/// Index basis: `rows.items`, for the views that treat rows one-to-one with
+/// screen lines (`renderSwitchScreen`, `renderRemoveScreen`). The live list
+/// numbers only its data rows while also drawing unnumbered group header
+/// lines, so its rail cursor must use `liveRowIndexForDataIndex` instead.
 fn rowIndexForDisplayIndex(rows: []const SwitchRow, selected_display_idx: usize) ?usize {
     var display_idx: usize = 0;
     for (rows, 0..) |row, row_idx| {
@@ -301,6 +292,9 @@ fn rowIndexForDisplayIndex(rows: []const SwitchRow, selected_display_idx: usize)
     return null;
 }
 
+/// Number of selectable rows in a `rows` prefix, on the same `rows.items` basis
+/// as `rowIndexForDisplayIndex`. Not the live list body line count, which is
+/// `liveDataRowCount`.
 fn dataRowCount(rows: []const SwitchRow) usize {
     var count: usize = 0;
     for (rows) |row| {
@@ -319,18 +313,17 @@ fn liveAccountCells(row: SwitchRow) [table_layout.live_column_count]table_layout
     };
 }
 
+// Error stays red under the cursor, same as the live list: the `>` glyph
+// alone marks focus, and hiding the alarm would invite acting on a broken row.
 fn switchRowStyle(row: SwitchRow, is_cursor: bool, is_active: bool) []const u8 {
-    if (is_active) return style.ansi.green;
-    if (is_cursor) return style.ansi.green;
     if (row.has_error) return style.ansi.red;
+    if (is_active or is_cursor) return style.ansi.green;
     return "";
 }
 
 fn removeRowStyle(row: SwitchRow, is_cursor: bool, is_checked: bool, is_active: bool) []const u8 {
-    if (is_active) return style.ansi.green;
-    if (is_cursor) return style.ansi.green;
     if (row.has_error) return style.ansi.red;
-    if (is_checked) return style.ansi.green;
+    if (is_active or is_cursor or is_checked) return style.ansi.green;
     return "";
 }
 
@@ -373,12 +366,7 @@ fn liveTableRemovePrefix(
 }
 
 fn writeIndexPadded(out: *std.Io.Writer, idx: usize, width: usize) !void {
-    var buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch "0";
-    if (idx_str.len < width) {
-        try out.splatByteAll('0', width - idx_str.len);
-    }
-    try out.writeAll(idx_str);
+    try table_layout.writeIndexAligned(out, idx, width);
 }
 
 fn writeSwitchRow(
@@ -412,7 +400,97 @@ fn writeSwitchRow(
     displayed_counter.* += 1;
 }
 
+/// Single source of truth for which rows the live list body renders as
+/// numbered data rows. Selection and the rail cursor index those data rows,
+/// so mapping and rendering share one predicate. Views that draw group header
+/// rows as selectable-style rows (switch, remove) use the `rows.items`-based
+/// helpers above instead; the two bases are not interchangeable.
+pub fn isRenderedLiveRow(row: SwitchRow, account_count: usize) bool {
+    if (row.is_header) return false;
+    const account_idx = row.account_index orelse return false;
+    return account_idx < account_count;
+}
+
+/// Number of data rows `renderListBody` emits for these rows. Group header
+/// lines are extra body lines on top of this count; see
+/// `liveLineIndexForDataIndex` for the rendered-line basis.
+pub fn liveDataRowCount(rows: []const SwitchRow, account_count: usize) usize {
+    var count: usize = 0;
+    for (rows) |row| {
+        if (isRenderedLiveRow(row, account_count)) count += 1;
+    }
+    return count;
+}
+
+/// Maps a rendered data-row index back to its index in `rows`, skipping the
+/// rows `renderListBody` does not number (group headers and stale indices).
+pub fn liveRowIndexForDataIndex(rows: []const SwitchRow, account_count: usize, data_index: usize) ?usize {
+    var rendered: usize = 0;
+    for (rows, 0..) |row, row_idx| {
+        if (!isRenderedLiveRow(row, account_count)) continue;
+        if (rendered == data_index) return row_idx;
+        rendered += 1;
+    }
+    return null;
+}
+
+/// Reverse of `liveRowIndexForDataIndex`, on the same rendered basis: the
+/// data-row index of `account_key`. The rail cursor uses it to open on the
+/// active account's row, the same starting point the pickers' initial
+/// selection takes.
+pub fn liveDataIndexForAccountKey(rows: []const SwitchRow, reg: *const registry.Registry, account_key: []const u8) ?usize {
+    var data_index: usize = 0;
+    for (rows) |row| {
+        if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
+        const account_idx = row.account_index.?;
+        if (std.mem.eql(u8, reg.accounts.items[account_idx].account_key, account_key)) return data_index;
+        data_index += 1;
+    }
+    return null;
+}
+
+/// Rendered body-line index (0-based, column header excluded) of a data-row
+/// index: the group header lines `renderListBody` emits ahead of a group's
+/// first rendered child shift everything below them. The rail's splice point
+/// and viewport-follow span are body lines, so they go through this mapping;
+/// the selection state itself stays on the `liveDataRowCount` basis.
+pub fn liveLineIndexForDataIndex(
+    rows: []const SwitchRow,
+    account_count: usize,
+    data_index: usize,
+) ?usize {
+    var data: usize = 0;
+    var line: usize = 0;
+    var pending_header = false;
+    for (rows) |row| {
+        if (row.is_header) {
+            pending_header = true;
+            continue;
+        }
+        if (!isRenderedLiveRow(row, account_count)) continue;
+        // The header only counts once a rendered child actually follows it,
+        // matching renderListBody's emission rule; a group whose rows all went
+        // stale leaves no orphan line behind.
+        if (pending_header) {
+            line += 1;
+            pending_header = false;
+        }
+        if (data == data_index) return line;
+        data += 1;
+        line += 1;
+    }
+    return null;
+}
+
 /// Render the compact live account table.
+/// `cursor` is an optional data-row index on the `liveDataRowCount` basis
+/// (0-based, group header lines excluded); the matching row draws `>` instead
+/// of the `*`/space marker, so the row `Enter` acts on is always visible.
+/// `cursor_anchored` keeps that row's green but yields the `>` glyph to a
+/// nested cursor: while the reset-credit rail is open the card highlight owns
+/// `>`, so two cursor glyphs never compete on screen.
+/// A group header draws one unnumbered dim line ahead of its first rendered
+/// child so grouped rows keep their shared email in view.
 pub fn renderListBody(
     allocator: std.mem.Allocator,
     writer: *style.StyledWriter,
@@ -421,22 +499,59 @@ pub fn renderListBody(
     idx_width: usize,
     widths: SwitchWidths,
     max_cols: ?usize,
+    cursor: ?usize,
+    cursor_anchored: bool,
 ) !void {
     const details = @import("list_details.zig");
 
-    const number_width = idx_width + 1;
+    const number_width = idx_width + 2;
     const column_widths = details.computeWidths(number_width, widths, max_cols);
     try details.writeHeader(writer, column_widths);
     var displayed_counter: usize = 0;
+    var pending_header: ?[]const u8 = null;
     for (rows) |row| {
-        if (row.is_header) continue;
-        const idx = row.account_index orelse continue;
-        if (idx >= reg.accounts.items.len) continue;
+        if (row.is_header) {
+            pending_header = row.account;
+            continue;
+        }
+        if (!isRenderedLiveRow(row, reg.accounts.items.len)) continue;
+        if (pending_header) |email| {
+            pending_header = null;
+            try details.writeGroupHeader(writer, email, column_widths[0] + 2, max_cols);
+        }
+        const idx = row.account_index.?;
+        const is_cursor = cursor != null and cursor.? == displayed_counter;
         displayed_counter += 1;
         const account = reg.accounts.items[idx];
         var number_buf: [32]u8 = undefined;
-        const marker: []const u8 = if (row.has_error) "!" else if (row.is_active) "*" else " ";
-        const number = try std.fmt.bufPrint(&number_buf, "{s}{d}", .{ marker, displayed_counter });
+        const marker: u8 = if (is_cursor)
+            (if (cursor_anchored) ' ' else '>')
+        else if (row.is_active) '*' else ' ';
+        var number_len: usize = 0;
+        number_buf[number_len] = marker;
+        number_len += 1;
+        number_buf[number_len] = ' ';
+        number_len += 1;
+        var digit_buf: [16]u8 = undefined;
+        const digits = std.fmt.bufPrint(&digit_buf, "{d}", .{displayed_counter}) catch "0";
+        var pad = idx_width - @min(idx_width, digits.len);
+        while (pad > 0) : (pad -= 1) {
+            number_buf[number_len] = ' ';
+            number_len += 1;
+        }
+        @memcpy(number_buf[number_len .. number_len + digits.len], digits);
+        number_len += digits.len;
+        const number = number_buf[0..number_len];
+        // Style precedence deliberately differs from the marker's: an error row
+        // stays red under the cursor (the glyph already marks the focus, the
+        // alarm must not be hidden), while cursor and active share the green the
+        // switch/remove pickers give both — the glyph, not the color, says which.
+        const row_style: []const u8 = if (row.has_error)
+            style.role.error_text
+        else if (is_cursor or row.is_active)
+            style.role.success
+        else
+            "";
         try details.write(allocator, writer, account, .{
             .number = number,
             .account = row.account,
@@ -444,7 +559,8 @@ pub fn renderListBody(
             .rate_5h = row.rate_5h,
             .rate_week = row.rate_week,
             .last = row.last,
-        }, column_widths);
+            .depth = row.depth,
+        }, column_widths, row_style);
     }
 }
 
@@ -453,6 +569,19 @@ pub fn renderListBodyViewport(
     body: []const u8,
     status_line: []const u8,
     viewport: LiveListViewport,
+) !void {
+    try renderListBodyViewportWithFooter(writer, body, status_line, viewport, null);
+}
+
+/// Like `renderListBodyViewport`, but `footer_text` replaces the default list
+/// footer when the caller has a context-specific key legend (for example while
+/// the reset credits rail owns `j`/`k`).
+pub fn renderListBodyViewportWithFooter(
+    writer: *style.StyledWriter,
+    body: []const u8,
+    status_line: []const u8,
+    viewport: LiveListViewport,
+    footer_text: ?[]const u8,
 ) !void {
     var lines = std.mem.splitScalar(u8, body, '\n');
     if (lines.next()) |header| {
@@ -469,5 +598,11 @@ pub fn renderListBodyViewport(
     if (status_line.len != 0) {
         try writeLiveStatusLine(writer.out, status_line, writer.color_enabled, viewport.max_cols);
     }
-    try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
+    if (footer_text) |text| {
+        // The rail's own key legend is secondary: the credit rows and the
+        // status line stay the focus while the user is consuming a credit.
+        try writeStyledTuiLineBounded(writer.out, if (writer.color_enabled) style.role.secondary else "", text, viewport.max_cols);
+    } else {
+        try writeListTuiFooterBounded(writer.out, writer.color_enabled, viewport.max_cols);
+    }
 }

@@ -1,13 +1,12 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
-const builtin = @import("builtin");
 const display_rows = @import("../tui/display.zig");
+const rate_limit = @import("../tui/rate_limit.zig");
 const registry = @import("../registry/root.zig");
+const localtime = @import("../time/localtime.zig");
 const timefmt = @import("../time/relative.zig");
+const timestamp_iso = @import("../time/timestamp.zig");
 const text_width = @import("../tui/text_width.zig");
-const c = @cImport({
-    @cInclude("time.h");
-});
 
 pub const SwitchWidths = struct {
     email: usize,
@@ -82,7 +81,16 @@ fn usageCellTextAlloc(
     usage_override: ?[]const u8,
 ) ![]u8 {
     if (usage_override) |value| return allocator.dupe(u8, value);
-    return formatRateLimitSwitchAlloc(allocator, window);
+    return rate_limit.formatRateLimitFullAlloc(allocator, window);
+}
+
+/// An error overlay like `401 unauthorized_unknown` is already loud through
+/// the row's red role; it must not also inflate its column to message length
+/// and starve every other column. Width measurements cap its contribution.
+pub const usage_override_max_width: usize = 16;
+
+pub fn usageOverrideDisplayWidth(text: []const u8) usize {
+    return @min(text_width.displayWidth(text), usage_override_max_width);
 }
 
 pub fn buildSwitchRows(allocator: std.mem.Allocator, reg: *registry.Registry) !SwitchRows {
@@ -108,9 +116,9 @@ pub fn buildSwitchRowsWithUsageOverrides(
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolveDisplayPlan(&rec)) |p| registry.planLabel(p) else "-";
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+            const plan = display_rows.displayPlan(&rec);
+            const rate_5h = registry.resolveRateWindow(rec.last_usage, 300, true);
+            const rate_week = registry.resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
             const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
             const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
@@ -129,8 +137,9 @@ pub fn buildSwitchRowsWithUsageOverrides(
             };
             widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
-            widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
-            widths.rate_week = @max(widths.rate_week, rate_week_str.len);
+            const usage_cell_w: usize = if (usage_override != null) usageOverrideDisplayWidth(rate_5h_str) else rate_5h_str.len;
+            widths.rate_5h = @max(widths.rate_5h, usage_cell_w);
+            widths.rate_week = @max(widths.rate_week, if (usage_override != null) usageOverrideDisplayWidth(rate_week_str) else rate_week_str.len);
             widths.last = @max(widths.last, last.len);
         } else {
             rows[i] = .{
@@ -154,14 +163,6 @@ pub fn buildSwitchRowsWithUsageOverrides(
         .selectable_row_indices = try allocator.dupe(usize, display.selectable_row_indices),
         .widths = widths,
     };
-}
-
-fn buildSwitchRowsFromIndices(
-    allocator: std.mem.Allocator,
-    reg: *registry.Registry,
-    indices: []const usize,
-) !SwitchRows {
-    return buildSwitchRowsFromIndicesWithUsageOverrides(allocator, reg, indices, null);
 }
 
 pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
@@ -184,9 +185,9 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
     for (display.rows, 0..) |display_row, i| {
         if (display_row.account_index) |account_idx| {
             const rec = reg.accounts.items[account_idx];
-            const plan = if (registry.resolveDisplayPlan(&rec)) |p| registry.planLabel(p) else "-";
-            const rate_5h = resolveRateWindow(rec.last_usage, 300, true);
-            const rate_week = resolveRateWindow(rec.last_usage, 10080, false);
+            const plan = display_rows.displayPlan(&rec);
+            const rate_5h = registry.resolveRateWindow(rec.last_usage, 300, true);
+            const rate_week = registry.resolveRateWindow(rec.last_usage, 10080, false);
             const usage_override = usageOverrideForAccount(usage_overrides, account_idx);
             const rate_5h_str = try usageCellTextAlloc(allocator, rate_5h, usage_override);
             const rate_week_str = try usageCellTextAlloc(allocator, rate_week, usage_override);
@@ -205,8 +206,9 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
             };
             widths.email = @max(widths.email, text_width.displayWidth(display_row.account_cell) + (@as(usize, display_row.depth) * 2));
             widths.plan = @max(widths.plan, plan.len);
-            widths.rate_5h = @max(widths.rate_5h, rate_5h_str.len);
-            widths.rate_week = @max(widths.rate_week, rate_week_str.len);
+            const usage_cell_w: usize = if (usage_override != null) usageOverrideDisplayWidth(rate_5h_str) else rate_5h_str.len;
+            widths.rate_5h = @max(widths.rate_5h, usage_cell_w);
+            widths.rate_week = @max(widths.rate_week, if (usage_override != null) usageOverrideDisplayWidth(rate_week_str) else rate_week_str.len);
             widths.last = @max(widths.last, last.len);
         } else {
             rows[i] = .{
@@ -232,120 +234,7 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
     };
 }
 
-pub fn resolveRateWindow(usage: ?registry.RateLimitSnapshot, minutes: i64, fallback_primary: bool) ?registry.RateLimitWindow {
-    if (usage == null) return null;
-    if (usage.?.primary) |p| {
-        if (p.window_minutes != null and p.window_minutes.? == minutes) return p;
-    }
-    if (usage.?.secondary) |s| {
-        if (s.window_minutes != null and s.window_minutes.? == minutes) return s;
-    }
-    return if (fallback_primary) usage.?.primary else usage.?.secondary;
-}
 
-fn formatRateLimitSwitchAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow) ![]u8 {
-    if (window == null) return try std.fmt.allocPrint(allocator, "-", .{});
-    if (window.?.resets_at == null) return try std.fmt.allocPrint(allocator, "-", .{});
-    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-    const reset_at = window.?.resets_at.?;
-    if (now >= reset_at) {
-        return try std.fmt.allocPrint(allocator, "100%", .{});
-    }
-    const remaining = remainingPercent(window.?.used_percent);
-    var parts = try resetPartsAlloc(allocator, reset_at, now);
-    defer parts.deinit(allocator);
-    if (parts.same_day) {
-        return std.fmt.allocPrint(allocator, "{d}% ({s})", .{ remaining, parts.time });
-    }
-    return std.fmt.allocPrint(allocator, "{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
-}
-
-const ResetParts = struct {
-    time: []u8,
-    date: []u8,
-    same_day: bool,
-
-    fn deinit(self: *ResetParts, allocator: std.mem.Allocator) void {
-        allocator.free(self.time);
-        allocator.free(self.date);
-    }
-};
-
-fn localtimeCompat(ts: i64, out_tm: *c.struct_tm) bool {
-    if (comptime builtin.os.tag == .windows) {
-        // Bind directly to the exported CRT symbol on Windows.
-        if (comptime @hasDecl(c, "_localtime64_s") and @hasDecl(c, "__time64_t")) {
-            var t64 = std.math.cast(c.__time64_t, ts) orelse return false;
-            return c._localtime64_s(out_tm, &t64) == 0;
-        }
-        return false;
-    }
-
-    var t = std.math.cast(c.time_t, ts) orelse return false;
-    if (comptime @hasDecl(c, "localtime_r")) {
-        return c.localtime_r(&t, out_tm) != null;
-    }
-
-    if (comptime @hasDecl(c, "localtime")) {
-        const tm_ptr = c.localtime(&t);
-        if (tm_ptr == null) return false;
-        out_tm.* = tm_ptr.*;
-        return true;
-    }
-
-    return false;
-}
-
-fn resetPartsAlloc(allocator: std.mem.Allocator, reset_at: i64, now: i64) !ResetParts {
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(reset_at, &tm)) {
-        return ResetParts{
-            .time = try std.fmt.allocPrint(allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(allocator, "-", .{}),
-            .same_day = true,
-        };
-    }
-    var now_tm: c.struct_tm = undefined;
-    if (!localtimeCompat(now, &now_tm)) {
-        return ResetParts{
-            .time = try std.fmt.allocPrint(allocator, "-", .{}),
-            .date = try std.fmt.allocPrint(allocator, "-", .{}),
-            .same_day = true,
-        };
-    }
-
-    const same_day = tm.tm_year == now_tm.tm_year and tm.tm_mon == now_tm.tm_mon and tm.tm_mday == now_tm.tm_mday;
-    const hour = @as(u32, @intCast(tm.tm_hour));
-    const min = @as(u32, @intCast(tm.tm_min));
-    const day = @as(u32, @intCast(tm.tm_mday));
-    const months = [_][]const u8{
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-    };
-    const month_idx: usize = if (tm.tm_mon < 0) 0 else @min(@as(usize, @intCast(tm.tm_mon)), months.len - 1);
-    return ResetParts{
-        .time = try std.fmt.allocPrint(allocator, "{d:0>2}:{d:0>2}", .{ hour, min }),
-        .date = try std.fmt.allocPrint(allocator, "{d} {s}", .{ day, months[month_idx] }),
-        .same_day = same_day,
-    };
-}
-
-fn remainingPercent(used: f64) i64 {
-    const remaining = 100.0 - used;
-    if (remaining <= 0.0) return 0;
-    if (remaining >= 100.0) return 100;
-    return @as(i64, @intFromFloat(remaining));
-}
 
 pub fn indexWidth(count: usize) usize {
     var n = count;
@@ -357,8 +246,8 @@ pub fn indexWidth(count: usize) usize {
 }
 
 pub fn formatTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8 {
-    var tm: c.struct_tm = undefined;
-    if (timestamp == null or !localtimeCompat(timestamp.?, &tm)) return allocator.dupe(u8, "unavailable");
+    var tm: localtime.struct_tm = undefined;
+    if (timestamp == null or !localtime.compat(timestamp.?, &tm)) return allocator.dupe(u8, "-");
     const year: u32 = @intCast(tm.tm_year + 1900);
     const month: u32 = @intCast(tm.tm_mon + 1);
     const day: u32 = @intCast(tm.tm_mday);
@@ -369,14 +258,61 @@ pub fn formatTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8
     });
 }
 
+/// Formats a timestamp as a local `MM-DD HH:MM`: the compact form the live reset
+/// credits rail and the `reset` summary share. An unparseable timestamp keeps the
+/// `-` missing marker of the full form.
+pub fn formatCompactTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8 {
+    const full = try formatTimestampAlloc(allocator, timestamp);
+    if (full.len < 16) return full;
+    const compact = try allocator.dupe(u8, full[5..16]);
+    allocator.free(full);
+    return compact;
+}
+
+const available_status = "available";
+
+/// `N` from the persisted `reset_credits` count, plus the earliest expiry among
+/// the available cards in local `MM-DD` form (omitted when unknown). The count
+/// falls back to the persisted card list so plain and live cells agree.
+pub fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.RateLimitSnapshot) ![]u8 {
+    const snapshot = usage orelse return std.fmt.allocPrint(allocator, "-", .{});
+    var count: ?i64 = snapshot.reset_credits;
+    if (count == null) {
+        if (snapshot.reset_credit) |cards| {
+            var derived: i64 = 0;
+            for (cards) |card| {
+                if (std.mem.eql(u8, card.status, available_status)) derived += 1;
+            }
+            count = derived;
+        }
+    }
+    const value = count orelse return std.fmt.allocPrint(allocator, "-", .{});
+    if (value == 0) return std.fmt.allocPrint(allocator, "0", .{});
+    var earliest: ?i64 = null;
+    if (snapshot.reset_credit) |cards| {
+        for (cards) |card| {
+            if (!std.mem.eql(u8, card.status, available_status)) continue;
+            if (timestamp_iso.parseIso8601(card.expires_at orelse "")) |epoch| {
+                if (earliest == null or epoch < earliest.?) earliest = epoch;
+            }
+        }
+    }
+    if (earliest) |epoch| {
+        const local = try formatTimestampAlloc(allocator, epoch);
+        defer allocator.free(local);
+        if (local.len >= 10) return std.fmt.allocPrint(allocator, "{d} (exp {s})", .{ value, local[5..10] });
+    }
+    return std.fmt.allocPrint(allocator, "{d}", .{value});
+}
+
 /// Formats a future timestamp as a local `YYYY-MM-DD` date. Missing, invalid,
 /// and already-expired timestamps render as `-` so stale snapshots do not look
 /// like current entitlements.
 pub fn formatFutureDateAlloc(allocator: std.mem.Allocator, timestamp: ?i64, now: i64) ![]u8 {
     const value = timestamp orelse return allocator.dupe(u8, "-");
     if (value <= now) return allocator.dupe(u8, "-");
-    var tm: c.struct_tm = undefined;
-    if (!localtimeCompat(value, &tm)) return allocator.dupe(u8, "-");
+    var tm: localtime.struct_tm = undefined;
+    if (!localtime.compat(value, &tm)) return allocator.dupe(u8, "-");
     const year: u32 = @intCast(tm.tm_year + 1900);
     const month: u32 = @intCast(tm.tm_mon + 1);
     const day: u32 = @intCast(tm.tm_mday);
