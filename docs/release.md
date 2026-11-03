@@ -27,7 +27,8 @@ This document describes the repository's CI, preview package publishing, and tag
 ### Prereleases (tag-only, no version commit)
 
 - Prerelease tags (any `v*` tag containing `-`, such as `v1.2.4-alpha.1`, `v1.2.4-beta.1`, `v1.2.4-rc.1`) do not need a version-bump commit.
-- Create an annotated tag on the latest green `main` commit and push it:
+- Prereleases do not need hand-written release notes: the generated changelog is sufficient for test releases. Only supply an annotated-tag message (see Tag Release Workflow) when there is something specific worth highlighting; a lightweight tag is fine otherwise.
+- Create the tag on the latest green `main` commit and push it:
   - `git tag -a v<version> -m "Release <version>"` (the annotation may contain release notes; see Tag Release Workflow)
   - `git push origin v<version>`
 - The tag is the version source of truth. The release workflow runs `scripts/npm/set-version.mjs` inside the CI checkout to stamp `src/version.zig`, `package.json`, and `optionalDependencies` with the tag version before building and publishing. Committed files on `main` are unchanged.
