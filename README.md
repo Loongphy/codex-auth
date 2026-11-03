@@ -159,10 +159,6 @@ This project is provided as-is and use is at your own risk.
 2. **Local-only:** With per-command `--skip-api`, the tool scans local `~/.codex/sessions/*/rollout-*.jsonl` files for usage data and skips team name refresh API calls. This mode is safer, but it can be less accurate because recent Codex rollout files often contain `rate_limits: null`, so the latest local usage limit data may lag by several hours.
 
 **API Call Declaration:**
-By using the default API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers for usage limit and team name refresh. The exact endpoints are:
-- `GET https://chatgpt.com/backend-api/wham/usage`
-- `GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits`
-- `GET https://chatgpt.com/backend-api/accounts`
-- `POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume` (only when you explicitly redeem a reset credit with `codex-auth reset` or in the `list --live` rail; never during a refresh)
+By using the default API-backed refresh, this tool will send your ChatGPT access token to OpenAI's servers for usage limit, reset-credit, and team name refresh. Redeeming a reset credit with `codex-auth reset` (or from the `list --live` rail) additionally sends a consume request — the only state-mutating call this tool makes — and it is never sent during a refresh. See [docs/api.md](docs/api.md) for the exact endpoints.
 
 This behavior may be detected by OpenAI and could violate their terms of service, potentially leading to account suspension or other risks. The decision to use this feature and any resulting consequences are entirely yours.
