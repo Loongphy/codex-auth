@@ -33,6 +33,25 @@ This keeps failures localized to the test file that owns them and avoids a large
 
 A small library compile test may be included to validate the package surface with `std.testing.refAllDecls`.
 
+### Why tests use plain `Step.Run` instead of `addRunArtifact`
+
+`b.addRunArtifact` on a test compile enables Zig's server-mode test runner:
+the binary is spawned with `--listen=-` and talks `std.zig.Server` over stdio,
+giving per-test timeouts, crash respawn, and result metadata. On Windows, Zig
+0.16's implementation of that protocol intermittently deadlocks: the build
+runner spawns the test server and then never services it, so the child waits
+on stdin forever while the runner emits no output — CI then shows only
+`zig version` until the job is cancelled (upstream race, also seen on
+ziglang's own `x86_64-windows` CI in ziglang/zig#25029).
+
+Each test step is therefore a plain `std.Build.Step.Run` with
+`addArtifactArg`, which runs the binary in terminal mode and treats its exit
+code as the verdict. Per-test output (`N/N name...OK`) still streams to the
+log. Do not "simplify" this back to `addRunArtifact`, and do not set
+`run.stdio = .inherit` on an `addRunArtifact` result — the step still passes
+`--listen=-` and the runner aborts with `internal test runner failure:
+ReadFailed`.
+
 ## Production/Test Boundary
 
 Production modules must not import `tests/` or `tests/support/`.

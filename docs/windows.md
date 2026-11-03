@@ -126,3 +126,13 @@ The same translation applies to the Codext release lookup and download in
 `codex-auth app`.
 
 See [api.md](./api.md) for the full resolution order.
+
+## Test runner deadlock (Zig 0.16)
+
+Zig 0.16's server-mode test runner (`--listen=-`, `std.zig.Server` over stdio)
+can deadlock the build runner on Windows: the spawned `test.exe` waits on
+stdin forever while the runner prints nothing, so CI appears stuck right
+after `zig version`. `zig build test` therefore runs test binaries through
+plain `Step.Run` steps (exit code verdict) rather than `addRunArtifact`. See
+[tests.md](./tests.md#why-tests-use-plain-steprun-instead-of-addrunartifact)
+before touching the run-test wiring in `build.zig`.
