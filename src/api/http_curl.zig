@@ -330,6 +330,8 @@ fn runCurlGetJsonBatchCommand(
     }
 
     queue.run();
+    for (threads[0..spawned_count]) |thread| thread.join();
+    spawned_count = 0;
     if (queue.canceled.load(.monotonic)) return error.Canceled;
     return .{ .items = items };
 }
