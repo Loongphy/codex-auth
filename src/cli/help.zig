@@ -45,7 +45,6 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "import --purge [<path>]");
     try writeCommandSummary(out, use_color, "export [<dir>] [--cpa]", "Export stored account auth files");
     try writeCommandSummary(out, use_color, "switch", "Switch the active account");
-    try writeCommandDetail(out, use_color, "switch -");
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
     try writeCommandDetail(out, use_color, "switch <query> --json");
@@ -217,11 +216,11 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth switch -\n");
+            try out.writeAll("  codex-auth -\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
             try out.writeAll("  codex-auth switch <query> --json\n");
-            try out.writeAll("  codex-auth switch [<query>|-] --restart-daemon\n");
+            try out.writeAll("  codex-auth switch <query> --restart-daemon\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
@@ -389,8 +388,8 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa /path/to/cpa-backup\n");
         },
         .switch_account => {
+            try out.writeAll("  codex-auth -\n");
             try out.writeAll("  codex-auth switch\n");
-            try out.writeAll("  codex-auth switch -\n");
             try out.writeAll("  codex-auth switch --live\n");
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
@@ -445,7 +444,7 @@ fn writeNotesSectionStyled(out: *std.Io.Writer, use_color: bool, topic: HelpTopi
     try out.writeAll("\n");
     switch (topic) {
         .switch_account => {
-            try out.writeAll("  Targets can be `-`, aliases, emails, display numbers, or partial queries.\n");
+            try out.writeAll("  Targets can be aliases, emails, display numbers, or partial queries.\n");
         },
         .reset_credits => {
             try out.writeAll("  Consumes the available reset credit with the earliest expiry.\n");

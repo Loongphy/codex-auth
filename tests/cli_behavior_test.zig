@@ -609,7 +609,6 @@ test "Scenario: Given explicit restart on one-shot switch forms then parser pres
     const cases = [_][]const [:0]const u8{
         &.{ "codex-auth", "switch", "beta", "--restart-daemon" },
         &.{ "codex-auth", "switch", "--restart-daemon", "beta", "--json" },
-        &.{ "codex-auth", "switch", "-", "--restart-daemon" },
         &.{ "codex-auth", "switch", "--skip-api", "--restart-daemon" },
         &.{ "codex-auth", "switch", "--api", "--restart-daemon" },
     };
@@ -1376,23 +1375,13 @@ test "Scenario: Given top-level dash when parsing then previous switch is select
     }
 }
 
-test "Scenario: Given switch dash when parsing then previous switch is selected" {
+test "Scenario: Given switch dash when parsing then it is rejected in favor of the top-level shortcut" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    switch (result) {
-        .command => |cmd| switch (cmd) {
-            .switch_account => |opts| {
-                try std.testing.expectEqual(cli.types.SwitchTarget.previous, opts.target);
-                try std.testing.expectEqual(cli.types.ApiMode.default, opts.api_mode);
-                try std.testing.expect(!opts.live);
-            },
-            else => return error.TestExpectedEqual,
-        },
-        else => return error.TestExpectedEqual,
-    }
+    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
 }
 
 test "Scenario: Given switch json query when parsing then query target and json mode are preserved" {
@@ -1416,7 +1405,7 @@ test "Scenario: Given switch json query when parsing then query target and json 
     }
 }
 
-test "Scenario: Given switch dash with json when parsing then previous switching is rejected" {
+test "Scenario: Given switch dash with json when parsing then the shortcut form is rejected" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-", "--json" };
     var result = try cli.commands.parseArgs(gpa, &args);
@@ -1425,7 +1414,7 @@ test "Scenario: Given switch dash with json when parsing then previous switching
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.find(u8, usage_err.message, "previous-account switching is CLI-only") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "only available as `codex-auth -`") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1566,7 +1555,7 @@ test "Scenario: Given switch dash with api flag when parsing then usage error is
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
+    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
 }
 
 test "Scenario: Given switch dash with live flag when parsing then usage error is returned" {
@@ -1575,7 +1564,7 @@ test "Scenario: Given switch dash with live flag when parsing then usage error i
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
+    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
 }
 
 test "Scenario: Given switch dash with skip-api flag when parsing then usage error is returned" {
@@ -1584,7 +1573,7 @@ test "Scenario: Given switch dash with skip-api flag when parsing then usage err
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "switch -|<alias|email|display-number|query>");
+    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
 }
 
 test "Scenario: Given switch query with removed auto flag when parsing then usage error is returned" {
@@ -2139,7 +2128,7 @@ test "Scenario: Given a partial command word when completing then matching comma
     try std.testing.expectEqualStrings("switch\tSwitch the active account\n:36\n", out);
 }
 
-test "Scenario: Given a flag prefix inside switch when completing then flags and the previous-account literal are emitted" {
+test "Scenario: Given a flag prefix inside switch when completing then flags are emitted" {
     const gpa = std.testing.allocator;
     const args = [_][]const u8{ "switch", "-" };
     const out = try completeResponse(gpa, "/nonexistent", &args);
@@ -2147,7 +2136,7 @@ test "Scenario: Given a flag prefix inside switch when completing then flags and
 
     try std.testing.expect(std.mem.find(u8, out, "--live\tOpen the live switch UI") != null);
     try std.testing.expect(std.mem.find(u8, out, "--json\tEmit one machine-readable JSON document for non-interactive switch") != null);
-    try std.testing.expect(std.mem.find(u8, out, "-\tSwitch to the previous active account") != null);
+    try std.testing.expect(std.mem.find(u8, out, "-\tSwitch to the previous active account") == null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
@@ -2170,7 +2159,7 @@ test "Scenario: Given a switch selector position when completing then account ca
 
     try std.testing.expect(std.mem.find(u8, out, "work\twork(alpha@example.com)") != null);
     try std.testing.expect(std.mem.find(u8, out, "01:") == null);
-    try std.testing.expect(std.mem.find(u8, out, "-\tSwitch to the previous active account") != null);
+    try std.testing.expect(std.mem.find(u8, out, "-\t") == null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
@@ -2295,7 +2284,7 @@ test "Scenario: Given conflicting flags when completing then rejected combinatio
         const args = [_][]const u8{ "switch", "-", "--j" };
         const out = try completeResponse(gpa, "/nonexistent", &args);
         defer gpa.free(out);
-        try std.testing.expect(std.mem.find(u8, out, "--json") == null);
+        try std.testing.expect(std.mem.find(u8, out, "--json") != null);
     }
     {
         const args = [_][]const u8{ "remove", "--all", "" };
@@ -2389,7 +2378,7 @@ test "Scenario: Given no-desc mode when completing account selectors then values
     const out = try completeResponseNoDesc(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("work\n-\n:36\n", out);
+    try std.testing.expectEqualStrings("work\n:36\n", out);
 }
 
 test "Scenario: Given a partial reset word when completing then the reset command is emitted" {
@@ -2443,7 +2432,7 @@ test "Scenario: Given a missing registry when completing an account selector the
     const out = try completeResponse(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("-\tSwitch to the previous active account\n:36\n", out);
+    try std.testing.expectEqualStrings(":36\n", out);
 }
 
 test "Scenario: Given a reset selector when parsing then the selector is preserved" {
@@ -2472,8 +2461,8 @@ test "Scenario: Given reset without a selector when parsing then usage error is 
 
 test "Scenario: Given reset with a leading dash selector when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
-    // Unlike `switch -`, `reset` has no previous-account form: a leading dash is
-    // reported as an unknown flag instead of being read as a selector.
+    // `reset` has no previous-account form: a leading dash is reported as an
+    // unknown flag instead of being read as a selector.
     const args = [_][:0]const u8{ "codex-auth", "reset", "-" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);

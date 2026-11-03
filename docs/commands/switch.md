@@ -3,23 +3,21 @@
 ## Usage
 
 ```shell
-codex-auth switch -
+codex-auth -
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
 codex-auth switch <query> --json
-codex-auth switch [<query>|-] --restart-daemon
+codex-auth switch <query> --restart-daemon
 ```
 
 ## Previous Switch
 
-`codex-auth switch -` switches to the previous active account.
+`codex-auth -` switches to the previous active account.
 
-- `codex-auth -` is a shortcut for the same behavior.
+- The shortcut takes no flags.
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
-- `switch -` does not accept `--live`, `--api`, or `--skip-api`.
-- Previous-account switching is a human CLI convenience and cannot be combined with `--json`.
 
 ## Interactive Switch
 
@@ -79,7 +77,6 @@ One-shot switches detect a responsive daemon and print a restart hint on stderr.
 
 ```shell
 codex-auth switch personal --restart-daemon
-codex-auth switch - --restart-daemon
 codex-auth switch personal --json --restart-daemon
 ```
 

@@ -254,8 +254,6 @@ const FlagSpec = struct {
 const Cand = struct {
     value: []const u8,
     desc: []const u8,
-    // Flags that make this literal an invalid argument when already seen.
-    blocked_by: []const []const u8 = &.{},
 };
 const PosSpec = struct {
     kind: PosKind,
@@ -272,8 +270,6 @@ const CmdSpec = struct {
     positionals: []const PosSpec = &.{},
     // Flags the parser rejects once a positional selector has been typed.
     pos_blocks_flags: []const []const u8 = &.{},
-    // Flags the parser rejects once the `-` previous-account literal is typed.
-    dash_blocks_flags: []const []const u8 = &.{},
 };
 
 const help_flags = [_]FlagSpec{
@@ -331,7 +327,7 @@ const config_live_flags = [_]FlagSpec{
     .{ .name = "--interval", .desc = "Set the live refresh interval in seconds", .value = .freeform },
 };
 
-const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account", .blocked_by = &.{"--json"} }};
+const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account" }};
 const clean_cands = [_]Cand{.{ .value = "background", .desc = "Delete stale background files" }};
 const shell_cands = [_]Cand{
     .{ .value = "bash", .desc = "Print Bash completion script" },
@@ -343,7 +339,7 @@ const shell_cands = [_]Cand{
 const help_positionals = [_]PosSpec{.{ .kind = .command_name }};
 const import_positionals = [_]PosSpec{.{ .kind = .path }};
 const export_positionals = [_]PosSpec{.{ .kind = .path }};
-const switch_positionals = [_]PosSpec{.{ .kind = .account, .literals = &dash_cands, .blocked_by = &.{ "--live", "--api", "--skip-api" } }};
+const switch_positionals = [_]PosSpec{.{ .kind = .account, .blocked_by = &.{ "--live", "--api", "--skip-api" } }};
 const remove_positionals = [_]PosSpec{.{ .kind = .account, .repeat = true, .blocked_by = &.{ "--live", "--api", "--skip-api", "--all" } }};
 const reset_positionals = [_]PosSpec{.{ .kind = .account }};
 const clean_positionals = [_]PosSpec{.{ .kind = .literal, .literals = &clean_cands }};
@@ -365,7 +361,7 @@ const command_specs = [_]CmdSpec{
     .{ .name = "login", .desc = "Login and add the current account", .flags = &login_flags },
     .{ .name = "import", .desc = "Import auth files or rebuild the registry", .flags = &import_flags, .positionals = &import_positionals },
     .{ .name = "export", .desc = "Export stored account auth files", .flags = &export_flags, .positionals = &export_positionals },
-    .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api" }, .dash_blocks_flags = &.{"--json"} },
+    .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api" } },
     .{ .name = "remove", .desc = "Remove one or more accounts", .flags = &remove_flags, .positionals = &remove_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api", "--all" } },
     .{ .name = "reset", .desc = "Use the available reset credit that expires first", .positionals = &reset_positionals },
     .{ .name = "alias", .desc = "Set or clear account aliases", .subs = &alias_subs },
@@ -382,7 +378,6 @@ const Context = struct {
     pos_count: usize = 0,
     sub_pending: bool = false,
     unknown: bool = false,
-    dash_seen: bool = false,
     seen_buf: [32]*const FlagSpec = undefined,
     seen_len: usize = 0,
 
@@ -468,7 +463,6 @@ fn resolveContext(prev: []const []const u8) Context {
             continue;
         }
         ctx.pos_count += 1;
-        if (std.mem.eql(u8, tok, "-")) ctx.dash_seen = true;
     }
     if (ctx.spec) |spec| {
         ctx.sub_pending = spec.subs.len > 0 and !sub_taken;
@@ -498,11 +492,8 @@ fn writeCand(out: *std.Io.Writer, value: []const u8, desc: []const u8, cur: []co
     }
 }
 
-fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8, seen: []const *const FlagSpec, descriptions: bool) !void {
-    outer: for (cands) |cand| {
-        for (cand.blocked_by) |name| {
-            if (seenFlagNamed(seen, name)) continue :outer;
-        }
+fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8, descriptions: bool) !void {
+    for (cands) |cand| {
         try writeCand(out, cand.value, cand.desc, cur, descriptions);
     }
 }
@@ -519,11 +510,6 @@ fn seenFlagNamed(seen: []const *const FlagSpec, name: []const u8) bool {
 fn flagBlocked(spec: *const CmdSpec, flag: *const FlagSpec, ctx: *const Context) bool {
     if (ctx.pos_count > 0) {
         for (spec.pos_blocks_flags) |name| {
-            if (std.mem.eql(u8, flag.name, name)) return true;
-        }
-    }
-    if (ctx.dash_seen) {
-        for (spec.dash_blocks_flags) |name| {
             if (std.mem.eql(u8, flag.name, name)) return true;
         }
     }
@@ -610,10 +596,10 @@ fn writePositionalCands(
         .account => {
             if (!blocked) {
                 try writeAccountCandidates(out, allocator, codex_home, cur, descriptions);
-                try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions);
+                try writeCands(out, pos.literals, cur, descriptions);
             }
         },
-        .literal => if (!blocked) try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions),
+        .literal => if (!blocked) try writeCands(out, pos.literals, cur, descriptions),
         .command_name => try writeSpecNames(out, &command_specs, cur, descriptions),
         .freeform => {},
         .path => {
@@ -653,10 +639,10 @@ pub fn writeCompleteResponse(
         directive = try writeInlineFlagValueCands(out, flag, cur, descriptions);
     } else if (ctx.spec == null) {
         if (std.mem.startsWith(u8, cur, "-") and cur.len > 0) {
-            try writeCands(out, &global_cands, cur, ctx.seenFlags(), descriptions);
+            try writeCands(out, &global_cands, cur, descriptions);
         } else {
             try writeSpecNames(out, &command_specs, cur, descriptions);
-            try writeCands(out, &dash_cands, cur, ctx.seenFlags(), descriptions);
+            try writeCands(out, &dash_cands, cur, descriptions);
         }
     } else {
         const spec = ctx.spec.?;
@@ -664,7 +650,7 @@ pub fn writeCompleteResponse(
             // `codex-auth -` takes no further arguments.
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
-            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, ctx.seenFlags(), descriptions);
+            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
         } else if (ctx.sub_pending) {
             try writeSpecNames(out, spec.subs, cur, descriptions);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {

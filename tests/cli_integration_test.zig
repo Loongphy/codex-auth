@@ -822,11 +822,10 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
-    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, previous: bool = false, attempts: usize = 1 }{
+    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, attempts: usize = 1 }{
         .{},
         .{ .json = true },
         .{ .unchanged = true },
-        .{ .previous = true },
         .{ .unchanged = true, .requested = false },
         .{ .requested = false },
         .{ .fail = true },
@@ -846,12 +845,6 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer home_dir.close();
         const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
         defer gpa.free(beta_key);
-        if (case.previous) {
-            var reg = try registry.loadRegistry(gpa, home);
-            defer reg.deinit(gpa);
-            reg.previous_active_account_key = try gpa.dupe(u8, beta_key);
-            try registry.saveRegistry(gpa, home, &reg);
-        }
         const body = try gpa.print(
             "{s}" ++
                 "[ \"$3\" = restart ] || exit 91\n" ++
@@ -863,7 +856,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer gpa.free(body);
         try fake_daemon.install(home_dir, body);
         for (0..case.attempts) |_| {
-            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "switch", "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
+            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
             const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, args);
             defer gpa.free(result.stdout);
             defer gpa.free(result.stderr);
@@ -2651,7 +2644,7 @@ test "Scenario: Given previous account exists when running top-level dash then i
         project_root,
         home_root,
         empty_path,
-        &[_][]const u8{ "switch", "-" },
+        &[_][]const u8{"-"},
     );
     defer gpa.free(switch_dash_result.stdout);
     defer gpa.free(switch_dash_result.stderr);
@@ -2763,7 +2756,7 @@ test "Scenario: Given previous is active after remove when running dash then it 
     try std.testing.expectEqualStrings(previous_key, loaded.previous_active_account_key.?);
 }
 
-test "Scenario: Given missing previous account when running switch dash then it fails cleanly" {
+test "Scenario: Given missing previous account when running dash then it fails cleanly" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2790,7 +2783,7 @@ test "Scenario: Given missing previous account when running switch dash then it 
         gpa,
         project_root,
         home_root,
-        &[_][]const u8{ "switch", "-" },
+        &[_][]const u8{"-"},
     );
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
@@ -5815,7 +5808,7 @@ test "Scenario: Given seeded accounts when running __complete through the CLI th
         try std.testing.expect(std.mem.indexOf(u8, out, "work\t") != null);
         try std.testing.expect(std.mem.indexOf(u8, out, "beta@example.com\t") != null);
         try std.testing.expect(std.mem.indexOf(u8, out, "01:") == null);
-        try std.testing.expect(std.mem.indexOf(u8, out, "-\tSwitch to the previous active account") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "-\t") == null);
         try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
     }
     {
@@ -5938,7 +5931,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<work>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<beta@example.com>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<01:demo>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<->") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<->") == null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<alpha@example.com>") == null);
     try std.testing.expectEqualStrings("<demo>", line_colon);
     try std.testing.expectEqualStrings("<win><wsl>", line_platform);
