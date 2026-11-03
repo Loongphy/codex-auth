@@ -13,7 +13,7 @@ codex-auth import --purge [<path>]
 - A file path imports one auth/config file.
 - A directory path imports direct child `.json` files from that directory.
 - Directory imports are non-recursive.
-- `--alias` applies only to a single imported file.
+- `--alias` applies only to a single imported file and also accepts the joined `--alias=<alias>` form.
 - Directory import ignores `--alias`.
 
 ## CLIProxyAPI Import

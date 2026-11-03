@@ -5,6 +5,15 @@ pub fn isHelpFlag(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h");
 }
 
+/// Returns the inline value of a `--name=value` argument, or null when `arg`
+/// is not the joined form of `name` (bare flag names need a following arg).
+pub fn inlineFlagValue(arg: []const u8, name: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, arg, name)) return null;
+    const rest = arg[name.len..];
+    if (rest.len == 0 or rest[0] != '=') return null;
+    return rest[1..];
+}
+
 pub fn usageErrorResult(
     allocator: std.mem.Allocator,
     topic: types.HelpTopic,

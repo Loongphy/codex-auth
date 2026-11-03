@@ -82,7 +82,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
-| `codex-auth completion <bash|zsh|fish>` | Print a shell completion script |
+| `codex-auth completion <bash|zsh|fish|pwsh>` | Print a shell completion script |
 
 ## Shell Completion
 
@@ -92,6 +92,7 @@ Generate completions with:
 codex-auth completion bash
 codex-auth completion zsh
 codex-auth completion fish
+codex-auth completion pwsh
 ```
 
 Install Fish completions with:
@@ -109,11 +110,13 @@ mkdir -p ~/.local/share/bash-completion/completions
 codex-auth completion bash > ~/.local/share/bash-completion/completions/codex-auth
 ```
 
-Install Zsh completions with:
+Install Zsh completions with (the directory must be in `fpath` before `compinit` runs):
 
 ```shell
 mkdir -p ~/.zsh/completions
 codex-auth completion zsh > ~/.zsh/completions/_codex-auth
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+autoload -Uz compinit && compinit
 ```
 
 ## Quick Examples

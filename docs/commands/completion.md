@@ -30,14 +30,16 @@ source <(codex-auth completion bash)
 
 `completion zsh` prints a Zsh completion script to stdout.
 
-Install it with:
+Install it with (the directory must be in `fpath` before `compinit` runs):
 
 ```shell
 mkdir -p ~/.zsh/completions
 codex-auth completion zsh > ~/.zsh/completions/_codex-auth
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+autoload -Uz compinit && compinit
 ```
 
-Or load it dynamically from `~/.zshrc` so upgrades apply automatically:
+Or load it dynamically from `~/.zshrc` so upgrades apply automatically — place this after `compinit`, since the generated script calls `compdef`:
 
 ```shell
 source <(codex-auth completion zsh)

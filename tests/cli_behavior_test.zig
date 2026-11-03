@@ -112,6 +112,33 @@ test "Scenario: Given app launch overrides when parsing then IDs and paths are p
     }
 }
 
+test "Scenario: Given app joined flag values when parsing then options are preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{
+        "codex-auth",
+        "app",
+        "--id=OpenAI.Codex",
+        "--codex-cli-path=codex-custom",
+        "--codex-home=/mnt/c/Users/Loong/.codext",
+        "--platform=mac",
+    };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .app => |opts| {
+                try std.testing.expectEqualStrings("OpenAI.Codex", opts.app_id.?);
+                try std.testing.expectEqualStrings("codex-custom", opts.codex_cli_path.?);
+                try std.testing.expectEqualStrings("/mnt/c/Users/Loong/.codext", opts.codex_home.?);
+                try std.testing.expectEqual(cli.types.AppPlatform.mac, opts.platform.?);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given app passthrough args when parsing then usage error is returned" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "app", "--", "--trace" };
@@ -137,6 +164,21 @@ test "Scenario: Given removed app status subcommand when parsing then usage erro
     defer cli.commands.freeParseResult(gpa, &result);
 
     try expectUsageError(result, .app, "unexpected argument `status` for `app`.");
+}
+
+test "Scenario: Given import joined alias when parsing then alias is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "import", "/tmp/auth.json", "--alias=personal" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .import_auth => |opts| try std.testing.expectEqualStrings("personal", opts.alias.?),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "Scenario: Given removed app patch subcommand when parsing then usage error is returned" {
@@ -741,7 +783,8 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "COMP_WORDS") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o default") != null);
     try std.testing.expect(std.mem.find(u8, script, "compgen -d") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compgen -W \"${cands[*]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "for cand in \"${cands[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "COMPREPLY+=(\"${cand#\"$before\"}\")") != null);
 }
 
 test "Scenario: Given zsh completion when rendering then the script is a __complete trampoline" {
@@ -756,7 +799,8 @@ test "Scenario: Given zsh completion when rendering then the script is a __compl
     try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete \"${argv[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "compdef _codex-auth codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "words[2,CURRENT]") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compadd -Q -d descs -- \"${cands[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compadd -d descs -- \"${cands[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compadd -Q") == null);
     try std.testing.expect(std.mem.find(u8, script, "_files -/") != null);
 }
 
@@ -922,6 +966,23 @@ test "Scenario: Given removed config api section when parsing then usage error i
 test "Scenario: Given config live interval when parsing then interval is preserved" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "config", "live", "--interval", "30" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .config => |opts| switch (opts) {
+                .live => |live_opts| try std.testing.expectEqual(@as(u16, 30), live_opts.interval_seconds),
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given config live joined interval when parsing then interval is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "config", "live", "--interval=30" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
@@ -1895,7 +1956,7 @@ test "Scenario: Given stored accounts when completing with a prefix then only ma
     try std.testing.expectEqualStrings("alpha@example.com\twork(alpha@example.com)\n", aw.written());
 }
 
-test "Scenario: Given grouped accounts sharing an email when completing an account selector then the email candidate is deduplicated" {
+test "Scenario: Given grouped accounts sharing an email when completing an account selector then numbered candidates carry account keys and the email is deduplicated" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1916,9 +1977,36 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
     try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
-    try std.testing.expect(std.mem.find(u8, out, "01:same@example.com\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, "02:same@example.com\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "02:user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:same@example.com") == null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\nsame@example.com\t"));
+}
+
+test "Scenario: Given shared-email accounts with unique aliases when completing an account selector then numbered candidates carry the aliases" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "same@example.com", "work", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "same@example.com", "play", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
+
+    const out = aw.written();
+    try std.testing.expect(std.mem.find(u8, out, ":work\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, ":play\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:same@example.com") == null);
 }
 
 fn completeResponse(gpa: std.mem.Allocator, codex_home: []const u8, args: []const []const u8) ![]u8 {
@@ -2123,6 +2211,46 @@ test "Scenario: Given no-desc mode when completing account selectors then values
     defer gpa.free(out);
 
     try std.testing.expectEqualStrings("01:alpha@example.com\nwork\nalpha@example.com\n-\n:36\n", out);
+}
+
+test "Scenario: Given a partial reset word when completing then the reset command is emitted" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{"res"};
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings("reset\tUse the available reset credit that expires first\n:36\n", out);
+}
+
+test "Scenario: Given a reset selector position when completing then account candidates and the nofile directive are emitted" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .business);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const args = [_][]const u8{ "reset", "" };
+    const out = try completeResponse(gpa, codex_home, &args);
+    defer gpa.free(out);
+
+    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "work\t") != null);
+    try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
+}
+
+test "Scenario: Given a dash prefix inside switch when completing then the restart-daemon flag is emitted" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{ "switch", "--r" };
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings("--restart-daemon\tApply the selected credentials to the running daemon\n:36\n", out);
 }
 
 test "Scenario: Given a missing registry when completing an account selector then only the directive is emitted" {

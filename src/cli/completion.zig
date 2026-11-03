@@ -65,10 +65,9 @@ const bash_script =
     \\    if (( directive & 16 )); then
     \\        COMPREPLY=( $(compgen -d -- "$tail") )
     \\    elif (( ${#cands[@]} )); then
-    \\        COMPREPLY=( $(compgen -W "${cands[*]}" -- "$cur") )
-    \\        if [[ -n "$before" ]]; then
-    \\            COMPREPLY=("${COMPREPLY[@]#"$before"}")
-    \\        fi
+    \\        for cand in "${cands[@]}"; do
+    \\            [[ "$cand" == "$cur"* ]] && COMPREPLY+=("${cand#"$before"}")
+    \\        done
     \\    fi
     \\    (( directive & 2 )) && compopt -o nospace 2>/dev/null
     \\    (( directive & 4 )) || compopt -o default 2>/dev/null
@@ -100,9 +99,9 @@ const zsh_script =
     \\  fi
     \\  if (( ${#cands[@]} > 0 )); then
     \\    if (( directive & 2 )); then
-    \\      compadd -Q -S '' -d descs -- "${cands[@]}"
+    \\      compadd -S '' -d descs -- "${cands[@]}"
     \\    else
-    \\      compadd -Q -d descs -- "${cands[@]}"
+    \\      compadd -d descs -- "${cands[@]}"
     \\    fi
     \\  fi
     \\  (( directive & 4 )) || _files
@@ -250,6 +249,7 @@ const switch_flags = [_]FlagSpec{
     .{ .name = "--api", .desc = "Load usage and account data from APIs" },
     .{ .name = "--skip-api", .desc = "Load usage and account data from local data only" },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
+    .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
 };
 const remove_flags = [_]FlagSpec{
     .{ .name = "--live", .desc = "Open the live remove UI" },
@@ -283,6 +283,7 @@ const import_positionals = [_]PosSpec{.{ .kind = .path }};
 const export_positionals = [_]PosSpec{.{ .kind = .path }};
 const switch_positionals = [_]PosSpec{.{ .kind = .account, .literals = &dash_cands }};
 const remove_positionals = [_]PosSpec{.{ .kind = .account, .repeat = true }};
+const reset_positionals = [_]PosSpec{.{ .kind = .account }};
 const clean_positionals = [_]PosSpec{.{ .kind = .literal, .literals = &clean_cands }};
 const completion_positionals = [_]PosSpec{.{ .kind = .literal, .literals = &shell_cands }};
 const alias_set_positionals = [_]PosSpec{ .{ .kind = .account }, .{ .kind = .freeform } };
@@ -304,6 +305,7 @@ const command_specs = [_]CmdSpec{
     .{ .name = "export", .desc = "Export stored account auth files", .flags = &export_flags, .positionals = &export_positionals },
     .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals },
     .{ .name = "remove", .desc = "Remove one or more accounts", .flags = &remove_flags, .positionals = &remove_positionals },
+    .{ .name = "reset", .desc = "Use the available reset credit that expires first", .positionals = &reset_positionals },
     .{ .name = "alias", .desc = "Set or clear account aliases", .subs = &alias_subs },
     .{ .name = "clean", .desc = "Delete backup and stale files under accounts/", .positionals = &clean_positionals },
     .{ .name = "completion", .desc = "Generate shell completion scripts", .positionals = &completion_positionals },
@@ -585,7 +587,7 @@ pub fn writeAccountCandidates(
         const rec = &reg.accounts.items[account_idx];
         const account_cell = display.rows[row_idx].account_cell;
 
-        const composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ displayed_idx + 1, rec.email });
+        const composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ displayed_idx + 1, selectorHint(&reg, rec) });
         try writeUniqueCandidate(out, &seen, composite, account_cell, cur, allocator, descriptions);
         allocator.free(composite);
         if (rec.alias.len != 0) {
@@ -593,6 +595,25 @@ pub fn writeAccountCandidates(
         }
         try writeUniqueCandidate(out, &seen, rec.email, account_cell, cur, allocator, descriptions);
     }
+}
+
+// The numbered composite's label must resolve back to this one account: a
+// shared email is ambiguous, so fall back to a unique alias and then to the
+// always-unique account key.
+fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecord) []const u8 {
+    if (labelMatchCount(reg, rec.email) == 1) return rec.email;
+    if (rec.alias.len != 0 and labelMatchCount(reg, rec.alias) == 1) return rec.alias;
+    return rec.account_key;
+}
+
+fn labelMatchCount(reg: *const registry.Registry, label: []const u8) usize {
+    var count: usize = 0;
+    for (reg.accounts.items) |*other| {
+        const alias_hit = other.alias.len != 0 and std.ascii.eqlIgnoreCase(other.alias, label);
+        const email_hit = std.ascii.eqlIgnoreCase(other.email, label);
+        if (alias_hit or email_hit) count += 1;
+    }
+    return count;
 }
 
 fn writeUniqueCandidate(

@@ -68,12 +68,20 @@ fn replaceAlias(allocator: std.mem.Allocator, rec: *registry.AccountRecord, alia
     rec.alias = owned_alias;
 }
 
+fn isDigitOnly(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch < '0' or ch > '9') return false;
+    }
+    return true;
+}
+
 fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx: usize) !void {
     if (alias_value.len == 0) {
         try cli.output.printInvalidAliasError("alias cannot be empty; use `codex-auth alias clear <selector>` to remove one.");
         return error.InvalidAlias;
     }
-    if (query_mod.parseDisplayNumber(alias_value) != null) {
+    if (isDigitOnly(alias_value)) {
         try cli.output.printInvalidAliasError("alias cannot be only digits because numbers select displayed rows.");
         return error.InvalidAlias;
     }

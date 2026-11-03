@@ -5892,7 +5892,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
 
     const exe_path = try builtCliPathAlloc(gpa, project_root);
     defer gpa.free(exe_path);
-    const bin_dir = std.fs.path.dirname(exe_path) orelse return error.TestUnexpectedResult;
+    const bin_dir = std.Io.Dir.path.dirname(exe_path) orelse return error.TestUnexpectedResult;
 
     const driver = try std.fmt.allocPrint(gpa,
         \\export PATH="{s}:$PATH"
