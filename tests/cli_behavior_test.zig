@@ -782,7 +782,8 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "complete -F _codex_auth_complete codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "COMP_WORDS") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o default") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compgen -d") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compgen -d -- \"$dsearch\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "dpre=\"${dsearch%%=*}=\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "while IFS= read -r cand") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o filenames") != null);
     try std.testing.expect(std.mem.find(u8, script, "for cand in \"${cands[@]}\"") != null);
