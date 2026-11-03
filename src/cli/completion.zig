@@ -38,7 +38,7 @@ pub fn writeCompletion(out: *std.Io.Writer, shell: types.CompletionShell) !void 
 const bash_script =
     \\_codex_auth_complete() {
     \\    COMPREPLY=()
-    \\    local i w buf="" cur tail before directive=0 value desc out join_next=0
+    \\    local i w buf="" cur tail before directive=0 value desc out join_next=0 dpath dpre btail dkeep cand
     \\    local -a argv cands
     \\    for (( i=1; i<=COMP_CWORD; i++ )); do
     \\        w="${COMP_WORDS[i]}"
@@ -438,7 +438,10 @@ fn resolveContext(prev: []const []const u8) Context {
                 ctx.spec = &empty_spec;
                 continue;
             }
-            if (isGlobalFlagName(tok)) continue;
+            if (isGlobalFlagName(tok)) {
+                ctx.unknown = true;
+                continue;
+            }
             ctx.unknown = true;
             return ctx;
         };
@@ -450,19 +453,25 @@ fn resolveContext(prev: []const []const u8) Context {
             }
             sub_taken = true;
         }
-        if (std.mem.startsWith(u8, tok, "-") and tok.len > 1) {
+        if (std.mem.startsWith(u8, tok, "-")) {
             if (std.mem.startsWith(u8, tok, "--")) {
                 const eq = std.mem.indexOfScalar(u8, tok, '=');
                 const name = if (eq) |i| tok[0..i] else tok;
                 if (findFlag(spec, name)) |flag| {
                     ctx.markFlag(flag);
+                    // A `--help` word is only valid on its own; extras are rejected.
+                    if (std.mem.eql(u8, name, "--help")) ctx.unknown = true;
                     // A trailing `=` keeps the value pending for completable
                     // kinds; a freeform flag's empty value is already consumed,
                     // so the next word is a positional.
                     if (flag.value != .none and (eq == null or (eq.? == tok.len - 1 and flag.value != .freeform))) {
                         ctx.pending = flag;
                     }
+                } else {
+                    ctx.unknown = true;
                 }
+            } else {
+                ctx.unknown = true;
             }
             continue;
         }
@@ -534,9 +543,11 @@ fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, ct
         if (flagBlocked(spec, flag, ctx)) continue :outer;
         try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
-    outer: for (&help_flags) |*flag| {
-        for (ctx.seenFlags()) |s| if (s == flag) continue :outer;
-        try writeCand(out, flag.name, flag.desc, cur, descriptions);
+    // Help flags are only valid as the sole argument after a command name.
+    if (ctx.pos_count == 0 and ctx.seen_len == 0) {
+        for (&help_flags) |*flag| {
+            try writeCand(out, flag.name, flag.desc, cur, descriptions);
+        }
     }
 }
 
@@ -629,6 +640,9 @@ pub fn writeCompleteResponse(
     var prev = args;
     if (prev.len > 0) {
         cur = prev[prev.len - 1];
+        // PowerShell <7.2 sends a literal `""` sentinel for an empty word; if it
+        // ever arrives unnormalized, treat it as an empty prefix.
+        if (std.mem.eql(u8, cur, "\"\"")) cur = "";
         prev = prev[0 .. prev.len - 1];
     }
 

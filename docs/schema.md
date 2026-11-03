@@ -239,8 +239,7 @@ differences:
 - live refresh interval stored as top-level `interval_seconds`;
 - older `live.interval_seconds` and removed `auto_switch` blocks are omitted on
   rewrite;
-- top-level `previous_active_account_key` supports `codex-auth -` and
-  `codex-auth switch -`;
+- top-level `previous_active_account_key` supports `codex-auth -`;
 - persisted plans use final product semantics rather than backend identifiers;
 - legacy `team` becomes `business`;
 - legacy `business` becomes `enterprise`;

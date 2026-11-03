@@ -2328,10 +2328,21 @@ test "Scenario: Given conflicting flags when completing then rejected combinatio
         try std.testing.expect(std.mem.find(u8, out, "-\t") == null);
     }
     {
+        // A bare `-` is not a valid switch word, so the context is rejected.
         const args = [_][]const u8{ "switch", "-", "--j" };
         const out = try completeResponse(gpa, "/nonexistent", &args);
         defer gpa.free(out);
-        try std.testing.expect(std.mem.find(u8, out, "--json") != null);
+        try std.testing.expect(std.mem.find(u8, out, "--json") == null);
+    }
+    {
+        // The PowerShell <7.2 empty-word sentinel normalizes to an empty prefix.
+        const args = [_][]const u8{ "switch", "\"\"" };
+        const out = try completeResponse(gpa, "/nonexistent", &args);
+        defer gpa.free(out);
+        const empty_args = [_][]const u8{ "switch", "" };
+        const empty_out = try completeResponse(gpa, "/nonexistent", &empty_args);
+        defer gpa.free(empty_out);
+        try std.testing.expectEqualStrings(empty_out, out);
     }
     {
         const args = [_][]const u8{ "remove", "--all", "" };

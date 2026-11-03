@@ -308,7 +308,6 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("               Can interrupt attached sessions; cannot be combined with --live.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
-            try out.writeAll("  -            Switch to the previous active account.\n");
         },
         .remove_account => {
             try out.writeAll("  --live       Open the live remove UI.\n");
