@@ -5902,6 +5902,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
         \\COMP_WORDS=(codex-auth switch ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth switch 01 : d); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth app --platform = w); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth remove work: b); COMP_CWORD=3; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth alias ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
     , .{ bin_dir, script_path });
     defer gpa.free(driver);
@@ -5930,6 +5931,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     const line_switch = lines.next() orelse return error.TestExpectedEqual;
     const line_colon = lines.next() orelse return error.TestExpectedEqual;
     const line_platform = lines.next() orelse return error.TestExpectedEqual;
+    const line_separgs = lines.next() orelse return error.TestExpectedEqual;
     const line_alias = lines.next() orelse return error.TestExpectedEqual;
 
     try std.testing.expectEqualStrings("<switch>", line_root);
@@ -5940,6 +5942,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<alpha@example.com>") == null);
     try std.testing.expectEqualStrings("<demo>", line_colon);
     try std.testing.expectEqualStrings("<win><wsl>", line_platform);
+    try std.testing.expect(std.mem.indexOf(u8, line_separgs, "<beta@example.com>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<set>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<clear>") != null);
 }

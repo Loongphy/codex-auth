@@ -37,12 +37,18 @@ pub fn writeCompletion(out: *std.Io.Writer, shell: types.CompletionShell) !void 
 const bash_script =
     \\_codex_auth_complete() {
     \\    COMPREPLY=()
-    \\    local i w buf="" cur tail before directive=0 value desc out
+    \\    local i w buf="" cur tail before directive=0 value desc out join_next=0
     \\    local -a argv cands
     \\    for (( i=1; i<=COMP_CWORD; i++ )); do
     \\        w="${COMP_WORDS[i]}"
-    \\        if [[ "$w" == ":" || "$w" == "=" || "$buf" == *[:=] ]]; then
+    \\        if [[ "$w" == ":" || "$w" == "=" ]]; then
     \\            buf+="$w"
+    \\            join_next=1
+    \\            continue
+    \\        fi
+    \\        if (( join_next )); then
+    \\            buf+="$w"
+    \\            join_next=0
     \\            continue
     \\        fi
     \\        (( i > 1 )) && argv+=("$buf")
@@ -646,7 +652,11 @@ fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecor
 }
 
 fn usableHint(reg: *const registry.Registry, label: []const u8) bool {
-    return label.len != 0 and label[0] != '-' and label[0] != ':' and lineSafe(label) and labelMatchCount(reg, label) == 1;
+    if (label.len == 0 or label[0] == '-' or label[0] == ':' or !lineSafe(label)) return false;
+    // Account keys resolve before labels, so a label that spells another
+    // account's key would act on that account, not this one.
+    if (registry.findAccountIndexByAccountKey(reg, label) != null) return false;
+    return labelMatchCount(reg, label) == 1;
 }
 
 // Candidate rows are `value<TAB>description` lines; a value carrying control
