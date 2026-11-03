@@ -82,6 +82,21 @@ if ($Scenario -eq "ok") {
 $r = Invoke-Native @("reset", "nonexistent")
 Check "unknown account is a clean error" (($r.Code -ne 0) -and ($r.Err -match "no account matches 'nonexistent'")) ""
 
+# 5. Redirected output appends at the inherited offset instead of rewinding.
+# `cmd /c >>` hands the child a real file handle positioned at the end, unlike
+# PowerShell's own >> which pipes output through Out-File -Append.
+$logPath = Join-Path $FixtureDir "append.log"
+Remove-Item $logPath -ErrorAction SilentlyContinue
+Push-Location -Path $FixtureDir
+try {
+    & cmd.exe /d /c "`"$Exe`" --version >> `"$logPath`"" 2>$null
+    & cmd.exe /d /c "`"$Exe`" --version >> `"$logPath`"" 2>$null
+} finally {
+    Pop-Location
+}
+$lines = @(Select-String -Path $logPath -Pattern "codex-auth" -SimpleMatch)
+Check "redirected runs append" ($lines.Count -ge 2) "lines: $($lines.Count)"
+
 Remove-Item -Recurse -Force $scratch
 Write-Host ""
 if ($failures -eq 0) { Write-Host "all smoke checks passed" } else { Write-Host "$failures smoke check(s) failed" }

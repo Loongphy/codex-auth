@@ -35,6 +35,9 @@ jobs:
     needs: classify
     if: ${{ needs.classify.outputs.skip_release != 'true' }}
     runs-on: ${{ matrix.os }}
+    # Zig 0.16's build runner can wedge for hours draining a failed Windows
+    # test step's stdio; cap the job so a hang surfaces as a timeout instead.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

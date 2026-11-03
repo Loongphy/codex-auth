@@ -403,12 +403,44 @@ fn builtFakeCodexPathAlloc(allocator: std.mem.Allocator, project_root: []const u
     return fs.path.join(allocator, &[_][]const u8{ prefix, "bin", exe_name });
 }
 
+fn pathEntryHostsCodexBinary(dir_path: []const u8) bool {
+    const names: []const []const u8 = if (builtin.os.tag == .windows)
+        &.{ "codex.exe", "codex.cmd", "codex.bat", "codex.ps1" }
+    else
+        &.{"codex"};
+    for (names) |name| {
+        const candidate = fs.path.join(std.heap.page_allocator, &[_][]const u8{ dir_path, name }) catch continue;
+        defer std.heap.page_allocator.free(candidate);
+        if (std.fs.path.isAbsolute(candidate)) {
+            std.Io.Dir.accessAbsolute(fs.io(), candidate, .{}) catch continue;
+        } else {
+            std.Io.Dir.cwd().access(fs.io(), candidate, .{}) catch continue;
+        }
+        return true;
+    }
+    return false;
+}
+
+/// Prepends the fixture directory to PATH, dropping inherited entries that
+/// contain a real `codex` binary. Native wrappers outrank `codex.ps1` during
+/// resolution, so a machine that has Codex installed would otherwise shadow
+/// the fixture's fake wrappers and launch the real CLI in tests that assert
+/// lower-priority launchers.
 fn prependPathEntryAlloc(allocator: std.mem.Allocator, entry: []const u8) ![]u8 {
     var env_map = try getEnvMap(allocator);
     defer env_map.deinit();
 
     const inherited_path = env_map.get("PATH") orelse return allocator.dupe(u8, entry);
-    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, inherited_path });
+    var kept = std.ArrayList(u8).empty;
+    defer kept.deinit(allocator);
+    var it = std.mem.splitScalar(u8, inherited_path, fs.path.delimiter);
+    while (it.next()) |path_entry| {
+        if (path_entry.len == 0) continue;
+        if (pathEntryHostsCodexBinary(path_entry)) continue;
+        if (kept.items.len != 0) try kept.append(allocator, fs.path.delimiter);
+        try kept.appendSlice(allocator, path_entry);
+    }
+    return try std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ entry, fs.path.delimiter, kept.items });
 }
 
 fn runCliWithIsolatedHomeAndPathAndApiKeyCurl(
@@ -5685,8 +5717,9 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     const output_path = try fs.path.join(gpa, &[_][]const u8{ home, "version.log" });
     defer gpa.free(output_path);
 
-    const output = try tmp.dir.createFile("version.log", .{});
-    defer output.close();
+    // The children open this path through shell redirection; keep no handle
+    // open so Windows share-mode checks cannot reject their create.
+    (try tmp.dir.createFile("version.log", .{})).close();
 
     var env_map = try getEnvMap(gpa);
     defer env_map.deinit();
@@ -5695,19 +5728,50 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     try env_map.put("CODEX_HOME", home);
     try env_map.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
 
-    for (0..2) |_| {
+    // Go through a real shell `>>` redirect: std.process.spawn's `.file`
+    // stdio reopens the handle into a fresh file object on Windows, so a
+    // nonzero inherited offset cannot be passed to the child there. A
+    // shell performs the append redirection itself and gives the child a
+    // handle already positioned at the end, which is the scenario the
+    // streaming writer must honor.
+    if (builtin.os.tag == .windows) {
+        // `cmd /c` quote-parses its own argv badly, so put the redirections
+        // in a batch file where the text is taken verbatim.
+        const script = try std.fmt.allocPrint(gpa, "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
+        defer gpa.free(script);
+        try tmp.dir.writeFile(.{ .sub_path = "append-run.cmd", .data = script });
         var child = try std.process.spawn(fs.io(), .{
-            .argv = &[_][]const u8{ exe_path, "--version" },
-            .cwd = .{ .path = project_root },
+            .argv = &[_][]const u8{ "cmd.exe", "/d", "/c", "append-run.cmd" },
+            // A `.dir` cwd becomes a `\\?\`-prefixed path that cmd.exe cannot
+            // use as its working directory; pass the resolved path instead.
+            .cwd = .{ .path = home },
             .environ_map = &env_map,
             .stdin = .ignore,
-            .stdout = .{ .file = output.toIoFile() },
+            .stdout = .ignore,
             .stderr = .ignore,
         });
         const term = try child.wait(fs.io());
         switch (term) {
             .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
             else => return error.TestUnexpectedResult,
+        }
+    } else {
+        for (0..2) |_| {
+            const command = try std.fmt.allocPrint(gpa, "\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
+            defer gpa.free(command);
+            var child = try std.process.spawn(fs.io(), .{
+                .argv = &[_][]const u8{ "sh", "-c", command },
+                .cwd = .{ .path = project_root },
+                .environ_map = &env_map,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            });
+            const term = try child.wait(fs.io());
+            switch (term) {
+                .exited => |code| try std.testing.expectEqual(@as(u8, 0), code),
+                else => return error.TestUnexpectedResult,
+            }
         }
     }
 
