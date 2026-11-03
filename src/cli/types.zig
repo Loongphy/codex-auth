@@ -70,6 +70,7 @@ pub const CompletionShell = enum {
 };
 pub const CompleteRequest = struct {
     args: []const []const u8,
+    descriptions: bool = true,
 };
 pub const LiveOptions = struct {
     interval_seconds: u16,

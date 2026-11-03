@@ -79,12 +79,13 @@ codex-auth completion pwsh | Invoke-Expression
 
 ## Runtime Completion Protocol
 
-The generated scripts are thin trampolines: on every Tab they forward the current command-line words to the hidden `codex-auth __complete` endpoint and let the binary decide what to offer.
+The generated scripts are thin trampolines: on every Tab they forward the current command-line words to a hidden endpoint and let the binary decide what to offer.
 
 ```shell
 codex-auth __complete <word>... <current-word>
+codex-auth __completeNoDesc <word>... <current-word>
 ```
 
-The last argument is the word being completed (possibly empty); the arguments before it are the already-typed words after `codex-auth`. The endpoint prints `candidate<TAB>description` rows followed by a final `:<directive>` line. The directive is a bitmask compatible with Cobra's `ShellCompDirective`: `0` allow file completion, `1` error, `2` no trailing space, `4` no file completion, `16` directories only, `32` keep output order.
+The last argument is the word being completed (possibly empty); the arguments before it are the already-typed words after `codex-auth`. `__complete` prints `candidate<TAB>description` rows; `__completeNoDesc` prints bare `candidate` rows for shells that cannot render descriptions. Both end with a `:<directive>` line — a bitmask compatible with Cobra's `ShellCompDirective`: `0` allow file completion, `1` error, `2` no trailing space, `4` no file completion, `16` directories only, `32` keep output order.
 
 Account-taking arguments (`switch`, `remove`, `alias set`, `alias clear`) emit `NN:email` composites plus alias and bare-email candidates, so the inserted value always resolves to a stable account identity rather than a bare list position.

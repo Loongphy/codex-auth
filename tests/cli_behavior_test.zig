@@ -685,6 +685,26 @@ test "Scenario: Given __complete with raw words when parsing then args are prese
                 try std.testing.expectEqual(@as(usize, 2), opts.args.len);
                 try std.testing.expectEqualStrings("switch", opts.args[0]);
                 try std.testing.expectEqualStrings("", opts.args[1]);
+                try std.testing.expect(opts.descriptions);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given __completeNoDesc when parsing then descriptions are disabled" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "__completeNoDesc", "sw" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .complete_request => |opts| {
+                try std.testing.expectEqual(@as(usize, 1), opts.args.len);
+                try std.testing.expectEqualStrings("sw", opts.args[0]);
+                try std.testing.expect(!opts.descriptions);
             },
             else => return error.TestExpectedEqual,
         },
@@ -716,7 +736,7 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
 
     const script = aw.written();
     try std.testing.expect(std.mem.find(u8, script, "_codex_auth_complete()") != null);
-    try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete \"${argv[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "codex-auth __completeNoDesc \"${argv[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "complete -F _codex_auth_complete codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "COMP_WORDS") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o default") != null);
@@ -1842,7 +1862,7 @@ test "Scenario: Given stored accounts when completing an account selector then c
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
 
-    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "");
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
     try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\twork(alpha@example.com)\n") != null);
@@ -1870,7 +1890,7 @@ test "Scenario: Given stored accounts when completing with a prefix then only ma
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
 
-    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "al");
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "al", true);
 
     try std.testing.expectEqualStrings("alpha@example.com\twork(alpha@example.com)\n", aw.written());
 }
@@ -1893,7 +1913,7 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
 
-    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "");
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
     try std.testing.expect(std.mem.find(u8, out, "01:same@example.com\t") != null);
@@ -1902,9 +1922,17 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
 }
 
 fn completeResponse(gpa: std.mem.Allocator, codex_home: []const u8, args: []const []const u8) ![]u8 {
+    return completeResponseMode(gpa, codex_home, args, true);
+}
+
+fn completeResponseNoDesc(gpa: std.mem.Allocator, codex_home: []const u8, args: []const []const u8) ![]u8 {
+    return completeResponseMode(gpa, codex_home, args, false);
+}
+
+fn completeResponseMode(gpa: std.mem.Allocator, codex_home: []const u8, args: []const []const u8, descriptions: bool) ![]u8 {
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
-    try cli.completion.writeCompleteResponse(&aw.writer, gpa, codex_home, args);
+    try cli.completion.writeCompleteResponse(&aw.writer, gpa, codex_home, args, descriptions);
     return gpa.dupe(u8, aw.written());
 }
 
@@ -2066,6 +2094,35 @@ test "Scenario: Given a config live position when completing then its flags are 
     defer gpa.free(out);
 
     try std.testing.expectEqualStrings(":36\n", out);
+}
+
+test "Scenario: Given no-desc mode when completing then candidates carry no description column" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{"sw"};
+    const out = try completeResponseNoDesc(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings("switch\n:36\n", out);
+}
+
+test "Scenario: Given no-desc mode when completing account selectors then values and directive match desc mode" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "work", .business);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    const args = [_][]const u8{ "switch", "" };
+    const out = try completeResponseNoDesc(gpa, codex_home, &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings("01:alpha@example.com\nwork\nalpha@example.com\n-\n:36\n", out);
 }
 
 test "Scenario: Given a missing registry when completing an account selector then only the directive is emitted" {

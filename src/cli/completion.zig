@@ -16,11 +16,12 @@ pub fn printCompleteResponse(
     allocator: std.mem.Allocator,
     codex_home: ?[]const u8,
     args: []const []const u8,
+    descriptions: bool,
 ) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
     const out = stdout.out();
-    try writeCompleteResponse(out, allocator, codex_home, args);
+    try writeCompleteResponse(out, allocator, codex_home, args, descriptions);
     try out.flush();
 }
 
@@ -48,7 +49,7 @@ const bash_script =
     \\        buf="$w"
     \\    done
     \\    argv+=("$buf")
-    \\    out="$(codex-auth __complete "${argv[@]}" 2>/dev/null)"
+    \\    out="$(codex-auth __completeNoDesc "${argv[@]}" 2>/dev/null)"
     \\    while IFS=$'\t' read -r value desc; do
     \\        case "$value" in
     \\            :*) directive="${value#:}" ;;
@@ -414,37 +415,41 @@ fn positionalSpec(spec: *const CmdSpec, pos_count: usize) ?*const PosSpec {
     return null;
 }
 
-fn writeCand(out: *std.Io.Writer, value: []const u8, desc: []const u8, cur: []const u8) !void {
+fn writeCand(out: *std.Io.Writer, value: []const u8, desc: []const u8, cur: []const u8, descriptions: bool) !void {
     if (!std.mem.startsWith(u8, value, cur)) return;
-    try out.print("{s}\t{s}\n", .{ value, desc });
+    if (descriptions) {
+        try out.print("{s}\t{s}\n", .{ value, desc });
+    } else {
+        try out.print("{s}\n", .{value});
+    }
 }
 
-fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8) !void {
-    for (cands) |cand| try writeCand(out, cand.value, cand.desc, cur);
+fn writeCands(out: *std.Io.Writer, cands: []const Cand, cur: []const u8, descriptions: bool) !void {
+    for (cands) |cand| try writeCand(out, cand.value, cand.desc, cur, descriptions);
 }
 
-fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, seen: []const *const FlagSpec) !void {
+fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, seen: []const *const FlagSpec, descriptions: bool) !void {
     outer: for (spec.flags) |*flag| {
         for (seen) |s| if (s == flag) continue :outer;
-        try writeCand(out, flag.name, flag.desc, cur);
+        try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
     outer: for (&help_flags) |*flag| {
         for (seen) |s| if (s == flag) continue :outer;
-        try writeCand(out, flag.name, flag.desc, cur);
+        try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
 }
 
-fn writeSpecNames(out: *std.Io.Writer, specs: []const CmdSpec, cur: []const u8) !void {
+fn writeSpecNames(out: *std.Io.Writer, specs: []const CmdSpec, cur: []const u8, descriptions: bool) !void {
     for (specs) |spec| {
         if (std.mem.eql(u8, spec.name, "help")) continue;
-        try writeCand(out, spec.name, spec.desc, cur);
+        try writeCand(out, spec.name, spec.desc, cur, descriptions);
     }
 }
 
-fn writeFlagValueCands(out: *std.Io.Writer, flag: *const FlagSpec, cur: []const u8) !u6 {
+fn writeFlagValueCands(out: *std.Io.Writer, flag: *const FlagSpec, cur: []const u8, descriptions: bool) !u6 {
     switch (flag.value) {
         .choices => {
-            for (flag.choices) |choice| try writeCand(out, choice, choice, cur);
+            for (flag.choices) |choice| try writeCand(out, choice, choice, cur, descriptions);
             return static_directive;
         },
         .path => return Directive.none,
@@ -453,13 +458,13 @@ fn writeFlagValueCands(out: *std.Io.Writer, flag: *const FlagSpec, cur: []const 
     }
 }
 
-fn writeInlineFlagValueCands(out: *std.Io.Writer, flag: *const FlagSpec, cur: []const u8) !u6 {
+fn writeInlineFlagValueCands(out: *std.Io.Writer, flag: *const FlagSpec, cur: []const u8, descriptions: bool) !u6 {
     const eq = std.mem.indexOfScalar(u8, cur, '=') orelse return static_directive;
     if (flag.value == .choices) {
         for (flag.choices) |choice| {
             var buf: [128]u8 = undefined;
             const full = std.fmt.bufPrint(&buf, "{s}={s}", .{ cur[0..eq], choice }) catch continue;
-            try writeCand(out, full, choice, cur);
+            try writeCand(out, full, choice, cur, descriptions);
         }
     }
     return switch (flag.value) {
@@ -484,21 +489,22 @@ fn writePositionalCands(
     pos: *const PosSpec,
     cur: []const u8,
     seen: []const *const FlagSpec,
+    descriptions: bool,
 ) !u6 {
     switch (pos.kind) {
         .account => {
-            try writeAccountCandidates(out, allocator, codex_home, cur);
-            try writeCands(out, pos.literals, cur);
+            try writeAccountCandidates(out, allocator, codex_home, cur, descriptions);
+            try writeCands(out, pos.literals, cur, descriptions);
         },
-        .literal => try writeCands(out, pos.literals, cur),
-        .command_name => try writeSpecNames(out, &command_specs, cur),
+        .literal => try writeCands(out, pos.literals, cur, descriptions),
+        .command_name => try writeSpecNames(out, &command_specs, cur, descriptions),
         .freeform => {},
         .path => {
-            try writeFlagCands(out, spec, cur, seen);
+            try writeFlagCands(out, spec, cur, seen, descriptions);
             return Directive.none;
         },
         .dir => {
-            try writeFlagCands(out, spec, cur, seen);
+            try writeFlagCands(out, spec, cur, seen, descriptions);
             return Directive.filter_dirs;
         },
     }
@@ -510,6 +516,7 @@ pub fn writeCompleteResponse(
     allocator: std.mem.Allocator,
     codex_home: ?[]const u8,
     args: []const []const u8,
+    descriptions: bool,
 ) !void {
     var cur: []const u8 = "";
     var prev = args;
@@ -524,29 +531,29 @@ pub fn writeCompleteResponse(
     if (ctx.unknown) {
         // No meaningful completions for an unrecognized command word.
     } else if (ctx.pending) |flag| {
-        directive = try writeFlagValueCands(out, flag, cur);
+        directive = try writeFlagValueCands(out, flag, cur, descriptions);
     } else if (inlineFlagSpec(ctx.spec, cur)) |flag| {
-        directive = try writeInlineFlagValueCands(out, flag, cur);
+        directive = try writeInlineFlagValueCands(out, flag, cur, descriptions);
     } else if (ctx.spec == null) {
         if (std.mem.startsWith(u8, cur, "-") and cur.len > 0) {
-            try writeCands(out, &global_cands, cur);
+            try writeCands(out, &global_cands, cur, descriptions);
         } else {
-            try writeSpecNames(out, &command_specs, cur);
-            try writeCands(out, &dash_cands, cur);
+            try writeSpecNames(out, &command_specs, cur, descriptions);
+            try writeCands(out, &dash_cands, cur, descriptions);
         }
     } else {
         const spec = ctx.spec.?;
         if (spec == &empty_spec) {
             // `codex-auth -` takes no further arguments.
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
-            try writeFlagCands(out, spec, cur, ctx.seenFlags());
-            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur);
+            try writeFlagCands(out, spec, cur, ctx.seenFlags(), descriptions);
+            if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
         } else if (ctx.sub_pending) {
-            try writeSpecNames(out, spec.subs, cur);
+            try writeSpecNames(out, spec.subs, cur, descriptions);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {
-            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, ctx.seenFlags());
+            directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, ctx.seenFlags(), descriptions);
         } else {
-            try writeFlagCands(out, spec, cur, ctx.seenFlags());
+            try writeFlagCands(out, spec, cur, ctx.seenFlags(), descriptions);
         }
     }
     try out.print(":{d}\n", .{directive});
@@ -557,6 +564,7 @@ pub fn writeAccountCandidates(
     allocator: std.mem.Allocator,
     codex_home: ?[]const u8,
     cur: []const u8,
+    descriptions: bool,
 ) !void {
     const home = codex_home orelse return;
     var reg = registry.loadRegistry(allocator, home) catch return;
@@ -578,12 +586,12 @@ pub fn writeAccountCandidates(
         const account_cell = display.rows[row_idx].account_cell;
 
         const composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ displayed_idx + 1, rec.email });
-        try writeUniqueCandidate(out, &seen, composite, account_cell, cur, allocator);
+        try writeUniqueCandidate(out, &seen, composite, account_cell, cur, allocator, descriptions);
         allocator.free(composite);
         if (rec.alias.len != 0) {
-            try writeUniqueCandidate(out, &seen, rec.alias, account_cell, cur, allocator);
+            try writeUniqueCandidate(out, &seen, rec.alias, account_cell, cur, allocator, descriptions);
         }
-        try writeUniqueCandidate(out, &seen, rec.email, account_cell, cur, allocator);
+        try writeUniqueCandidate(out, &seen, rec.email, account_cell, cur, allocator, descriptions);
     }
 }
 
@@ -594,6 +602,7 @@ fn writeUniqueCandidate(
     description: []const u8,
     cur: []const u8,
     allocator: std.mem.Allocator,
+    descriptions: bool,
 ) !void {
     if (value.len == 0) return;
     if (!std.mem.startsWith(u8, value, cur)) return;
@@ -602,6 +611,10 @@ fn writeUniqueCandidate(
     const owned_value = try allocator.dupe(u8, value);
     errdefer allocator.free(owned_value);
 
-    try out.print("{s}\t{s}\n", .{ value, description });
+    if (descriptions) {
+        try out.print("{s}\t{s}\n", .{ value, description });
+    } else {
+        try out.print("{s}\n", .{value});
+    }
     try seen.putNoClobber(owned_value, {});
 }

@@ -10,5 +10,5 @@ pub fn handleCompleteRequest(
     codex_home: ?[]const u8,
     opts: cli.types.CompleteRequest,
 ) !void {
-    try cli.completion.printCompleteResponse(allocator, codex_home, opts.args);
+    try cli.completion.printCompleteResponse(allocator, codex_home, opts.args, opts.descriptions);
 }
