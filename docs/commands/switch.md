@@ -52,7 +52,7 @@ Selectors can match:
 - email fragment, or
 - account name fragment.
 
-Shell completion inserts numbered selectors in the form `<number>:<label>` (for example `02:beta@example.com`). The label is resolved as an account key, alias, or email first; the number is used only when the label does not identify an account.
+Shell completion offers one stable selector per account (a unique alias or email, or the account key). A typed selector may also use the numbered form `<number>:<label>` — the label is resolved as an account key, alias, or email first and the number is used only when the label does not identify an account.
 
 If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--api`, or `--skip-api`.
 

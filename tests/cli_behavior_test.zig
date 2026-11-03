@@ -1916,7 +1916,7 @@ test "Scenario: Given selector environment when deciding switch or remove UI the
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(true, true, true));
 }
 
-test "Scenario: Given stored accounts when completing an account selector then composite, alias, and email candidates are emitted" {
+test "Scenario: Given stored accounts when completing an account selector then one selector hint is emitted per account" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1937,11 +1937,10 @@ test "Scenario: Given stored accounts when completing an account selector then c
     try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
-    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\twork(alpha@example.com)\n") != null);
     try std.testing.expect(std.mem.find(u8, out, "work\twork(alpha@example.com)\n") != null);
-    try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\twork(alpha@example.com)\n") != null);
-    try std.testing.expect(std.mem.find(u8, out, "02:beta@example.com\tbeta@example.com\n") != null);
-    try std.testing.expect(std.mem.find(u8, out, "beta@example.com\tbeta@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out, "beta@example.com\tbeta@example.com\n") != null);
+    try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
 }
 
 test "Scenario: Given stored accounts when completing with a prefix then only matching candidates are emitted" {
@@ -1962,12 +1961,12 @@ test "Scenario: Given stored accounts when completing with a prefix then only ma
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
 
-    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "al", true);
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "wo", true);
 
-    try std.testing.expectEqualStrings("alpha@example.com\twork(alpha@example.com)\n", aw.written());
+    try std.testing.expectEqualStrings("work\twork(alpha@example.com)\n", aw.written());
 }
 
-test "Scenario: Given grouped accounts sharing an email when completing an account selector then numbered candidates carry account keys and the email is deduplicated" {
+test "Scenario: Given grouped accounts sharing an email when completing an account selector then the hints fall back to account keys" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -1988,13 +1987,13 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
     try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
-    try std.testing.expect(std.mem.find(u8, out, "01:user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, "02:user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, "01:same@example.com") == null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\nsame@example.com\t"));
+    try std.testing.expect(std.mem.find(u8, out, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "same@example.com\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
 }
 
-test "Scenario: Given an alias colliding with a numbered composite when completing an account selector then the numbered candidate carries the account key" {
+test "Scenario: Given a numbered-looking alias when completing an account selector then it stays the hint of its own account" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -2015,10 +2014,11 @@ test "Scenario: Given an alias colliding with a numbered composite when completi
     try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
-    try std.testing.expect(std.mem.find(u8, out, "01:user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\t") != null);
 }
 
-test "Scenario: Given shared-email accounts with unique aliases when completing an account selector then numbered candidates carry the aliases" {
+test "Scenario: Given shared-email accounts with unique aliases when completing an account selector then the hints carry the aliases" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
@@ -2039,9 +2039,10 @@ test "Scenario: Given shared-email accounts with unique aliases when completing 
     try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
 
     const out = aw.written();
-    try std.testing.expect(std.mem.find(u8, out, ":work\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, ":play\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, "01:same@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, out, "work\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "play\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "same@example.com\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
 }
 
 fn completeResponse(gpa: std.mem.Allocator, codex_home: []const u8, args: []const []const u8) ![]u8 {
@@ -2097,8 +2098,8 @@ test "Scenario: Given a switch selector position when completing then account ca
     const out = try completeResponse(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\twork(alpha@example.com)") != null);
     try std.testing.expect(std.mem.find(u8, out, "work\twork(alpha@example.com)") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
     try std.testing.expect(std.mem.find(u8, out, "-\tSwitch to the previous active account") != null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
@@ -2120,7 +2121,7 @@ test "Scenario: Given a remove selector position when completing then account ca
     const out = try completeResponse(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out, "alpha@example.com") != null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
@@ -2141,8 +2142,8 @@ test "Scenario: Given an alias set selector when completing then account candida
     const out = try completeResponse(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com") != null);
     try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
@@ -2245,7 +2246,7 @@ test "Scenario: Given no-desc mode when completing account selectors then values
     const out = try completeResponseNoDesc(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("01:alpha@example.com\nwork\nalpha@example.com\n-\n:36\n", out);
+    try std.testing.expectEqualStrings("work\n-\n:36\n", out);
 }
 
 test "Scenario: Given a partial reset word when completing then the reset command is emitted" {
@@ -2274,8 +2275,8 @@ test "Scenario: Given a reset selector position when completing then account can
     const out = try completeResponse(gpa, codex_home, &args);
     defer gpa.free(out);
 
-    try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "work\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "01:") == null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 

@@ -5812,9 +5812,9 @@ test "Scenario: Given seeded accounts when running __complete through the CLI th
     {
         const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "switch", "" });
         defer gpa.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "01:alpha@example.com") != null);
         try std.testing.expect(std.mem.indexOf(u8, out, "work\t") != null);
-        try std.testing.expect(std.mem.indexOf(u8, out, "02:beta@example.com") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "beta@example.com\t") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "01:") == null);
         try std.testing.expect(std.mem.indexOf(u8, out, "-\tSwitch to the previous active account") != null);
         try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
     }
@@ -5835,7 +5835,7 @@ test "Scenario: Given seeded accounts when running __complete through the CLI th
     {
         const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "alias", "set", "" });
         defer gpa.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "01:alpha@example.com") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "work\t") != null);
         try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
     }
     {
@@ -5877,6 +5877,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
         .{ .email = "alpha@example.com", .alias = "work" },
         .{ .email = "beta@example.com", .alias = "" },
+        .{ .email = "demo@example.com", .alias = "01:demo" },
     });
     try tmp.dir.makePath("empty-bin");
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
@@ -5899,7 +5900,7 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
         \\source "{s}"
         \\COMP_WORDS=(codex-auth sw); COMP_CWORD=1; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth switch ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
-        \\COMP_WORDS=(codex-auth switch 01 : al); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth switch 01 : d); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth app --platform = w); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
         \\COMP_WORDS=(codex-auth alias ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
     , .{ bin_dir, script_path });
@@ -5932,11 +5933,12 @@ test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPRE
     const line_alias = lines.next() orelse return error.TestExpectedEqual;
 
     try std.testing.expectEqualStrings("<switch>", line_root);
-    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<01:alpha@example.com>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<work>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<02:beta@example.com>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<beta@example.com>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<01:demo>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_switch, "<->") != null);
-    try std.testing.expectEqualStrings("<alpha@example.com>", line_colon);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<alpha@example.com>") == null);
+    try std.testing.expectEqualStrings("<demo>", line_colon);
     try std.testing.expectEqualStrings("<win><wsl>", line_platform);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<set>") != null);
     try std.testing.expect(std.mem.indexOf(u8, line_alias, "<clear>") != null);

@@ -3,7 +3,6 @@ const io_util = @import("../core/io_util.zig");
 const types = @import("types.zig");
 const registry = @import("../registry/root.zig");
 const display_rows = @import("../tui/display.zig");
-const query = @import("../workflows/query.zig");
 
 pub fn printCompletion(shell: types.CompletionShell) !void {
     var stdout: io_util.Stdout = undefined;
@@ -612,49 +611,21 @@ pub fn writeAccountCandidates(
         seen.deinit();
     }
 
-    for (display.selectable_row_indices, 0..) |row_idx, displayed_idx| {
+    for (display.selectable_row_indices) |row_idx| {
         const account_idx = display.rows[row_idx].account_index orelse continue;
         const rec = &reg.accounts.items[account_idx];
         const account_cell = display.rows[row_idx].account_cell;
 
-        const composite = try numberedSelector(allocator, &reg, account_idx, rec, displayed_idx + 1);
-        defer allocator.free(composite);
-        try writeUniqueCandidate(out, &seen, composite, account_cell, cur, allocator, descriptions);
-        if (rec.alias.len != 0) {
-            try writeUniqueCandidate(out, &seen, rec.alias, account_cell, cur, allocator, descriptions);
-        }
-        try writeUniqueCandidate(out, &seen, rec.email, account_cell, cur, allocator, descriptions);
+        try writeUniqueCandidate(out, &seen, selectorHint(&reg, rec), account_cell, cur, allocator, descriptions);
     }
 }
 
-// The numbered composite is also parsed as a whole label before its hint is
-// read, so it must not spell another account's exact alias or email. Retarget
-// the hint to the always-unique account key, or emit the bare key when even
-// the numbered form collides.
-fn numberedSelector(
-    allocator: std.mem.Allocator,
-    reg: *const registry.Registry,
-    account_idx: usize,
-    rec: *const registry.AccountRecord,
-    row_number: usize,
-) ![]u8 {
-    var composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ row_number, selectorHint(reg, rec) });
-    const owner = query.findAccountIndexByExactLabel(reg, composite);
-    if (owner == null or owner.? == account_idx) return composite;
-    allocator.free(composite);
-    composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ row_number, rec.account_key });
-    const key_owner = query.findAccountIndexByExactLabel(reg, composite);
-    if (key_owner == null or key_owner.? == account_idx) return composite;
-    allocator.free(composite);
-    return try allocator.dupe(u8, rec.account_key);
-}
-
-// The numbered composite's label must resolve back to this one account: a
-// shared email is ambiguous, so fall back to a unique alias and then to the
-// always-unique account key.
+// One candidate per account: the user-chosen alias when it uniquely identifies
+// the account, else a unique email, else the always-unique account key. Shared
+// emails and aliases are ambiguous selectors, so they are never offered.
 fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecord) []const u8 {
-    if (labelMatchCount(reg, rec.email) == 1) return rec.email;
     if (rec.alias.len != 0 and labelMatchCount(reg, rec.alias) == 1) return rec.alias;
+    if (labelMatchCount(reg, rec.email) == 1) return rec.email;
     return rec.account_key;
 }
 
