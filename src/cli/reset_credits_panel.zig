@@ -1,5 +1,6 @@
 const std = @import("std");
 const registry = @import("../registry/root.zig");
+const reset_credits_api = @import("../api/reset_credits.zig");
 const rows = @import("rows.zig");
 const style = @import("style.zig");
 const timestamp = @import("../time/timestamp.zig");
@@ -85,6 +86,51 @@ pub const ConfirmStep = enum {
 
 /// Role of a rail status line, mapped to the shared color roles.
 pub const StatusKind = enum { ok, fail, info };
+
+/// The report a consume outcome leaves on the rail's bottom line. `text` is
+/// owned by the caller.
+pub const ConsumeStatus = struct {
+    text: []u8,
+    kind: StatusKind,
+};
+
+/// The status line an outcome draws under the card list, or `null` when the
+/// outcome reports itself in place: a fresh redeem keeps the consumed card as
+/// a struck ghost tagged `redeemed`, and that row is the success report.
+/// `already_redeemed` still gets a line because this attempt consumed
+/// nothing — the card was already spent — so a ghost's tag alone would read
+/// as our own success. Every other outcome reports on the last line; failures
+/// are `.fail`, spent-state answers are `.info`.
+pub fn consumeStatus(
+    allocator: std.mem.Allocator,
+    result: *const reset_credits_api.ConsumeResult,
+) !?ConsumeStatus {
+    const text: []u8 = switch (result.outcome) {
+        .reset => return null,
+        .already_redeemed => try allocator.dupe(u8, "reset credit already redeemed"),
+        .nothing_to_reset => try allocator.dupe(u8, "usage does not need a reset right now"),
+        .no_credit => try allocator.dupe(u8, "reset credit is no longer available; refresh to see current resets"),
+        .unexpected_response => if (result.status_code) |code|
+            try allocator.print("redeem failed (HTTP {d}, unexpected response)", .{code})
+        else
+            try allocator.dupe(u8, "redeem failed (unexpected response)"),
+        .http_error => if (result.status_code) |code|
+            try allocator.print("redeem failed (HTTP {d})", .{code})
+        else
+            try allocator.dupe(u8, "redeem failed"),
+        .request_error => try allocator.dupe(u8, if (result.error_name) |name|
+            reset_credits_api.describeRequestError(name)
+        else
+            "redeem failed"),
+    };
+    return .{
+        .text = text,
+        .kind = switch (result.outcome) {
+            .already_redeemed, .nothing_to_reset => .info,
+            else => .fail,
+        },
+    };
+}
 
 /// Selection state of the live reset credits panel.
 ///

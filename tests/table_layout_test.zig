@@ -319,6 +319,26 @@ test "plain and live views keep shared columns in the same relative order" {
     }
 }
 
+test "account cell truncation follows the documented width table" {
+    const table_layout = cli.table_layout;
+    const label = "very-long-account-name@example.com";
+    const cases = [_]struct { width: usize, expected: []const u8 }{
+        .{ .width = 4, .expected = "ver." },
+        .{ .width = 8, .expected = "very-lo." },
+        .{ .width = 10, .expected = "very-l.com" },
+        .{ .width = 14, .expected = "very-l.ple.com" },
+        .{ .width = 32, .expected = "very-l.-account-name@example.com" },
+        .{ .width = 34, .expected = "very-long-account-name@example.com" },
+    };
+    for (cases) |case| {
+        var buffer: [256]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        const written = try table_layout.writeCellFor(.account, &writer, label, case.width);
+        try std.testing.expectEqual(case.expected.len, written);
+        try std.testing.expectEqualStrings(case.expected, writer.buffered());
+    }
+}
+
 test "account cell truncation avoids a doubled dot before a dotted suffix" {
     const table_layout = cli.table_layout;
     var buffer: [256]u8 = undefined;

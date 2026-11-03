@@ -779,20 +779,12 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        if (result.outcome == .already_redeemed) {
-                                            // This attempt consumed nothing —
-                                            // the card was already spent — so
-                                            // unlike a fresh redeem there is no
-                                            // new artifact pointing at it and
-                                            // the ghost's tag alone would read
-                                            // as our own success.
-                                            try credit_selection.setStatusFor(allocator, current.account_key, "reset credit already redeemed", .info);
-                                        }
-                                        // A fresh redeem writes no status line:
-                                        // the consumed card stays as a struck
-                                        // ghost tagged `redeemed` where it
-                                        // sorted, and the cursor lands on the
-                                        // next available card.
+                                        // A fresh redeem leaves the consumed
+                                        // card as a struck ghost tagged
+                                        // `redeemed` where it sorted — the row
+                                        // itself is the success report — and
+                                        // the cursor lands on the next
+                                        // available card.
                                         if (registry.findAccountIndexByAccountKey(&current_display.reg, current.account_key)) |spent_idx| {
                                             const spent_rec = &current_display.reg.accounts.items[spent_idx];
                                             if (spent_rec.last_usage) |usage| {
@@ -822,37 +814,12 @@ pub fn viewAccountsWithLiveUpdates(
                                         redeem_key = null;
                                         if (redeem_credit_id) |c| allocator.free(c);
                                         redeem_credit_id = null;
-                                        try credit_selection.setStatusFor(
-                                            allocator,
-                                            current.account_key,
-                                            "reset credit is no longer available; refresh to see current resets",
-                                            .fail,
-                                        );
                                     },
-                                    .nothing_to_reset => {
-                                        try credit_selection.setStatusFor(allocator, current.account_key, "usage does not need a reset right now", .info);
-                                    },
-                                    .unexpected_response => {
-                                        if (result.status_code) |code| {
-                                            try credit_selection.setStatusForf(allocator, current.account_key, .fail, "redeem failed (HTTP {d}, unexpected response)", .{code});
-                                        } else {
-                                            try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed (unexpected response)", .fail);
-                                        }
-                                    },
-                                    .http_error => {
-                                        if (result.status_code) |code| {
-                                            try credit_selection.setStatusForf(allocator, current.account_key, .fail, "redeem failed (HTTP {d})", .{code});
-                                        } else {
-                                            try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed", .fail);
-                                        }
-                                    },
-                                    .request_error => {
-                                        const detail = if (result.error_name) |name|
-                                            reset_credits_api.describeRequestError(name)
-                                        else
-                                            "redeem failed";
-                                        try credit_selection.setStatusFor(allocator, current.account_key, detail, .fail);
-                                    },
+                                    else => {},
+                                }
+                                if (try reset_credits_panel.consumeStatus(allocator, &result)) |report| {
+                                    defer allocator.free(report.text);
+                                    try credit_selection.setStatusFor(allocator, current.account_key, report.text, report.kind);
                                 }
                             } else {
                                 try credit_selection.setStatusFor(allocator, current.account_key, "redeem failed (idempotency key unavailable)", .fail);
