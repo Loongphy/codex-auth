@@ -21,6 +21,7 @@ After modifying any `.zig` file, always run `zig build run -- list` to verify th
 - Use the paths reported by `zig env` as the source of truth, especially `std_dir` for the standard library and `lib_dir` for other bundled Zig libraries.
 - Prefer evidence from local sources: symbol definitions, nearby tests, and existing call sites in this repository.
 - If the needed behavior is not clear from `std_dir`, inspect other Zig sources and tests under the local `lib_dir` tree as needed.
+- The local stdlib shows what an API is, not whether it is being retired: deprecated declarations still compile. Cross-check the release notes at `https://ziglang.org/download/<version>/release-notes.html` (for example `0.17.0`) for deprecation and removal lists before picking between alternatives.
 
 # Zig 0.17 Runtime and Tests
 
