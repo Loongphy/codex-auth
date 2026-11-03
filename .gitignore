@@ -9,3 +9,6 @@ dist/
 
 # Local benchmarking workspace
 benchmark/*
+
+# Local release notes drafts (referenced via git tag -F)
+release-notes/
