@@ -57,7 +57,7 @@ pub fn resolveExecutablePathEntryForLaunchAlloc(
         return try allocator.dupe(u8, candidate);
     }
 
-    if (builtin.os.tag == .windows and std.Io.Dir.path.extension(executable).len == 0) {
+    if (builtin.target.os.tag == .windows and std.Io.Dir.path.extension(executable).len == 0) {
         const path_ext = getEnvVarOwned(allocator, "PATHEXT") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => try allocator.dupe(u8, ".COM;.EXE;.BAT;.CMD"),
             else => return err,

@@ -13,7 +13,7 @@ fn runEntry(comptime command_line: []const u8, argv: []const [*:0]const u8, allo
     defer env_map.deinit();
     return codex_auth.workflows.main(.{
         .minimal = .{
-            .args = .{ .vector = if (builtin.os.tag == .windows) std.unicode.utf8ToUtf16LeStringLiteral(command_line) else argv },
+            .args = .{ .vector = if (builtin.target.os.tag == .windows) std.unicode.utf8ToUtf16LeStringLiteral(command_line) else argv },
             .environ = .empty,
         },
         .arena = &arena,
@@ -65,7 +65,7 @@ test "runtime environment reads the supplied map and isolates child overrides" {
     try std.testing.expectEqualStrings("parent", env_map.get("CODEX_AUTH_RUNTIME_TEST").?);
     try std.testing.expectEqualStrings("parent", value);
     try std.testing.expectEqualStrings("child", child_env.get("CODEX_AUTH_RUNTIME_TEST").?);
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const lower = try runtime.getEnvVarOwned(allocator, "codex_auth_runtime_test");
         defer allocator.free(lower);
         try std.testing.expectEqualStrings("parent", lower);

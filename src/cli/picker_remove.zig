@@ -37,7 +37,7 @@ pub fn selectAccountsToRemoveWithUsageOverrides(
     usage_overrides: ?[]const ?[]const u8,
 ) !?[]usize {
     if (shouldUseNumberedRemoveSelector(
-        comptime builtin.os.tag == .windows,
+        comptime builtin.target.os.tag == .windows,
         std.Io.File.stdin().isTty(app_runtime.io()) catch false,
         std.Io.File.stdout().isTty(app_runtime.io()) catch false,
     )) {
@@ -177,7 +177,7 @@ fn selectRemoveInteractive(
         ) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
 
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
                 .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (idx > 0) {

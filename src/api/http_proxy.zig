@@ -32,7 +32,7 @@ const no_system_proxy = struct {
 
 /// Linux has no system-wide proxy setting that CLI tools read; the environment
 /// variables are the convention, so the `else` arm above stays empty there.
-const platform = switch (builtin.os.tag) {
+const platform = switch (builtin.target.os.tag) {
     .windows => @import("http_proxy_windows.zig"),
     .macos => @import("http_proxy_macos.zig"),
     else => no_system_proxy,

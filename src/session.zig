@@ -251,7 +251,7 @@ fn scanFileForUsageWithMode(allocator: std.mem.Allocator, path: []const u8, keep
 
     const stat = try file.stat(app_runtime.io());
     if (stat.size == 0) return null;
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         return scanFileForUsageStreaming(allocator, file, keep_latest_unusable);
     }
 

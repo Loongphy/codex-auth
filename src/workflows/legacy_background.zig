@@ -14,11 +14,11 @@ pub const CleanSummary = struct {
 };
 
 pub fn clean(allocator: std.mem.Allocator) !CleanSummary {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .linux => cleanLinux(allocator),
         .macos => cleanMac(allocator),
         .windows => cleanWindows(allocator),
-        else => .{ .platform = @tagName(builtin.os.tag) },
+        else => .{ .platform = @tagName(builtin.target.os.tag) },
     };
 }
 

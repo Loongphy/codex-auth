@@ -12,7 +12,7 @@ pub const struct_tm = c.struct_tm;
 /// platform conversion fails or the value does not fit the platform `time_t`.
 /// On Windows this binds directly to the exported CRT symbol.
 pub fn compat(ts: i64, out_tm: *struct_tm) bool {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         if (comptime @hasDecl(c, "_localtime64_s") and @hasDecl(c, "__time64_t")) {
             var t64 = std.math.cast(c.__time64_t, ts) orelse return false;
             return c._localtime64_s(out_tm, &t64) == 0;

@@ -290,7 +290,7 @@ fn terminalWidth() usize {
     const stdout_file = std.Io.File.stdout();
     if (!(stdout_file.isTty(app_runtime.io()) catch false)) return 0;
 
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
         switch (get_console_info.operate(app_runtime.io(), stdout_file) catch return 0) {
             .SUCCESS => {},

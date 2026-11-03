@@ -7,11 +7,11 @@ pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, 
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
-pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+pub const private_file_permissions: std.Io.File.Permissions = switch (builtin.target.os.tag) {
     .windows => .default_file,
     else => .fromMode(0o600),
 };
-pub const private_dir_permissions: std.Io.File.Permissions = switch (builtin.os.tag) {
+pub const private_dir_permissions: std.Io.File.Permissions = switch (builtin.target.os.tag) {
     .windows => .default_dir,
     else => .fromMode(0o700),
 };
@@ -449,7 +449,7 @@ pub fn resolveUserHome(allocator: std.mem.Allocator) ![]u8 {
 }
 
 pub fn hardenPathPermissions(path: []const u8, permissions: std.Io.File.Permissions) !void {
-    if (builtin.os.tag == .windows) return;
+    if (builtin.target.os.tag == .windows) return;
     try std.Io.Dir.cwd().setFilePermissions(app_runtime.io(), path, permissions, .{});
 }
 

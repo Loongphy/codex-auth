@@ -23,11 +23,11 @@ test "run child capture times out stalled child process" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const script_name = switch (builtin.os.tag) {
+    const script_name = switch (builtin.target.os.tag) {
         .windows => "stall.ps1",
         else => "stall.sh",
     };
-    const script_data = switch (builtin.os.tag) {
+    const script_data = switch (builtin.target.os.tag) {
         .windows =>
         \\Start-Sleep -Seconds 30
         ,
@@ -42,7 +42,7 @@ test "run child capture times out stalled child process" {
         .data = script_data,
     });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
         defer script_file.close(app_runtime.io());
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
@@ -51,7 +51,7 @@ test "run child capture times out stalled child process" {
     const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
-    const argv: []const []const u8 = switch (builtin.os.tag) {
+    const argv: []const []const u8 = switch (builtin.target.os.tag) {
         .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
         else => &[_][]const u8{script_path},
     };
@@ -70,11 +70,11 @@ test "run child capture preserves partial stdout when child times out" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const script_name = switch (builtin.os.tag) {
+    const script_name = switch (builtin.target.os.tag) {
         .windows => "partial-output.ps1",
         else => "partial-output.sh",
     };
-    const script_data = switch (builtin.os.tag) {
+    const script_data = switch (builtin.target.os.tag) {
         .windows =>
         \\[Console]::Out.Write("." * 64)
         \\[Console]::Out.Flush()
@@ -92,7 +92,7 @@ test "run child capture preserves partial stdout when child times out" {
         .data = script_data,
     });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
         defer script_file.close(app_runtime.io());
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
@@ -101,11 +101,11 @@ test "run child capture preserves partial stdout when child times out" {
     const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
-    const argv: []const []const u8 = switch (builtin.os.tag) {
+    const argv: []const []const u8 = switch (builtin.target.os.tag) {
         .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
         else => &[_][]const u8{script_path},
     };
-    const timeout_ms: u64 = if (builtin.os.tag == .windows) 3000 else 1000;
+    const timeout_ms: u64 = if (builtin.target.os.tag == .windows) 3000 else 1000;
 
     const result = runChildCapture(allocator, argv, timeout_ms, null) catch |err| switch (err) {
         error.OutOfMemory => return error.SkipZigTest,
@@ -114,7 +114,7 @@ test "run child capture preserves partial stdout when child times out" {
     defer result.deinit(allocator);
 
     try std.testing.expect(result.timed_out);
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         try std.testing.expect(result.stdout.len > 0);
     }
 }
@@ -124,11 +124,11 @@ test "run child capture frees first output buffer when second result dupe fails"
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const script_name = switch (builtin.os.tag) {
+    const script_name = switch (builtin.target.os.tag) {
         .windows => "emit-output.ps1",
         else => "emit-output.sh",
     };
-    const script_data = switch (builtin.os.tag) {
+    const script_data = switch (builtin.target.os.tag) {
         .windows =>
         \\[Console]::Out.Write("stdout-data")
         \\[Console]::Error.Write("stderr-data")
@@ -145,7 +145,7 @@ test "run child capture frees first output buffer when second result dupe fails"
         .data = script_data,
     });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
         defer script_file.close(app_runtime.io());
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
@@ -154,7 +154,7 @@ test "run child capture frees first output buffer when second result dupe fails"
     const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
-    const argv: []const []const u8 = switch (builtin.os.tag) {
+    const argv: []const []const u8 = switch (builtin.target.os.tag) {
         .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
         else => &[_][]const u8{script_path},
     };
@@ -173,11 +173,11 @@ test "run child capture frees first output buffer when timeout result dupe fails
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const script_name = switch (builtin.os.tag) {
+    const script_name = switch (builtin.target.os.tag) {
         .windows => "stall-output.ps1",
         else => "stall-output.sh",
     };
-    const script_data = switch (builtin.os.tag) {
+    const script_data = switch (builtin.target.os.tag) {
         .windows =>
         \\[Console]::Out.Write("stdout-data")
         \\[Console]::Out.Flush()
@@ -198,7 +198,7 @@ test "run child capture frees first output buffer when timeout result dupe fails
         .data = script_data,
     });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
         defer script_file.close(app_runtime.io());
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
@@ -207,11 +207,11 @@ test "run child capture frees first output buffer when timeout result dupe fails
     const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
-    const argv: []const []const u8 = switch (builtin.os.tag) {
+    const argv: []const []const u8 = switch (builtin.target.os.tag) {
         .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
         else => &[_][]const u8{script_path},
     };
-    const timeout_ms: u64 = if (builtin.os.tag == .windows) 3000 else 1000;
+    const timeout_ms: u64 = if (builtin.target.os.tag == .windows) 3000 else 1000;
 
     var failing_allocator = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 1 });
     try std.testing.expectError(
@@ -227,11 +227,11 @@ test "run child capture accepts larger custom output limits for batched payloads
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const script_name = switch (builtin.os.tag) {
+    const script_name = switch (builtin.target.os.tag) {
         .windows => "large-output.ps1",
         else => "large-output.sh",
     };
-    const script_data = switch (builtin.os.tag) {
+    const script_data = switch (builtin.target.os.tag) {
         .windows =>
         \\$chunk = 'a' * 4096
         \\for ($i = 0; $i -lt 320; $i++) {
@@ -249,7 +249,7 @@ test "run child capture accepts larger custom output limits for batched payloads
         .data = script_data,
     });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var script_file = try tmp.dir.openFile(app_runtime.io(), script_name, .{ .mode = .read_write });
         defer script_file.close(app_runtime.io());
         try script_file.setPermissions(app_runtime.io(), .fromMode(0o755));
@@ -258,7 +258,7 @@ test "run child capture accepts larger custom output limits for batched payloads
     const script_path = try app_runtime.realPathFileAlloc(allocator, tmp.dir, script_name);
     defer allocator.free(script_path);
 
-    const argv: []const []const u8 = switch (builtin.os.tag) {
+    const argv: []const []const u8 = switch (builtin.target.os.tag) {
         .windows => &[_][]const u8{ "pwsh.exe", "-NoLogo", "-NoProfile", "-File", script_path },
         else => &[_][]const u8{script_path},
     };
@@ -293,7 +293,7 @@ test "ensure executable available returns generic executable error for missing p
 }
 
 test "launch path resolution preserves symlink path" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});

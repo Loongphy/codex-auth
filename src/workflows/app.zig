@@ -130,11 +130,11 @@ fn resolveCliPath(
 
 fn resolvePlatform(allocator: std.mem.Allocator, home: []const u8, explicit: ?types.AppPlatform) !ResolvedPlatform {
     if (explicit) |platform| return .{ .value = platform, .source = .explicit };
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const use_wsl = try readWindowsWslBackendSetting(allocator, home);
         return .{ .value = if (use_wsl) .wsl else .win, .source = .detected };
     }
-    if (builtin.os.tag == .macos) return .{ .value = .mac, .source = .detected };
+    if (builtin.target.os.tag == .macos) return .{ .value = .mac, .source = .detected };
     return .{ .value = null, .source = .not_set };
 }
 
@@ -332,7 +332,7 @@ fn writeWrappedPanelValue(out: *cli_style.StyledWriter, columns: usize, first_li
 fn terminalColumns() usize {
     const file = std.Io.File.stderr();
     if (!(file.isTty(app_runtime.io()) catch false)) return 80;
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
         switch (get_console_info.operate(app_runtime.io(), file) catch return 80) {
             .SUCCESS => {},
@@ -364,7 +364,7 @@ fn platformLabel(platform: types.AppPlatform) []const u8 {
 
 fn isCodexAppRunning(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: ResolvedValue) !bool {
     const value = app_id.value orelse return false;
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .windows => try isCodexAppRunningOnWindows(allocator, value),
         .macos => try isCodexAppRunningOnMac(allocator, value),
         else => switch (platform orelse return false) {
@@ -429,7 +429,7 @@ fn childExitedSuccessfully(term: std.process.Child.Term) bool {
 }
 
 fn nativeDefaultPlatform() types.AppPlatform {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .windows => .win,
         .macos => .mac,
         else => .wsl,
@@ -636,12 +636,12 @@ fn launchApp(
     try validateAppPlatform(platform.value);
     if (platform.source == .explicit) try writeAppPlatformSetting(allocator, home, platform.value);
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try writeAppLaunching();
         return launchWindowsViaPowerShell(allocator, target, cli_path.value, home, if (inherit_stdio) .stdio else .gui);
     }
 
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         if (inherit_stdio) {
             try writeAppLaunching();
             return launchMacExecutableWithStdio(allocator, target, cli_path.value, home);
@@ -655,11 +655,11 @@ fn launchApp(
 fn validateAppPlatform(value: ?types.AppPlatform) !void {
     const platform = value orelse return;
     switch (platform) {
-        .win, .wsl => if (builtin.os.tag != .windows) {
+        .win, .wsl => if (builtin.target.os.tag != .windows) {
             try writeAppError("app with `--platform win` or `--platform wsl` must run from the Windows codex-auth executable.\n");
             return error.WindowsAppPlatformRequiresWindows;
         },
-        .mac => if (builtin.os.tag != .macos) {
+        .mac => if (builtin.target.os.tag != .macos) {
             try writeAppError("app with `--platform mac` must run from the macOS codex-auth executable.\n");
             return error.MacAppPlatformRequiresMacOS;
         },
@@ -668,7 +668,7 @@ fn validateAppPlatform(value: ?types.AppPlatform) !void {
 
 fn validateNativeAppLaunchHost(platform: ?types.AppPlatform) !void {
     if (platform != null) return;
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows, .macos => return,
         else => {
             try writeAppError("app launch is supported only from the Windows or macOS codex-auth executable.\n");
@@ -1115,9 +1115,9 @@ fn runCurlRequest(
 
 fn codextPlatformCacheName(platform: types.AppPlatform) []const u8 {
     return switch (platform) {
-        .win => if (builtin.cpu.arch == .aarch64) "win32-arm64" else "win32-x64",
-        .wsl => if (builtin.cpu.arch == .aarch64) "linux-arm64" else "linux-x64",
-        .mac => if (builtin.cpu.arch == .aarch64) "darwin-arm64" else "darwin-x64",
+        .win => if (builtin.target.cpu.arch == .aarch64) "win32-arm64" else "win32-x64",
+        .wsl => if (builtin.target.cpu.arch == .aarch64) "linux-arm64" else "linux-x64",
+        .mac => if (builtin.target.cpu.arch == .aarch64) "darwin-arm64" else "darwin-x64",
     };
 }
 
@@ -1126,11 +1126,11 @@ fn releaseAssetNeedle(platform: types.AppPlatform) []const u8 {
 }
 
 fn curlExecutable() []const u8 {
-    return if (builtin.os.tag == .windows) "C:\\Windows\\System32\\curl.exe" else "curl";
+    return if (builtin.target.os.tag == .windows) "C:\\Windows\\System32\\curl.exe" else "curl";
 }
 
 fn tarExecutable() []const u8 {
-    return if (builtin.os.tag == .windows) "C:\\Windows\\System32\\tar.exe" else "tar";
+    return if (builtin.target.os.tag == .windows) "C:\\Windows\\System32\\tar.exe" else "tar";
 }
 
 fn codextExecutableName(platform: types.AppPlatform) []const u8 {

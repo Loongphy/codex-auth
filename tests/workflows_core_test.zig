@@ -423,7 +423,7 @@ test "Scenario: Given Windows GUI app launch when building script then environme
     try std.testing.expect(std.mem.find(u8, script, "shell:AppsFolder") == null);
 }
 
-const codext_test_platform_suffix = if (builtin.cpu.arch == .aarch64) "linux-arm64" else "linux-x64";
+const codext_test_platform_suffix = if (builtin.target.cpu.arch == .aarch64) "linux-arm64" else "linux-x64";
 
 test "Scenario: Given codex-package archive when installing managed codext then package tree is preserved" {
     const gpa = std.testing.allocator;

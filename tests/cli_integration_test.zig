@@ -119,7 +119,7 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
 }
 
 fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
-    const exe_name = if (builtin.os.tag == .windows) "codex-auth.exe" else "codex-auth";
+    const exe_name = if (builtin.target.os.tag == .windows) "codex-auth.exe" else "codex-auth";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -131,7 +131,7 @@ fn builtCliPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]
 }
 
 fn fakeCodexCommandPath() []const u8 {
-    return if (builtin.os.tag == .windows) "fake-bin/codex.cmd" else "fake-bin/codex";
+    return if (builtin.target.os.tag == .windows) "fake-bin/codex.cmd" else "fake-bin/codex";
 }
 
 fn fakeCodexPowerShellPath() []const u8 {
@@ -152,14 +152,14 @@ fn fakeBareWindowsCodexPath() []const u8 {
 
 fn writeFailingFakeCodex(dir: fs.Dir, exit_code: u8) !void {
     var script_buf: [128]u8 = undefined;
-    const script = if (builtin.os.tag == .windows)
+    const script = if (builtin.target.os.tag == .windows)
         try std.mem.print(&script_buf, "@echo off\r\n>\"%HOME%\\fake-codex-argv.txt\" echo %*\r\nexit /b {d}\r\n", .{exit_code})
     else
         try std.mem.print(&script_buf, "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$HOME/fake-codex-argv.txt\"\nexit {d}\n", .{exit_code});
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var file = try dir.openFile(sub_path, .{ .mode = .read_write });
         defer file.close();
         try file.chmod(0o755);
@@ -168,7 +168,7 @@ fn writeFailingFakeCodex(dir: fs.Dir, exit_code: u8) !void {
 
 fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     const script =
-        if (builtin.os.tag == .windows)
+        if (builtin.target.os.tag == .windows)
             "@echo off\r\n" ++
                 ">\"%HOME%\\fake-codex-launcher.txt\" echo cmd\r\n" ++
                 ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
@@ -190,7 +190,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var file = try dir.openFile(sub_path, .{ .mode = .read_write });
         defer file.close();
         try file.chmod(0o755);
@@ -199,7 +199,7 @@ fn writeSuccessfulFakeCodex(dir: fs.Dir) !void {
 
 fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
     const script =
-        if (builtin.os.tag == .windows)
+        if (builtin.target.os.tag == .windows)
             "@echo off\r\n" ++
                 ">\"%HOME%\\fake-codex-launcher.txt\" echo cmd\r\n" ++
                 ">\"%HOME%\\fake-codex-argv.txt\" echo %*\r\n" ++
@@ -221,7 +221,7 @@ fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
     const sub_path = fakeCodexCommandPath();
     try dir.writeFile(.{ .sub_path = sub_path, .data = script });
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var file = try dir.openFile(sub_path, .{ .mode = .read_write });
         defer file.close();
         try file.chmod(0o755);
@@ -229,7 +229,7 @@ fn writeStrictExistingCodexHomeFakeCodex(dir: fs.Dir) !void {
 }
 
 fn writeStrictExistingCodexHomeFakeCodexBatch(dir: fs.Dir) !void {
-    if (builtin.os.tag != .windows) return;
+    if (builtin.target.os.tag != .windows) return;
 
     const script =
         "@echo off\r\n" ++
@@ -246,7 +246,7 @@ fn writeStrictExistingCodexHomeFakeCodexBatch(dir: fs.Dir) !void {
 }
 
 fn writeBrokenBareWindowsCodex(dir: fs.Dir) !void {
-    if (builtin.os.tag != .windows) return;
+    if (builtin.target.os.tag != .windows) return;
     try dir.writeFile(.{
         .sub_path = fakeBareWindowsCodexPath(),
         .data = "#!/bin/sh\nexit 99\n",
@@ -254,7 +254,7 @@ fn writeBrokenBareWindowsCodex(dir: fs.Dir) !void {
 }
 
 fn writeSuccessfulFakeCodexPowerShellAt(dir: fs.Dir, sub_path: []const u8) !void {
-    if (builtin.os.tag != .windows) return;
+    if (builtin.target.os.tag != .windows) return;
 
     const script =
         "$homePath = $env:HOME\r\n" ++
@@ -279,7 +279,7 @@ fn writeSuccessfulFakeCodexExeAt(
     project_root: []const u8,
     sub_path: []const u8,
 ) !void {
-    if (builtin.os.tag != .windows) return;
+    if (builtin.target.os.tag != .windows) return;
 
     const built_fake_codex = try builtFakeCodexPathAlloc(allocator, project_root);
     defer allocator.free(built_fake_codex);
@@ -297,14 +297,14 @@ fn writeSuccessfulFakeCodexExe(
 }
 
 fn fakeCurlCommandPath() []const u8 {
-    return if (builtin.os.tag == .windows) "fake-curl-bin/curl.exe" else "fake-curl-bin/curl";
+    return if (builtin.target.os.tag == .windows) "fake-curl-bin/curl.exe" else "fake-curl-bin/curl";
 }
 
 /// Installs a built helper binary under `dir` so it can shadow PATH. Copies
 /// instead of reading into memory: these binaries outgrew `readFileAlloc`'s cap.
 fn installBuiltBinary(source_path: []const u8, dir: fs.Dir, sub_path: []const u8) !void {
     try fs.cwd().copyFile(source_path, dir, sub_path, .{});
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var file = try dir.openFile(sub_path, .{ .mode = .read_write });
         defer file.close();
         try file.chmod(0o755);
@@ -313,7 +313,7 @@ fn installBuiltBinary(source_path: []const u8, dir: fs.Dir, sub_path: []const u8
 
 fn writeFailingFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     try dir.makePath("fake-curl-bin");
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const built_fake_curl = try builtFakeCurlFailPathAlloc(allocator, project_root);
         defer allocator.free(built_fake_curl);
         try installBuiltBinary(built_fake_curl, dir, fakeCurlCommandPath());
@@ -332,7 +332,7 @@ fn writeFailingFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root:
 
 fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_root: []const u8) !void {
     try dir.makePath("fake-curl-bin");
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const built_fake_curl = try builtFakeCurlPathAlloc(allocator, project_root);
         defer allocator.free(built_fake_curl);
         try installBuiltBinary(built_fake_curl, dir, fakeCurlCommandPath());
@@ -362,7 +362,7 @@ fn writeApiKeyFlowFakeCurl(allocator: std.mem.Allocator, dir: fs.Dir, project_ro
 }
 
 fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
-    const exe_name = if (builtin.os.tag == .windows) "curl.exe" else "curl";
+    const exe_name = if (builtin.target.os.tag == .windows) "curl.exe" else "curl";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -374,7 +374,7 @@ fn builtFakeCurlPathAlloc(allocator: std.mem.Allocator, project_root: []const u8
 }
 
 fn builtFakeCurlFailPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
-    const exe_name = if (builtin.os.tag == .windows) "curl-fail.exe" else "curl-fail";
+    const exe_name = if (builtin.target.os.tag == .windows) "curl-fail.exe" else "curl-fail";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -386,7 +386,7 @@ fn builtFakeCurlFailPathAlloc(allocator: std.mem.Allocator, project_root: []cons
 }
 
 fn builtFakeCodexPathAlloc(allocator: std.mem.Allocator, project_root: []const u8) ![]u8 {
-    const exe_name = if (builtin.os.tag == .windows) "fake-codex.exe" else "fake-codex";
+    const exe_name = if (builtin.target.os.tag == .windows) "fake-codex.exe" else "fake-codex";
     const install_prefix = getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => null,
         else => return err,
@@ -398,7 +398,7 @@ fn builtFakeCodexPathAlloc(allocator: std.mem.Allocator, project_root: []const u
 }
 
 fn pathEntryHostsCodexBinary(dir_path: []const u8) bool {
-    const names: []const []const u8 = if (builtin.os.tag == .windows)
+    const names: []const []const u8 = if (builtin.target.os.tag == .windows)
         &.{ "codex.exe", "codex.cmd", "codex.bat", "codex.ps1" }
     else
         &.{"codex"};
@@ -817,7 +817,7 @@ fn seedDaemonSwitchFixture(allocator: std.mem.Allocator, home_root: []const u8, 
 }
 
 test "Scenario: Given daemon-aware switching then explicit recovery preserves selection JSON and restart failures remain visible" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -904,7 +904,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
 }
 
 test "Scenario: Given no managed executable then daemon restart resolves relative and empty PATH entries" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -945,7 +945,7 @@ test "Scenario: Given no managed executable then daemon restart resolves relativ
 }
 
 test "Scenario: Given a non-executable codex first in PATH then daemon restart uses the next executable" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -988,7 +988,7 @@ test "Scenario: Given a non-executable codex first in PATH then daemon restart u
 }
 
 test "Scenario: Given absent or indeterminate daemons then switching never starts one" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1026,7 +1026,7 @@ test "Scenario: Given absent or indeterminate daemons then switching never start
 }
 
 test "Scenario: Given failed account selection then daemon lifecycle commands are not invoked" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -1273,7 +1273,7 @@ test "Scenario: Given strict codex login when running login then scratch CODEX_H
 }
 
 test "Scenario: Given npm-style Windows codex wrappers when running login then the bare script is ignored and codex.cmd is launched" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1320,7 +1320,7 @@ test "Scenario: Given npm-style Windows codex wrappers when running login then t
 }
 
 test "Scenario: Given only a Windows batch codex wrapper when running login then codex.bat is launched" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1367,7 +1367,7 @@ test "Scenario: Given only a Windows batch codex wrapper when running login then
 }
 
 test "Scenario: Given only a PowerShell Windows codex wrapper when running login then codex.ps1 is launched" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1414,7 +1414,7 @@ test "Scenario: Given only a PowerShell Windows codex wrapper when running login
 }
 
 test "Scenario: Given a winget-style Windows codex launcher when running login then codex.exe is launched" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -1460,7 +1460,7 @@ test "Scenario: Given a winget-style Windows codex launcher when running login t
 }
 
 test "Scenario: Given an earlier PowerShell launcher and a later exe launcher when running login then ps1 stays a global fallback" {
-    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -2316,7 +2316,7 @@ test "Scenario: Given directory import with an empty json file when running impo
 }
 
 test "Scenario: Given directory import with a broken symlink when running import then it skips that entry and still imports valid files" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -2968,7 +2968,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
     const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
     defer gpa.free(empty_path);
 
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         var daemon_dir = try tmp.dir.openDir(".codex", .{});
         defer daemon_dir.close();
         try fake_daemon.install(daemon_dir, fake_daemon.succeed);
@@ -2979,7 +2979,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
         project_root,
         home_root,
         empty_path,
-        if (builtin.os.tag == .windows) &[_][]const u8{ "switch", "team" } else &[_][]const u8{ "switch", "team", "--restart-daemon" },
+        if (builtin.target.os.tag == .windows) &[_][]const u8{ "switch", "team" } else &[_][]const u8{ "switch", "team", "--restart-daemon" },
         "2\n",
     );
     defer gpa.free(result.stdout);
@@ -2991,7 +2991,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
     try std.testing.expect(std.mem.find(u8, result.stdout, "beta@example.com") != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, "solo@example.com") == null);
     try std.testing.expect(std.mem.find(u8, result.stdout, "Switched to team-b(beta@example.com)") != null);
-    try std.testing.expectEqualStrings(if (builtin.os.tag == .windows) "" else "Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n", result.stderr);
+    try std.testing.expectEqualStrings(if (builtin.target.os.tag == .windows) "" else "Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n", result.stderr);
 
     const auth_after = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(auth_after);
@@ -3001,7 +3001,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
     defer loaded.deinit(gpa);
     try std.testing.expect(loaded.active_account_key != null);
     try std.testing.expect(std.mem.eql(u8, loaded.active_account_key.?, beta_key));
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         const calls_path = try fs.path.join(gpa, &.{ codex_home, "lifecycle-calls" });
         defer gpa.free(calls_path);
         const calls = try fixtures.readFileAlloc(gpa, calls_path);
@@ -5112,7 +5112,7 @@ test "Scenario: Given default api usage when listing accounts then no warning is
 }
 
 test "Scenario: Given unsupported native host when launching app then command fails before launch plan" {
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows or builtin.target.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -5145,7 +5145,7 @@ test "Scenario: Given unsupported native host when launching app then command fa
 }
 
 test "Scenario: Given unsupported native host when launching app then managed CLI is not downloaded" {
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows or builtin.target.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -5180,7 +5180,7 @@ test "Scenario: Given unsupported native host when launching app then managed CL
 }
 
 test "Scenario: Given unsupported native host with missing explicit codex CLI path then host rejection happens first" {
-    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows or builtin.target.os.tag == .macos) return error.SkipZigTest;
 
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -5268,7 +5268,7 @@ fn runCliWithMockBackend(
 
     try tmp_dir.makePath("mock-bin");
     try tmp_dir.makePath("fixtures");
-    const curl_sub_path = if (builtin.os.tag == .windows) "mock-bin/curl.exe" else "mock-bin/curl";
+    const curl_sub_path = if (builtin.target.os.tag == .windows) "mock-bin/curl.exe" else "mock-bin/curl";
     try installBuiltBinary(built_curl, tmp_dir, curl_sub_path);
 
     const mock_bin = try tmp_dir.realpathAlloc(allocator, "mock-bin");
@@ -5379,7 +5379,7 @@ test "Scenario: Given reset credits when running reset then it consumes the soon
     logRunResultIfFailed("reset", result);
     try expectSuccess(result);
     // printResetSummary picks its separator from the platform glyphs.
-    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
+    const left_marker = if (builtin.target.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
     try std.testing.expect(std.mem.find(u8, result.stdout, "reset credit redeemed") != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, left_marker) != null);
     try std.testing.expectEqualStrings("", result.stderr);
@@ -5394,7 +5394,7 @@ test "Scenario: Given an already redeemed credit when running reset then it stil
     logRunResultIfFailed("reset already_redeemed", result);
     try expectExitCode(result, 0);
     // printResetSummary picks its separator from the platform glyphs.
-    const left_marker = if (builtin.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
+    const left_marker = if (builtin.target.os.tag == .windows) ", 1 left (next exp " else "\u{00b7} 1 left (next exp ";
     try std.testing.expect(std.mem.find(u8, result.stdout, "reset credit already redeemed") != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, left_marker) != null);
     try std.testing.expectEqualStrings("", result.stderr);
@@ -5719,7 +5719,7 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     // shell performs the append redirection itself and gives the child a
     // handle already positioned at the end, which is the scenario the
     // streaming writer must honor.
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         // `cmd /c` quote-parses its own argv badly, so put the redirections
         // in a batch file where the text is taken verbatim.
         const script = try gpa.print( "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });

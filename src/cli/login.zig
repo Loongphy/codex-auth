@@ -393,7 +393,7 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
     defer env_map.deinit();
     try env_map.put("CODEX_HOME", codex_home);
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         var candidates = try collectWindowsCodexPathsAlloc(std.heap.page_allocator);
         defer deinitWindowsCodexPathList(std.heap.page_allocator, &candidates);
 

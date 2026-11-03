@@ -84,7 +84,7 @@ fn writeRegistryFileReplace(path: []const u8, data: []const u8) !void {
 }
 
 fn writeRegistryFileAtomic(path: []const u8, data: []const u8) !void {
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         return writeRegistryFileReplace(path, data);
     }
     var buf: [4096]u8 = undefined;

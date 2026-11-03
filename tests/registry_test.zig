@@ -257,13 +257,13 @@ fn expectBackupNameFormat(name: []const u8, prefix: []const u8) !void {
 }
 
 fn expectModeUnix(path: []const u8, expected_mode: u16) !void {
-    if (comptime builtin.os.tag == .windows) return;
+    if (comptime builtin.target.os.tag == .windows) return;
     const stat = try fs.cwd().statFile(path);
     try std.testing.expectEqual(@as(std.posix.mode_t, expected_mode), stat.permissions.toMode() & 0o777);
 }
 
 fn setModeUnix(path: []const u8, mode: u16) !void {
-    if (comptime builtin.os.tag == .windows) return;
+    if (comptime builtin.target.os.tag == .windows) return;
     try fs.cwd().inner.setFilePermissions(fs.io(), path, fs.File.Permissions.fromMode(mode), .{});
 }
 

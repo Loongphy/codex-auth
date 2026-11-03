@@ -57,9 +57,9 @@ pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, execu
 }
 
 fn writeDaemonCommandTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, command: []const u8) !void {
-    try out.writeAll(if (builtin.os.tag == .windows) "$env:CODEX_HOME = " else "CODEX_HOME=");
+    try out.writeAll(if (builtin.target.os.tag == .windows) "$env:CODEX_HOME = " else "CODEX_HOME=");
     try writeShellArgumentTo(out, home);
-    try out.writeAll(if (builtin.os.tag == .windows) "; & " else " ");
+    try out.writeAll(if (builtin.target.os.tag == .windows) "; & " else " ");
     try writeShellArgumentTo(out, executable);
     try out.print(" app-server daemon {s}", .{command});
 }
@@ -69,7 +69,7 @@ fn writeShellArgumentTo(out: *std.Io.Writer, arg: []const u8) !void {
     var parts = std.mem.splitScalar(u8, arg, '\'');
     try out.writeAll(parts.first());
     while (parts.next()) |part| {
-        try out.writeAll(if (builtin.os.tag == .windows) "''" else "'\\''");
+        try out.writeAll(if (builtin.target.os.tag == .windows) "''" else "'\\''");
         try out.writeAll(part);
     }
     try out.writeAll("'");
@@ -448,7 +448,7 @@ pub fn printResetSummary(
     remaining: usize,
     next_expiry: ?[]const u8,
 ) !void {
-    const line = try resetSummaryLineAlloc(allocator, already_used, remaining, next_expiry, builtin.os.tag == .windows);
+    const line = try resetSummaryLineAlloc(allocator, already_used, remaining, next_expiry, builtin.target.os.tag == .windows);
     defer allocator.free(line);
     var stdout: io_util.Stdout = undefined;
     stdout.init();

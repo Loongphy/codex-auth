@@ -560,7 +560,7 @@ test "Scenario: Given daemon timeout then diagnostic distinguishes selected file
     try std.testing.expect(std.mem.find(u8, aw.written(), "account state is unconfirmed") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "app-server daemon version") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "app-server daemon restart") != null);
-    const quoted_home = if (builtin.os.tag == .windows) "'/tmp/home''s space'" else "'/tmp/home'\\''s space'";
+    const quoted_home = if (builtin.target.os.tag == .windows) "'/tmp/home''s space'" else "'/tmp/home'\\''s space'";
     try std.testing.expect(std.mem.find(u8, aw.written(), quoted_home) != null);
 }
 

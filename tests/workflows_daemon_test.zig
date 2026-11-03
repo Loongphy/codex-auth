@@ -17,7 +17,7 @@ test "Scenario: Given a missing daemon endpoint then lifecycle commands are not 
 }
 
 test "Scenario: Given a responsive daemon then explicit restart forwards the selected home exactly once" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try fake.install(tmp.dir, fake.succeed);
@@ -35,7 +35,7 @@ test "Scenario: Given a responsive daemon then explicit restart forwards the sel
 }
 
 test "Scenario: Given failed or malformed daemon probes then explicit restart remains indeterminate" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     for ([_][]const u8{ "exit 1\n", "printf '%s\\n' '{}'\n", "printf '%s\\n' '{\"status\":\"notRunning\"}'\n" }) |body| {
         var tmp = fs.tmpDir(.{});
         defer tmp.cleanup();
@@ -52,7 +52,7 @@ test "Scenario: Given failed or malformed daemon probes then explicit restart re
 }
 
 test "Scenario: Given a codex daemon that reloads auth then ensure reloads without restarting" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try fake.install(tmp.dir, fake.reload_changed);
@@ -68,7 +68,7 @@ test "Scenario: Given a codex daemon that reloads auth then ensure reloads witho
 }
 
 test "Scenario: Given an upstream daemon without reload support then ensure falls back to restart" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try fake.install(tmp.dir, fake.reload_unsupported_succeed);
@@ -86,7 +86,7 @@ test "Scenario: Given an upstream daemon without reload support then ensure fall
 }
 
 test "Scenario: Given a busy daemon then the reload defers without restarting" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try fake.install(tmp.dir, fake.reload_busy);
@@ -102,7 +102,7 @@ test "Scenario: Given a busy daemon then the reload defers without restarting" {
 }
 
 test "Scenario: Given a restart failure then retry makes another explicit restart attempt" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
     try fake.install(tmp.dir, fake.running ++ "exit 42\n");
@@ -118,7 +118,7 @@ test "Scenario: Given a restart failure then retry makes another explicit restar
 }
 
 test "Scenario: Given a restart helper that stalls with open or closed pipes then timeout kills and reaps only the helper" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     for ([_][]const u8{ "", "exec 1>&- 2>&-\n" }) |close_pipes| {
         var tmp = fs.tmpDir(.{});
         defer tmp.cleanup();
