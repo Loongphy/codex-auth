@@ -107,7 +107,9 @@ fn parseCompleteRequest(allocator: std.mem.Allocator, args: []const [:0]const u8
         owned.deinit(allocator);
     }
     for (args) |arg| {
-        try owned.append(allocator, try allocator.dupe(u8, std.mem.sliceTo(arg, 0)));
+        const dupe = try allocator.dupe(u8, std.mem.sliceTo(arg, 0));
+        errdefer allocator.free(dupe);
+        try owned.append(allocator, dupe);
     }
     return .{ .command = .{ .complete_request = .{ .args = try owned.toOwnedSlice(allocator), .descriptions = descriptions } } };
 }

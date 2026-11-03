@@ -270,6 +270,8 @@ const CmdSpec = struct {
     positionals: []const PosSpec = &.{},
     // Flags the parser rejects once a positional selector has been typed.
     pos_blocks_flags: []const []const u8 = &.{},
+    // Whether `-h`/`--help` are valid immediately after this command name.
+    accepts_help: bool = true,
 };
 
 const help_flags = [_]FlagSpec{
@@ -285,19 +287,19 @@ const global_cands = [_]Cand{
 };
 
 const list_flags = [_]FlagSpec{
-    .{ .name = "--live", .desc = "Open a live-updating table" },
+    .{ .name = "--live", .desc = "Open a live-updating table", .conflicts = &.{"--json"} },
     .{ .name = "--active", .desc = "Refresh only the active account before rendering" },
     .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{"--skip-api"} },
     .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{"--api"} },
-    .{ .name = "--json", .desc = "Emit one machine-readable JSON document" },
+    .{ .name = "--json", .desc = "Emit one machine-readable JSON document", .conflicts = &.{"--live"} },
 };
 const login_flags = [_]FlagSpec{
     .{ .name = "--device-auth", .desc = "Run codex login with device auth" },
 };
 const import_flags = [_]FlagSpec{
     .{ .name = "--alias", .desc = "Set an alias for a single imported account", .value = .freeform },
-    .{ .name = "--cpa", .desc = "Import CPA flat token JSON" },
-    .{ .name = "--purge", .desc = "Rebuild registry.json from auth files" },
+    .{ .name = "--cpa", .desc = "Import CPA flat token JSON", .conflicts = &.{"--purge"} },
+    .{ .name = "--purge", .desc = "Rebuild registry.json from auth files", .conflicts = &.{"--cpa"} },
 };
 const export_flags = [_]FlagSpec{
     .{ .name = "--cpa", .desc = "Export CPA flat token JSON" },
@@ -352,8 +354,8 @@ const alias_set_positionals = [_]PosSpec{ .{ .kind = .account }, .{ .kind = .fre
 const alias_clear_positionals = [_]PosSpec{.{ .kind = .account }};
 
 const alias_subs = [_]CmdSpec{
-    .{ .name = "set", .desc = "Set one stored account alias", .positionals = &alias_set_positionals },
-    .{ .name = "clear", .desc = "Clear one stored account alias", .positionals = &alias_clear_positionals },
+    .{ .name = "set", .desc = "Set one stored account alias", .positionals = &alias_set_positionals, .accepts_help = false },
+    .{ .name = "clear", .desc = "Clear one stored account alias", .positionals = &alias_clear_positionals, .accepts_help = false },
 };
 const config_subs = [_]CmdSpec{
     .{ .name = "live", .desc = "Manage live refresh settings", .flags = &config_live_flags },
@@ -426,7 +428,9 @@ fn resolveContext(prev: []const []const u8) Context {
     var sub_taken = false;
     for (prev) |tok| {
         if (ctx.pending != null) {
-            if (!std.mem.eql(u8, tok, "=")) ctx.pending = null;
+            // A real `=` word is consumed by the parser as the flag's value,
+            // so it ends the pending state like any other value token.
+            ctx.pending = null;
             continue;
         }
         const spec = ctx.spec orelse {
@@ -458,6 +462,11 @@ fn resolveContext(prev: []const []const u8) Context {
                 const eq = std.mem.indexOfScalar(u8, tok, '=');
                 const name = if (eq) |i| tok[0..i] else tok;
                 if (findFlag(spec, name)) |flag| {
+                    if (eq != null and flag.value == .none) {
+                        // `--flag=x` is rejected for value-less flags.
+                        ctx.unknown = true;
+                        continue;
+                    }
                     ctx.markFlag(flag);
                     // A `--help` word is only valid on its own; extras are rejected.
                     if (std.mem.eql(u8, name, "--help")) ctx.unknown = true;
@@ -544,16 +553,16 @@ fn writeFlagCands(out: *std.Io.Writer, spec: *const CmdSpec, cur: []const u8, ct
         try writeCand(out, flag.name, flag.desc, cur, descriptions);
     }
     // Help flags are only valid as the sole argument after a command name.
-    if (ctx.pos_count == 0 and ctx.seen_len == 0) {
+    if (spec.accepts_help and ctx.pos_count == 0 and ctx.seen_len == 0) {
         for (&help_flags) |*flag| {
             try writeCand(out, flag.name, flag.desc, cur, descriptions);
         }
     }
 }
 
-fn writeSpecNames(out: *std.Io.Writer, specs: []const CmdSpec, cur: []const u8, descriptions: bool) !void {
+fn writeSpecNames(out: *std.Io.Writer, specs: []const CmdSpec, cur: []const u8, skip_help: bool, descriptions: bool) !void {
     for (specs) |spec| {
-        if (std.mem.eql(u8, spec.name, "help")) continue;
+        if (skip_help and std.mem.eql(u8, spec.name, "help")) continue;
         try writeCand(out, spec.name, spec.desc, cur, descriptions);
     }
 }
@@ -615,7 +624,7 @@ fn writePositionalCands(
             }
         },
         .literal => if (!blocked) try writeCands(out, pos.literals, cur, descriptions),
-        .command_name => try writeSpecNames(out, &command_specs, cur, descriptions),
+        .command_name => try writeSpecNames(out, &command_specs, cur, true, descriptions),
         .freeform => {},
         .path => {
             try writeFlagCands(out, spec, cur, ctx, descriptions);
@@ -659,7 +668,7 @@ pub fn writeCompleteResponse(
         if (std.mem.startsWith(u8, cur, "-") and cur.len > 0) {
             try writeCands(out, &global_cands, cur, descriptions);
         } else {
-            try writeSpecNames(out, &command_specs, cur, descriptions);
+            try writeSpecNames(out, &command_specs, cur, false, descriptions);
             try writeCands(out, &dash_cands, cur, descriptions);
         }
     } else {
@@ -670,7 +679,7 @@ pub fn writeCompleteResponse(
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
             if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
         } else if (ctx.sub_pending) {
-            try writeSpecNames(out, spec.subs, cur, descriptions);
+            try writeSpecNames(out, spec.subs, cur, false, descriptions);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {
             directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, &ctx, descriptions);
         } else {
