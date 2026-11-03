@@ -132,7 +132,7 @@ const fish_script =
     \\    test $directive -eq 1; and return
     \\    set -l dirs (math -s0 "floor($directive / 16) % 2" 2>/dev/null)
     \\    if test "$dirs" = "1"
-    \\        __fish_complete_path
+    \\        __fish_complete_directories
     \\        return
     \\    end
     \\    set -l nofile (math -s0 "floor($directive / 4) % 2" 2>/dev/null)
@@ -622,11 +622,17 @@ pub fn writeAccountCandidates(
 
 // One candidate per account: the user-chosen alias when it uniquely identifies
 // the account, else a unique email, else the always-unique account key. Shared
-// emails and aliases are ambiguous selectors, so they are never offered.
+// labels are ambiguous selectors, so they are never offered, and a label that
+// parses as a flag (for example `--all`) is never offered either — accepting
+// it would trigger a command action instead of selecting the account.
 fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecord) []const u8 {
-    if (rec.alias.len != 0 and labelMatchCount(reg, rec.alias) == 1) return rec.alias;
-    if (labelMatchCount(reg, rec.email) == 1) return rec.email;
+    if (usableHint(reg, rec.alias)) return rec.alias;
+    if (usableHint(reg, rec.email)) return rec.email;
     return rec.account_key;
+}
+
+fn usableHint(reg: *const registry.Registry, label: []const u8) bool {
+    return label.len != 0 and label[0] != '-' and labelMatchCount(reg, label) == 1;
 }
 
 fn labelMatchCount(reg: *const registry.Registry, label: []const u8) usize {

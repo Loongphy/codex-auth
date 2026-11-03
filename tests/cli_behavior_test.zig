@@ -821,6 +821,7 @@ test "Scenario: Given fish completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "set -a tokens \"$cur\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "$tokens[-1]\" != \"$cur") == null);
     try std.testing.expect(std.mem.find(u8, script, "__fish_complete_path") != null);
+    try std.testing.expect(std.mem.find(u8, script, "__fish_complete_directories") != null);
     try std.testing.expect(std.mem.find(u8, script, "complete -c codex-auth -f -a '(__fish_codex_auth_complete)'") != null);
 }
 
@@ -2016,6 +2017,35 @@ test "Scenario: Given a numbered-looking alias when completing an account select
     const out = aw.written();
     try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "01:alpha@example.com\t") != null);
+}
+
+test "Scenario: Given a flag-like alias when completing an account selector then the hint falls back to a safe label" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "--all", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "shared@example.com", "-n", .plus);
+    try appendAccount(gpa, &reg, "user-3KxBq7TzR5mNp9SfLpT8JdEe::a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "shared@example.com", "", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
+
+    const out = aw.written();
+    try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--all\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, "-n\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, "shared@example.com\t") == null);
 }
 
 test "Scenario: Given shared-email accounts with unique aliases when completing an account selector then the hints carry the aliases" {
