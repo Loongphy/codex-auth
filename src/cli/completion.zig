@@ -3,6 +3,7 @@ const io_util = @import("../core/io_util.zig");
 const types = @import("types.zig");
 const registry = @import("../registry/root.zig");
 const display_rows = @import("../tui/display.zig");
+const query = @import("../workflows/query.zig");
 
 pub fn printCompletion(shell: types.CompletionShell) !void {
     var stdout: io_util.Stdout = undefined;
@@ -63,7 +64,10 @@ const bash_script =
     \\    [[ "$COMP_WORDBREAKS" == *"="* ]] && tail="${tail##*=}"
     \\    before="${cur%"$tail"}"
     \\    if (( directive & 16 )); then
-    \\        COMPREPLY=( $(compgen -d -- "$tail") )
+    \\        while IFS= read -r cand; do
+    \\            COMPREPLY+=("$cand")
+    \\        done < <(compgen -d -- "$tail")
+    \\        compopt -o filenames 2>/dev/null
     \\    elif (( ${#cands[@]} )); then
     \\        for cand in "${cands[@]}"; do
     \\            [[ "$cand" == "$cur"* ]] && COMPREPLY+=("${cand#"$before"}")
@@ -171,19 +175,23 @@ const pwsh_script =
     \\        $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $parts[0]), $parts[0], 'ParameterValue', $desc))
     \\    }
     \\    if ($directive -eq 1) { return }
-    \\    $dirPart = [System.IO.Path]::GetDirectoryName($wordToComplete)
-    \\    $sep = if ($wordToComplete.Contains('/')) { '/' } else { [IO.Path]::DirectorySeparatorChar }
+    \\    $flagPrefix = ''
+    \\    $pathWord = $wordToComplete
+    \\    if ($pathWord -match '^(--[^=]+=)(.*)$') { $flagPrefix = $Matches[1]; $pathWord = $Matches[2] }
+    \\    $dirPart = [System.IO.Path]::GetDirectoryName($pathWord)
+    \\    $sep = if ($pathWord.Contains('/')) { '/' } else { [IO.Path]::DirectorySeparatorChar }
     \\    if ($directive -band 16) {
-    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*" -Directory -ErrorAction SilentlyContinue)) {
+    \\        foreach ($entry in (Get-ChildItem -Name "$pathWord*" -Directory -ErrorAction SilentlyContinue)) {
     \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
-    \\            $value = "$joined$sep"
+    \\            $value = "$flagPrefix$joined$sep"
     \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $value), $value, 'ProviderContainer', $entry))
     \\        }
     \\    } elseif (-not ($directive -band 4)) {
-    \\        foreach ($entry in (Get-ChildItem -Name "$wordToComplete*" -ErrorAction SilentlyContinue)) {
+    \\        foreach ($entry in (Get-ChildItem -Name "$pathWord*" -ErrorAction SilentlyContinue)) {
     \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
     \\            $type = if (Test-Path -LiteralPath $joined -PathType Container) { 'ProviderContainer' } else { 'ProviderItem' }
-    \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $joined), $joined, $type, $entry))
+    \\            $value = "$flagPrefix$joined"
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $value), $value, $type, $entry))
     \\        }
     \\    }
     \\    return $results
@@ -598,14 +606,36 @@ pub fn writeAccountCandidates(
         const rec = &reg.accounts.items[account_idx];
         const account_cell = display.rows[row_idx].account_cell;
 
-        const composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ displayed_idx + 1, selectorHint(&reg, rec) });
+        const composite = try numberedSelector(allocator, &reg, account_idx, rec, displayed_idx + 1);
+        defer allocator.free(composite);
         try writeUniqueCandidate(out, &seen, composite, account_cell, cur, allocator, descriptions);
-        allocator.free(composite);
         if (rec.alias.len != 0) {
             try writeUniqueCandidate(out, &seen, rec.alias, account_cell, cur, allocator, descriptions);
         }
         try writeUniqueCandidate(out, &seen, rec.email, account_cell, cur, allocator, descriptions);
     }
+}
+
+// The numbered composite is also parsed as a whole label before its hint is
+// read, so it must not spell another account's exact alias or email. Retarget
+// the hint to the always-unique account key, or emit the bare key when even
+// the numbered form collides.
+fn numberedSelector(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    account_idx: usize,
+    rec: *const registry.AccountRecord,
+    row_number: usize,
+) ![]u8 {
+    var composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ row_number, selectorHint(reg, rec) });
+    const owner = query.findAccountIndexByExactLabel(reg, composite);
+    if (owner == null or owner.? == account_idx) return composite;
+    allocator.free(composite);
+    composite = try std.fmt.allocPrint(allocator, "{d:0>2}:{s}", .{ row_number, rec.account_key });
+    const key_owner = query.findAccountIndexByExactLabel(reg, composite);
+    if (key_owner == null or key_owner.? == account_idx) return composite;
+    allocator.free(composite);
+    return try allocator.dupe(u8, rec.account_key);
 }
 
 // The numbered composite's label must resolve back to this one account: a

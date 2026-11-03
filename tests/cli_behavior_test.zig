@@ -783,6 +783,8 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "COMP_WORDS") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o default") != null);
     try std.testing.expect(std.mem.find(u8, script, "compgen -d") != null);
+    try std.testing.expect(std.mem.find(u8, script, "while IFS= read -r cand") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compopt -o filenames") != null);
     try std.testing.expect(std.mem.find(u8, script, "for cand in \"${cands[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "COMPREPLY+=(\"${cand#\"$before\"}\")") != null);
 }
@@ -835,7 +837,8 @@ test "Scenario: Given pwsh completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "Get-ChildItem") != null);
     try std.testing.expect(std.mem.find(u8, script, "Where-Object { $_.Extent.StartOffset -lt $cursorPosition }") != null);
     try std.testing.expect(std.mem.find(u8, script, "$text -replace \"'\", \"''\"") != null);
-    try std.testing.expect(std.mem.find(u8, script, "GetDirectoryName($wordToComplete)") != null);
+    try std.testing.expect(std.mem.find(u8, script, "GetDirectoryName($pathWord)") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$flagPrefix = $Matches[1]") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
@@ -1984,6 +1987,30 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
     try std.testing.expect(std.mem.find(u8, out, "02:user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "01:same@example.com") == null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\nsame@example.com\t"));
+}
+
+test "Scenario: Given an alias colliding with a numbered composite when completing an account selector then the numbered candidate carries the account key" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "", .business);
+    try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "beta@example.com", "01:alpha@example.com", .plus);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try cli.completion.writeAccountCandidates(&aw.writer, gpa, codex_home, "", true);
+
+    const out = aw.written();
+    try std.testing.expect(std.mem.find(u8, out, "01:user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf\t") != null);
 }
 
 test "Scenario: Given shared-email accounts with unique aliases when completing an account selector then numbered candidates carry the aliases" {
