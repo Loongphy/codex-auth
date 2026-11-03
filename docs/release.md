@@ -103,7 +103,7 @@ This document describes the repository's CI, preview package publishing, and tag
 - It then cross-builds release assets for the six supported targets on Ubuntu.
 - Release metadata is checked against `scripts/npm/metadata.mjs` before publishing GitHub release assets or npm packages.
 - For prerelease tags (tag names containing `-`), the workflow stamps the tag version into `src/version.zig` and `package.json` in the CI checkout via `scripts/npm/set-version.mjs`; stable tags must match the committed versions exactly.
-- Release notes are generated from git tags and commit history. If the pushed tag is annotated, its message is prepended to the generated `## Changelog` section (separated by `---`).
+- Release notes are produced by GitHub's generate-release-notes API: newest entries first, each linked to its pull request and author, with the Full Changelog compare link appended automatically. If the pushed tag is annotated, its message is prepended to the generated notes (separated by `---`).
 - The recommended way to supply hand-written release notes is a local Markdown file passed with `git tag -a v<version> -F <file>`; the gitignored `release-notes/` directory at the repo root is the conventional scratch location (for example `release-notes/v1.2.4.md`). A file keeps Markdown formatting intact and avoids shell quoting and clipboard issues that come with `-m` or pasting from note-taking apps.
 - Boilerplate messages matching `release v<version>` and lightweight tags produce only the generated changelog.
 - GitHub releases are published automatically from the tag pipeline.
