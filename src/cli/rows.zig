@@ -8,7 +8,6 @@ const timefmt = @import("../time/relative.zig");
 const timestamp_iso = @import("../time/timestamp.zig");
 const text_width = @import("../tui/text_width.zig");
 
-
 pub const SwitchWidths = struct {
     email: usize,
     plan: usize,
@@ -235,7 +234,6 @@ pub fn buildSwitchRowsFromIndicesWithUsageOverrides(
     };
 }
 
-
 pub fn indexWidth(count: usize) usize {
     var n = count;
     var width: usize = 1;
@@ -253,7 +251,7 @@ pub fn formatTimestampAlloc(allocator: std.mem.Allocator, timestamp: ?i64) ![]u8
     const day: u32 = @intCast(tm.tm_mday);
     const hour: u32 = @intCast(tm.tm_hour);
     const minute: u32 = @intCast(tm.tm_min);
-    return allocator.print( "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
+    return allocator.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
         year, month, day, hour, minute,
     });
 }
@@ -275,7 +273,7 @@ const available_status = "available";
 /// the available cards in local `MM-DD` form (omitted when unknown). The count
 /// falls back to the persisted card list so plain and live cells agree.
 pub fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.RateLimitSnapshot) ![]u8 {
-    const snapshot = usage orelse return allocator.print( "-", .{});
+    const snapshot = usage orelse return allocator.print("-", .{});
     var count: ?i64 = snapshot.reset_credits;
     if (count == null) {
         if (snapshot.reset_credit) |cards| {
@@ -286,8 +284,8 @@ pub fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.Rate
             count = derived;
         }
     }
-    const value = count orelse return allocator.print( "-", .{});
-    if (value == 0) return allocator.print( "0", .{});
+    const value = count orelse return allocator.print("-", .{});
+    if (value == 0) return allocator.print("0", .{});
     var earliest: ?i64 = null;
     if (snapshot.reset_credit) |cards| {
         for (cards) |card| {
@@ -300,9 +298,9 @@ pub fn resetCreditsCellAlloc(allocator: std.mem.Allocator, usage: ?registry.Rate
     if (earliest) |epoch| {
         const local = try formatTimestampAlloc(allocator, epoch);
         defer allocator.free(local);
-        if (local.len >= 10) return allocator.print( "{d} (exp {s})", .{ value, local[5..10] });
+        if (local.len >= 10) return allocator.print("{d} (exp {s})", .{ value, local[5..10] });
     }
-    return allocator.print( "{d}", .{value});
+    return allocator.print("{d}", .{value});
 }
 
 /// Formats a future timestamp as a local `YYYY-MM-DD` date. Missing, invalid,
@@ -316,5 +314,5 @@ pub fn formatFutureDateAlloc(allocator: std.mem.Allocator, timestamp: ?i64, now:
     const year: u32 = @intCast(tm.tm_year + 1900);
     const month: u32 = @intCast(tm.tm_mon + 1);
     const day: u32 = @intCast(tm.tm_mday);
-    return allocator.print( "{d:0>4}-{d:0>2}-{d:0>2}", .{ year, month, day });
+    return allocator.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ year, month, day });
 }

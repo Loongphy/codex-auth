@@ -137,4 +137,3 @@ pub fn write(
     try writer.reset();
     try writer.out.writeByte('\n');
 }
-

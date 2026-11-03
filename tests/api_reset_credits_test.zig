@@ -68,7 +68,7 @@ test "consume credit maps each documented backend code through the transport por
         .{ .code = "no_credit", .outcome = .no_credit },
     };
     for (cases) |case| {
-        const body = try gpa.print( "{{\"code\":\"{s}\"}}", .{case.code});
+        const body = try gpa.print("{{\"code\":\"{s}\"}}", .{case.code});
         defer gpa.free(body);
         try ctx.backend.queuePostJson(body, 200);
     }

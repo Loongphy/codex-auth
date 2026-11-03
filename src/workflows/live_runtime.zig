@@ -225,7 +225,7 @@ pub const SwitchLiveRuntime = struct {
         // prefix but keeps the mode, state, and error — the parts that change.
         if (max_cols != null and full.len > max_cols.?) {
             defer allocator.free(full);
-            return allocator.print( "{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
+            return allocator.print("{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
         }
         return full;
     }

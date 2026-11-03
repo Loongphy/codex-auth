@@ -311,4 +311,3 @@ fn terminalWidth() usize {
         return @as(usize, wsz.col);
     }
 }
-

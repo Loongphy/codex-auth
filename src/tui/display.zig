@@ -194,7 +194,7 @@ fn accountCellAlloc(
     defer label.deinit(allocator);
     if (label.alias) |alias| {
         if (label.fingerprint orelse label.account_name) |detail|
-            return allocator.print( "{s}({s})", .{ alias, detail });
+            return allocator.print("{s}({s})", .{ alias, detail });
         return allocator.dupe(u8, alias);
     }
     if (label.fingerprint) |fingerprint| return allocator.dupe(u8, fingerprint);
@@ -226,7 +226,7 @@ fn groupFallbackLabelAlloc(
         }
     }
     if (total_same <= 1) return allocator.dupe(u8, base);
-    return allocator.print( "{s} #{d}", .{ base, ordinal });
+    return allocator.print("{s} #{d}", .{ base, ordinal });
 }
 
 /// Singleton shape over the shared label resolution: the row must carry the
@@ -237,13 +237,13 @@ pub fn buildAccountIdentityLabelAlloc(
 ) ![]u8 {
     const label = try resolveAccountLabel(allocator, rec, false);
     if (label.alias != null and label.account_name != null) {
-        return allocator.print( "{s}({s}, {s})", .{ label.alias.?, label.account_name.?, rec.email });
+        return allocator.print("{s}({s}, {s})", .{ label.alias.?, label.account_name.?, rec.email });
     }
     if (label.alias) |alias| {
-        return allocator.print( "{s}({s})", .{ alias, rec.email });
+        return allocator.print("{s}({s})", .{ alias, rec.email });
     }
     if (label.account_name) |name| {
-        return allocator.print( "{s}({s})", .{ name, rec.email });
+        return allocator.print("{s}({s})", .{ name, rec.email });
     }
     return allocator.dupe(u8, rec.email);
 }
@@ -266,7 +266,7 @@ fn apiKeyFingerprintSlice(account_key: []const u8) ?[]const u8 {
 
 fn apiKeyLabelFromAccountKeyAlloc(allocator: std.mem.Allocator, account_key: []const u8) !?[]u8 {
     const fingerprint = apiKeyFingerprintSlice(account_key) orelse return null;
-    const label = try allocator.print( "sk-{s}***{s}", .{
+    const label = try allocator.print("sk-{s}***{s}", .{
         fingerprint[0..5],
         fingerprint[fingerprint.len - 4 ..],
     });

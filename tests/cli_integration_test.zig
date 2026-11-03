@@ -972,7 +972,7 @@ test "Scenario: Given a non-executable codex first in PATH then daemon restart u
     defer gpa.free(decoy);
     const fallback = try tmp.dir.realpathAlloc(gpa, "fallback");
     defer gpa.free(fallback);
-    const path = try gpa.print( "{s}:{s}", .{ decoy, fallback });
+    const path = try gpa.print("{s}:{s}", .{ decoy, fallback });
     defer gpa.free(path);
     const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, root, home, path, &.{ "switch", "beta", "--restart-daemon" });
     defer gpa.free(result.stdout);
@@ -5486,7 +5486,7 @@ fn writeMockFixtureNamed(
     args: anytype,
     data: []const u8,
 ) !void {
-    const sub_path = try gpa.print( "fixtures/" ++ name_fmt, args);
+    const sub_path = try gpa.print("fixtures/" ++ name_fmt, args);
     defer gpa.free(sub_path);
     try tmp_dir.makePath("fixtures");
     try tmp_dir.writeFile(.{ .sub_path = sub_path, .data = data });
@@ -5722,7 +5722,7 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     if (builtin.target.os.tag == .windows) {
         // `cmd /c` quote-parses its own argv badly, so put the redirections
         // in a batch file where the text is taken verbatim.
-        const script = try gpa.print( "@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
+        const script = try gpa.print("@\"{s}\" --version >> \"{s}\"\r\n@\"{s}\" --version >> \"{s}\"\r\n", .{ exe_path, output_path, exe_path, output_path });
         defer gpa.free(script);
         try tmp.dir.writeFile(.{ .sub_path = "append-run.cmd", .data = script });
         var child = try std.process.spawn(fs.io(), .{
@@ -5742,7 +5742,7 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
         }
     } else {
         for (0..2) |_| {
-            const command = try gpa.print( "\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
+            const command = try gpa.print("\"{s}\" --version >> \"{s}\"", .{ exe_path, output_path });
             defer gpa.free(command);
             var child = try std.process.spawn(fs.io(), .{
                 .argv = &[_][]const u8{ "sh", "-c", command },

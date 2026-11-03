@@ -158,7 +158,7 @@ fn serveConsume(init: std.process.Init, dir: std.Io.Dir, request: Request) !void
     // so one account in a session can fail while the others succeed. Files are
     // re-read on every request, which makes mid-session edits possible.
     if (request.account_id.len != 0) {
-        const per_account = try init.gpa.print( "consume-{s}.json", .{request.account_id});
+        const per_account = try init.gpa.print("consume-{s}.json", .{request.account_id});
         defer init.gpa.free(per_account);
         if (try readExitCode(init, dir, per_account)) |code| std.process.exit(code);
         if (try readFixture(init, dir, per_account)) |body| {
@@ -211,11 +211,11 @@ fn serveFixture(
     const marker = try consumedMarkerName(init.gpa, request.account_id);
     defer init.gpa.free(marker);
     if (try exists(init, dir, marker)) {
-        try names.append(init.gpa, try init.gpa.print( "after-consume-{s}-{s}.json", .{ name, request.account_id }));
-        try names.append(init.gpa, try init.gpa.print( "after-consume-{s}.json", .{name}));
+        try names.append(init.gpa, try init.gpa.print("after-consume-{s}-{s}.json", .{ name, request.account_id }));
+        try names.append(init.gpa, try init.gpa.print("after-consume-{s}.json", .{name}));
     }
-    try names.append(init.gpa, try init.gpa.print( "{s}-{s}.json", .{ name, request.account_id }));
-    try names.append(init.gpa, try init.gpa.print( "{s}.json", .{name}));
+    try names.append(init.gpa, try init.gpa.print("{s}-{s}.json", .{ name, request.account_id }));
+    try names.append(init.gpa, try init.gpa.print("{s}.json", .{name}));
 
     for (names.items) |candidate| {
         if (try readExitCode(init, dir, candidate)) |code| std.process.exit(code);
@@ -230,13 +230,13 @@ fn serveFixture(
 }
 
 fn consumedMarkerName(gpa: std.mem.Allocator, account_id: []const u8) ![]u8 {
-    return try gpa.print( "consumed-{s}", .{account_id});
+    return try gpa.print("consumed-{s}", .{account_id});
 }
 
 fn markConsumed(init: std.process.Init, dir: std.Io.Dir, account_id: []const u8) !void {
     const marker = try consumedMarkerName(init.gpa, account_id);
     defer init.gpa.free(marker);
-    const stamp = try init.gpa.print( "{d}\n", .{nowSeconds(init)});
+    const stamp = try init.gpa.print("{d}\n", .{nowSeconds(init)});
     defer init.gpa.free(stamp);
     try dir.writeFile(init.io, .{ .sub_path = marker, .data = stamp });
 }
@@ -274,9 +274,9 @@ fn recordConsume(
 
     // Current remaining state: a previous consume this session wins over the
     // pristine per-account fixture.
-    const after_name = try init.gpa.print( "after-consume-credits-{s}.json", .{request.account_id});
+    const after_name = try init.gpa.print("after-consume-credits-{s}.json", .{request.account_id});
     defer init.gpa.free(after_name);
-    const base_name = try init.gpa.print( "credits-{s}.json", .{request.account_id});
+    const base_name = try init.gpa.print("credits-{s}.json", .{request.account_id});
     defer init.gpa.free(base_name);
     const current = (try readFixture(init, dir, after_name)) orelse
         (try readFixture(init, dir, base_name)) orelse return;
@@ -312,7 +312,7 @@ fn patchAfterConsumeUsageCount(
     account_id: []const u8,
     count: usize,
 ) !void {
-    const name = try init.gpa.print( "after-consume-usage-{s}.json", .{account_id});
+    const name = try init.gpa.print("after-consume-usage-{s}.json", .{account_id});
     defer init.gpa.free(name);
     const text = (try readFixture(init, dir, name)) orelse return;
     defer init.gpa.free(text);
@@ -320,7 +320,7 @@ fn patchAfterConsumeUsageCount(
     const idx = std.mem.find(u8, text, needle) orelse return;
     var digits_end = idx + needle.len;
     while (digits_end < text.len and std.ascii.isDigit(text[digits_end])) digits_end += 1;
-    const patched = try init.gpa.print( "{s}{d}{s}", .{ text[0 .. idx + needle.len], count, text[digits_end..] });
+    const patched = try init.gpa.print("{s}{d}{s}", .{ text[0 .. idx + needle.len], count, text[digits_end..] });
     defer init.gpa.free(patched);
     try dir.writeFile(init.io, .{ .sub_path = name, .data = patched });
 }
@@ -357,7 +357,7 @@ fn readFixture(init: std.process.Init, dir: std.Io.Dir, name: []const u8) !?[]u8
 fn readStatus(init: std.process.Init, dir: std.Io.Dir, json_name: []const u8) !u16 {
     const suffix = ".json";
     if (!std.mem.endsWith(u8, json_name, suffix)) return 200;
-    const status_name = try init.gpa.print( "{s}.status", .{json_name[0 .. json_name.len - suffix.len]});
+    const status_name = try init.gpa.print("{s}.status", .{json_name[0 .. json_name.len - suffix.len]});
     defer init.gpa.free(status_name);
     const text = try readFixture(init, dir, status_name) orelse return 200;
     defer init.gpa.free(text);
@@ -369,7 +369,7 @@ fn readStatus(init: std.process.Init, dir: std.Io.Dir, json_name: []const u8) !u
 fn readExitCode(init: std.process.Init, dir: std.Io.Dir, json_name: []const u8) !?u8 {
     const suffix = ".json";
     if (!std.mem.endsWith(u8, json_name, suffix)) return null;
-    const exit_name = try init.gpa.print( "{s}.exit", .{json_name[0 .. json_name.len - suffix.len]});
+    const exit_name = try init.gpa.print("{s}.exit", .{json_name[0 .. json_name.len - suffix.len]});
     defer init.gpa.free(exit_name);
     const text = try readFixture(init, dir, exit_name) orelse return null;
     defer init.gpa.free(text);
@@ -377,7 +377,7 @@ fn readExitCode(init: std.process.Init, dir: std.Io.Dir, json_name: []const u8) 
 }
 
 fn appendLog(init: std.process.Init, dir: std.Io.Dir, request: Request) !void {
-    const line = try init.gpa.print( "{d} {s} {s} account={s} body={s}\n", .{
+    const line = try init.gpa.print("{d} {s} {s} account={s} body={s}\n", .{
         nowSeconds(init),
         request.method(),
         request.url,

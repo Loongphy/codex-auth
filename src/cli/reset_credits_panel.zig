@@ -332,7 +332,7 @@ pub const Selection = struct {
         comptime fmt: []const u8,
         args: anytype,
     ) !void {
-        const text = try allocator.print( fmt, args);
+        const text = try allocator.print(fmt, args);
         defer allocator.free(text);
         try self.setStatusFor(allocator, account_key, text, kind);
     }
@@ -538,7 +538,7 @@ pub fn render(
     if (opts.status) |message| {
         // The marker joins the message before bounding, so a narrow terminal
         // truncates the pair instead of overflowing by the marker's width.
-        const marked = try allocator.print( "{s}{s}", .{ statusMarker(g, opts.status_kind), message });
+        const marked = try allocator.print("{s}{s}", .{ statusMarker(g, opts.status_kind), message });
         defer allocator.free(marked);
         try writeRailLine(
             writer,
@@ -708,11 +708,11 @@ pub fn mergedCardLine(cards: []const AvailableCard, spent_cards: []const Selecti
 
 fn relativeIn(allocator: std.mem.Allocator, target: i64, now: i64) ![]u8 {
     const delta = target - now;
-    if (delta <= 0) return allocator.print( "expired", .{});
-    if (delta < 60) return allocator.print( "in {d}s", .{delta});
-    if (delta < 3600) return allocator.print( "in {d}m", .{@divTrunc(delta, 60)});
-    if (delta < 86400) return allocator.print( "in {d}h", .{@divTrunc(delta, 3600)});
-    return allocator.print( "in {d}d", .{@divTrunc(delta, 86400)});
+    if (delta <= 0) return allocator.print("expired", .{});
+    if (delta < 60) return allocator.print("in {d}s", .{delta});
+    if (delta < 3600) return allocator.print("in {d}m", .{@divTrunc(delta, 60)});
+    if (delta < 86400) return allocator.print("in {d}h", .{@divTrunc(delta, 3600)});
+    return allocator.print("in {d}d", .{@divTrunc(delta, 86400)});
 }
 
 fn writeBounded(writer: *std.Io.Writer, text: []const u8, max_cols: usize) !void {

@@ -157,7 +157,7 @@ const table_format = codex_auth.tui.table;
 
 fn appendListAccount(allocator: std.mem.Allocator, reg: *registry.Registry, email: []const u8) !void {
     const sep = std.mem.find(u8, email, "@").?;
-    const record_key = try allocator.print( "user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
+    const record_key = try allocator.print("user-{s}::{s}", .{ email[0..sep], email[sep + 1 ..] });
     defer allocator.free(record_key);
     try reg.accounts.append(allocator, .{
         .account_key = try allocator.dupe(u8, record_key),
