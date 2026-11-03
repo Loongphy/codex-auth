@@ -70,14 +70,18 @@ const bash_script =
     \\    [[ "$COMP_WORDBREAKS" == *"="* ]] && tail="${tail##*=}"
     \\    before="${cur%"$tail"}"
     \\    if (( directive & 16 )); then
-    \\        dsearch="$tail" dpre=""
-    \\        if [[ "$dsearch" == --*=* ]]; then
-    \\            dpre="${dsearch%%=*}="
-    \\            dsearch="${dsearch#*=}"
+    \\        dpath="$cur" dpre=""
+    \\        if [[ "$dpath" == --*=* ]]; then
+    \\            [[ "$COMP_WORDBREAKS" == *"="* ]] || dpre="${dpath%%=*}="
+    \\            dpath="${dpath#*=}"
     \\        fi
+    \\        btail="$dpath"
+    \\        [[ "$COMP_WORDBREAKS" == *":"* ]] && btail="${btail##*:}"
+    \\        [[ "$COMP_WORDBREAKS" == *"="* ]] && btail="${btail##*=}"
+    \\        dkeep="${dpath%"$btail"}"
     \\        while IFS= read -r cand; do
-    \\            COMPREPLY+=("${dpre}${cand}")
-    \\        done < <(compgen -d -- "$dsearch")
+    \\            COMPREPLY+=("${dpre}${cand#"$dkeep"}")
+    \\        done < <(compgen -d -- "$dpath")
     \\        compopt -o filenames 2>/dev/null
     \\    elif (( ${#cands[@]} )); then
     \\        for cand in "${cands[@]}"; do
