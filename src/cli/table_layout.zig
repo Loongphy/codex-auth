@@ -185,7 +185,7 @@ pub fn accountTableForSwitch(widths: SwitchWidths, prefix_width: usize, max_cols
     for (switch_columns, 0..) |id, index| {
         columns[index] = columnSpec(id, source_widths[index]);
     }
-    var bounded = [_]usize{0} ** live_column_count;
+    var bounded: [live_column_count]usize = @splat(0);
     allocateColumns(.{
         .columns = &columns,
         .first_order = &shared_first_order,
@@ -306,8 +306,8 @@ fn writeUsageCell(out: *std.Io.Writer, text: []const u8, width: usize) !usize {
         try out.writeAll(text);
         return measured;
     }
-    if (std.mem.indexOf(u8, text, " (")) |paren| {
-        if (std.mem.indexOf(u8, text[paren..], " on ")) |on| {
+    if (std.mem.find(u8, text, " (")) |paren| {
+        if (std.mem.find(u8, text[paren..], " on ")) |on| {
             // After " on " the date keeps the closing `)`, so
             // `N% (HH:MM on D Mon)` reassembles as `N% (` + `D Mon)`.
             const head = text[0..paren];
@@ -338,7 +338,7 @@ fn writeDateCell(out: *std.Io.Writer, text: []const u8, width: usize) !usize {
         try out.writeAll(text);
         return measured;
     }
-    if (std.mem.indexOfScalar(u8, text, ' ')) |space| {
+    if (std.mem.findScalar(u8, text, ' ')) |space| {
         const date = text[0..space];
         if (date.len == 10 and std.ascii.isDigit(date[0]) and width >= 10) {
             try out.writeAll(date);
@@ -383,7 +383,7 @@ fn writeResetCell(out: *std.Io.Writer, text: []const u8, width: usize) !usize {
         try out.writeAll(text);
         return measured;
     }
-    if (std.mem.indexOf(u8, text, " (")) |paren| {
+    if (std.mem.find(u8, text, " (")) |paren| {
         const head_w = text_width.displayWidth(text[0..paren]);
         if (head_w <= width) {
             try out.writeAll(text[0..paren]);

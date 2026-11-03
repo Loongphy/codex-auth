@@ -1,20 +1,18 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const c = @cImport({
-    @cInclude("time.h");
-});
+const c = @import("c_time");
 
-/// One `struct_tm` type for every caller: separate `@cImport` sites produce
-/// incompatible `cimport.struct_tm` types, so the conversion and its type
-/// live here exactly once.
+/// One `struct_tm` type for every caller: the translate-c `c_time` module is
+/// shared through this file so the conversion and its type live here exactly
+/// once.
 pub const struct_tm = c.struct_tm;
 
 /// Converts `ts` (Unix seconds) to local time. Returns false when the
 /// platform conversion fails or the value does not fit the platform `time_t`.
 /// On Windows this binds directly to the exported CRT symbol.
 pub fn compat(ts: i64, out_tm: *struct_tm) bool {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         if (comptime @hasDecl(c, "_localtime64_s") and @hasDecl(c, "__time64_t")) {
             var t64 = std.math.cast(c.__time64_t, ts) orelse return false;
             return c._localtime64_s(out_tm, &t64) == 0;

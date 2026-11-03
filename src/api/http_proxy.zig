@@ -32,7 +32,7 @@ const no_system_proxy = struct {
 
 /// Linux has no system-wide proxy setting that CLI tools read; the environment
 /// variables are the convention, so the `else` arm above stays empty there.
-const platform = switch (builtin.os.tag) {
+const platform = switch (builtin.target.os.tag) {
     .windows => @import("http_proxy_windows.zig"),
     .macos => @import("http_proxy_macos.zig"),
     else => no_system_proxy,
@@ -138,7 +138,7 @@ fn noproxyValue(
 pub fn pickProxyServer(scheme: Scheme, raw: []const u8) ?Picked {
     const trimmed = std.mem.trim(u8, raw, " \t");
     if (trimmed.len == 0) return null;
-    if (std.mem.indexOfScalar(u8, trimmed, '=') == null) return .{ .hostport = trimmed, .socks = false };
+    if (std.mem.findScalar(u8, trimmed, '=') == null) return .{ .hostport = trimmed, .socks = false };
 
     const wanted = switch (scheme) {
         .https => "https",
@@ -149,7 +149,7 @@ pub fn pickProxyServer(scheme: Scheme, raw: []const u8) ?Picked {
     var it = std.mem.splitScalar(u8, trimmed, ';');
     while (it.next()) |entry| {
         const item = std.mem.trim(u8, entry, " \t");
-        const eq = std.mem.indexOfScalar(u8, item, '=') orelse continue;
+        const eq = std.mem.findScalar(u8, item, '=') orelse continue;
         const key = std.mem.trim(u8, item[0..eq], " \t");
         const value = std.mem.trim(u8, item[eq + 1 ..], " \t");
         if (value.len == 0) continue;

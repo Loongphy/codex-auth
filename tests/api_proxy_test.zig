@@ -284,9 +284,9 @@ test "resolved proxy is written into the curl config document" {
 
     try curl.appendCurlConfig(allocator, &config, "https://chatgpt.com/backend-api/wham/usage", &.{"Authorization: Bearer token"}, resolved);
 
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "url = \"https://chatgpt.com/backend-api/wham/usage\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "proxy = \"127.0.0.1:7890\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "noproxy = \"localhost,*.internal\"") != null);
+    try std.testing.expect(std.mem.find(u8, config.items, "url = \"https://chatgpt.com/backend-api/wham/usage\"") != null);
+    try std.testing.expect(std.mem.find(u8, config.items, "proxy = \"127.0.0.1:7890\"") != null);
+    try std.testing.expect(std.mem.find(u8, config.items, "noproxy = \"localhost,*.internal\"") != null);
 }
 
 test "curl config document omits proxy options when none resolved" {
@@ -297,7 +297,7 @@ test "curl config document omits proxy options when none resolved" {
 
     try curl.appendCurlConfig(allocator, &config, "https://chatgpt.com/backend-api/accounts", &.{}, null);
 
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "proxy = ") == null);
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "noproxy = ") == null);
-    try std.testing.expect(std.mem.indexOf(u8, config.items, "url = \"https://chatgpt.com/backend-api/accounts\"") != null);
+    try std.testing.expect(std.mem.find(u8, config.items, "proxy = ") == null);
+    try std.testing.expect(std.mem.find(u8, config.items, "noproxy = ") == null);
+    try std.testing.expect(std.mem.find(u8, config.items, "url = \"https://chatgpt.com/backend-api/accounts\"") != null);
 }

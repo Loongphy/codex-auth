@@ -1,5 +1,5 @@
 const std = @import("std");
-const codex_auth = @import("root.zig");
+const codex_auth = @import("codex_auth");
 
 /// std.log goes through the style.md palette instead of Zig's default
 /// yellow-on-bold warning: warnings are cyan, errors red, info cyan,
@@ -32,6 +32,6 @@ fn appLogFn(
     stderr.writer.print(format ++ "\n", args) catch {};
 }
 
-pub fn main(init: std.process.Init.Minimal) !void {
+pub fn main(init: std.process.Init) !u8 {
     return codex_auth.workflows.main(init);
 }

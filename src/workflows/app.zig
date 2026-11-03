@@ -130,11 +130,11 @@ fn resolveCliPath(
 
 fn resolvePlatform(allocator: std.mem.Allocator, home: []const u8, explicit: ?types.AppPlatform) !ResolvedPlatform {
     if (explicit) |platform| return .{ .value = platform, .source = .explicit };
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         const use_wsl = try readWindowsWslBackendSetting(allocator, home);
         return .{ .value = if (use_wsl) .wsl else .win, .source = .detected };
     }
-    if (builtin.os.tag == .macos) return .{ .value = .mac, .source = .detected };
+    if (builtin.target.os.tag == .macos) return .{ .value = .mac, .source = .detected };
     return .{ .value = null, .source = .not_set };
 }
 
@@ -308,7 +308,7 @@ fn writePanelFieldStyled(
 
 fn panelDisplayValue(allocator: std.mem.Allocator, value: []const u8, source: ?[]const u8) ![]u8 {
     if (source) |source_label| {
-        if (source_label.len != 0) return try std.fmt.allocPrint(allocator, "{s} ({s})", .{ value, source_label });
+        if (source_label.len != 0) return try allocator.print("{s} ({s})", .{ value, source_label });
     }
     return try allocator.dupe(u8, value);
 }
@@ -332,7 +332,7 @@ fn writeWrappedPanelValue(out: *cli_style.StyledWriter, columns: usize, first_li
 fn terminalColumns() usize {
     const file = std.Io.File.stderr();
     if (!(file.isTty(app_runtime.io()) catch false)) return 80;
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
         switch (get_console_info.operate(app_runtime.io(), file) catch return 80) {
             .SUCCESS => {},
@@ -364,7 +364,7 @@ fn platformLabel(platform: types.AppPlatform) []const u8 {
 
 fn isCodexAppRunning(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: ResolvedValue) !bool {
     const value = app_id.value orelse return false;
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .windows => try isCodexAppRunningOnWindows(allocator, value),
         .macos => try isCodexAppRunningOnMac(allocator, value),
         else => switch (platform orelse return false) {
@@ -412,8 +412,7 @@ fn isCodexAppRunningOnMac(allocator: std.mem.Allocator, app_id: []const u8) !boo
 fn windowsAppIdRunningScriptAlloc(allocator: std.mem.Allocator, app_id: []const u8) ![]u8 {
     const app_quoted = try psSingleQuoteAlloc(allocator, app_id);
     defer allocator.free(app_quoted);
-    return try std.fmt.allocPrint(
-        allocator,
+    return try allocator.print(
         "$ErrorActionPreference='SilentlyContinue'; {s}; " ++
             "$target=Resolve-CodexAppExecutable {s}; " ++
             "$p=Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -ieq $target) }} | Select-Object -First 1; " ++
@@ -430,7 +429,7 @@ fn childExitedSuccessfully(term: std.process.Child.Term) bool {
 }
 
 fn nativeDefaultPlatform() types.AppPlatform {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .windows => .win,
         .macos => .mac,
         else => .wsl,
@@ -438,7 +437,7 @@ fn nativeDefaultPlatform() types.AppPlatform {
 }
 
 fn readWindowsWslBackendSetting(allocator: std.mem.Allocator, home: []const u8) !bool {
-    const config_path = try std.fs.path.join(allocator, &.{ home, codex_config_file_name });
+    const config_path = try std.Io.Dir.path.join(allocator, &.{ home, codex_config_file_name });
     defer allocator.free(config_path);
 
     var file = std.Io.Dir.cwd().openFile(app_runtime.io(), config_path, .{}) catch |err| switch (err) {
@@ -460,10 +459,10 @@ fn writeAppPlatformSetting(allocator: std.mem.Allocator, home: []const u8, value
         .mac => return,
     };
 
-    const config_path = try std.fs.path.join(allocator, &.{ home, codex_config_file_name });
+    const config_path = try std.Io.Dir.path.join(allocator, &.{ home, codex_config_file_name });
     defer allocator.free(config_path);
 
-    if (std.fs.path.dirname(config_path)) |dir| {
+    if (std.Io.Dir.path.dirname(config_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(app_runtime.io(), dir);
     }
 
@@ -547,7 +546,7 @@ fn findDesktopWslSettingLocation(data: []const u8) TomlLocation {
     var offset: usize = 0;
     while (offset < data.len) {
         const line_start = offset;
-        const newline = std.mem.indexOfScalarPos(u8, data, offset, '\n') orelse data.len;
+        const newline = std.mem.findScalarPos(u8, data, offset, '\n') orelse data.len;
         const line_end = if (newline < data.len) newline + 1 else newline;
         const line = std.mem.trim(u8, data[line_start..newline], " \t\r");
 
@@ -572,7 +571,7 @@ fn findDesktopWslSettingLocation(data: []const u8) TomlLocation {
 
 fn tomlSectionName(line: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, line, "[") or std.mem.startsWith(u8, line, "[[")) return null;
-    const close_offset = std.mem.indexOfScalar(u8, line[1..], ']') orelse return null;
+    const close_offset = std.mem.findScalar(u8, line[1..], ']') orelse return null;
     const close_index = close_offset + 1;
     const rest = std.mem.trim(u8, line[close_index + 1 ..], " \t\r");
     if (rest.len != 0 and rest[0] != '#') return null;
@@ -581,16 +580,16 @@ fn tomlSectionName(line: []const u8) ?[]const u8 {
 
 fn tomlSettingLineHasKey(line: []const u8, key: []const u8) bool {
     if (line.len == 0 or line[0] == '#') return false;
-    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse return false;
+    const eq_index = std.mem.findScalar(u8, line, '=') orelse return false;
     const setting_key = std.mem.trim(u8, line[0..eq_index], " \t\r");
     return std.mem.eql(u8, setting_key, key);
 }
 
 fn tomlBoolSettingValue(line: []const u8, key: []const u8) ?bool {
     if (!tomlSettingLineHasKey(line, key)) return null;
-    const eq_index = std.mem.indexOfScalar(u8, line, '=') orelse return null;
+    const eq_index = std.mem.findScalar(u8, line, '=') orelse return null;
     var raw_value = std.mem.trim(u8, line[eq_index + 1 ..], " \t\r");
-    if (std.mem.indexOfScalar(u8, raw_value, '#')) |comment_index| {
+    if (std.mem.findScalar(u8, raw_value, '#')) |comment_index| {
         raw_value = std.mem.trim(u8, raw_value[0..comment_index], " \t\r");
     }
     if (std.mem.eql(u8, raw_value, "true")) return true;
@@ -637,12 +636,12 @@ fn launchApp(
     try validateAppPlatform(platform.value);
     if (platform.source == .explicit) try writeAppPlatformSetting(allocator, home, platform.value);
 
-    if (builtin.os.tag == .windows) {
+    if (builtin.target.os.tag == .windows) {
         try writeAppLaunching();
         return launchWindowsViaPowerShell(allocator, target, cli_path.value, home, if (inherit_stdio) .stdio else .gui);
     }
 
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         if (inherit_stdio) {
             try writeAppLaunching();
             return launchMacExecutableWithStdio(allocator, target, cli_path.value, home);
@@ -656,11 +655,11 @@ fn launchApp(
 fn validateAppPlatform(value: ?types.AppPlatform) !void {
     const platform = value orelse return;
     switch (platform) {
-        .win, .wsl => if (builtin.os.tag != .windows) {
+        .win, .wsl => if (builtin.target.os.tag != .windows) {
             try writeAppError("app with `--platform win` or `--platform wsl` must run from the Windows codex-auth executable.\n");
             return error.WindowsAppPlatformRequiresWindows;
         },
-        .mac => if (builtin.os.tag != .macos) {
+        .mac => if (builtin.target.os.tag != .macos) {
             try writeAppError("app with `--platform mac` must run from the macOS codex-auth executable.\n");
             return error.MacAppPlatformRequiresMacOS;
         },
@@ -669,7 +668,7 @@ fn validateAppPlatform(value: ?types.AppPlatform) !void {
 
 fn validateNativeAppLaunchHost(platform: ?types.AppPlatform) !void {
     if (platform != null) return;
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows, .macos => return,
         else => {
             try writeAppError("app launch is supported only from the Windows or macOS codex-auth executable.\n");
@@ -712,9 +711,9 @@ fn launchMac(
 ) !void {
     try writeAppLaunching();
 
-    const home_env = try std.fmt.allocPrint(allocator, "{s}={s}", .{ codex_home_env, home });
+    const home_env = try allocator.print("{s}={s}", .{ codex_home_env, home });
     defer allocator.free(home_env);
-    const cli_env = if (cli_path) |path| try std.fmt.allocPrint(allocator, "{s}={s}", .{ codex_cli_path_env, path }) else null;
+    const cli_env = if (cli_path) |path| try allocator.print("{s}={s}", .{ codex_cli_path_env, path }) else null;
     defer if (cli_env) |value| allocator.free(value);
 
     var argv = std.ArrayList([]const u8).empty;
@@ -781,7 +780,7 @@ fn resolveMacBundleExecutablePath(allocator: std.mem.Allocator, bundle_path: []c
         "Contents/MacOS/codext",
     };
     for (candidates) |candidate| {
-        const joined = try std.fs.path.join(allocator, &.{ bundle_path, candidate });
+        const joined = try std.Io.Dir.path.join(allocator, &.{ bundle_path, candidate });
         if (fileExists(joined)) return joined;
         allocator.free(joined);
     }
@@ -791,8 +790,7 @@ fn resolveMacBundleExecutablePath(allocator: std.mem.Allocator, bundle_path: []c
 fn windowsCanResolveAppId(allocator: std.mem.Allocator, app_id: []const u8) !bool {
     const app_quoted = try psSingleQuoteAlloc(allocator, app_id);
     defer allocator.free(app_quoted);
-    const script = try std.fmt.allocPrint(
-        allocator,
+    const script = try allocator.print(
         "$ErrorActionPreference='Stop'; {s}; try {{ $null=Resolve-CodexAppAumid {s}; [Console]::Out.Write('ok') }} catch {{ }}",
         .{ windows_app_id_resolver_script, app_quoted },
     );
@@ -833,7 +831,7 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
     const release = try fetchLatestCodextRelease(allocator);
     defer release.deinit(allocator);
 
-    const cache_root = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
+    const cache_root = try std.Io.Dir.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
     defer allocator.free(cache_root);
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), cache_root);
 
@@ -852,7 +850,7 @@ fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, plat
 }
 
 fn managedCodextExecutablePath(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform) ![]u8 {
-    const cache_root = try std.fs.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
+    const cache_root = try std.Io.Dir.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
     defer allocator.free(cache_root);
     return try managedCodextExecutablePathInCache(allocator, cache_root, platform);
 }
@@ -860,9 +858,9 @@ fn managedCodextExecutablePath(allocator: std.mem.Allocator, home: []const u8, p
 fn managedCodextExecutablePathInCache(allocator: std.mem.Allocator, cache_root: []const u8, platform: types.AppPlatform) ![]u8 {
     const package_dir_name = try managedCodextPackageDirName(allocator, platform);
     defer allocator.free(package_dir_name);
-    const primary = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextReleaseExecutableName(platform) });
+    const primary = try std.Io.Dir.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextReleaseExecutableName(platform) });
     if (fileExists(primary)) return primary;
-    const alternate = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextExecutableName(platform) });
+    const alternate = try std.Io.Dir.path.join(allocator, &.{ cache_root, package_dir_name, "bin", codextExecutableName(platform) });
     if (fileExists(alternate)) {
         allocator.free(primary);
         return alternate;
@@ -872,7 +870,7 @@ fn managedCodextExecutablePathInCache(allocator: std.mem.Allocator, cache_root: 
 }
 
 fn managedCodextPackageDirName(allocator: std.mem.Allocator, platform: types.AppPlatform) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "codex-{s}-package", .{codextPlatformCacheName(platform)});
+    return try allocator.print("codex-{s}-package", .{codextPlatformCacheName(platform)});
 }
 
 fn ensureCodextAssetInstalled(
@@ -922,13 +920,13 @@ fn managedCodextAssetIsCurrent(
 fn managedCodextVersionPath(allocator: std.mem.Allocator, cache_root: []const u8, platform: types.AppPlatform) ![]u8 {
     const executable_name = try managedCodextExecutableName(allocator, platform);
     defer allocator.free(executable_name);
-    const version_name = try std.fmt.allocPrint(allocator, "{s}.version", .{executable_name});
+    const version_name = try allocator.print("{s}.version", .{executable_name});
     defer allocator.free(version_name);
-    return try std.fs.path.join(allocator, &.{ cache_root, version_name });
+    return try std.Io.Dir.path.join(allocator, &.{ cache_root, version_name });
 }
 
 fn managedCodextVersionText(allocator: std.mem.Allocator, tag: []const u8, asset: CodextAsset) ![]u8 {
-    return try std.fmt.allocPrint(allocator, "tag={s}\nasset={s}\n", .{ tag, asset.name });
+    return try allocator.print("tag={s}\nasset={s}\n", .{ tag, asset.name });
 }
 
 const CodextAsset = struct {
@@ -1001,11 +999,11 @@ fn fetchLatestCodextRelease(allocator: std.mem.Allocator) !CodextRelease {
             .string => |value| value,
             else => continue,
         };
-        if (std.mem.indexOf(u8, name, want_win) != null) {
+        if (std.mem.find(u8, name, want_win) != null) {
             if (release.win_asset == null) release.win_asset = try dupeCodextAsset(allocator, name, url);
-        } else if (std.mem.indexOf(u8, name, want_linux) != null) {
+        } else if (std.mem.find(u8, name, want_linux) != null) {
             if (release.linux_asset == null) release.linux_asset = try dupeCodextAsset(allocator, name, url);
-        } else if (std.mem.indexOf(u8, name, want_mac) != null) {
+        } else if (std.mem.find(u8, name, want_mac) != null) {
             if (release.mac_asset == null) release.mac_asset = try dupeCodextAsset(allocator, name, url);
         }
     }
@@ -1026,16 +1024,16 @@ fn downloadAndInstallCodextAsset(
     platform: types.AppPlatform,
     asset: CodextAsset,
 ) !void {
-    const extract_dir_name = try std.fmt.allocPrint(allocator, ".extract-{s}", .{codextPlatformCacheName(platform)});
+    const extract_dir_name = try allocator.print(".extract-{s}", .{codextPlatformCacheName(platform)});
     defer allocator.free(extract_dir_name);
-    const extract_dir = try std.fs.path.join(allocator, &.{ cache_root, extract_dir_name });
+    const extract_dir = try std.Io.Dir.path.join(allocator, &.{ cache_root, extract_dir_name });
     defer allocator.free(extract_dir);
     if (isDirectory(extract_dir)) try std.Io.Dir.cwd().deleteTree(app_runtime.io(), extract_dir);
     defer std.Io.Dir.cwd().deleteTree(app_runtime.io(), extract_dir) catch {};
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), extract_dir);
 
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
-    const archive_path = try std.fs.path.join(allocator, &.{ extract_dir, archive_name });
+    const archive_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, archive_name });
     defer allocator.free(archive_path);
     var download = try runCurlRequest(
         allocator,
@@ -1050,7 +1048,7 @@ fn downloadAndInstallCodextAsset(
         defer allocator.free(archive_quoted);
         const dest_quoted = try psSingleQuoteAlloc(allocator, extract_dir);
         defer allocator.free(dest_quoted);
-        const script = try std.fmt.allocPrint(allocator, "Expand-Archive -LiteralPath {s} -DestinationPath {s} -Force", .{ archive_quoted, dest_quoted });
+        const script = try allocator.print("Expand-Archive -LiteralPath {s} -DestinationPath {s} -Force", .{ archive_quoted, dest_quoted });
         defer allocator.free(script);
         try runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 120000);
     } else {
@@ -1117,9 +1115,9 @@ fn runCurlRequest(
 
 fn codextPlatformCacheName(platform: types.AppPlatform) []const u8 {
     return switch (platform) {
-        .win => if (builtin.cpu.arch == .aarch64) "win32-arm64" else "win32-x64",
-        .wsl => if (builtin.cpu.arch == .aarch64) "linux-arm64" else "linux-x64",
-        .mac => if (builtin.cpu.arch == .aarch64) "darwin-arm64" else "darwin-x64",
+        .win => if (builtin.target.cpu.arch == .aarch64) "win32-arm64" else "win32-x64",
+        .wsl => if (builtin.target.cpu.arch == .aarch64) "linux-arm64" else "linux-x64",
+        .mac => if (builtin.target.cpu.arch == .aarch64) "darwin-arm64" else "darwin-x64",
     };
 }
 
@@ -1128,11 +1126,11 @@ fn releaseAssetNeedle(platform: types.AppPlatform) []const u8 {
 }
 
 fn curlExecutable() []const u8 {
-    return if (builtin.os.tag == .windows) "C:\\Windows\\System32\\curl.exe" else "curl";
+    return if (builtin.target.os.tag == .windows) "C:\\Windows\\System32\\curl.exe" else "curl";
 }
 
 fn tarExecutable() []const u8 {
-    return if (builtin.os.tag == .windows) "C:\\Windows\\System32\\tar.exe" else "tar";
+    return if (builtin.target.os.tag == .windows) "C:\\Windows\\System32\\tar.exe" else "tar";
 }
 
 fn codextExecutableName(platform: types.AppPlatform) []const u8 {
@@ -1151,9 +1149,9 @@ fn codextReleaseExecutableName(platform: types.AppPlatform) []const u8 {
 
 fn managedCodextExecutableName(allocator: std.mem.Allocator, platform: types.AppPlatform) ![]u8 {
     return if (platform == .win)
-        try std.fmt.allocPrint(allocator, "codex-{s}.exe", .{codextPlatformCacheName(platform)})
+        try allocator.print("codex-{s}.exe", .{codextPlatformCacheName(platform)})
     else
-        try std.fmt.allocPrint(allocator, "codex-{s}", .{codextPlatformCacheName(platform)});
+        try allocator.print("codex-{s}", .{codextPlatformCacheName(platform)});
 }
 
 fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []const u8, extract_dir: []const u8, platform: types.AppPlatform) !void {
@@ -1161,18 +1159,18 @@ fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []co
     // codex-package.json. Keep the whole tree: the app-server daemon only
     // recognizes a CLI whose executable sits in a bin/ directory beside
     // codex-package.json.
-    const metadata_path = try std.fs.path.join(allocator, &.{ extract_dir, "codex-package.json" });
+    const metadata_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, "codex-package.json" });
     defer allocator.free(metadata_path);
     if (!fileExists(metadata_path)) return error.CodextReleaseInstallFailed;
 
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
-    const archive_path = try std.fs.path.join(allocator, &.{ extract_dir, archive_name });
+    const archive_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, archive_name });
     defer allocator.free(archive_path);
     if (fileExists(archive_path)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), archive_path);
 
     const package_dir_name = try managedCodextPackageDirName(allocator, platform);
     defer allocator.free(package_dir_name);
-    const package_dir = try std.fs.path.join(allocator, &.{ cache_root, package_dir_name });
+    const package_dir = try std.Io.Dir.path.join(allocator, &.{ cache_root, package_dir_name });
     defer allocator.free(package_dir);
     if (isDirectory(package_dir)) try std.Io.Dir.cwd().deleteTree(app_runtime.io(), package_dir);
     try std.Io.Dir.renameAbsolute(extract_dir, package_dir, app_runtime.io());
@@ -1181,7 +1179,7 @@ fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []co
     // now only uses the package tree.
     const legacy_name = try managedCodextExecutableName(allocator, platform);
     defer allocator.free(legacy_name);
-    const legacy_path = try std.fs.path.join(allocator, &.{ cache_root, legacy_name });
+    const legacy_path = try std.Io.Dir.path.join(allocator, &.{ cache_root, legacy_name });
     defer allocator.free(legacy_path);
     if (fileExists(legacy_path)) try std.Io.Dir.deleteFileAbsolute(app_runtime.io(), legacy_path);
 }
@@ -1307,7 +1305,7 @@ fn launchWindowsViaPowerShell(
     defer if (cli_quoted) |path| allocator.free(path);
 
     const cli_part = if (cli_quoted) |path|
-        try std.fmt.allocPrint(allocator, "; $env:CODEX_CLI_PATH={s}", .{path})
+        try allocator.print("; $env:CODEX_CLI_PATH={s}", .{path})
     else
         try allocator.dupe(u8, "");
     defer allocator.free(cli_part);
@@ -1342,8 +1340,7 @@ fn windowsLaunchScriptAlloc(
         .stdio => "$app=Resolve-CodexAppExecutable $id; $wd=Split-Path -Parent $app; Push-Location $wd; try { & $app; $code=$LASTEXITCODE } finally { Pop-Location }; if ($null -ne $code) { exit $code }",
     };
 
-    return try std.fmt.allocPrint(
-        allocator,
+    return try allocator.print(
         "$ErrorActionPreference='Stop'; {s}; $id={s}; $env:CODEX_HOME={s}{s}; {s}",
         .{ windows_app_id_resolver_script, app_quoted, home_quoted, cli_part, launch_part },
     );

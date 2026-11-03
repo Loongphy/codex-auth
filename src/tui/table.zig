@@ -89,7 +89,7 @@ fn resetCreditsCellAlloc(
 fn integerCreditBalanceAlloc(allocator: std.mem.Allocator, balance: []const u8) ![]u8 {
     // Do not round up the displayed balance (for example, 5.99 remains 5).
     const trimmed = std.mem.trim(u8, balance, " \t\r\n");
-    const dot = std.mem.indexOfScalar(u8, trimmed, '.') orelse return allocator.dupe(u8, trimmed);
+    const dot = std.mem.findScalar(u8, trimmed, '.') orelse return allocator.dupe(u8, trimmed);
     const integer_part = trimmed[0..dot];
     if (integer_part.len == 0 or
         (integer_part.len == 1 and (integer_part[0] == '+' or integer_part[0] == '-')))
@@ -123,8 +123,9 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     // per-cell page_allocator mmaps (~3700 syscalls on 200 accounts) into a
     // few buffer growths and a single release. The arena grows out of a
     // stack buffer first — typical registries render without touching mmap.
-    var sfba = std.heap.stackFallback(256 * 1024, std.heap.page_allocator);
-    var arena = std.heap.ArenaAllocator.init(sfba.get());
+    var stack_buffer: [256 * 1024]u8 = undefined;
+    var sfba = std.heap.BufferFirstAllocator.init(&stack_buffer, std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(sfba.allocator());
     defer arena.deinit();
     const cell_allocator = arena.allocator();
 
@@ -190,7 +191,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     for (table_layout.plain_columns, 0..) |id, index| {
         columns[index] = table_layout.columnSpec(id, content_widths[index]);
     }
-    var widths = [_]usize{0} ** table_layout.plain_columns.len;
+    var widths: [table_layout.plain_columns.len]usize = @splat(0);
     table_layout.allocateColumns(.{
         .columns = &columns,
         .first_order = &table_layout.shared_first_order,
@@ -289,7 +290,7 @@ fn terminalWidth() usize {
     const stdout_file = std.Io.File.stdout();
     if (!(stdout_file.isTty(app_runtime.io()) catch false)) return 0;
 
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
         switch (get_console_info.operate(app_runtime.io(), stdout_file) catch return 0) {
             .SUCCESS => {},

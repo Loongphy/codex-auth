@@ -156,7 +156,7 @@ fn resolveLegacySnapshotPathForEmail(
         if (!std.mem.endsWith(u8, entry.name, ".auth.json")) continue;
         if (std.mem.startsWith(u8, entry.name, "auth.json.bak.")) continue;
 
-        const path = try std.fs.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
+        const path = try std.Io.Dir.path.join(allocator, &[_][]const u8{ accounts_dir, entry.name });
         errdefer allocator.free(path);
         const info = auth.parseAuthInfo(allocator, path) catch {
             allocator.free(path);

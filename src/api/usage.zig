@@ -122,10 +122,30 @@ pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []
     return result;
 }
 
+/// Injectable form of the shared batch transport: the usage path shells out
+/// twice (usage, then reset credits), and tests substitute a scripted runner
+/// to cover failures the live subprocess rarely produces — including the
+/// cancellation path between the two calls.
+pub const GetJsonBatchFn = *const fn (
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const chatgpt_http.BatchRequest,
+    max_concurrency: usize,
+) anyerror!chatgpt_http.BatchHttpResult;
+
 pub fn fetchUsageForAuthPathsDetailedBatch(
     allocator: std.mem.Allocator,
     auth_paths: []const []const u8,
     max_concurrency: usize,
+) ![]BatchUsageFetchResult {
+    return fetchUsageForAuthPathsDetailedBatchWithRunner(allocator, auth_paths, max_concurrency, chatgpt_http.runGetJsonBatchCommand);
+}
+
+pub fn fetchUsageForAuthPathsDetailedBatchWithRunner(
+    allocator: std.mem.Allocator,
+    auth_paths: []const []const u8,
+    max_concurrency: usize,
+    get_json_batch: GetJsonBatchFn,
 ) ![]BatchUsageFetchResult {
     const results = try allocator.alloc(BatchUsageFetchResult, auth_paths.len);
     errdefer allocator.free(results);
@@ -145,6 +165,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     for (auth_paths, 0..) |auth_path, idx| {
         var info = auth.parseAuthInfo(arena, auth_path) catch |err| {
+            if (err == error.Canceled) return error.Canceled;
             results[idx].error_name = @errorName(err);
             continue;
         };
@@ -193,7 +214,7 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
 
     if (requests.items.len == 0) return results;
 
-    var http_results = try chatgpt_http.runGetJsonBatchCommand(
+    var http_results = try get_json_batch(
         allocator,
         default_usage_endpoint,
         requests.items,
@@ -228,12 +249,18 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
     }
     if (!has_snapshot) return results;
 
-    var reset_credit_http_results = chatgpt_http.runGetJsonBatchCommand(
+    var reset_credit_http_results = get_json_batch(
         allocator,
         default_reset_credits_endpoint,
         requests.items,
         max_concurrency,
-    ) catch return results;
+    ) catch |err| {
+        if (err == error.Canceled) {
+            for (results) |*result| result.deinit(allocator);
+            return error.Canceled;
+        }
+        return results;
+    };
     defer reset_credit_http_results.deinit(allocator);
 
     for (request_indexes, 0..) |request_idx, result_idx| {
@@ -277,7 +304,10 @@ pub fn fetchUsageForTokenDetailed(
     var snapshot = try parseUsageResponse(allocator, http_result.body);
     if (snapshot) |*value| {
         errdefer registry.freeRateLimitSnapshot(allocator, value);
-        if (fetchResetCreditDetailsForToken(allocator, access_token, account_id) catch null) |details| {
+        if (fetchResetCreditDetailsForToken(allocator, access_token, account_id) catch |err| blk: {
+            if (err == error.Canceled) return error.Canceled;
+            break :blk null;
+        }) |details| {
             value.reset_credit = details;
         }
     }
@@ -462,8 +492,8 @@ fn parseCredits(allocator: std.mem.Allocator, v: std.json.Value) !?registry.Cred
 fn parseBalance(allocator: std.mem.Allocator, value: std.json.Value) !?[]u8 {
     return switch (value) {
         .string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
-        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .float => |f| if (std.math.isFinite(f)) try std.fmt.allocPrint(allocator, "{d}", .{f}) else null,
+        .integer => |i| try allocator.print("{d}", .{i}),
+        .float => |f| if (std.math.isFinite(f)) try allocator.print("{d}", .{f}) else null,
         .number_string => |s| if (s.len == 0) null else try allocator.dupe(u8, s),
         else => null,
     };

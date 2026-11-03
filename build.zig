@@ -3,15 +3,27 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run tests matching these substrings") orelse &.{};
     // Stripped binaries start faster cold: non-loadable DWARF sections still
     // get pulled in by kernel readahead around demand-paged .text pages.
-    const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .Debug);
-    const package_module = b.createModule(.{
+    const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .debug);
+    const c_time_translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/c_time.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const c_time_module = c_time_translate.createModule();
+
+    const package_module = b.addModule("codex_auth", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .strip = strip,
+        .imports = &.{
+            .{ .name = "c_time", .module = c_time_module },
+        },
     });
 
     const main_module = b.createModule(.{
@@ -20,6 +32,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
         .strip = strip,
+        .imports = &.{
+            .{ .name = "codex_auth", .module = package_module },
+        },
     });
     const exe = b.addExecutable(.{
         .name = "codex-auth",
@@ -52,14 +67,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{
-            .{ .name = "app_runtime", .module = b.createModule(.{
-                .root_source_file = b.path("src/core/runtime.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-            }) },
-        },
     });
     const fake_codex_exe = b.addExecutable(.{
         .name = "fake-codex",
@@ -73,9 +80,7 @@ pub fn build(b: *std.Build) void {
     test_helpers_step.dependOn(&install_fake_codex.step);
 
     const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run codex-auth");
     run_step.dependOn(&run_cmd.step);
 
@@ -106,6 +111,10 @@ pub fn build(b: *std.Build) void {
         "tests/workflows_live_test.zig",
     };
 
+    const test_options = b.addOptions();
+    test_options.addOptionPathUntracked("zig_exe", .zig_exe);
+    test_options.addOptionPathUntracked("project_root", b.path("."));
+
     const test_step = b.step("test", "Run tests");
     for (test_files) |test_file| {
         const test_module = b.createModule(.{
@@ -117,15 +126,28 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "codex_auth", .module = package_module },
             },
         });
+        test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
             .root_module = test_module,
+            .filters = test_filters,
         });
         // Plain Run step instead of addRunArtifact: the default server-mode
         // test runner (--listen=-) can deadlock the build runner on Windows
-        // (upstream Zig 0.16 std.zig.Server race). Exit code decides pass/fail.
+        // (upstream Zig std.zig.Server race). Exit code decides pass/fail.
         const run_test = std.Build.Step.Run.create(b, b.fmt("run test {s}", .{test_file}));
         run_test.addArtifactArg(test_artifact);
-        run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT", b.pathFromRoot("."));
+        run_test.setEnvironmentVariable(
+            "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT",
+            b.root.joinString(b.allocator, &.{}) catch @panic("OOM"),
+        );
+        if (std.mem.eql(u8, test_file, "tests/cli_integration_test.zig")) {
+            run_test.addFileInput(exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_exe.getEmittedBin());
+            run_test.addFileInput(fake_curl_fail_exe.getEmittedBin());
+            run_test.addFileInput(fake_codex_exe.getEmittedBin());
+            run_test.addFileInput(b.path("build.zig"));
+            run_test.addFileInput(b.path("build.zig.zon"));
+        }
         test_step.dependOn(&run_test.step);
     }
 }

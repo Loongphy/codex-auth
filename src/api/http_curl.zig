@@ -117,7 +117,7 @@ fn runCurlBearerGetJsonCommand(
     endpoint: []const u8,
     access_token: []const u8,
 ) !HttpResult {
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print("Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
 
     return try runCurlJsonCommand(allocator, endpoint, &[_][]const u8{authorization});
@@ -133,9 +133,9 @@ pub fn runCurlPostJsonCommand(
     const curl_executable = try resolveCurlExecutableForLaunchAlloc(allocator);
     defer allocator.free(curl_executable);
 
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print("Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
-    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    const account_header = try allocator.print("ChatGPT-Account-Id: {s}", .{account_id});
     defer allocator.free(account_header);
 
     var argv = std.ArrayList([]const u8).empty;
@@ -199,9 +199,9 @@ fn runCurlGetJsonCommandWithExecutable(
     access_token: []const u8,
     account_id: []const u8,
 ) !HttpResult {
-    const authorization = try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{access_token});
+    const authorization = try allocator.print("Authorization: Bearer {s}", .{access_token});
     defer allocator.free(authorization);
-    const account_header = try std.fmt.allocPrint(allocator, "ChatGPT-Account-Id: {s}", .{account_id});
+    const account_header = try allocator.print("ChatGPT-Account-Id: {s}", .{account_id});
     defer allocator.free(account_header);
 
     return try runCurlJsonCommandWithExecutable(allocator, curl_executable, endpoint, &[_][]const u8{ authorization, account_header });
@@ -286,6 +286,7 @@ fn runCurlGetJsonBatchCommand(
     if (requests.len == 0) return .{ .items = items };
 
     const curl_executable = resolveCurlExecutableForLaunchAlloc(allocator) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         switch (err) {
             error.OutOfMemory => return err,
             else => {
@@ -298,7 +299,7 @@ fn runCurlGetJsonBatchCommand(
 
     const worker_count = @min(requests.len, @max(@as(usize, 1), max_concurrency));
     if (worker_count <= 1) {
-        runCurlGetJsonBatchSerially(allocator, curl_executable, endpoint, requests, items);
+        try runCurlGetJsonBatchSerially(allocator, curl_executable, endpoint, requests, items);
         return .{ .items = items };
     }
 
@@ -329,6 +330,9 @@ fn runCurlGetJsonBatchCommand(
     }
 
     queue.run();
+    for (threads[0..spawned_count]) |thread| thread.join();
+    spawned_count = 0;
+    if (queue.canceled.load(.monotonic)) return error.Canceled;
     return .{ .items = items };
 }
 
@@ -339,12 +343,18 @@ const CurlBatchWorkerQueue = struct {
     requests: []const BatchRequest,
     items: []BatchItemResult,
     next_index: std.atomic.Value(usize) = .init(0),
+    canceled: std.atomic.Value(bool) = .init(false),
 
     fn run(self: *CurlBatchWorkerQueue) void {
-        while (true) {
+        while (!self.canceled.load(.monotonic)) {
             const idx = self.next_index.fetchAdd(1, .monotonic);
             if (idx >= self.requests.len) return;
-            runCurlBatchItem(self.allocator, self.curl_executable, self.endpoint, self.requests[idx], &self.items[idx]);
+            runCurlBatchItem(self.allocator, self.curl_executable, self.endpoint, self.requests[idx], &self.items[idx]) catch |err| switch (err) {
+                error.Canceled => {
+                    self.canceled.store(true, .monotonic);
+                    return;
+                },
+            };
         }
     }
 };
@@ -355,9 +365,9 @@ fn runCurlGetJsonBatchSerially(
     endpoint: []const u8,
     requests: []const BatchRequest,
     items: []BatchItemResult,
-) void {
+) error{Canceled}!void {
     for (requests, 0..) |request, idx| {
-        runCurlBatchItem(allocator, curl_executable, endpoint, request, &items[idx]);
+        try runCurlBatchItem(allocator, curl_executable, endpoint, request, &items[idx]);
     }
 }
 
@@ -367,7 +377,7 @@ fn runCurlBatchItem(
     endpoint: []const u8,
     request: BatchRequest,
     item: *BatchItemResult,
-) void {
+) error{Canceled}!void {
     const result = runCurlGetJsonCommandWithExecutable(
         allocator,
         curl_executable,
@@ -375,6 +385,7 @@ fn runCurlBatchItem(
         request.access_token,
         request.account_id,
     ) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
         item.* = curlBatchErrorItem(allocator, err);
         return;
     };
@@ -485,7 +496,7 @@ fn appendCurlConfigQuotedValue(
 
 fn parseCurlHttpOutput(allocator: std.mem.Allocator, output: []const u8) !CurlHttpOutput {
     const trimmed = std.mem.trimEnd(u8, output, "\r\n");
-    const status_idx = std.mem.lastIndexOfScalar(u8, trimmed, '\n') orelse return error.CommandFailed;
+    const status_idx = std.mem.findScalarLast(u8, trimmed, '\n') orelse return error.CommandFailed;
     const status_slice = std.mem.trim(u8, trimmed[status_idx + 1 ..], " \r\t");
     const status = std.fmt.parseInt(u16, status_slice, 10) catch return error.CommandFailed;
     const body = try allocator.dupe(u8, trimmed[0..status_idx]);

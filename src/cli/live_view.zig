@@ -16,7 +16,7 @@ const registry = @import("../registry/root.zig");
 const api_usage = @import("../api/usage.zig");
 const timestamp = @import("../time/timestamp.zig");
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 /// Refreshes one account's usage snapshot after a successful consume so the
 /// 5H/WEEKLY cells and the remaining card list reflect the reset immediately.
@@ -109,7 +109,7 @@ pub fn selectAccountWithLiveUpdates(
     if (current_display.reg.accounts.items.len == 0) return null;
 
     if (shouldUseNumberedSwitchSelector(
-        comptime builtin.os.tag == .windows,
+        comptime builtin.target.os.tag == .windows,
         std.Io.File.stdin().isTty(app_runtime.io()) catch false,
         std.Io.File.stdout().isTty(app_runtime.io()) catch false,
     )) {

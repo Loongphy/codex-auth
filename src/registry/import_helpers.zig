@@ -9,7 +9,7 @@ pub fn importDisplayLabelFromName(allocator: std.mem.Allocator, name: []const u8
 }
 
 pub fn importDisplayLabel(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return importDisplayLabelFromName(allocator, std.fs.path.basename(path));
+    return importDisplayLabelFromName(allocator, std.Io.Dir.path.basename(path));
 }
 
 pub fn importReasonLabel(err: anyerror) []const u8 {

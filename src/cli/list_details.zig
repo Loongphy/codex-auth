@@ -34,7 +34,7 @@ pub fn computeWidths(
         table_layout.columnSpec(.auth_expire, "2000-01-01 00:00".len),
         table_layout.columnSpec(.last, @max(widths.last, "LAST".len)),
     };
-    var bounded = [_]usize{0} ** column_count;
+    var bounded: [column_count]usize = @splat(0);
     table_layout.allocateColumns(.{
         .columns = &columns,
         .first_order = &table_layout.shared_first_order,
@@ -137,4 +137,3 @@ pub fn write(
     try writer.reset();
     try writer.out.writeByte('\n');
 }
-

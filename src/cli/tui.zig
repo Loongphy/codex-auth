@@ -97,8 +97,8 @@ const win = struct {
 
 pub const win32 = win;
 
-pub const tui_poll_input_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.IN;
-pub const tui_poll_error_mask: i16 = if (builtin.os.tag == .windows) 0 else std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
+pub const tui_poll_input_mask: i16 = if (builtin.target.os.tag == .windows) 0 else std.posix.POLL.IN;
+pub const tui_poll_error_mask: i16 = if (builtin.target.os.tag == .windows) 0 else std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
 pub const tui_escape_sequence_timeout_ms: i32 = 100;
 pub const live_ui_tick_ms: i32 = 100;
 
@@ -208,7 +208,7 @@ pub fn windowsTuiOutputMode(saved_output_mode: win.DWORD) win.DWORD {
         win.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 }
 
-pub const pollTuiInput = if (builtin.os.tag == .windows)
+pub const pollTuiInput = if (builtin.target.os.tag == .windows)
     struct {
         fn call(file: std.Io.File, timeout_ms: i32, _: i16) !TuiPollResult {
             const wait_ms: win.DWORD = if (timeout_ms < 0) win.INFINITE else @intCast(timeout_ms);
@@ -255,7 +255,7 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
     var start: usize = 0;
     var first = true;
     while (start < frame.len) {
-        const newline = std.mem.indexOfScalarPos(u8, frame, start, '\n') orelse frame.len;
+        const newline = std.mem.findScalarPos(u8, frame, start, '\n') orelse frame.len;
         const line = frame[start..newline];
         if (!first) try out.writeAll("\r\n");
         first = false;
@@ -318,7 +318,7 @@ pub fn switchTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
 }
 
 pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterTextFor(builtin.target.os.tag == .windows, max_cols), max_cols);
 }
 
 fn removeFooterLadder(is_windows: bool) FooterLadder {
@@ -342,7 +342,7 @@ pub fn removeTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
 }
 
 pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterTextFor(builtin.target.os.tag == .windows, max_cols), max_cols);
 }
 
 fn listFooterLadder(is_windows: bool) FooterLadder {
@@ -389,7 +389,7 @@ pub fn listCreditsTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u
 }
 
 pub fn writeListTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterTextFor(builtin.target.os.tag == .windows, max_cols), max_cols);
 }
 
 pub fn writeStyledTuiLineBounded(out: *std.Io.Writer, ansi_style: []const u8, text: []const u8, max_cols: ?usize) !void {
@@ -453,8 +453,8 @@ pub fn writeTuiPromptLineBounded(out: *std.Io.Writer, prompt: []const u8, digits
     try out.writeAll("\n");
 }
 
-const TuiSavedInputState = if (builtin.os.tag == .windows) win.DWORD else std.posix.termios;
-const TuiSavedOutputState = if (builtin.os.tag == .windows) win.DWORD else void;
+const TuiSavedInputState = if (builtin.target.os.tag == .windows) win.DWORD else std.posix.termios;
+const TuiSavedOutputState = if (builtin.target.os.tag == .windows) win.DWORD else void;
 
 pub fn mapTuiOutputError(err: anyerror) anyerror {
     return switch (err) {
@@ -466,8 +466,8 @@ pub fn mapTuiOutputError(err: anyerror) anyerror {
 pub const TuiSession = struct {
     input: std.Io.File,
     output: std.Io.File,
-    saved_input_state: TuiSavedInputState = if (builtin.os.tag == .windows) 0 else undefined,
-    saved_output_state: TuiSavedOutputState = if (builtin.os.tag == .windows) 0 else {},
+    saved_input_state: TuiSavedInputState = if (builtin.target.os.tag == .windows) 0 else undefined,
+    saved_output_state: TuiSavedOutputState = if (builtin.target.os.tag == .windows) 0 else {},
     pending_windows_key: ?TuiInputKey = null,
     pending_windows_repeat_count: u16 = 0,
     keyboard_enhancement_supported: bool = false,
@@ -484,7 +484,7 @@ pub const TuiSession = struct {
             return error.TuiRequiresTty;
         }
 
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             var saved_input_mode: win.DWORD = 0;
             var saved_output_mode: win.DWORD = 0;
             if (win.GetConsoleMode(input.handle, &saved_input_mode) == .FALSE) {
@@ -523,8 +523,8 @@ pub const TuiSession = struct {
             // terminal; with ISIG off, Ctrl-C arrives as a byte the input loop
             // maps to `.quit`, so quitting always runs the restore path.
             raw.lflag.ISIG = false;
-            raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
-            raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
+            raw.cc[@backingInt(std.c.V.MIN)] = 1;
+            raw.cc[@backingInt(std.c.V.TIME)] = 0;
             try std.posix.tcsetattr(input.handle, .FLUSH, raw);
             errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
 
@@ -542,7 +542,7 @@ pub const TuiSession = struct {
         const writer = self.out();
         writeTuiExitTo(writer) catch {};
         writer.flush() catch {};
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             _ = win.SetConsoleMode(self.output.handle, self.saved_output_state);
             _ = win.SetConsoleMode(self.input.handle, self.saved_input_state);
         } else {
@@ -568,7 +568,7 @@ pub const TuiSession = struct {
             .ready => {},
         }
 
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             keys[0] = try self.readWindowsKey();
             return .{ .ready = 1 };
         }
@@ -610,7 +610,7 @@ pub const TuiSession = struct {
     }
 
     pub fn readWindowsKey(self: *@This()) !TuiInputKey {
-        if (comptime builtin.os.tag != .windows) unreachable;
+        if (comptime builtin.target.os.tag != .windows) unreachable;
 
         if (self.pending_windows_key) |pending| {
             if (self.pending_windows_repeat_count > 1) {
@@ -766,7 +766,7 @@ pub fn appendTuiInputKeysFromEscape(
 pub fn terminalSize(file: std.Io.File) ?TuiSize {
     if (!(file.isTty(app_runtime.io()) catch false)) return null;
 
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         var get_console_info = std.os.windows.CONSOLE.USER_IO.GET_SCREEN_BUFFER_INFO;
         switch (get_console_info.operate(app_runtime.io(), file) catch return null) {
             .SUCCESS => {},
@@ -825,11 +825,11 @@ fn isEnhancedArrowSuffix(seq: []const u8) bool {
 /// 2 repeat, 3 release. Legacy sequences carry none and count as a press.
 /// The same check the CSI-u decoder applies, for the CSI-letter forms.
 fn csiKeyEventType(params: []const u8) usize {
-    const last_field = if (std.mem.lastIndexOfScalar(u8, params, ';')) |semi|
+    const last_field = if (std.mem.findScalarLast(u8, params, ';')) |semi|
         params[semi + 1 ..]
     else
         params;
-    const colon = std.mem.indexOfScalar(u8, last_field, ':') orelse return 1;
+    const colon = std.mem.findScalar(u8, last_field, ':') orelse return 1;
     return std.fmt.parseInt(usize, last_field[colon + 1 ..], 10) catch 1;
 }
 
@@ -848,13 +848,13 @@ fn csiUKey(seq: []const u8) ?TuiInputKey {
     // (text codepoints) are irrelevant to the keys this TUI binds.
     var fields = std.mem.splitScalar(u8, params, ';');
     const key_field = fields.first();
-    const code_end = std.mem.indexOfScalar(u8, key_field, ':') orelse key_field.len;
+    const code_end = std.mem.findScalar(u8, key_field, ':') orelse key_field.len;
     const code = std.fmt.parseInt(usize, key_field[0..code_end], 10) catch return null;
 
     var modifiers: usize = 1;
     var event_type: usize = 1;
     if (fields.next()) |mod_field| {
-        if (std.mem.indexOfScalar(u8, mod_field, ':')) |colon| {
+        if (std.mem.findScalar(u8, mod_field, ':')) |colon| {
             modifiers = std.fmt.parseInt(usize, mod_field[0..colon], 10) catch 1;
             event_type = std.fmt.parseInt(usize, mod_field[colon + 1 ..], 10) catch 1;
         } else if (mod_field.len != 0) {
@@ -888,7 +888,7 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                     if (final >= '@' and final <= '~') break :blk .ignore;
                     break :blk .incomplete;
                 }
-                const first_semicolon = std.mem.indexOfScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
+                const first_semicolon = std.mem.findScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
                 const button_code = std.fmt.parseInt(usize, seq[2 .. 2 + first_semicolon], 10) catch break :blk .ignore;
                 break :blk switch (button_code) {
                     64 => .{ .navigation = .scroll_up },
@@ -925,7 +925,7 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                 if (csiKeyEventType(params) == 3) break :blk .ignore;
                 // The key number is the first field; modifiers and the event
                 // type live in later fields the TUI does not bind.
-                const key_end = std.mem.indexOfScalar(u8, params, ';') orelse params.len;
+                const key_end = std.mem.findScalar(u8, params, ';') orelse params.len;
                 const code = std.fmt.parseInt(usize, params[0..key_end], 10) catch break :blk .ignore;
                 break :blk switch (code) {
                     1, 7 => .{ .navigation = .home },

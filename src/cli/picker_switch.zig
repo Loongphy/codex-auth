@@ -49,7 +49,7 @@ pub fn selectAccountWithUsageOverrides(
     usage_overrides: ?[]const ?[]const u8,
 ) !?[]const u8 {
     if (shouldUseNumberedSwitchSelector(
-        comptime builtin.os.tag == .windows,
+        comptime builtin.target.os.tag == .windows,
         std.Io.File.stdin().isTty(app_runtime.io()) catch false,
         std.Io.File.stdout().isTty(app_runtime.io()) catch false,
     )) {
@@ -74,7 +74,7 @@ pub fn selectAccountFromIndicesWithUsageOverrides(
     if (indices.len == 0) return null;
     if (indices.len == 1) return reg.accounts.items[indices[0]].account_key;
     if (shouldUseNumberedSwitchSelector(
-        comptime builtin.os.tag == .windows,
+        comptime builtin.target.os.tag == .windows,
         std.Io.File.stdin().isTty(app_runtime.io()) catch false,
         std.Io.File.stdout().isTty(app_runtime.io()) catch false,
     )) {
@@ -226,7 +226,7 @@ fn selectInteractiveFromIndices(
         ) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
 
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
                 .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (rows.selectable_row_indices.len != 0 and idx > 0) {
@@ -458,7 +458,7 @@ fn selectInteractive(
         ) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
 
-        if (comptime builtin.os.tag == .windows) {
+        if (comptime builtin.target.os.tag == .windows) {
             switch (try tui.readWindowsKey()) {
                 .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (rows.selectable_row_indices.len != 0 and idx > 0) {

@@ -20,7 +20,7 @@ fn appendAccount(
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, record_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{

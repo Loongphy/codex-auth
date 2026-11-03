@@ -174,7 +174,7 @@ fn appendTestAccount(
     alias: []const u8,
     plan: registry.PlanType,
 ) !void {
-    const sep = std.mem.lastIndexOf(u8, record_key, "::") orelse return error.InvalidRecordKey;
+    const sep = std.mem.findLast(u8, record_key, "::") orelse return error.InvalidRecordKey;
     const chatgpt_user_id = record_key[0..sep];
     const chatgpt_account_id = record_key[sep + 2 ..];
     try reg.accounts.append(allocator, .{
@@ -199,9 +199,9 @@ fn appendNumberedTestAccount(
     reg: *registry.Registry,
     idx: usize,
 ) !void {
-    const record_key = try std.fmt.allocPrint(allocator, "user-{d:0>3}::acc-{d:0>3}", .{ idx, idx });
+    const record_key = try allocator.print("user-{d:0>3}::acc-{d:0>3}", .{ idx, idx });
     defer allocator.free(record_key);
-    const email = try std.fmt.allocPrint(allocator, "account-{d:0>3}@example.com", .{idx});
+    const email = try allocator.print("account-{d:0>3}@example.com", .{idx});
     defer allocator.free(email);
     try appendTestAccount(allocator, reg, record_key, email, "", .business);
 }
@@ -392,10 +392,10 @@ test "Scenario: Given a live switch viewport when rendering then long lists keep
     }, 1, false, .{ .start_row = 2, .max_rows = 1 });
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ">  2 second") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "01 first") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "03 third") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "group") == null);
+    try std.testing.expect(std.mem.find(u8, output, ">  2 second") != null);
+    try std.testing.expect(std.mem.find(u8, output, "01 first") == null);
+    try std.testing.expect(std.mem.find(u8, output, "03 third") == null);
+    try std.testing.expect(std.mem.find(u8, output, "group") == null);
 }
 
 test "Scenario: Given long account labels when rendering live rows then account cells are truncated within the account column" {
@@ -428,10 +428,10 @@ test "Scenario: Given long account labels when rendering live rows then account 
     }, null, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "     group-name-too-long\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "   1     chi.  Team") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "group-name-too-long") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "child-name-too-long") == null);
+    try std.testing.expect(std.mem.find(u8, output, "     group-name-too-long\n") != null);
+    try std.testing.expect(std.mem.find(u8, output, "   1     chi.  Team") != null);
+    try std.testing.expect(std.mem.find(u8, output, "group-name-too-long") != null);
+    try std.testing.expect(std.mem.find(u8, output, "child-name-too-long") == null);
 }
 
 test "Scenario: Given a Cyrillic account label when rendering live rows then truncation preserves UTF-8" {
@@ -465,7 +465,7 @@ test "Scenario: Given a Cyrillic account label when rendering live rows then tru
 
     const output = writer.buffered();
     try std.testing.expect(std.unicode.utf8ValidateSlice(output));
-    try std.testing.expect(std.mem.indexOf(u8, output, "Раб.") != null);
+    try std.testing.expect(std.mem.find(u8, output, "Раб.") != null);
 }
 
 test "Scenario: Given a narrow live viewport when rendering then the account column truncates instead of wrapping" {
@@ -508,7 +508,7 @@ test "Scenario: Given a narrow live viewport when rendering then the account col
         if (line.len == 0) continue;
         try std.testing.expect(line.len <= 40);
     }
-    try std.testing.expect(std.mem.indexOf(u8, output, "very-long-account-name-that-should-not-wrap") == null);
+    try std.testing.expect(std.mem.find(u8, output, "very-long-account-name-that-should-not-wrap") == null);
 }
 
 test "Scenario: Given live screens when rendering then vertical spacing stays compact" {
@@ -530,15 +530,15 @@ test "Scenario: Given live screens when rendering then vertical spacing stays co
     try renderSwitchScreen(&switch_writer, &reg, &rows, 2, widths, 0, false, "Live refresh: ready", "Switched to account@example.com", "");
     const switch_output = switch_writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, switch_output, "Select account to activate:\n"));
-    try std.testing.expect(std.mem.indexOf(u8, switch_output, "\n\n") == null);
+    try std.testing.expect(std.mem.find(u8, switch_output, "\n\n") == null);
 
     var list_buffer: [2048]u8 = undefined;
     var list_writer: std.Io.Writer = .fixed(&list_buffer);
     try renderListScreenViewport(&list_writer, &reg, &rows, 2, widths, false, "Live refresh: ready", .{});
     const list_output = list_writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, list_output, "     ACCOUNT"));
-    try std.testing.expect(std.mem.indexOf(u8, list_output, "Live account list:") == null);
-    try std.testing.expect(std.mem.indexOf(u8, list_output, "\n\n") == null);
+    try std.testing.expect(std.mem.find(u8, list_output, "Live account list:") == null);
+    try std.testing.expect(std.mem.find(u8, list_output, "\n\n") == null);
 
     var remove_buffer: [2048]u8 = undefined;
     var remove_writer: std.Io.Writer = .fixed(&remove_buffer);
@@ -546,7 +546,7 @@ test "Scenario: Given live screens when rendering then vertical spacing stays co
     try renderRemoveScreen(&remove_writer, &reg, &rows, 2, widths, 0, &checked, false, "Live refresh: ready", "Deleted account@example.com", "");
     const remove_output = remove_writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, remove_output, "Select accounts to delete:\n"));
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, "\n\n") == null);
+    try std.testing.expect(std.mem.find(u8, remove_output, "\n\n") == null);
 
     try std.testing.expectEqual(@as(usize, 3), live_tui.switchFixedLines("", ""));
     try std.testing.expectEqual(@as(usize, 5), live_tui.switchFixedLines("status", "action"));
@@ -575,7 +575,7 @@ test "Scenario: Given live remove number input when toggling a row then the prom
     try renderRemoveScreen(&before_writer, &reg, &rows, 2, widths, 1, &before_checked, false, "Live refresh: ready", "", "2");
     const before_output = before_writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, before_output, "Select accounts to delete: 2\n"));
-    try std.testing.expect(std.mem.indexOf(u8, before_output, "> [ ]  2 second@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, before_output, "> [ ]  2 second@example.com") != null);
 
     var after_checked = [_]bool{ false, true };
     var after_buffer: [2048]u8 = undefined;
@@ -583,8 +583,8 @@ test "Scenario: Given live remove number input when toggling a row then the prom
     try renderRemoveScreen(&after_writer, &reg, &rows, 2, widths, 1, &after_checked, false, "Live refresh: ready", "", "");
     const after_output = after_writer.buffered();
     try std.testing.expect(std.mem.startsWith(u8, after_output, "Select accounts to delete:\n"));
-    try std.testing.expect(std.mem.indexOf(u8, after_output, "Select accounts to delete: 2\n") == null);
-    try std.testing.expect(std.mem.indexOf(u8, after_output, "> [x]  2 second@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, after_output, "Select accounts to delete: 2\n") == null);
+    try std.testing.expect(std.mem.find(u8, after_output, "> [x]  2 second@example.com") != null);
 }
 
 test "Scenario: Given long live switch and remove screens when rendering a full-height frame then prompts stay visible" {
@@ -687,9 +687,9 @@ test "Scenario: Given a live remove viewport when rendering then checked row num
     }, 1, &checked, false, .{ .start_row = 1, .max_rows = 1 });
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "> [x]  2 second") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "01 first") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "03 third") == null);
+    try std.testing.expect(std.mem.find(u8, output, "> [x]  2 second") != null);
+    try std.testing.expect(std.mem.find(u8, output, "01 first") == null);
+    try std.testing.expect(std.mem.find(u8, output, "03 third") == null);
 }
 
 test "Scenario: Given a cursor row below the live viewport then viewport start scrolls it into view" {
@@ -824,8 +824,8 @@ test "Scenario: Given unselectable rows at live switch edges when viewport scrol
         .start_row = top_start,
         .max_rows = max_rows,
     });
-    try std.testing.expect(std.mem.indexOf(u8, top.written(), "  1 account-001@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, top.written(), " 21 account-021@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, top.written(), "  1 account-001@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, top.written(), " 21 account-021@example.com") != null);
 
     const last_selectable_idx = selectableIndexForAccountKey(&rows, &reg, "user-099::acc-099") orelse return error.TestExpectedEqual;
     const last_display_idx = displayedIndexForSelectable(&rows, last_selectable_idx) orelse return error.TestExpectedEqual;
@@ -841,8 +841,8 @@ test "Scenario: Given unselectable rows at live switch edges when viewport scrol
         .start_row = bottom_start,
         .max_rows = max_rows,
     });
-    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), " 99 account-099@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), "138 account-138@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, bottom.written(), " 99 account-099@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, bottom.written(), "138 account-138@example.com") != null);
 }
 
 test "Scenario: Given switch selection is at first selectable row when scrolling up then unavailable rows above remain reachable" {
@@ -883,8 +883,8 @@ test "Scenario: Given switch selection is at first selectable row when scrolling
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     try renderSwitchListViewport(&out.writer, &reg, rows.items, 2, rows.widths, first_display_idx, false, viewport);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), " 5 account-005@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "> 11 account-011@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out.written(), " 5 account-005@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "> 11 account-011@example.com") != null);
 }
 
 test "Scenario: Given switch selection is at final selectable row when scrolling down then unavailable rows below remain reachable" {
@@ -925,8 +925,8 @@ test "Scenario: Given switch selection is at final selectable row when scrolling
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     try renderSwitchListViewport(&out.writer, &reg, rows.items, 2, rows.widths, final_display_idx, false, viewport);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "> 30 account-030@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "36 account-036@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "> 30 account-030@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "36 account-036@example.com") != null);
 }
 
 test "Scenario: Given a long live table when rendering viewport bounds then both ends are reachable" {
@@ -948,8 +948,8 @@ test "Scenario: Given a long live table when rendering viewport bounds then both
         .start_row = 0,
         .max_rows = max_rows,
     });
-    try std.testing.expect(std.mem.indexOf(u8, top.written(), "  1 account-001@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, top.written(), "105 account-105@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, top.written(), "  1 account-001@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, top.written(), "105 account-105@example.com") == null);
 
     const bottom_start = cli.render.clampLiveViewportStart(rows.items.len, max_rows, rows.items.len);
     try std.testing.expectEqual(@as(usize, 45), bottom_start);
@@ -960,8 +960,8 @@ test "Scenario: Given a long live table when rendering viewport bounds then both
         .start_row = bottom_start,
         .max_rows = max_rows,
     });
-    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), "  1 account-001@example.com") == null);
-    try std.testing.expect(std.mem.indexOf(u8, bottom.written(), "105 account-105@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, bottom.written(), "  1 account-001@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, bottom.written(), "105 account-105@example.com") != null);
 }
 
 test "Scenario: Given grouped accounts when rendering switch list then child rows keep indentation" {
@@ -982,8 +982,8 @@ test "Scenario: Given grouped accounts when rendering switch list then child row
     try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, " 1   Als's Workspace") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, " 2   Free") != null);
+    try std.testing.expect(std.mem.find(u8, output, " 1   Als's Workspace") != null);
+    try std.testing.expect(std.mem.find(u8, output, " 2   Free") != null);
 }
 
 test "Scenario: Given usage overrides when rendering switch list then failed rows show response status in both usage columns" {
@@ -1142,10 +1142,10 @@ test "Scenario: Given usage overrides when rendering switch list then errored ro
     try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, " 1 ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, " 2 ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "healthy@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "failed@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, " 1 ") != null);
+    try std.testing.expect(std.mem.find(u8, output, " 2 ") != null);
+    try std.testing.expect(std.mem.find(u8, output, "healthy@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "failed@example.com") != null);
 }
 
 test "Scenario: Given an active account when rendering switch list then non-cursor active rows use the list marker" {
@@ -1177,22 +1177,22 @@ test "Scenario: Given an active account when rendering switch list then non-curs
 
     const output = writer.buffered();
     var expected_cursor_line_buf: [128]u8 = undefined;
-    const expected_cursor_line = try std.fmt.bufPrint(
+    const expected_cursor_line = try std.mem.print(
         &expected_cursor_line_buf,
         "> {d:>2} cursor@example.com",
         .{cursor_displayed_idx.? + 1},
     );
-    try std.testing.expect(std.mem.indexOf(u8, output, expected_cursor_line) != null);
+    try std.testing.expect(std.mem.find(u8, output, expected_cursor_line) != null);
 
     const active_displayed_idx = displayedIndexForSelectable(&rows, activeSelectableIndex(&rows).?).?;
     var expected_active_line_buf: [128]u8 = undefined;
-    const expected_active_line = try std.fmt.bufPrint(
+    const expected_active_line = try std.mem.print(
         &expected_active_line_buf,
         "* {d:>2} active@example.com",
         .{active_displayed_idx + 1},
     );
-    try std.testing.expect(std.mem.indexOf(u8, output, expected_active_line) != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+    try std.testing.expect(std.mem.find(u8, output, expected_active_line) != null);
+    try std.testing.expect(std.mem.find(u8, output, "[ACTIVE]") == null);
 }
 
 test "Scenario: Given the active account is selected when rendering switch list then the cursor marker wins" {
@@ -1213,9 +1213,9 @@ test "Scenario: Given the active account is selected when rendering switch list 
     try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, 0, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ">  1 active@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "*  1 active@example.com") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+    try std.testing.expect(std.mem.find(u8, output, ">  1 active@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "*  1 active@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, "[ACTIVE]") == null);
 }
 
 test "Scenario: Given switch list color output when rendering then header cursor active and primary rows use distinct styles" {
@@ -1238,11 +1238,11 @@ test "Scenario: Given switch list color output when rendering then header cursor
     }, 0, true);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ ">  1 cursor@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "*  2 active@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "   3 normal@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m   3 normal@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.cyan ++ "     ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ ">  1 cursor@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ "*  2 active@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "   3 normal@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\x1b[2m   3 normal@example.com") == null);
 }
 
 test "Scenario: Given an active account when rendering remove list then non-cursor active rows use the list marker" {
@@ -1266,22 +1266,22 @@ test "Scenario: Given an active account when rendering remove list then non-curs
 
     const output = writer.buffered();
     var expected_cursor_line_buf: [128]u8 = undefined;
-    const expected_cursor_line = try std.fmt.bufPrint(
+    const expected_cursor_line = try std.mem.print(
         &expected_cursor_line_buf,
         "> [ ] {d:>2} cursor@example.com",
         .{cursor_idx + 1},
     );
-    try std.testing.expect(std.mem.indexOf(u8, output, expected_cursor_line) != null);
+    try std.testing.expect(std.mem.find(u8, output, expected_cursor_line) != null);
 
     const active_idx = selectableIndexForAccountKey(&rows, &reg, "user-1::acc-2").?;
     var expected_active_line_buf: [128]u8 = undefined;
-    const expected_active_line = try std.fmt.bufPrint(
+    const expected_active_line = try std.mem.print(
         &expected_active_line_buf,
         "* [ ] {d:>2} active@example.com",
         .{active_idx + 1},
     );
-    try std.testing.expect(std.mem.indexOf(u8, output, expected_active_line) != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+    try std.testing.expect(std.mem.find(u8, output, expected_active_line) != null);
+    try std.testing.expect(std.mem.find(u8, output, "[ACTIVE]") == null);
 }
 
 test "Scenario: Given the active account is the remove cursor then the cursor marker wins" {
@@ -1303,9 +1303,9 @@ test "Scenario: Given the active account is the remove cursor then the cursor ma
     try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, 0, &checked, false);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, "> [ ]  1 active@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "* [ ]  1 active@example.com") == null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "[ACTIVE]") == null);
+    try std.testing.expect(std.mem.find(u8, output, "> [ ]  1 active@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "* [ ]  1 active@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, "[ACTIVE]") == null);
 }
 
 test "Scenario: Given remove list color output when rendering then cursor checked active and primary rows use distinct styles" {
@@ -1330,12 +1330,12 @@ test "Scenario: Given remove list color output when rendering then cursor checke
     }, 0, &checked, true);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.cyan ++ "         ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "> [ ]  1 cursor@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "  [x]  2 checked@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.green ++ "* [ ]  3 active@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "  [ ]  4 normal@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[2m  [ ]  4 normal@example.com") == null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.cyan ++ "         ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ "> [ ]  1 cursor@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ "  [x]  2 checked@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.green ++ "* [ ]  3 active@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "  [ ]  4 normal@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, output, "\x1b[2m  [ ]  4 normal@example.com") == null);
 }
 
 test "Scenario: Given overlapping row states when rendering live lists then color priority is stable" {
@@ -1360,8 +1360,8 @@ test "Scenario: Given overlapping row states when rendering live lists then colo
     const switch_output = switch_writer.buffered();
     // An errored row keeps red even under the cursor/active marker: the glyph
     // already shows focus and the alarm must not be hidden.
-    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.red ++ ">  1 cursor-error@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.red ++ "*  2 active-error@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, switch_output, ansi.red ++ ">  1 cursor-error@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, switch_output, ansi.red ++ "*  2 active-error@example.com") != null);
 
     var remove_rows = [_]SwitchRow{
         testAccountRow("cursor-error@example.com", "Team", false),
@@ -1382,9 +1382,9 @@ test "Scenario: Given overlapping row states when rendering live lists then colo
         .last = 4,
     }, 0, &checked, true);
     const remove_output = remove_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.red ++ "> [ ]  1 cursor-error@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.green ++ "  [x]  2 checked@example.com") != null);
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.red ++ "* [x]  3 active-error@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, remove_output, ansi.red ++ "> [ ]  1 cursor-error@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, remove_output, ansi.green ++ "  [x]  2 checked@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, remove_output, ansi.red ++ "* [x]  3 active-error@example.com") != null);
 }
 
 test "Scenario: Given switch live feedback when rendering switch screen then the action message stays below the footer" {
@@ -1412,8 +1412,8 @@ test "Scenario: Given switch live feedback when rendering switch screen then the
     );
 
     const output = writer.buffered();
-    const footer_pos = std.mem.indexOf(u8, output, "Keys:") orelse return error.TestExpectedEqual;
-    const action_pos = std.mem.indexOf(u8, output, "Switched to healthy@example.com") orelse return error.TestExpectedEqual;
+    const footer_pos = std.mem.find(u8, output, "Keys:") orelse return error.TestExpectedEqual;
+    const action_pos = std.mem.find(u8, output, "Switched to healthy@example.com") orelse return error.TestExpectedEqual;
     try std.testing.expect(action_pos > footer_pos);
 }
 
@@ -1440,7 +1440,7 @@ test "Scenario: Given switch live feedback with color when rendering switch scre
         "Switched to healthy@example.com",
         "",
     );
-    try std.testing.expect(std.mem.indexOf(u8, success_writer.buffered(), ansi.green ++ "Switched to healthy@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, success_writer.buffered(), ansi.green ++ "Switched to healthy@example.com") != null);
 
     var failure_buffer: [2048]u8 = undefined;
     var failure_writer: std.Io.Writer = .fixed(&failure_buffer);
@@ -1456,7 +1456,7 @@ test "Scenario: Given switch live feedback with color when rendering switch scre
         "Switch failed: denied",
         "",
     );
-    try std.testing.expect(std.mem.indexOf(u8, failure_writer.buffered(), ansi.red ++ "Switch failed: denied") != null);
+    try std.testing.expect(std.mem.find(u8, failure_writer.buffered(), ansi.red ++ "Switch failed: denied") != null);
 }
 
 test "Scenario: Given live screen status and footers with color when rendering then status and footer styles match command rules" {
@@ -1483,8 +1483,8 @@ test "Scenario: Given live screen status and footers with color when rendering t
         "",
     );
     const switch_output = switch_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
-    try std.testing.expect(std.mem.indexOf(u8, switch_output, ansi.cyan ++ "Keys:") != null);
+    try std.testing.expect(std.mem.find(u8, switch_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
+    try std.testing.expect(std.mem.find(u8, switch_output, ansi.cyan ++ "Keys:") != null);
 
     var remove_buffer: [2048]u8 = undefined;
     var remove_writer: std.Io.Writer = .fixed(&remove_buffer);
@@ -1503,8 +1503,8 @@ test "Scenario: Given live screen status and footers with color when rendering t
         "",
     );
     const remove_output = remove_writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
-    try std.testing.expect(std.mem.indexOf(u8, remove_output, ansi.cyan ++ "Keys:") != null);
+    try std.testing.expect(std.mem.find(u8, remove_output, ansi.cyan ++ "Live refresh: api | Refresh in 25s") != null);
+    try std.testing.expect(std.mem.find(u8, remove_output, ansi.cyan ++ "Keys:") != null);
 }
 
 test "Scenario: Given Windows console labels when rendering unicode-prone output then ASCII fallbacks are used" {
@@ -1590,7 +1590,7 @@ test "Scenario: Given usage overrides when rendering switch list with color then
     try renderSwitchList(&writer, &reg, rows.items, idx_width, rows.widths, null, true);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.red) != null);
 }
 
 test "Scenario: Given usage overrides when rendering remove list with color then failed rows are highlighted red" {
@@ -1612,7 +1612,7 @@ test "Scenario: Given usage overrides when rendering remove list with color then
     try renderRemoveList(&writer, &reg, rows.items, idx_width, rows.widths, null, &checked, true);
 
     const output = writer.buffered();
-    try std.testing.expect(std.mem.indexOf(u8, output, ansi.red) != null);
+    try std.testing.expect(std.mem.find(u8, output, ansi.red) != null);
 }
 
 test "Scenario: Given a usage snapshot plan when building switch rows then the displayed plan prefers it over the stored auth plan" {
@@ -1660,10 +1660,10 @@ test "live list details show reset credits cell and scroll within the viewport" 
     var styled_body = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
     for ([_][]const u8{ "ACCOUNT", "PLAN", "test@e", "TOKEN EXPIRE", "RESETS", "1 (exp 10-01)" }) |expected| {
-        try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+        try std.testing.expect(std.mem.find(u8, body.written(), expected) != null);
     }
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "00:00:00 UTC") == null);
-    try std.testing.expect(std.mem.indexOfScalar(u8, body.written(), 27) == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "00:00:00 UTC") == null);
+    try std.testing.expect(std.mem.findScalar(u8, body.written(), 27) == null);
     var frame: std.Io.Writer.Allocating = .init(gpa);
     defer frame.deinit();
     var styled_frame = StyledWriter.init(&frame.writer, false);
@@ -1672,9 +1672,9 @@ test "live list details show reset credits cell and scroll within the viewport" 
     var viewport = live_tui.listViewport(7, count, live_tui.listFixedLines("ready"), &start);
     viewport.max_cols = null;
     try cli.render.renderListBodyViewport(&styled_frame, body.written(), "ready", viewport);
-    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "10-01") != null);
-    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, frame.written(), "ready") != null);
+    try std.testing.expect(std.mem.find(u8, frame.written(), "10-01") != null);
+    try std.testing.expect(std.mem.find(u8, frame.written(), "ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, frame.written(), "ready") != null);
     try std.testing.expect(std.mem.count(u8, frame.written(), "\n") <= 7);
 
     body.clearRetainingCapacity();
@@ -1686,8 +1686,8 @@ test "live list details show reset credits cell and scroll within the viewport" 
     defer color_body.deinit();
     var colored_writer = StyledWriter.init(&color_body.writer, true);
     try cli.render.renderListBody(gpa, &colored_writer, &reg, rows.items, 2, rows.widths, 120, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.cyan) != null);
-    try std.testing.expect(std.mem.indexOf(u8, color_body.written(), ansi.bold) != null);
+    try std.testing.expect(std.mem.find(u8, color_body.written(), ansi.cyan) != null);
+    try std.testing.expect(std.mem.find(u8, color_body.written(), ansi.bold) != null);
 }
 
 test "live list derives the reset credits count from available cards when the summary is absent" {
@@ -1714,7 +1714,7 @@ test "live list derives the reset credits count from available cards when the su
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "1 (exp 10-01)") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "1 (exp 10-01)") != null);
 }
 
 test "Scenario: Given a live list cursor when rendering the body then the cursor row shares the active row's green" {
@@ -1737,14 +1737,14 @@ test "Scenario: Given a live list cursor when rendering the body then the cursor
 
     // Cursor row: the ">" glyph wears the same green as the active row — the
     // glyph, not the color, says which row Enter acts on (the pickers' rule).
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ ">  1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ "*  2") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), ansi.green ++ ">  1") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), ansi.green ++ "*  2") != null);
 
     // Cursor on the active row: ">" wins the marker, the green survives.
     body.clearRetainingCapacity();
     try cli.render.renderListBody(gpa, &colored, &reg, rows.items, 2, rows.widths, null, 1, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), ansi.green ++ ">  2") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "*  2") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), ansi.green ++ ">  2") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "*  2") == null);
 }
 
 test "Scenario: Given grouped accounts when resolving the rail cursor start then group headers do not shift the index" {
@@ -1791,11 +1791,11 @@ test "reset credits panel renders the remaining rail and compact rows" {
     try std.testing.expectEqual(@as(usize, 4), lines);
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, out.written(), "\n"));
     const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "      RESETS · 2 available") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr) · ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "· in 9d · Enter again to redeem") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "      ✓ reset credit redeemed") != null);
+    try std.testing.expect(std.mem.find(u8, text, "      RESETS · 2 available") != null);
+    try std.testing.expect(std.mem.find(u8, text, "      > Full reset (Weekly + 5 hr) · ") != null);
+    try std.testing.expect(std.mem.find(u8, text, "· in 9d · Enter again to redeem") != null);
+    try std.testing.expect(std.mem.find(u8, text, "        untitled") != null);
+    try std.testing.expect(std.mem.find(u8, text, "      ✓ reset credit redeemed") != null);
     try std.testing.expect(!std.mem.endsWith(u8, text, "└\n"));
 }
 
@@ -1820,10 +1820,10 @@ test "reset credits panel uses heading and selected color roles" {
     const text = out.written();
     // Borderless design D: the heading carries weight/color, the selected
     // credit is green, and the other credit stays at the default foreground.
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[1m\x1b[36mRESETS · 2 available\x1b[0m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m> Full reset\x1b[0m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m  Later card") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[32m✓ reset credit redeemed\x1b[0m") != null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[1m\x1b[36mRESETS · 2 available\x1b[0m") != null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[32m> Full reset\x1b[0m") != null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[32m  Later card") == null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[32m✓ reset credit redeemed\x1b[0m") != null);
 }
 
 test "reset credits panel draws redeemed cards as struck ghosts in their slots" {
@@ -1851,31 +1851,31 @@ test "reset credits panel draws redeemed cards as struck ghosts in their slots" 
     });
     try std.testing.expectEqual(@as(usize, 5), lines);
     const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "RESETS · 2 available") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[2m\x1b[9m  5h reset credit") != null);
+    try std.testing.expect(std.mem.find(u8, text, "RESETS · 2 available") != null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[2m\x1b[9m  5h reset credit") != null);
     // The `redeemed` tag is the success report: a plain space, green, and
     // crucially OUTSIDE the strike — the reset+green SGR pair between the
     // struck span and the tag is what keeps it from being struck through.
-    try std.testing.expect(std.mem.indexOf(u8, text, "\x1b[0m\x1b[32m redeemed\x1b[0m") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "· redeemed") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "redeemed") != null);
+    try std.testing.expect(std.mem.find(u8, text, "\x1b[0m\x1b[32m redeemed\x1b[0m") != null);
+    try std.testing.expect(std.mem.find(u8, text, "· redeemed") == null);
+    try std.testing.expect(std.mem.find(u8, text, "redeemed") != null);
     // `redeemed` must not sit inside any struck span: every `redeemed` is
     // preceded by a reset since the last strike-open.
     var scan_at: usize = 0;
-    while (std.mem.indexOfPos(u8, text, scan_at, "redeemed")) |tag_at| {
-        const strike_open = std.mem.lastIndexOf(u8, text[0..tag_at], "\x1b[9m") orelse 0;
-        const last_reset = std.mem.lastIndexOf(u8, text[0..tag_at], "\x1b[0m") orelse 0;
+    while (std.mem.findPos(u8, text, scan_at, "redeemed")) |tag_at| {
+        const strike_open = std.mem.findLast(u8, text[0..tag_at], "\x1b[9m") orelse 0;
+        const last_reset = std.mem.findLast(u8, text[0..tag_at], "\x1b[0m") orelse 0;
         try std.testing.expect(last_reset > strike_open);
         scan_at = tag_at + 1;
     }
-    const ghost_a = std.mem.indexOf(u8, text, "5h reset credit").?;
-    const weekly_at = std.mem.indexOf(u8, text, "Weekly limit reset").?;
-    const ghost_b = std.mem.indexOf(u8, text, "Month reset").?;
+    const ghost_a = std.mem.find(u8, text, "5h reset credit").?;
+    const weekly_at = std.mem.find(u8, text, "Weekly limit reset").?;
+    const ghost_b = std.mem.find(u8, text, "Month reset").?;
     try std.testing.expect(ghost_a < weekly_at);
     try std.testing.expect(weekly_at < ghost_b);
-    try std.testing.expect(std.mem.indexOf(u8, text, "> Weekly limit reset") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "> 5h") == null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "✓") == null);
+    try std.testing.expect(std.mem.find(u8, text, "> Weekly limit reset") != null);
+    try std.testing.expect(std.mem.find(u8, text, "> 5h") == null);
+    try std.testing.expect(std.mem.find(u8, text, "✓") == null);
 }
 
 test "reset credits mergedCardLine reports the armed card's line inside the block" {
@@ -1944,10 +1944,10 @@ test "reset credits panel stays ASCII on Windows" {
     });
     try std.testing.expectEqual(@as(usize, 4), lines);
     const text = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, text, "      RESETS, 2 available") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "      > Full reset (Weekly + 5 hr), ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, ", in 9d, Enter again to redeem") != null);
-    try std.testing.expect(std.mem.indexOf(u8, text, "        untitled") != null);
+    try std.testing.expect(std.mem.find(u8, text, "      RESETS, 2 available") != null);
+    try std.testing.expect(std.mem.find(u8, text, "      > Full reset (Weekly + 5 hr), ") != null);
+    try std.testing.expect(std.mem.find(u8, text, ", in 9d, Enter again to redeem") != null);
+    try std.testing.expect(std.mem.find(u8, text, "        untitled") != null);
     try std.testing.expect(std.mem.endsWith(u8, text, "      OK reset credit redeemed\n"));
     // docs/windows.md: no box-drawing, bullets, arrows or marks in the output.
     for (text) |byte| try std.testing.expect(byte < 0x80);
@@ -2322,8 +2322,8 @@ test "reset credits panel reports the last redeem without an empty-list placehol
         "    RESETS · 0 available\n    ✓ reset credit redeemed\n",
         out.written(),
     );
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "no available reset credits") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out.written(), "codex-auth list --api") == null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "no available reset credits") == null);
+    try std.testing.expect(std.mem.find(u8, out.written(), "codex-auth list --api") == null);
 
     // The same empty rail without a status is only the count, never a hint to
     // go refresh; `0 available` already says there is nothing to use.
@@ -2478,7 +2478,7 @@ test "live list maps the credits rail cursor to the rendered account row" {
         cli.render.liveDataRowCount(rows.items, account_count) + header_rows,
         std.mem.count(u8, body.written(), "\n") - 1,
     );
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "shared@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "shared@example.com") != null);
 
     // The rail's anchor and the viewport-follow span are body lines, so the
     // data index under a shifted group must map through
@@ -2507,7 +2507,7 @@ test "live list maps the credits rail cursor to the rendered account row" {
     }
     try std.testing.expectEqual(@as(usize, 4), body_lines.items.len);
     // Line 0 is the singleton, line 1 the group header, lines 2-3 its children.
-    try std.testing.expect(std.mem.indexOf(u8, body_lines.items[1], "shared@example.com") != null);
+    try std.testing.expect(std.mem.find(u8, body_lines.items[1], "shared@example.com") != null);
     var shifted: usize = 0;
     for (0..3) |data_index| {
         const line_index = cli.render.liveLineIndexForDataIndex(rows.items, account_count, data_index) orelse
@@ -2516,7 +2516,7 @@ test "live list maps the credits rail cursor to the rendered account row" {
         const row_index = cli.render.liveRowIndexForDataIndex(rows.items, account_count, data_index) orelse
             return error.TestUnexpectedResult;
         try std.testing.expect(!rows.items[row_index].is_header);
-        try std.testing.expect(std.mem.indexOf(u8, line, rows.items[row_index].account) != null);
+        try std.testing.expect(std.mem.find(u8, line, rows.items[row_index].account) != null);
         if (row_index != data_index) shifted += 1;
     }
     // The naive `rows.items[data_index]` indexing still desyncs from the
@@ -2543,8 +2543,8 @@ test "live list indents grouped account labels inside the account column" {
 
     const lineCol = struct {
         fn of(text: []const u8, needle: []const u8) usize {
-            const at = std.mem.indexOf(u8, text, needle).?;
-            const line_start = (std.mem.lastIndexOfScalar(u8, text[0..at], '\n') orelse 0) + @intFromBool(at != 0);
+            const at = std.mem.find(u8, text, needle).?;
+            const line_start = (std.mem.findScalarLast(u8, text[0..at], '\n') orelse 0) + @intFromBool(at != 0);
             return at - line_start;
         }
     }.of;
@@ -2584,8 +2584,8 @@ test "live list renders the bare count when available reset credits have no expi
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "(-)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "(exp") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "(-)") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "(exp") == null);
 }
 
 test "live list shows plan expiry only when it is still in the future" {
@@ -2605,14 +2605,14 @@ test "live list shows plan expiry only when it is still in the future" {
     defer body.deinit();
     var styled_body = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXP") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "PLAN EXP") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), expected) != null);
 
     reg.accounts.items[0].plan_expires_at = now - 30 * 86400;
     body.clearRetainingCapacity();
     try cli.render.renderListBody(gpa, &styled_body, &reg, rows.items, 2, rows.widths, null, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "PLAN EXP") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), expected) == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "PLAN EXP") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), expected) == null);
 }
 
 test "live list keeps the active marker visible for double-digit accounts" {
@@ -2629,7 +2629,7 @@ test "live list keeps the active marker visible for double-digit accounts" {
     var writer = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
 
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "* 10") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "* 10") != null);
 }
 
 test "live list distinguishes unavailable reset details from an empty server list" {
@@ -2643,8 +2643,8 @@ test "live list distinguishes unavailable reset details from an empty server lis
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "CREDIT 1 EXP") == null);
     reg.accounts.items[0].last_usage = .{
         .primary = null,
         .secondary = null,
@@ -2656,8 +2656,8 @@ test "live list distinguishes unavailable reset details from an empty server lis
     };
     body.clearRetainingCapacity();
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, 120, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "ACCOUNT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "CREDIT 1 EXP") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "ACCOUNT") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "CREDIT 1 EXP") == null);
 }
 
 test "live list defers PLAN EXPIRE and keeps the configured column order" {
@@ -2690,8 +2690,8 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
             if (line.len == 0) continue;
             try std.testing.expect(line.len <= width);
         }
-        if (std.mem.indexOf(u8, header, "5H") != null) {
-            try std.testing.expect(std.mem.indexOf(u8, body.written(), "100%") != null);
+        if (std.mem.find(u8, header, "5H") != null) {
+            try std.testing.expect(std.mem.find(u8, body.written(), "100%") != null);
         }
     }
 
@@ -2699,7 +2699,7 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     defer narrow_body.deinit();
     var narrow_writer = StyledWriter.init(&narrow_body.writer, false);
     try cli.render.renderListBody(gpa, &narrow_writer, &reg, rows.items, 2, rows.widths, 60, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, narrow_body.written(), "PLAN EXP") == null);
+    try std.testing.expect(std.mem.find(u8, narrow_body.written(), "PLAN EXP") == null);
     var lines = std.mem.splitScalar(u8, narrow_body.written(), '\n');
     while (lines.next()) |line| try std.testing.expect(line.len <= 60);
 
@@ -2708,10 +2708,10 @@ test "live list defers PLAN EXPIRE and keeps the configured column order" {
     var wide_writer = StyledWriter.init(&wide_body.writer, false);
     try cli.render.renderListBody(gpa, &wide_writer, &reg, rows.items, 2, rows.widths, 200, null, false);
     const body = wide_body.written();
-    try std.testing.expect(std.mem.indexOf(u8, body, "PLAN EXP") != null);
+    try std.testing.expect(std.mem.find(u8, body, "PLAN EXP") != null);
     var last_index: usize = 0;
     for ([_][]const u8{ "ACCOUNT", "PLAN", "PLAN EXP", "RESETS", "5H", "WEEKLY", "TOKEN EXPIRE", "LAST" }) |token| {
-        const index = std.mem.indexOf(u8, body, token) orelse return error.TestUnexpectedResult;
+        const index = std.mem.find(u8, body, token) orelse return error.TestUnexpectedResult;
         try std.testing.expect(index >= last_index);
         last_index = index;
     }
@@ -2740,8 +2740,8 @@ test "live list renders zero reset credits without an expiry marker" {
     defer body.deinit();
     var writer = StyledWriter.init(&body.writer, false);
     try cli.render.renderListBody(gpa, &writer, &reg, rows.items, 2, rows.widths, null, null, false);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0 (-)") == null);
-    try std.testing.expect(std.mem.indexOf(u8, body.written(), "0") != null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "0 (-)") == null);
+    try std.testing.expect(std.mem.find(u8, body.written(), "0") != null);
 }
 
 test "mouse wheel step scales with visible rows" {

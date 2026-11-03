@@ -1,8 +1,10 @@
 const std = @import("std");
 const app_runtime = @import("codex_auth").core.runtime;
 const registry = @import("codex_auth").registry;
+const http_api = @import("codex_auth").api.http;
 const reset_credits_api = @import("codex_auth").api.reset_credits;
 const usage_api = @import("codex_auth").api.usage;
+const fixtures = @import("support/fixtures.zig");
 
 test "parse usage api response maps live usage windows and plan" {
     const gpa = std.testing.allocator;
@@ -333,4 +335,54 @@ test "idempotency key is a UUID v4" {
         if (index == 8 or index == 13 or index == 18 or index == 23) continue;
         try std.testing.expect((ch >= '0' and ch <= '9') or (ch >= 'a' and ch <= 'f'));
     }
+}
+
+const batch_usage_body =
+    \\{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":4102444800}}}
+;
+
+/// Scripted batch transport: usage answers normally so the batch produces a
+/// snapshot, then the reset-credit request is canceled mid-refresh — the path
+/// that used to be swallowed as a best-effort success.
+fn cancelOnCreditsBatch(
+    allocator: std.mem.Allocator,
+    endpoint: []const u8,
+    requests: []const http_api.BatchRequest,
+    max_concurrency: usize,
+) anyerror!http_api.BatchHttpResult {
+    _ = max_concurrency;
+    if (std.mem.eql(u8, endpoint, usage_api.default_reset_credits_endpoint)) return error.Canceled;
+    const items = try allocator.alloc(http_api.BatchItemResult, requests.len);
+    errdefer allocator.free(items);
+    for (items) |*item| {
+        item.* = .{
+            .body = try allocator.dupe(u8, batch_usage_body),
+            .status_code = 200,
+            .outcome = .ok,
+        };
+    }
+    return .{ .items = items };
+}
+
+test "canceled reset-credit batch propagates instead of reporting a completed refresh" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const auth_json = try fixtures.authJsonWithEmailPlan(gpa, "user@example.com", "plus");
+    defer gpa.free(auth_json);
+    try tmp.dir.writeFile(app_runtime.io(), .{
+        .sub_path = "auth.json",
+        .data = auth_json,
+    });
+    const auth_path = try app_runtime.realPathFileAlloc(gpa, tmp.dir, "auth.json");
+    defer gpa.free(auth_path);
+
+    const paths = [_][]const u8{auth_path};
+    try std.testing.expectError(error.Canceled, usage_api.fetchUsageForAuthPathsDetailedBatchWithRunner(
+        gpa,
+        &paths,
+        4,
+        cancelOnCreditsBatch,
+    ));
 }

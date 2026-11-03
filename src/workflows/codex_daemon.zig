@@ -31,7 +31,7 @@ pub const Client = struct {
     /// is a best-effort absence check; errors and stale endpoints stay unknown.
     pub fn probe(self: *const Client) !Outcome {
         if (!supported()) return .unsupported;
-        const socket = try std.fs.path.join(self.allocator, &.{ self.codex_home, "app-server-control", "app-server-control.sock" });
+        const socket = try std.Io.Dir.path.join(self.allocator, &.{ self.codex_home, "app-server-control", "app-server-control.sock" });
         defer self.allocator.free(socket);
         std.Io.Dir.cwd().access(runtime.io(), socket, .{}) catch |err| switch (err) {
             error.FileNotFound => return .not_running,
@@ -92,7 +92,7 @@ pub const Client = struct {
         };
         defer self.allocator.free(result.stdout);
         if (result.timed_out or !result.succeeded) return null;
-        if (std.mem.indexOf(u8, result.stdout, "skipped the auth reload") != null) return .deferred;
+        if (std.mem.find(u8, result.stdout, "skipped the auth reload") != null) return .deferred;
         return .reloaded;
     }
 
@@ -146,28 +146,28 @@ pub const Client = struct {
 };
 
 fn supported() bool {
-    return builtin.os.tag == .linux or builtin.os.tag == .macos or builtin.os.tag == .windows;
+    return builtin.target.os.tag == .linux or builtin.target.os.tag == .macos or builtin.target.os.tag == .windows;
 }
 
 fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
-    const name = if (builtin.os.tag == .windows) "codex.exe" else "codex";
+    const name = if (builtin.target.os.tag == .windows) "codex.exe" else "codex";
     const layouts = [_][]const []const u8{
         &.{ "packages", "app-server-daemon", "current", "bin" },
         &.{ "packages", "standalone", "current", "bin" },
         &.{ "packages", "standalone", "current" },
     };
     for (layouts) |layout| {
-        const dir = try std.fs.path.join(allocator, layout);
+        const dir = try std.Io.Dir.path.join(allocator, layout);
         defer allocator.free(dir);
-        const path = try std.fs.path.join(allocator, &.{ home, dir, name });
+        const path = try std.Io.Dir.path.join(allocator, &.{ home, dir, name });
         if (isExecutable(path)) return path;
         allocator.free(path);
     }
     var env = try runtime.currentEnviron().createMap(allocator);
     defer env.deinit();
-    var paths = std.mem.splitScalar(u8, env.get("PATH") orelse "", if (builtin.os.tag == .windows) ';' else ':');
+    var paths = std.mem.splitScalar(u8, env.get("PATH") orelse "", if (builtin.target.os.tag == .windows) ';' else ':');
     while (paths.next()) |dir| {
-        const path = try std.fs.path.join(allocator, &.{ dir, name });
+        const path = try std.Io.Dir.path.join(allocator, &.{ dir, name });
         if (isExecutable(path)) {
             defer allocator.free(path);
             return try runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path);
@@ -180,7 +180,7 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
 fn isExecutable(path: []const u8) bool {
     const stat = std.Io.Dir.cwd().statFile(runtime.io(), path, .{}) catch return false;
     if (stat.kind != .file) return false;
-    if (builtin.os.tag != .windows)
+    if (builtin.target.os.tag != .windows)
         std.Io.Dir.cwd().access(runtime.io(), path, .{ .execute = true }) catch return false;
     return true;
 }
@@ -190,7 +190,7 @@ fn isExecutable(path: []const u8) bool {
 fn waitForExit(child: *std.process.Child, deadline: std.Io.Clock.Timestamp) !std.process.Child.Term {
     const io = runtime.io();
     while (true) {
-        if (builtin.os.tag == .windows) {
+        if (builtin.target.os.tag == .windows) {
             const windows = std.os.windows;
             const zero: windows.LARGE_INTEGER = 0;
             switch (windows.ntdll.NtWaitForSingleObject(child.id.?, .FALSE, &zero)) {
