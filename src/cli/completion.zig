@@ -3,6 +3,7 @@ const io_util = @import("../core/io_util.zig");
 const types = @import("types.zig");
 const registry = @import("../registry/root.zig");
 const display_rows = @import("../tui/display.zig");
+const query = @import("../workflows/query.zig");
 
 pub fn printCompletion(shell: types.CompletionShell) !void {
     var stdout: io_util.Stdout = undefined;
@@ -712,8 +713,10 @@ fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecor
 fn usableHint(reg: *const registry.Registry, label: []const u8) bool {
     if (label.len == 0 or label[0] == '-' or label[0] == ':' or !lineSafe(label)) return false;
     // Account keys resolve before labels, so a label that spells another
-    // account's key would act on that account, not this one.
+    // account's key would act on that account, not this one. Bare digits
+    // resolve as displayed row numbers for the same reason.
     if (registry.findAccountIndexByAccountKey(reg, label) != null) return false;
+    if (query.selectorIsBareRowNumber(label)) return false;
     return labelMatchCount(reg, label) == 1;
 }
 
