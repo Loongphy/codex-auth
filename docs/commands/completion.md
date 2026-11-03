@@ -65,7 +65,7 @@ codex-auth completion fish | source
 
 ## PowerShell
 
-`completion pwsh` prints a PowerShell completion script to stdout (requires PowerShell 7+).
+`completion pwsh` (or `powershell`) prints a PowerShell completion script to stdout (Windows PowerShell 5.1 and PowerShell 7+).
 
 Install it by appending to your profile so upgrades apply automatically:
 

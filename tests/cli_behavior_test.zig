@@ -781,6 +781,7 @@ test "Scenario: Given bash completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "complete -F _codex_auth_complete codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "COMP_WORDS") != null);
     try std.testing.expect(std.mem.find(u8, script, "compopt -o default") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compopt -o nosort") != null);
     try std.testing.expect(std.mem.find(u8, script, "compgen -d -- \"$dpath\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "dpre=\"${dpath%%=*}=\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "dkeep=\"${dpath%\"$btail\"}\"") != null);
@@ -821,7 +822,7 @@ test "Scenario: Given fish completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "complete -c codex-auth -e") != null);
     try std.testing.expect(std.mem.find(u8, script, "commandline -opc") != null);
     try std.testing.expect(std.mem.find(u8, script, "commandline -ct") != null);
-    try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete $tokens") != null);
+    try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete (string escape -- $tokens)") != null);
     try std.testing.expect(std.mem.find(u8, script, "set -a tokens \"$cur\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "$tokens[-1]\" != \"$cur") == null);
     try std.testing.expect(std.mem.find(u8, script, "__fish_complete_path") != null);
@@ -849,6 +850,7 @@ test "Scenario: Given pwsh completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "$words[-1] = '\"\"'") != null);
     try std.testing.expect(std.mem.find(u8, script, "$line -match '^:(\\d+)$'") != null);
     try std.testing.expect(std.mem.find(u8, script, "$dirPart -match '[\\\\/]$'") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$PSVersionTable.PSVersion.Major -lt 7") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {

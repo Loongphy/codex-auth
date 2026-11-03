@@ -60,6 +60,7 @@ const bash_script =
     \\    while IFS=$'\t' read -r value desc; do
     \\        case "$value" in
     \\            :*) directive="${value#:}" ;;
+    \\            "") ;;
     \\            *)  cands+=("$value") ;;
     \\        esac
     \\    done <<< "$out"
@@ -92,6 +93,7 @@ const bash_script =
     \\        done
     \\    fi
     \\    (( directive & 2 )) && compopt -o nospace 2>/dev/null
+    \\    (( directive & 32 )) && compopt -o nosort 2>/dev/null
     \\    (( directive & 4 )) || compopt -o default 2>/dev/null
     \\    return
     \\}
@@ -142,14 +144,14 @@ const fish_script =
     \\    set -l cur (commandline -ct)
     \\    set -a tokens "$cur"
     \\    set -l directive 0
-    \\    for line in (codex-auth __complete $tokens 2>/dev/null)
+    \\    for line in (codex-auth __complete (string escape -- $tokens) 2>/dev/null)
     \\        if string match -q ':*' -- $line
     \\            set directive (string sub -s 2 -- $line)
     \\        else
     \\            echo $line
     \\        end
     \\    end
-    \\    test $directive -eq 1; and return
+    \\    test "$directive" = "1"; and return
     \\    set -l dirs (math -s0 "floor($directive / 16) % 2" 2>/dev/null)
     \\    if test "$dirs" = "1"
     \\        __fish_complete_directories
@@ -202,8 +204,11 @@ const pwsh_script =
     \\    if (($directive -band 4) -and $results.Count -eq 0) {
     \\        # An empty CompletionResult crashes PS 5.1; a single-space result
     \\        # still stops the default filename fallback.
-    \\        $results.Add([System.Management.Automation.CompletionResult]::new(' ', ' ', 'ParameterValue', ' '))
-    \\        return $results
+    \\        if ($PSVersionTable.PSVersion.Major -lt 7) {
+    \\            $results.Add([System.Management.Automation.CompletionResult]::new(' ', ' ', 'ParameterValue', ' '))
+    \\            return $results
+    \\        }
+    \\        return
     \\    }
     \\    $flagPrefix = ''
     \\    $pathWord = $wordToComplete
@@ -340,6 +345,7 @@ const shell_cands = [_]Cand{
     .{ .value = "zsh", .desc = "Print Zsh completion script" },
     .{ .value = "fish", .desc = "Print Fish completion script" },
     .{ .value = "pwsh", .desc = "Print PowerShell completion script" },
+    .{ .value = "powershell", .desc = "Print PowerShell completion script" },
 };
 
 const help_positionals = [_]PosSpec{.{ .kind = .command_name }};
@@ -362,7 +368,7 @@ const config_subs = [_]CmdSpec{
 };
 
 const command_specs = [_]CmdSpec{
-    .{ .name = "help", .desc = "Show command-specific help", .positionals = &help_positionals },
+    .{ .name = "help", .desc = "Show command-specific help", .positionals = &help_positionals, .accepts_help = false },
     .{ .name = "list", .desc = "List available accounts", .flags = &list_flags },
     .{ .name = "login", .desc = "Login and add the current account", .flags = &login_flags },
     .{ .name = "import", .desc = "Import auth files or rebuild the registry", .flags = &import_flags, .positionals = &import_positionals },
