@@ -154,6 +154,13 @@ const pwsh_script =
     \\        $words = @($words | Select-Object -First ($words.Count - 1))
     \\    }
     \\    $words += $wordToComplete
+    \\    if ($wordToComplete.Length -eq 0 -and
+    \\        ($PSVersionTable.PsVersion -lt [version]'7.2.0' -or
+    \\         ($PSVersionTable.PsVersion -lt [version]'7.3.0' -and -not [ExperimentalFeature]::IsEnabled("PSNativeCommandArgumentPassing")) -or
+    \\         (($PSVersionTable.PsVersion -ge [version]'7.3.0' -or [ExperimentalFeature]::IsEnabled("PSNativeCommandArgumentPassing")) -and
+    \\          $PSNativeCommandArgumentPassing -eq 'Legacy'))) {
+    \\        $words[-1] = '""'
+    \\    }
     \\    $quote = {
     \\        param($text)
     \\        if ($text -match '[\s''"`$;|&<>(){}\[\],#*?~^!]') {
@@ -164,8 +171,8 @@ const pwsh_script =
     \\    $directive = 0
     \\    $results = [System.Collections.Generic.List[System.Management.Automation.CompletionResult]]::new()
     \\    foreach ($line in (codex-auth __complete @words 2>$null)) {
-    \\        if ($line.StartsWith(':')) {
-    \\            $directive = [int]$line.Substring(1)
+    \\        if ($line -match '^:(\d+)$') {
+    \\            $directive = [int]$Matches[1]
     \\            continue
     \\        }
     \\        $parts = $line -split "`t", 2
@@ -173,20 +180,26 @@ const pwsh_script =
     \\        $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $parts[0]), $parts[0], 'ParameterValue', $desc))
     \\    }
     \\    if ($directive -eq 1) { return }
+    \\    if (($directive -band 4) -and $results.Count -eq 0) {
+    \\        # An empty CompletionResult crashes PS 5.1; a single-space result
+    \\        # still stops the default filename fallback.
+    \\        $results.Add([System.Management.Automation.CompletionResult]::new(' ', ' ', 'ParameterValue', ' '))
+    \\        return $results
+    \\    }
     \\    $flagPrefix = ''
     \\    $pathWord = $wordToComplete
     \\    if ($pathWord -match '^(--[^=]+=)(.*)$') { $flagPrefix = $Matches[1]; $pathWord = $Matches[2] }
-    \\    $dirPart = [System.IO.Path]::GetDirectoryName($pathWord)
+    \\    $dirPart = if ($pathWord.Length -gt 0) { [System.IO.Path]::GetDirectoryName($pathWord) } else { $null }
     \\    $sep = if ($pathWord.Contains('/')) { '/' } else { [IO.Path]::DirectorySeparatorChar }
     \\    if ($directive -band 16) {
     \\        foreach ($entry in (Get-ChildItem -Name "$pathWord*" -Directory -ErrorAction SilentlyContinue)) {
-    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
+    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } elseif ($dirPart -match '[\\/]$') { "$dirPart$entry" } else { "$dirPart$sep$entry" }
     \\            $value = "$flagPrefix$joined$sep"
     \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $value), $value, 'ProviderContainer', $entry))
     \\        }
     \\    } elseif (-not ($directive -band 4)) {
     \\        foreach ($entry in (Get-ChildItem -Name "$pathWord*" -ErrorAction SilentlyContinue)) {
-    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } else { "$dirPart$sep$entry" }
+    \\            $joined = if ([string]::IsNullOrEmpty($dirPart)) { $entry } elseif ($dirPart -match '[\\/]$') { "$dirPart$entry" } else { "$dirPart$sep$entry" }
     \\            $type = if (Test-Path -LiteralPath $joined -PathType Container) { 'ProviderContainer' } else { 'ProviderItem' }
     \\            $value = "$flagPrefix$joined"
     \\            $results.Add([System.Management.Automation.CompletionResult]::new((& $quote $value), $value, $type, $entry))

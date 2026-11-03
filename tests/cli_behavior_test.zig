@@ -841,6 +841,9 @@ test "Scenario: Given pwsh completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "$text -replace \"'\", \"''\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "GetDirectoryName($pathWord)") != null);
     try std.testing.expect(std.mem.find(u8, script, "$flagPrefix = $Matches[1]") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$words[-1] = '\"\"'") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$line -match '^:(\\d+)$'") != null);
+    try std.testing.expect(std.mem.find(u8, script, "$dirPart -match '[\\\\/]$'") != null);
 }
 
 test "Scenario: Given scanned import report when rendering then stdout and stderr match the import format" {
