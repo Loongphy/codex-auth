@@ -1375,13 +1375,60 @@ test "Scenario: Given top-level dash when parsing then previous switch is select
     }
 }
 
-test "Scenario: Given switch dash when parsing then it is rejected in favor of the top-level shortcut" {
+test "Scenario: Given top-level dash with switch flags when parsing then the shortcut accepts one-shot flags" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { args: []const [:0]const u8, json: bool = false, restart: bool = false }{
+        .{ .args = &.{ "codex-auth", "-", "--json" }, .json = true },
+        .{ .args = &.{ "codex-auth", "-", "--restart-daemon" }, .restart = true },
+        .{ .args = &.{ "codex-auth", "-", "--json", "--restart-daemon" }, .json = true, .restart = true },
+    };
+    for (cases) |case| {
+        var result = try cli.commands.parseArgs(gpa, case.args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        switch (result) {
+            .command => |cmd| switch (cmd) {
+                .switch_account => |opts| {
+                    try std.testing.expectEqual(cli.types.SwitchTarget.previous, opts.target);
+                    try std.testing.expectEqual(case.json, opts.json);
+                    try std.testing.expectEqual(case.restart, opts.restart_daemon);
+                },
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        }
+    }
+}
+
+test "Scenario: Given top-level dash with picker-mode flags when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const cases = [_][]const [:0]const u8{
+        &.{ "codex-auth", "-", "--api" },
+        &.{ "codex-auth", "-", "--skip-api" },
+        &.{ "codex-auth", "-", "--live" },
+    };
+    for (cases) |args| {
+        var result = try cli.commands.parseArgs(gpa, args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        try expectUsageError(result, .switch_account, "does not support `--live`, `--api`, or `--skip-api`");
+    }
+}
+
+test "Scenario: Given top-level dash with extra arguments when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "-", "beta" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .switch_account, "unexpected argument after `-`");
+}
+
+test "Scenario: Given switch dash when parsing then it is rejected as an unknown flag" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
+    try expectUsageError(result, .switch_account, "unknown flag `-`");
 }
 
 test "Scenario: Given switch json query when parsing then query target and json mode are preserved" {
@@ -1405,7 +1452,7 @@ test "Scenario: Given switch json query when parsing then query target and json 
     }
 }
 
-test "Scenario: Given switch dash with json when parsing then the shortcut form is rejected" {
+test "Scenario: Given switch dash with json when parsing then dash is rejected as an unknown flag" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-", "--json" };
     var result = try cli.commands.parseArgs(gpa, &args);
@@ -1414,7 +1461,7 @@ test "Scenario: Given switch dash with json when parsing then the shortcut form 
     switch (result) {
         .usage_error => |usage_err| {
             try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.find(u8, usage_err.message, "only available as `codex-auth -`") != null);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "unknown flag `-`") != null);
         },
         else => return error.TestExpectedEqual,
     }
@@ -1555,7 +1602,7 @@ test "Scenario: Given switch dash with api flag when parsing then usage error is
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
+    try expectUsageError(result, .switch_account, "unknown flag `-`");
 }
 
 test "Scenario: Given switch dash with live flag when parsing then usage error is returned" {
@@ -1564,7 +1611,7 @@ test "Scenario: Given switch dash with live flag when parsing then usage error i
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
+    try expectUsageError(result, .switch_account, "unknown flag `-`");
 }
 
 test "Scenario: Given switch dash with skip-api flag when parsing then usage error is returned" {
@@ -1573,7 +1620,7 @@ test "Scenario: Given switch dash with skip-api flag when parsing then usage err
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "only available as `codex-auth -`");
+    try expectUsageError(result, .switch_account, "unknown flag `-`");
 }
 
 test "Scenario: Given switch query with removed auto flag when parsing then usage error is returned" {
@@ -2419,6 +2466,18 @@ test "Scenario: Given a dash prefix inside switch when completing then the resta
     defer gpa.free(out);
 
     try std.testing.expectEqualStrings("--restart-daemon\tApply the selected credentials to the running daemon\n:36\n", out);
+}
+
+test "Scenario: Given a flag prefix after the top-level dash when completing then one-shot flags are emitted" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{ "-", "--" };
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expect(std.mem.find(u8, out, "--json\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--restart-daemon\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--live") == null);
+    try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
 test "Scenario: Given a missing registry when completing an account selector then only the directive is emitted" {

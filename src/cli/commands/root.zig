@@ -41,14 +41,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
         return .{ .command = .{ .version = {} } };
     }
 
-    if (std.mem.eql(u8, cmd, "-")) {
-        if (args.len > 2) {
-            return common.usageErrorResult(allocator, .top_level, "unexpected argument after `-`: `{s}`.", .{
-                std.mem.sliceTo(args[2], 0),
-            });
-        }
-        return .{ .command = .{ .switch_account = .{ .target = .previous } } };
-    }
+    if (std.mem.eql(u8, cmd, "-")) return switch_account.parsePreviousShortcut(allocator, args[2..]);
 
     if (std.mem.eql(u8, cmd, "list")) return list.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "login")) return login.parse(allocator, args[2..]);

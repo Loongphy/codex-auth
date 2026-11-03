@@ -197,7 +197,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .top_level => {
             try out.writeAll("  codex-auth <command>\n");
-            try out.writeAll("  codex-auth -\n");
+            try out.writeAll("  codex-auth - [--json] [--restart-daemon]\n");
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
@@ -216,7 +216,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth -\n");
+            try out.writeAll("  codex-auth - [--json] [--restart-daemon]\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
             try out.writeAll("  codex-auth switch <query> --json\n");

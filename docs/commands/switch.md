@@ -3,7 +3,7 @@
 ## Usage
 
 ```shell
-codex-auth -
+codex-auth - [--json] [--restart-daemon]
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
@@ -13,9 +13,8 @@ codex-auth switch <query> --restart-daemon
 
 ## Previous Switch
 
-`codex-auth -` switches to the previous active account.
+`codex-auth -` switches to the previous active account. It is a shortcut form of `codex-auth switch`: it takes no positional argument and supports the same one-shot flags as query switching (`--json`, `--restart-daemon`), but not the picker-mode flags (`--live`, `--api`, `--skip-api`).
 
-- The shortcut takes no flags.
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
 

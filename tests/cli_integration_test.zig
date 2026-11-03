@@ -822,10 +822,11 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
-    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, attempts: usize = 1 }{
+    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, previous: bool = false, attempts: usize = 1 }{
         .{},
         .{ .json = true },
         .{ .unchanged = true },
+        .{ .previous = true },
         .{ .unchanged = true, .requested = false },
         .{ .requested = false },
         .{ .fail = true },
@@ -845,6 +846,12 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer home_dir.close();
         const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
         defer gpa.free(beta_key);
+        if (case.previous) {
+            var reg = try registry.loadRegistry(gpa, home);
+            defer reg.deinit(gpa);
+            reg.previous_active_account_key = try gpa.dupe(u8, beta_key);
+            try registry.saveRegistry(gpa, home, &reg);
+        }
         const body = try gpa.print(
             "{s}" ++
                 "[ \"$3\" = restart ] || exit 91\n" ++
@@ -856,7 +863,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer gpa.free(body);
         try fake_daemon.install(home_dir, body);
         for (0..case.attempts) |_| {
-            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
+            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
             const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, args);
             defer gpa.free(result.stdout);
             defer gpa.free(result.stderr);
@@ -2644,13 +2651,15 @@ test "Scenario: Given previous account exists when running top-level dash then i
         project_root,
         home_root,
         empty_path,
-        &[_][]const u8{"-"},
+        &[_][]const u8{ "-", "--json" },
     );
     defer gpa.free(switch_dash_result.stdout);
     defer gpa.free(switch_dash_result.stderr);
     try expectSuccess(switch_dash_result);
-    try std.testing.expectEqualStrings("Switched to backup(backup@example.com)\n", switch_dash_result.stdout);
-    try std.testing.expectEqualStrings("", switch_dash_result.stderr);
+    var parsed_dash = try std.json.parseFromSlice(std.json.Value, gpa, switch_dash_result.stdout, .{});
+    defer parsed_dash.deinit();
+    try std.testing.expectEqualStrings("switch", parsed_dash.value.object.get("command").?.string);
+    try std.testing.expectEqualStrings("backup@example.com", parsed_dash.value.object.get("switched_to").?.object.get("email").?.string);
 
     const auth_after_switch_dash = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(auth_after_switch_dash);

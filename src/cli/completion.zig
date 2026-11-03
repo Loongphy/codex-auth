@@ -328,6 +328,10 @@ const config_live_flags = [_]FlagSpec{
 };
 
 const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account" }};
+const dash_flags = [_]FlagSpec{
+    .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
+    .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
+};
 const clean_cands = [_]Cand{.{ .value = "background", .desc = "Delete stale background files" }};
 const shell_cands = [_]Cand{
     .{ .value = "bash", .desc = "Print Bash completion script" },
@@ -370,7 +374,7 @@ const command_specs = [_]CmdSpec{
     .{ .name = "config", .desc = "Manage configuration", .subs = &config_subs },
     .{ .name = "app", .desc = "Launch Codex App with CLI overrides", .flags = &app_flags },
 };
-const empty_spec = CmdSpec{ .name = "-", .desc = "Switch to the previous active account" };
+const empty_spec = CmdSpec{ .name = "-", .desc = "Switch to the previous active account", .flags = &dash_flags };
 
 const Context = struct {
     spec: ?*const CmdSpec = null,
@@ -646,8 +650,8 @@ pub fn writeCompleteResponse(
         }
     } else {
         const spec = ctx.spec.?;
-        if (spec == &empty_spec) {
-            // `codex-auth -` takes no further arguments.
+        if (spec == &empty_spec and !(cur.len > 0 and std.mem.startsWith(u8, cur, "-"))) {
+            // `codex-auth -` takes no positional arguments.
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
             if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
