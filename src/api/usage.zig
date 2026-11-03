@@ -234,7 +234,10 @@ pub fn fetchUsageForAuthPathsDetailedBatch(
         default_reset_credits_endpoint,
         requests.items,
         max_concurrency,
-    ) catch return results;
+    ) catch |err| {
+        if (err == error.Canceled) return error.Canceled;
+        return results;
+    };
     defer reset_credit_http_results.deinit(allocator);
 
     for (request_indexes, 0..) |request_idx, result_idx| {
