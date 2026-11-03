@@ -123,10 +123,12 @@ const zsh_script =
     \\    return
     \\  fi
     \\  if (( ${#cands[@]} > 0 )); then
+    \\    local -a add_opts
+    \\    (( directive & 32 )) && add_opts+=(-o nosort)
     \\    if (( directive & 2 )); then
-    \\      compadd -S '' -d descs -- "${cands[@]}"
+    \\      compadd "${add_opts[@]}" -S '' -d descs -- "${cands[@]}"
     \\    else
-    \\      compadd -d descs -- "${cands[@]}"
+    \\      compadd "${add_opts[@]}" -d descs -- "${cands[@]}"
     \\    fi
     \\  fi
     \\  (( directive & 4 )) || { compset -P '*='; _files; }
@@ -144,7 +146,7 @@ const fish_script =
     \\    set -l cur (commandline -ct)
     \\    set -a tokens "$cur"
     \\    set -l directive 0
-    \\    for line in (codex-auth __complete (string escape -- $tokens) 2>/dev/null)
+    \\    for line in (codex-auth __complete $tokens 2>/dev/null)
     \\        if string match -q ':*' -- $line
     \\            set directive (string sub -s 2 -- $line)
     \\        else
@@ -476,9 +478,11 @@ fn resolveContext(prev: []const []const u8) Context {
                     ctx.markFlag(flag);
                     // A `--help` word is only valid on its own; extras are rejected.
                     if (std.mem.eql(u8, name, "--help")) ctx.unknown = true;
-                    // A trailing `=` keeps the value pending for completable
-                    // kinds; a freeform flag's empty value is already consumed,
-                    // so the next word is a positional.
+                    // A trailing `=` keeps the value pending so `--flag=<TAB>`
+                    // completes joined values; the endpoint cannot tell the
+                    // cursor sits right after `=` versus on a later word. A
+                    // freeform flag's empty value is already consumed, so the
+                    // next word is a positional.
                     if (flag.value != .none and (eq == null or (eq.? == tok.len - 1 and flag.value != .freeform))) {
                         ctx.pending = flag;
                     }
@@ -679,8 +683,10 @@ pub fn writeCompleteResponse(
         }
     } else {
         const spec = ctx.spec.?;
-        if (spec == &empty_spec and !(cur.len > 0 and std.mem.startsWith(u8, cur, "-"))) {
-            // `codex-auth -` takes no positional arguments.
+        if (spec == &empty_spec) {
+            // `codex-auth -` accepts only the one-shot switch flags.
+            if (cur.len == 0 or std.mem.startsWith(u8, cur, "-"))
+                try writeFlagCands(out, spec, cur, &ctx, descriptions);
         } else if (cur.len > 0 and std.mem.startsWith(u8, cur, "-")) {
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
             if (positionalSpec(spec, ctx.pos_count)) |pos| try writeCands(out, pos.literals, cur, descriptions);
@@ -688,6 +694,8 @@ pub fn writeCompleteResponse(
             try writeSpecNames(out, spec.subs, cur, false, descriptions);
         } else if (positionalSpec(spec, ctx.pos_count)) |pos| {
             directive = try writePositionalCands(out, allocator, codex_home, spec, pos, cur, &ctx, descriptions);
+            // A repeatable positional still allows the non-positional flags.
+            if (pos.repeat) try writeFlagCands(out, spec, cur, &ctx, descriptions);
         } else {
             try writeFlagCands(out, spec, cur, &ctx, descriptions);
         }

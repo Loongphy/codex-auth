@@ -90,4 +90,4 @@ codex-auth __completeNoDesc <word>... <current-word>
 
 The last argument is the word being completed (possibly empty); the arguments before it are the already-typed words after `codex-auth`. `__complete` prints `candidate<TAB>description` rows; `__completeNoDesc` prints bare `candidate` rows for shells that cannot render descriptions. Both end with a `:<directive>` line — a bitmask compatible with Cobra's `ShellCompDirective`: `0` allow file completion, `1` error, `2` no trailing space, `4` no file completion, `16` directories only, `32` keep output order.
 
-Account-taking arguments (`switch`, `remove`, `alias set`, `alias clear`) emit one selector hint per account — the unique alias, else the unique email, else the account key — so every offered value resolves to a single stable account identity.
+Account-taking arguments (`switch`, `remove`, `reset`, `alias set`, `alias clear`) emit one selector hint per account — the unique alias, else the unique email, else the account key — so every offered value resolves to a single stable account identity.

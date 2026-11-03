@@ -805,7 +805,8 @@ test "Scenario: Given zsh completion when rendering then the script is a __compl
     try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete \"${argv[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "compdef _codex-auth codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "words[2,CURRENT]") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compadd -d descs -- \"${cands[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compadd \"${add_opts[@]}\" -d descs -- \"${cands[@]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "add_opts+=(-o nosort)") != null);
     try std.testing.expect(std.mem.find(u8, script, "compadd -Q") == null);
     try std.testing.expect(std.mem.find(u8, script, "_files -/") != null);
     try std.testing.expect(std.mem.find(u8, script, "compset -P '*='") != null);
@@ -822,7 +823,7 @@ test "Scenario: Given fish completion when rendering then the script is a __comp
     try std.testing.expect(std.mem.find(u8, script, "complete -c codex-auth -e") != null);
     try std.testing.expect(std.mem.find(u8, script, "commandline -opc") != null);
     try std.testing.expect(std.mem.find(u8, script, "commandline -ct") != null);
-    try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete (string escape -- $tokens)") != null);
+    try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete $tokens") != null);
     try std.testing.expect(std.mem.find(u8, script, "set -a tokens \"$cur\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "$tokens[-1]\" != \"$cur") == null);
     try std.testing.expect(std.mem.find(u8, script, "__fish_complete_path") != null);
@@ -2350,7 +2351,9 @@ test "Scenario: Given conflicting flags when completing then rejected combinatio
         const args = [_][]const u8{ "remove", "--all", "" };
         const out = try completeResponse(gpa, "/nonexistent", &args);
         defer gpa.free(out);
-        try std.testing.expectEqualStrings(":36\n", out);
+        try std.testing.expect(std.mem.find(u8, out, "--json\t") != null);
+        try std.testing.expect(std.mem.find(u8, out, "--all\t") == null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
     }
     {
         const args = [_][]const u8{ "remove", "--all", "--l" };
