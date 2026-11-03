@@ -13,6 +13,7 @@ After modifying any `.zig` file, always run `zig build run -- list` to verify th
 # Docs
 
 - Do not add low-level technical implementation details to `README.md`. Put implementation-specific behavior in `docs/*.md` or `AGENTS.md` instead.
+- Keep `docs/*.md` behavioral: describe what a command does and the rules that cross feature boundaries (state transitions, platform differences, API/JSON contracts). Do not transcribe volatile UI details — exact wording, markers, colors, and rendered examples drift from the implementation and go stale. Pin those details in `tests/*_test.zig` and reference the test file instead.
 
 # Zig API Discovery
 
