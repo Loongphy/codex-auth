@@ -3,6 +3,7 @@ const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const style = @import("style.zig");
 const io = @import("io.zig");
+const text_width = @import("../tui/text_width.zig");
 const windows = std.os.windows;
 
 const readFileOnce = io.readFileOnce;
@@ -119,11 +120,14 @@ pub const TuiEscapeClassification = union(enum) {
     ignore,
     keyboard_enhancement_supported,
     navigation: TuiNavigation,
+    key: TuiInputKey,
 };
 
 pub const TuiEscapeAction = enum {
     quit,
     ignore,
+    enter,
+    backspace,
     move_up,
     move_down,
     keyboard_up,
@@ -140,6 +144,9 @@ pub const TuiEscapeAction = enum {
 pub const TuiEscapeReadResult = struct {
     action: TuiEscapeAction,
     buffered_bytes_consumed: usize,
+    /// Set when a byte following a standalone Esc was already consumed from
+    /// the TTY and must be replayed as a normal key by the caller.
+    pending_byte: ?u8 = null,
 };
 
 pub const TuiPollResult = enum {
@@ -271,54 +278,118 @@ pub fn writeTuiFrameTo(out: *std.Io.Writer, frame: []const u8, previous_line_cou
     return line_count;
 }
 
-pub fn switchTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n"
-    else
-        "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n";
+/// Footer legends shrink in three semantic tiers instead of hard-truncating:
+/// the full legend, a mid variant keeping the mode's verbs, and a compact
+/// variant keeping only the commit and exit keys. `·`/`↑` stay out of the
+/// Windows set per docs/windows.md.
+const FooterLadder = struct {
+    full: []const u8,
+    mid: []const u8,
+    compact: []const u8,
+};
+
+fn footerFor(ladder: FooterLadder, max_cols: ?usize) []const u8 {
+    const limit = max_cols orelse return ladder.full;
+    if (text_width.displayWidth(ladder.full) <= limit) return ladder.full;
+    if (text_width.displayWidth(ladder.mid) <= limit) return ladder.mid;
+    return ladder.compact;
 }
 
-pub fn writeSwitchTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeSwitchTuiFooterBounded(out, use_color, null);
+fn switchFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        .mid = "Up/Down - Enter select - Esc quit\n",
+        .compact = "Enter select - Esc quit\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k, 1-9 type, Enter select, Esc or q quit\n",
+        .mid = "↑/↓ · Enter select · Esc quit\n",
+        .compact = "Enter select · Esc quit\n",
+    };
+}
+
+pub fn switchTuiFooterText(is_windows: bool) []const u8 {
+    return switchFooterLadder(is_windows).full;
+}
+
+/// Widest switch legend that fits `max_cols`, so narrow terminals still show
+/// the select/quit keys instead of a sliced sentence.
+pub fn switchTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(switchFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeSwitchTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterText(builtin.os.tag == .windows), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", switchTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+}
+
+fn removeFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        .mid = "Up/Down - Space - Enter delete - Esc quit\n",
+        .compact = "Enter delete - Esc quit\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n",
+        .mid = "↑/↓ · Space · Enter delete · Esc quit\n",
+        .compact = "Enter delete · Esc quit\n",
+    };
 }
 
 pub fn removeTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n"
-    else
-        "Keys: ↑/↓ or j/k move, Space toggle, 1-9 type, Enter delete, Esc or q quit\n";
+    return removeFooterLadder(is_windows).full;
 }
 
-pub fn writeRemoveTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeRemoveTuiFooterBounded(out, use_color, null);
+pub fn removeTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(removeFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeRemoveTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterText(builtin.os.tag == .windows), max_cols);
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", removeTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
+}
+
+fn listFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        .mid = "j/k row - Enter credits - Esc quit\n",
+        .compact = "Enter - Esc\n",
+    } else .{
+        .full = "Keys: ↑/↓ scroll, j/k row, Enter credits, PgUp/PgDn/Home/End page, Esc/q quit\n",
+        .mid = "j/k row · Enter credits · Esc quit\n",
+        .compact = "Enter · Esc\n",
+    };
 }
 
 pub fn listTuiFooterText(is_windows: bool) []const u8 {
-    return if (is_windows)
-        "Keys: Up/Down scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n"
-    else
-        "Keys: ↑/↓ scroll, PgUp/PgDn page, Home/End jump, Esc or q quit\n";
+    return listFooterLadder(is_windows).full;
 }
 
-pub fn writeListTuiFooter(out: *std.Io.Writer, use_color: bool) !void {
-    try writeListTuiFooterBounded(out, use_color, null);
+pub fn listTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(listFooterLadder(is_windows), max_cols);
+}
+
+fn listCreditsFooterLadder(is_windows: bool) FooterLadder {
+    return if (is_windows) .{
+        .full = "Keys: Up/Down or j/k credit, Enter redeem, Esc/q back\n",
+        .mid = "Up/Down - Enter redeem - Esc back\n",
+        .compact = "Enter redeem - Esc\n",
+    } else .{
+        .full = "Keys: ↑/↓ or j/k credit, Enter redeem, Esc/q back\n",
+        .mid = "↑/↓ · Enter redeem · Esc back\n",
+        .compact = "Enter redeem · Esc\n",
+    };
+}
+
+/// Footer while the reset credits rail owns the navigation keys. It replaces
+/// the account-list legend entirely, so the rail mode shows only its own
+/// actions and cannot imply that `j`/`k` still move account rows.
+pub fn listCreditsTuiFooterText(is_windows: bool) []const u8 {
+    return listCreditsFooterLadder(is_windows).full;
+}
+
+pub fn listCreditsTuiFooterTextFor(is_windows: bool, max_cols: ?usize) []const u8 {
+    return footerFor(listCreditsFooterLadder(is_windows), max_cols);
 }
 
 pub fn writeListTuiFooterBounded(out: *std.Io.Writer, use_color: bool, max_cols: ?usize) !void {
-    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterText(builtin.os.tag == .windows), max_cols);
-}
-
-pub fn writeTuiLineBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?usize) !void {
-    try writeTuiLineContentBounded(out, text, max_cols);
-    try out.writeAll("\n");
+    try writeStyledTuiLineBounded(out, if (use_color) style.ansi.cyan else "", listTuiFooterTextFor(builtin.os.tag == .windows, max_cols), max_cols);
 }
 
 pub fn writeStyledTuiLineBounded(out: *std.Io.Writer, ansi_style: []const u8, text: []const u8, max_cols: ?usize) !void {
@@ -334,22 +405,51 @@ fn writeTuiLineContentBounded(out: *std.Io.Writer, text: []const u8, max_cols: ?
         try out.writeAll(line);
         return;
     };
-    if (line.len <= limit) {
+    if (text_width.displayWidth(line) <= limit) {
         try out.writeAll(line);
-    } else if (limit == 1) {
-        try out.writeAll(".");
-    } else if (limit > 1) {
-        try out.writeAll(line[0 .. limit - 1]);
-        try out.writeAll(".");
+        return;
     }
+    // Line-level truncation keeps a `...` tail — unlike the single `.` used
+    // inside table cells, a cut sentence still reads as one.
+    if (limit <= 3) {
+        try out.writeAll(line[0..text_width.prefixByteLength(line, limit)]);
+        return;
+    }
+    try out.writeAll(line[0..text_width.prefixByteLength(line, limit - 3)]);
+    try out.writeAll("...");
 }
 
 pub fn writeTuiPromptLine(out: *std.Io.Writer, prompt: []const u8, digits: []const u8) !void {
-    try out.writeAll(prompt);
-    if (digits.len != 0) {
-        try out.writeAll(" ");
-        try out.writeAll(digits);
+    try writeTuiPromptLineBounded(out, prompt, digits, null);
+}
+
+/// Prompt plus the in-progress digit echo, bounded to `max_cols`. Typed digits
+/// are the live feedback the user is watching, so on a tight line the prompt
+/// is what gives way — same priority split as the rail's confirm hint.
+pub fn writeTuiPromptLineBounded(out: *std.Io.Writer, prompt: []const u8, digits: []const u8, max_cols: ?usize) !void {
+    const limit = max_cols orelse {
+        try out.writeAll(prompt);
+        if (digits.len != 0) {
+            try out.writeAll(" ");
+            try out.writeAll(digits);
+        }
+        try out.writeAll("\n");
+        return;
+    };
+    if (digits.len == 0) {
+        try writeTuiLineContentBounded(out, prompt, limit);
+        try out.writeAll("\n");
+        return;
     }
+    const digits_width = text_width.displayWidth(digits);
+    if (digits_width + 1 >= limit) {
+        try writeTuiLineContentBounded(out, digits, limit);
+        try out.writeAll("\n");
+        return;
+    }
+    try writeTuiLineContentBounded(out, prompt, limit - digits_width - 1);
+    try out.writeAll(" ");
+    try out.writeAll(digits);
     try out.writeAll("\n");
 }
 
@@ -419,8 +519,12 @@ pub const TuiSession = struct {
             var raw = saved_termios;
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
-            raw.cc[@backingInt(std.c.V.MIN)] = 1;
-            raw.cc[@backingInt(std.c.V.TIME)] = 0;
+            // Signals would kill the process before `deinit` can restore the
+            // terminal; with ISIG off, Ctrl-C arrives as a byte the input loop
+            // maps to `.quit`, so quitting always runs the restore path.
+            raw.lflag.ISIG = false;
+            raw.cc[@intFromEnum(std.c.V.MIN)] = 1;
+            raw.cc[@intFromEnum(std.c.V.TIME)] = 0;
             try std.posix.tcsetattr(input.handle, .FLUSH, raw);
             errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
 
@@ -477,47 +581,32 @@ pub const TuiSession = struct {
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (buffer[i] == 0x1b) {
-                const escape = try readTuiEscapeAction(
+                i += try appendTuiInputKeysFromEscape(
                     self.input,
                     buffer[i + 1 .. n],
-                    tui_poll_error_mask,
-                    tui_escape_sequence_timeout_ms,
+                    keys,
+                    &key_count,
+                    &self.keyboard_enhancement_supported,
                 );
-                switch (escape.action) {
-                    .move_up => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_up else .move_up),
-                    .move_down => appendTuiInputKey(keys, &key_count, if (self.keyboard_enhancement_supported) .scroll_down else .move_down),
-                    .keyboard_up => appendTuiInputKey(keys, &key_count, .keyboard_up),
-                    .keyboard_down => appendTuiInputKey(keys, &key_count, .keyboard_down),
-                    .page_up => appendTuiInputKey(keys, &key_count, .page_up),
-                    .page_down => appendTuiInputKey(keys, &key_count, .page_down),
-                    .home => appendTuiInputKey(keys, &key_count, .home),
-                    .end => appendTuiInputKey(keys, &key_count, .end),
-                    .scroll_up => appendTuiInputKey(keys, &key_count, .scroll_up),
-                    .scroll_down => appendTuiInputKey(keys, &key_count, .scroll_down),
-                    .quit => appendTuiInputKey(keys, &key_count, .quit),
-                    .keyboard_enhancement_supported => self.keyboard_enhancement_supported = true,
-                    .ignore => {},
-                }
-                i += escape.buffered_bytes_consumed;
                 continue;
             }
 
-            switch (buffer[i]) {
-                '\r', '\n' => appendTuiInputKey(keys, &key_count, .enter),
-                0x7f, 0x08 => appendTuiInputKey(keys, &key_count, .backspace),
-                else => appendTuiInputKey(keys, &key_count, .{ .byte = buffer[i] }),
-            }
+            appendTuiInputKey(keys, &key_count, tuiInputKeyFromByte(buffer[i]));
         }
 
         return .{ .ready = key_count };
     }
 
     pub fn terminalRows(self: *@This()) usize {
-        return if (terminalSize(self.output)) |size| size.rows else 24;
+        // A terminal may report only one dimension (rows or cols as 0), so
+        // each accessor falls back independently instead of losing both.
+        const rows = if (terminalSize(self.output)) |size| size.rows else 0;
+        return if (rows != 0) rows else 24;
     }
 
     pub fn terminalCols(self: *@This()) usize {
-        return if (terminalSize(self.output)) |size| size.cols else 80;
+        const cols = if (terminalSize(self.output)) |size| size.cols else 0;
+        return if (cols != 0) cols else 80;
     }
 
     pub fn readWindowsKey(self: *@This()) !TuiInputKey {
@@ -563,7 +652,7 @@ pub const TuiSession = struct {
                 else => blk: {
                     const codepoint = key_event.uChar.UnicodeChar;
                     if (codepoint == 0 or codepoint > 0x7f) continue;
-                    break :blk TuiInputKey{ .byte = @intCast(codepoint) };
+                    break :blk tuiInputKeyFromByte(@intCast(codepoint));
                 },
             };
 
@@ -610,6 +699,70 @@ fn appendTuiInputKey(keys: []TuiInputKey, key_count: *usize, key: TuiInputKey) v
     key_count.* += 1;
 }
 
+/// Byte-to-key mapping shared by the normal input path, the `pending_byte`
+/// replay, and the Windows console reader: Enter variants, backspace
+/// variants, and Ctrl-C, which arrives as a byte because ISIG and
+/// ENABLE_PROCESSED_INPUT stay off for the whole session.
+pub fn tuiInputKeyFromByte(byte: u8) TuiInputKey {
+    return switch (byte) {
+        '\r', '\n' => .enter,
+        0x7f, 0x08 => .backspace,
+        0x03 => .quit,
+        else => .{ .byte = byte },
+    };
+}
+
+/// Translates the bytes that follow a consumed Esc into input keys and returns
+/// how many `buffered_tail` bytes that took. A `pending_byte` that cannot
+/// start a known sequence replays through `tuiInputKeyFromByte`, so Enter and
+/// Backspace mean the same thing there as anywhere else. A pending Esc is
+/// trickier: it may head a real sequence (Esc then Arrow inside one read or
+/// paste), so it re-enters the parser instead of assuming a second quit —
+/// otherwise Esc+Arrow would read as Esc+Esc and quit twice.
+pub fn appendTuiInputKeysFromEscape(
+    tty: std.Io.File,
+    buffered_tail: []const u8,
+    keys: []TuiInputKey,
+    key_count: *usize,
+    keyboard_enhancement_supported: *bool,
+) !usize {
+    var consumed: usize = 0;
+    while (true) {
+        const escape = try readTuiEscapeAction(
+            tty,
+            buffered_tail[consumed..],
+            tui_poll_error_mask,
+            tui_escape_sequence_timeout_ms,
+        );
+        consumed += escape.buffered_bytes_consumed;
+        switch (escape.action) {
+            .enter => appendTuiInputKey(keys, key_count, .enter),
+            .backspace => appendTuiInputKey(keys, key_count, .backspace),
+            .move_up => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_up else .move_up),
+            .move_down => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_down else .move_down),
+            .keyboard_up => appendTuiInputKey(keys, key_count, .keyboard_up),
+            .keyboard_down => appendTuiInputKey(keys, key_count, .keyboard_down),
+            .page_up => appendTuiInputKey(keys, key_count, .page_up),
+            .page_down => appendTuiInputKey(keys, key_count, .page_down),
+            .home => appendTuiInputKey(keys, key_count, .home),
+            .end => appendTuiInputKey(keys, key_count, .end),
+            .scroll_up => appendTuiInputKey(keys, key_count, .scroll_up),
+            .scroll_down => appendTuiInputKey(keys, key_count, .scroll_down),
+            .quit => {
+                appendTuiInputKey(keys, key_count, .quit);
+                if (escape.pending_byte) |byte| {
+                    if (byte == 0x1b) continue;
+                    appendTuiInputKey(keys, key_count, tuiInputKeyFromByte(byte));
+                }
+            },
+            .keyboard_enhancement_supported => keyboard_enhancement_supported.* = true,
+            .ignore => {},
+        }
+        break;
+    }
+    return consumed;
+}
+
 pub fn terminalSize(file: std.Io.File) ?TuiSize {
     if (!(file.isTty(app_runtime.io()) catch false)) return null;
 
@@ -621,10 +774,11 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
         }
         const rows = @as(i32, get_console_info.Data.dwWindowSize.Y);
         const cols = @as(i32, get_console_info.Data.dwWindowSize.X);
-        if (rows <= 0 or cols <= 0) return null;
+        // 0 means "unknown" for that dimension; only fail when both are.
+        if (rows <= 0 and cols <= 0) return null;
         return .{
-            .rows = @intCast(rows),
-            .cols = @intCast(cols),
+            .rows = @intCast(@max(0, rows)),
+            .cols = @intCast(@max(0, cols)),
         };
     } else {
         var wsz: std.posix.winsize = .{
@@ -634,7 +788,7 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
             .ypixel = 0,
         };
         const rc = std.posix.system.ioctl(file.handle, std.posix.T.IOCGWINSZ, @intFromPtr(&wsz));
-        if (std.posix.errno(rc) != .SUCCESS or wsz.row == 0 or wsz.col == 0) return null;
+        if (std.posix.errno(rc) != .SUCCESS or (wsz.row == 0 and wsz.col == 0)) return null;
         return .{
             .rows = @intCast(wsz.row),
             .cols = @intCast(wsz.col),
@@ -667,16 +821,55 @@ fn isEnhancedArrowSuffix(seq: []const u8) bool {
     return has_separator;
 }
 
-fn isCsiUKeyboardArrow(seq: []const u8) ?TuiNavigation {
-    if (seq.len < 4 or seq[0] != '[' or seq[seq.len - 1] != 'u') return null;
+/// Event type carried in a kitty `key;mods:event` parameter tail: 1 press,
+/// 2 repeat, 3 release. Legacy sequences carry none and count as a press.
+/// The same check the CSI-u decoder applies, for the CSI-letter forms.
+fn csiKeyEventType(params: []const u8) usize {
+    const last_field = if (std.mem.findScalarLast(u8, params, ';')) |semi|
+        params[semi + 1 ..]
+    else
+        params;
+    const colon = std.mem.findScalar(u8, last_field, ':') orelse return 1;
+    return std.fmt.parseInt(usize, last_field[colon + 1 ..], 10) catch 1;
+}
+
+/// Decodes a `CSI <key>;<modifiers>:<event-type> u` key event (the kitty
+/// keyboard protocol the `\x1b[>7u` push enables). Disambiguate moves Escape,
+/// Enter and Backspace off their legacy bytes — Esc arrives as `27u`, and
+/// Ctrl-C arrives as `99;5` rather than byte 0x03. Returns null for sequences
+/// that stay `.ignore`: key releases (event type 3 — press and repeat both
+/// fire), unbound keys, and malformed parameters.
+fn csiUKey(seq: []const u8) ?TuiInputKey {
+    if (seq.len < 3 or seq[0] != '[' or seq[seq.len - 1] != 'u') return null;
     const params = seq[1 .. seq.len - 1];
-    var code_end: usize = 0;
-    while (code_end < params.len and params[code_end] != ':' and params[code_end] != ';') : (code_end += 1) {}
-    if (code_end == 0) return null;
-    const code = std.fmt.parseInt(usize, params[0..code_end], 10) catch return null;
+
+    // Field 1 is `key-code[:shifted[:base-layout]]`; field 2 is
+    // `modifiers[:event-type]`. The alternate key codes and any third field
+    // (text codepoints) are irrelevant to the keys this TUI binds.
+    var fields = std.mem.splitScalar(u8, params, ';');
+    const key_field = fields.first();
+    const code_end = std.mem.findScalar(u8, key_field, ':') orelse key_field.len;
+    const code = std.fmt.parseInt(usize, key_field[0..code_end], 10) catch return null;
+
+    var modifiers: usize = 1;
+    var event_type: usize = 1;
+    if (fields.next()) |mod_field| {
+        if (std.mem.findScalar(u8, mod_field, ':')) |colon| {
+            modifiers = std.fmt.parseInt(usize, mod_field[0..colon], 10) catch 1;
+            event_type = std.fmt.parseInt(usize, mod_field[colon + 1 ..], 10) catch 1;
+        } else if (mod_field.len != 0) {
+            modifiers = std.fmt.parseInt(usize, mod_field, 10) catch 1;
+        }
+    }
+    if (event_type == 3) return null;
+
     return switch (code) {
+        27 => .quit,
+        13 => .enter,
+        127 => .backspace,
         57419 => .keyboard_up,
         57420 => .keyboard_down,
+        99 => if (modifiers > 1 and (modifiers - 1) & 4 != 0) .quit else null,
         else => null,
     };
 }
@@ -689,7 +882,7 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
             if (seq.len == 1) break :blk .incomplete;
             const final = seq[seq.len - 1];
             if (isKeyboardEnhancementFlagsResponse(seq)) break :blk .keyboard_enhancement_supported;
-            if (isCsiUKeyboardArrow(seq)) |direction| break :blk .{ .navigation = direction };
+            if (csiUKey(seq)) |key| break :blk .{ .key = key };
             if (seq[1] == '<') {
                 if (final != 'M' and final != 'm') {
                     if (final >= '@' and final <= '~') break :blk .ignore;
@@ -704,25 +897,36 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                 };
             }
             if (final == 'A' or final == 'B') {
+                const params = seq[1 .. seq.len - 1];
                 if (isEnhancedArrowSuffix(seq)) {
+                    // Kitty reports a key release as `1;mods:3 A/B`; without
+                    // this filter a single press moves twice.
+                    if (csiKeyEventType(params) == 3) break :blk .ignore;
                     break :blk .{ .navigation = if (final == 'A') .keyboard_up else .keyboard_down };
                 }
-                for (seq[1 .. seq.len - 1]) |ch| {
+                for (params) |ch| {
                     if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
                 }
                 break :blk .{ .navigation = if (final == 'A') .up else .down };
             }
             if (final == 'H' or final == 'F') {
-                for (seq[1 .. seq.len - 1]) |ch| {
-                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                const params = seq[1 .. seq.len - 1];
+                for (params) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';' and ch != ':') break :blk .ignore;
                 }
+                if (csiKeyEventType(params) == 3) break :blk .ignore;
                 break :blk .{ .navigation = if (final == 'H') .home else .end };
             }
             if (final == '~') {
-                for (seq[1 .. seq.len - 1]) |ch| {
-                    if (!std.ascii.isDigit(ch) and ch != ';') break :blk .ignore;
+                const params = seq[1 .. seq.len - 1];
+                for (params) |ch| {
+                    if (!std.ascii.isDigit(ch) and ch != ';' and ch != ':') break :blk .ignore;
                 }
-                const code = std.fmt.parseInt(usize, seq[1 .. seq.len - 1], 10) catch break :blk .ignore;
+                if (csiKeyEventType(params) == 3) break :blk .ignore;
+                // The key number is the first field; modifiers and the event
+                // type live in later fields the TUI does not bind.
+                const key_end = std.mem.findScalar(u8, params, ';') orelse params.len;
+                const code = std.fmt.parseInt(usize, params[0..key_end], 10) catch break :blk .ignore;
                 break :blk switch (code) {
                     1, 7 => .{ .navigation = .home },
                     4, 8 => .{ .navigation = .end },
@@ -749,6 +953,12 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     };
 }
 
+fn isTuiEscapeSequenceStarter(byte: u8) bool {
+    // CSI (`\x1b[...`) and SS3 (`\x1bO...`) cover everything this TUI reads:
+    // arrows, PgUp/PgDn, Home/End, mouse, and the keyboard-enhancement reply.
+    return byte == '[' or byte == 'O';
+}
+
 pub fn readTuiEscapeAction(
     tty: std.Io.File,
     buffered_tail: []const u8,
@@ -760,7 +970,32 @@ pub fn readTuiEscapeAction(
     var buffered_bytes_consumed: usize = 0;
 
     while (true) {
+        // A bare Esc followed by a byte that cannot start a known sequence is a
+        // standalone Esc, not the head of an unknown sequence. Without this,
+        // fast typists and key auto-repeat lose the Esc (and the byte) to the
+        // `.ignore` path: the escape-sequence window would swallow both. The
+        // byte travels out as `pending_byte` for the caller to replay.
+        if (seq_len == 1 and !isTuiEscapeSequenceStarter(seq[0])) {
+            return .{
+                .action = .quit,
+                .buffered_bytes_consumed = buffered_bytes_consumed,
+                .pending_byte = seq[0],
+            };
+        }
         switch (classifyTuiEscapeSuffix(seq[0..seq_len])) {
+            .key => |key| {
+                return .{
+                    .action = switch (key) {
+                        .quit => .quit,
+                        .enter => .enter,
+                        .backspace => .backspace,
+                        .keyboard_up => .keyboard_up,
+                        .keyboard_down => .keyboard_down,
+                        else => .ignore,
+                    },
+                    .buffered_bytes_consumed = buffered_bytes_consumed,
+                };
+            },
             .navigation => |direction| {
                 return .{
                     .action = switch (direction) {

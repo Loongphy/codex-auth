@@ -2,6 +2,8 @@ pub const api = struct {
     pub const account = @import("api/account.zig");
     pub const http = @import("api/http.zig");
     pub const me = @import("api/me.zig");
+    pub const reset_credits = @import("api/reset_credits.zig");
+    pub const transport = @import("api/transport.zig");
     pub const usage = @import("api/usage.zig");
 };
 
@@ -28,11 +30,13 @@ pub const terminal = struct {
 
 pub const time = struct {
     pub const relative = @import("time/relative.zig");
+    pub const timestamp = @import("time/timestamp.zig");
 };
 
 pub const tui = struct {
     pub const display = @import("tui/display.zig");
     pub const table = @import("tui/table.zig");
+    pub const text_width = @import("tui/text_width.zig");
 };
 
 pub const version = @import("version.zig");

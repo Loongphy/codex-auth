@@ -2,6 +2,8 @@ pub const types = @import("http_types.zig");
 pub const env = @import("http_env.zig");
 pub const child = @import("http_child.zig");
 pub const executable = @import("http_executable.zig");
+pub const proxy = @import("http_proxy.zig");
+pub const scutil = @import("http_proxy_scutil.zig");
 pub const curl = @import("http_curl.zig");
 
 pub const request_timeout_secs = types.request_timeout_secs;
@@ -23,6 +25,7 @@ pub const ChildCaptureResult = types.ChildCaptureResult;
 pub const runGetJsonCommand = curl.runGetJsonCommand;
 pub const runBearerGetJsonCommand = curl.runBearerGetJsonCommand;
 pub const runGetJsonBatchCommand = curl.runGetJsonBatchCommand;
+pub const runPostJsonCommand = curl.runCurlPostJsonCommand;
 pub const ensureCurlExecutableAvailable = curl.ensureCurlExecutableAvailable;
 pub const resolveCurlExecutableAlloc = curl.resolveCurlExecutableAlloc;
 

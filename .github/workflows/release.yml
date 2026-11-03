@@ -166,6 +166,10 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
+      - name: Apply prerelease tag version
+        if: ${{ contains(github.ref_name, '-') }}
+        run: node scripts/npm/set-version.mjs ${{ github.ref_name }}
+
       - name: Check versions
         run: node scripts/npm/check-versions.mjs ${{ github.ref_name }}
 
@@ -342,6 +346,33 @@ jobs:
               lines.push("- No code changes detected.");
             }
 
+            let tagNotes = "";
+            try {
+              const ref = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `tags/${currentTag}`,
+              });
+              if (ref.data.object.type === "tag") {
+                const tagObject = await github.rest.git.getTag({
+                  owner,
+                  repo,
+                  tag_sha: ref.data.object.sha,
+                });
+                tagNotes = (tagObject.data.message ?? "").trim();
+              }
+            } catch (error) {
+              core.info(`Could not read tag annotation for ${currentTag}: ${error.message}`);
+            }
+
+            if (/^release\s+v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/i.test(tagNotes)) {
+              tagNotes = "";
+            }
+
+            if (tagNotes) {
+              lines.unshift(tagNotes, "", "---", "");
+            }
+
             fs.writeFileSync("release-notes.md", lines.join("\n") + "\n");
 
       - name: Download build artifacts
@@ -376,6 +407,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+
+      - name: Apply prerelease tag version
+        if: ${{ contains(github.ref_name, '-') }}
+        run: node scripts/npm/set-version.mjs ${{ github.ref_name }}
 
       - name: Download build artifacts
         uses: actions/download-artifact@v8

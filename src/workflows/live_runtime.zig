@@ -182,7 +182,7 @@ pub const SwitchLiveRuntime = struct {
         self.next_refresh_not_before_ms = finished_ms + policy.interval_ms;
     }
 
-    pub fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.live.SwitchSelectionDisplay) ![]u8 {
+    pub fn buildStatusLine(self: *@This(), allocator: std.mem.Allocator, display: cli.live.SwitchSelectionDisplay, max_cols: ?usize) ![]u8 {
         _ = display;
         const io = self.io_impl.io();
         const now_ms = nowMilliseconds();
@@ -216,10 +216,19 @@ pub const SwitchLiveRuntime = struct {
             try allocator.dupe(u8, "");
         defer allocator.free(error_suffix);
 
-        return allocator.print(
+        const full = try std.fmt.allocPrint(
+            allocator,
             "Live refresh: {s} | {s}{s}",
             .{ mode_label, refresh_state, error_suffix },
         );
+        // Status text is pure ASCII, so byte length is display width. When the
+        // full line cannot fit, the compact variant drops the `Live refresh:`
+        // prefix but keeps the mode, state, and error — the parts that change.
+        if (max_cols != null and full.len > max_cols.?) {
+            defer allocator.free(full);
+            return std.fmt.allocPrint(allocator, "{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
+        }
+        return full;
     }
 };
 
@@ -296,9 +305,10 @@ pub fn switchLiveRuntimeBuildStatusLine(
     context: *anyopaque,
     allocator: std.mem.Allocator,
     display: cli.live.SwitchSelectionDisplay,
+    max_cols: ?usize,
 ) ![]u8 {
     const runtime: *SwitchLiveRuntime = @ptrCast(@alignCast(context));
-    return runtime.buildStatusLine(allocator, display);
+    return runtime.buildStatusLine(allocator, display, max_cols);
 }
 
 pub fn accountLabelForKeyAlloc(

@@ -58,5 +58,5 @@ JSON output, and several new account management commands.
 
 Added per-command documentation under [docs/commands/](./docs/commands/README.md), plus
 [docs/json-api.md](./docs/json-api.md), [docs/api.md](./docs/api.md),
-[docs/schema-migration.md](./docs/schema-migration.md), and
+[docs/schema.md](./docs/schema.md), and
 [docs/table-layout.md](./docs/table-layout.md).

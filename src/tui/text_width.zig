@@ -30,9 +30,3 @@ fn codepointByteLength(value: []const u8) usize {
     _ = std.unicode.utf8Decode(value[0..len]) catch return 1;
     return len;
 }
-
-test "display width counts UTF-8 codepoints instead of bytes" {
-    try std.testing.expectEqual(@as(usize, 7), displayWidth("Рабочая"));
-    try std.testing.expectEqual(@as(usize, 6), prefixByteLength("Рабочая", 3));
-    try std.testing.expectEqualStrings("чая", "Рабочая"[suffixStart("Рабочая", 3)..]);
-}

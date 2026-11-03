@@ -25,6 +25,9 @@ const ForegroundUsageWorkerResult = struct {
     missing_auth: bool = false,
     error_name: ?[]const u8 = null,
     snapshot: ?registry.RateLimitSnapshot = null,
+    access_token_expires_at: ?i64 = null,
+    plan_expires_at: ?i64 = null,
+    plan_expires_at_known: bool = false,
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         if (self.snapshot) |*snapshot| {
@@ -411,6 +414,9 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
                 .missing_auth = batch_result.missing_auth,
                 .error_name = batch_result.error_name,
                 .snapshot = batch_result.snapshot,
+                .access_token_expires_at = batch_result.access_token_expires_at,
+                .plan_expires_at = batch_result.plan_expires_at,
+                .plan_expires_at_known = batch_result.plan_expires_at_known,
             };
             batch_result.snapshot = null;
         }
@@ -451,6 +457,18 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
         }
         const outcome = &state.outcomes[idx];
         if (!worker_result.requested) continue;
+        if (worker_result.access_token_expires_at) |expiry| {
+            if (reg.accounts.items[idx].access_token_expires_at != expiry) {
+                reg.accounts.items[idx].access_token_expires_at = expiry;
+                registry_changed = true;
+            }
+        }
+        if (worker_result.plan_expires_at_known) {
+            if (reg.accounts.items[idx].plan_expires_at != worker_result.plan_expires_at) {
+                reg.accounts.items[idx].plan_expires_at = worker_result.plan_expires_at;
+                registry_changed = true;
+            }
+        }
         outcome.* = .{
             .attempted = true,
             .method = .api,
@@ -677,6 +695,9 @@ fn foregroundUsageRefreshWorker(
         .status_code = fetch_result.status_code,
         .error_code = fetch_result.error_code,
         .missing_auth = fetch_result.missing_auth,
+        .access_token_expires_at = fetch_result.access_token_expires_at,
+        .plan_expires_at = fetch_result.plan_expires_at,
+        .plan_expires_at_known = fetch_result.plan_expires_at_known,
     };
 
     if (fetch_result.snapshot) |snapshot| {
@@ -687,6 +708,9 @@ fn foregroundUsageRefreshWorker(
                 .status_code = fetch_result.status_code,
                 .error_code = fetch_result.error_code,
                 .missing_auth = fetch_result.missing_auth,
+                .access_token_expires_at = fetch_result.access_token_expires_at,
+                .plan_expires_at = fetch_result.plan_expires_at,
+                .plan_expires_at_known = fetch_result.plan_expires_at_known,
                 .error_name = @errorName(err),
             };
             return;
@@ -702,7 +726,15 @@ fn setForegroundUsageOverrideForOutcome(
     outcome: ForegroundUsageOutcome,
 ) !bool {
     if (outcome.error_name) |error_name| {
-        slot.* = try allocator.dupe(u8, error_name);
+        if (error_name.len > max_usage_override_display_width) {
+            slot.* = try std.fmt.allocPrint(
+                allocator,
+                "{s}...",
+                .{error_name[0 .. max_usage_override_display_width - 3]},
+            );
+        } else {
+            slot.* = try allocator.dupe(u8, error_name);
+        }
         return true;
     }
     if (outcome.missing_auth) {

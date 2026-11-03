@@ -33,6 +33,25 @@ This keeps failures localized to the test file that owns them and avoids a large
 
 A small library compile test may be included to validate the package surface with `std.testing.refAllDecls`.
 
+### Why tests use plain `Step.Run` instead of `addRunArtifact`
+
+`b.addRunArtifact` on a test compile enables Zig's server-mode test runner:
+the binary is spawned with `--listen=-` and talks `std.zig.Server` over stdio,
+giving per-test timeouts, crash respawn, and result metadata. On Windows, Zig
+0.16's implementation of that protocol intermittently deadlocks: the build
+runner spawns the test server and then never services it, so the child waits
+on stdin forever while the runner emits no output — CI then shows only
+`zig version` until the job is cancelled (upstream race, also seen on
+ziglang's own `x86_64-windows` CI in ziglang/zig#25029).
+
+Each test step is therefore a plain `std.Build.Step.Run` with
+`addArtifactArg`, which runs the binary in terminal mode and treats its exit
+code as the verdict. Per-test output (`N/N name...OK`) still streams to the
+log. Do not "simplify" this back to `addRunArtifact`, and do not set
+`run.stdio = .inherit` on an `addRunArtifact` result — the step still passes
+`--listen=-` and the runner aborts with `internal test runner failure:
+ReadFailed`.
+
 ## Production/Test Boundary
 
 Production modules must not import `tests/` or `tests/support/`.
@@ -54,6 +73,55 @@ const fixtures = @import("support/fixtures.zig");
 ```
 
 Do not expose fixtures from `src/root.zig`.
+
+## Mock Backend
+
+`tests/fake_curl.zig` is the mock backend, installed as `curl` by
+`zig build test-helpers`. `codex-auth` resolves `curl` from `PATH`, so putting the
+mock first shadows the real one without touching any production code path.
+
+Without `CODEX_AUTH_FAKE_CURL_DIR` it answers the two fixed bodies the older tests
+were written against. With it, the directory drives the responses:
+`usage[-<account_id>].json`, `credits[-<account_id>].json`,
+`accounts[-<account_id>].json`, `me.json` and `consume[-<account_id>].json` supply
+bodies (a per-account consume fixture wins over the global one, so a single live
+session can redeem for one account and fail for another), a sibling
+`<name>.status` file supplies a non-`200` status, a sibling `<name>.exit` file makes
+that one request fail like curl would (so a single account in a batch can fail
+transport while the others succeed), and `after-consume-*.json` takes over once a
+redeem succeeded. `CODEX_AUTH_FAKE_CURL_SCENARIO` selects a built-in consume outcome
+(`ok`, `already_redeemed`, `no_credit`, `nothing_to_reset`, `unknown_code`, `http500`,
+`timeout`, `resolve_failed`). `requests.log` records each consume request with its
+body, and never a credential; tests assert both.
+
+The mock replaces only the HTTP peer: the CLI binary, registry and usage parsing, the
+rail renderer and the exit codes are all the real thing. It is a `test-helpers`
+artifact, so it is never part of a release package: the release and preview workflows
+copy `zig-out/bin/<binary_name>` alone into the uploaded artifacts.
+
+## Transport Port
+
+`src/api/transport.zig` is the port between the endpoint modules and the HTTP
+machinery: a `Transport` vtable covering `getJson`, `bearerGetJson`, `getJsonBatch`
+and `postJson`. Workflow entry points assemble `Transport.curl()`, so the shipped
+binary always talks through the real curl child process. This is a production
+architecture boundary, not a test-only seam.
+
+Tests wire `tests/support/scripted_transport.zig` instead: an in-memory transport
+that queues responses per verb, injects transport failures, and records every
+request as structured data. Port-level tests (e.g. `api_reset_credits_test.zig`)
+run endpoint logic in-process — no process spawn, no fixture files, no parsing of
+curl config text.
+
+The split between the two doubles:
+
+- Port level owns scenario coverage: outcome matrices, per-account behavior,
+  request/body assertions. `reset_credits` is the reference implementation;
+  route any other endpoint through the port when you next modify it or need
+  port-level coverage for it.
+- Fake curl owns the curl assembly contract: argv/config construction, exit-code
+  to error mapping, timeouts, output caps, plus a thin end-to-end slice through
+  the real binary.
 
 ## Test Descriptions
 

@@ -1,8 +1,7 @@
 const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
-const builtin = @import("builtin");
 const common = @import("common.zig");
-const c_time = @import("c_time");
+const localtime = @import("../time/localtime.zig");
 
 const Registry = common.Registry;
 const accountSnapshotFileName = common.accountSnapshotFileName;
@@ -57,33 +56,9 @@ pub fn backupDir(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
     return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts" });
 }
 
-pub fn localtimeCompat(ts: i64, out_tm: *c_time.struct_tm) bool {
-    if (comptime builtin.os.tag == .windows) {
-        if (comptime @hasDecl(c_time, "_localtime64_s") and @hasDecl(c_time, "__time64_t")) {
-            var t64 = std.math.cast(c_time.__time64_t, ts) orelse return false;
-            return c_time._localtime64_s(out_tm, &t64) == 0;
-        }
-        return false;
-    }
-
-    var t = std.math.cast(c_time.time_t, ts) orelse return false;
-    if (comptime @hasDecl(c_time, "localtime_r")) {
-        return c_time.localtime_r(&t, out_tm) != null;
-    }
-
-    if (comptime @hasDecl(c_time, "localtime")) {
-        const tm_ptr = c_time.localtime(&t);
-        if (tm_ptr == null) return false;
-        out_tm.* = tm_ptr.*;
-        return true;
-    }
-
-    return false;
-}
-
 pub fn formatBackupTimestamp(allocator: std.mem.Allocator, ts: i64) ![]u8 {
-    var tm: c_time.struct_tm = undefined;
-    if (!localtimeCompat(ts, &tm)) {
+    var tm: localtime.struct_tm = undefined;
+    if (!localtime.compat(ts, &tm)) {
         return allocator.print("{d}", .{ts});
     }
 

@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const daemon = @import("../workflows/codex_daemon.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const io_util = @import("../core/io_util.zig");
@@ -9,6 +11,69 @@ const style = @import("style.zig");
 const io = @import("io.zig");
 
 const UsageError = types.UsageError;
+
+pub fn printCodexDaemonDiagnostic(home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    try writeCodexDaemonDiagnosticTo(stderr.out(), home, executable, outcome, requested);
+    try stderr.out().flush();
+}
+
+pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+    switch (outcome) {
+        .not_running => {
+            if (requested) try out.writeAll("Account files switched successfully; no running Codex daemon was found, so no restart was attempted.\n");
+            return;
+        },
+        .restarted => {
+            try out.writeAll("Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n");
+            return;
+        },
+        .reloaded => {
+            try out.writeAll("Account files switched successfully; the running daemon reloaded the new credentials without a restart.\n");
+            return;
+        },
+        .deferred => {
+            try out.writeAll("Account files switched successfully; the daemon deferred the reload until the running turn finishes. Rerun `switch --restart-daemon` afterwards.\n");
+            return;
+        },
+        .running => try out.writeAll("A running Codex daemon may still use cached credentials. Use `switch --restart-daemon` to apply the selection or repair stale authentication. Restarting can interrupt attached sessions.\n"),
+        .unknown => try out.writeAll(if (requested)
+            "Account files switched successfully; daemon responsiveness could not be confirmed. The requested restart was not attempted.\n"
+        else
+            "Account files switched successfully; daemon responsiveness could not be confirmed. Its account state is unconfirmed.\n"),
+        .restart_failed => try out.writeAll("Account files switched successfully; requested daemon restart failed. The daemon may be stopping or starting; its account state is unconfirmed.\n"),
+        .timed_out => try out.writeAll("Account files switched successfully; daemon restart did not complete within 120 seconds. The daemon may still be stopping or starting; its account state is unconfirmed.\n"),
+        .unsupported => {
+            if (!requested) return;
+            try out.writeAll("Account files switched successfully; automatic daemon coordination is unsupported on this platform. Check which lifecycle commands your Codex installation supports.\n");
+        },
+    }
+    try out.writeAll("Check daemon status before retrying (a version response does not verify account identity):\n  ");
+    try writeDaemonCommandTo(out, home, executable, "version");
+    try out.writeAll("\nIf a restart is needed:\n  ");
+    try writeDaemonCommandTo(out, home, executable, "restart");
+    try out.writeAll("\n");
+}
+
+fn writeDaemonCommandTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, command: []const u8) !void {
+    try out.writeAll(if (builtin.os.tag == .windows) "$env:CODEX_HOME = " else "CODEX_HOME=");
+    try writeShellArgumentTo(out, home);
+    try out.writeAll(if (builtin.os.tag == .windows) "; & " else " ");
+    try writeShellArgumentTo(out, executable);
+    try out.print(" app-server daemon {s}", .{command});
+}
+
+fn writeShellArgumentTo(out: *std.Io.Writer, arg: []const u8) !void {
+    try out.writeAll("'");
+    var parts = std.mem.splitScalar(u8, arg, '\'');
+    try out.writeAll(parts.first());
+    while (parts.next()) |part| {
+        try out.writeAll(if (builtin.os.tag == .windows) "''" else "'\\''");
+        try out.writeAll(part);
+    }
+    try out.writeAll("'");
+}
 
 fn importReportStyle(outcome: registry.ImportOutcome) []const u8 {
     return switch (outcome) {
@@ -330,6 +395,65 @@ pub fn printAliasCleared(rec: *const registry.AccountRecord, old_alias: []const 
         try out.print("Cleared alias for {s}: {s}\n", .{ rec.email, old_alias });
     }
     try out.flush();
+}
+
+/// Prints a `reset` command failure to stderr with the standard error prefix.
+pub fn printResetError(comptime fmt: []const u8, args: anytype) !void {
+    var stderr: io_util.Stderr = undefined;
+    stderr.init();
+    const out = stderr.out();
+    const use_color = stderr.color_enabled;
+    try writeErrorPrefixTo(out, use_color);
+    try out.writeAll(" ");
+    try out.print(fmt, args);
+    try out.writeAll("\n");
+    try out.flush();
+}
+
+/// The one-line summary `reset` prints after a consume: that a credit was
+/// redeemed, how many are left, and when the next one expires. The redeemed
+/// card is not named; `list --json` and the stored snapshot keep that detail.
+/// The wording matches the live rail's status line. Takes the platform
+/// explicitly so tests and the dev preview can render both variants.
+pub fn resetSummaryLineAlloc(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+    is_windows: bool,
+) ![]u8 {
+    const separator = style.Glyphs.forPlatform(is_windows).separator;
+    var line: std.Io.Writer.Allocating = .init(allocator);
+    errdefer line.deinit();
+    try line.writer.writeAll(if (already_used) "reset credit already redeemed" else "reset credit redeemed");
+    if (remaining == 0) {
+        try line.writer.print("{s}none left", .{separator});
+    } else {
+        try line.writer.print("{s}{d} left", .{ separator, remaining });
+        if (next_expiry) |expiry| {
+            try line.writer.print(" (next exp {s})", .{expiry});
+        } else {
+            try line.writer.writeAll(" (no expiry)");
+        }
+    }
+    return line.toOwnedSlice();
+}
+
+/// Prints the `reset` summary line. `next_expiry` is the compact local
+/// `MM-DD HH:MM` of the soonest-expiring remaining card, or null when that card
+/// carries no expiry.
+pub fn printResetSummary(
+    allocator: std.mem.Allocator,
+    already_used: bool,
+    remaining: usize,
+    next_expiry: ?[]const u8,
+) !void {
+    const line = try resetSummaryLineAlloc(allocator, already_used, remaining, next_expiry, builtin.os.tag == .windows);
+    defer allocator.free(line);
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    try stdout.out().print("{s}\n", .{line});
+    try stdout.out().flush();
 }
 
 pub fn printInvalidRemoveSelectionError() !void {

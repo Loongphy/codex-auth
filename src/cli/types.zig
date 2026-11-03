@@ -35,6 +35,7 @@ pub const SwitchOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
     json: bool = false,
+    restart_daemon: bool = false,
 };
 pub const RemoveOptions = struct {
     selectors: [][]const u8,
@@ -42,6 +43,9 @@ pub const RemoveOptions = struct {
     live: bool = false,
     api_mode: ApiMode = .default,
     json: bool = false,
+};
+pub const ResetOptions = struct {
+    selector: []u8,
 };
 pub const AliasSetOptions = struct {
     selector: []u8,
@@ -80,6 +84,7 @@ pub const HelpTopic = enum {
     export_auth,
     switch_account,
     remove_account,
+    reset_credits,
     alias,
     clean,
     config,
@@ -93,6 +98,7 @@ pub const Command = union(enum) {
     export_auth: ExportOptions,
     switch_account: SwitchOptions,
     remove_account: RemoveOptions,
+    reset_credits: ResetOptions,
     alias: AliasOptions,
     clean: CleanOptions,
     config: ConfigOptions,

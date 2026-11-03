@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cli = @import("codex_auth").cli;
 const fs = @import("codex_auth").core.compat_fs;
 const registry = @import("codex_auth").registry;
@@ -510,6 +511,57 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.find(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
     try std.testing.expect(std.mem.find(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.find(u8, help, "If a target is ambiguous") == null);
+    try std.testing.expect(std.mem.find(u8, help, "--restart-daemon") != null);
+    try std.testing.expect(std.mem.find(u8, help, "unchanged-file recovery") != null);
+}
+
+test "Scenario: Given explicit restart on one-shot switch forms then parser preserves the request" {
+    const gpa = std.testing.allocator;
+    const cases = [_][]const [:0]const u8{
+        &.{ "codex-auth", "switch", "beta", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--restart-daemon", "beta", "--json" },
+        &.{ "codex-auth", "switch", "-", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--skip-api", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "--api", "--restart-daemon" },
+    };
+    for (cases) |args| {
+        var result = try cli.commands.parseArgs(gpa, args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        switch (result) {
+            .command => |cmd| switch (cmd) {
+                .switch_account => |opts| try std.testing.expect(opts.restart_daemon),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        }
+    }
+}
+
+test "Scenario: Given live or duplicate explicit restart then parser rejects the combination" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { args: []const [:0]const u8, message: []const u8 }{
+        .{ .args = &.{ "codex-auth", "switch", "--live", "--restart-daemon" }, .message = "`--restart-daemon` cannot be combined with `--live`." },
+        .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon", "--restart-daemon", "--json" }, .message = "duplicate `--restart-daemon`" },
+    };
+    for (cases) |case| {
+        var result = try cli.commands.parseArgs(gpa, case.args);
+        defer cli.commands.freeParseResult(gpa, &result);
+        try expectUsageError(result, .switch_account, case.message);
+    }
+}
+
+test "Scenario: Given daemon timeout then diagnostic distinguishes selected files and quotes recovery commands" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try cli.output.writeCodexDaemonDiagnosticTo(&aw.writer, "/tmp/home's space", "/tmp/bin's space/codex", .timed_out, true);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "Account files switched successfully") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "120 seconds") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "account state is unconfirmed") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "app-server daemon version") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "app-server daemon restart") != null);
+    const quoted_home = if (builtin.os.tag == .windows) "'/tmp/home''s space'" else "'/tmp/home'\\''s space'";
+    try std.testing.expect(std.mem.find(u8, aw.written(), quoted_home) != null);
 }
 
 test "Scenario: Given remove command help when rendering then options explain live API all and target forms" {
@@ -1605,4 +1657,83 @@ test "Scenario: Given selector environment when deciding switch or remove UI the
     try std.testing.expect(cli.picker.shouldUseNumberedRemoveSelector(false, true, false));
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(false, true, true));
     try std.testing.expect(!cli.picker.shouldUseNumberedRemoveSelector(true, true, true));
+}
+
+test "Scenario: Given a reset selector when parsing then the selector is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| try std.testing.expectEqualStrings("work@example.com", opts.selector),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset without a selector when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "requires an account selector");
+}
+
+test "Scenario: Given reset with a leading dash selector when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    // Unlike `switch -`, `reset` has no previous-account form: a leading dash is
+    // reported as an unknown flag instead of being read as a selector.
+    const args = [_][:0]const u8{ "codex-auth", "reset", "-" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "unknown flag `-`");
+}
+
+test "Scenario: Given reset with extra args when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "one@example.com", "two@example.com" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "unexpected extra argument");
+}
+
+test "Scenario: Given reset help when parsing then the reset credits topic is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "--help" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectHelp(result, .reset_credits);
+}
+
+test "reset summary line matches the documented examples on both platforms" {
+    const gpa = std.testing.allocator;
+
+    const used = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", false);
+    defer gpa.free(used);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 1 left (next exp 01-01 08:00)", used);
+
+    const used_windows = try cli.output.resetSummaryLineAlloc(gpa, false, 1, "01-01 08:00", true);
+    defer gpa.free(used_windows);
+    try std.testing.expectEqualStrings("reset credit redeemed, 1 left (next exp 01-01 08:00)", used_windows);
+    for (used_windows) |byte| try std.testing.expect(byte < 0x80);
+
+    const already = try cli.output.resetSummaryLineAlloc(gpa, true, 0, null, true);
+    defer gpa.free(already);
+    try std.testing.expectEqualStrings("reset credit already redeemed, none left", already);
+
+    const none_left = try cli.output.resetSummaryLineAlloc(gpa, false, 0, null, false);
+    defer gpa.free(none_left);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} none left", none_left);
+
+    // A remaining card without an expiry says so instead of printing a blank.
+    const undated = try cli.output.resetSummaryLineAlloc(gpa, false, 2, null, false);
+    defer gpa.free(undated);
+    try std.testing.expectEqualStrings("reset credit redeemed \u{00b7} 2 left (no expiry)", undated);
 }
