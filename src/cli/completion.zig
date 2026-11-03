@@ -423,7 +423,10 @@ fn resolveContext(prev: []const []const u8) Context {
                 const name = if (eq) |i| tok[0..i] else tok;
                 if (findFlag(spec, name)) |flag| {
                     ctx.markFlag(flag);
-                    if (flag.value != .none and (eq == null or eq.? == tok.len - 1)) {
+                    // A trailing `=` keeps the value pending for completable
+                    // kinds; a freeform flag's empty value is already consumed,
+                    // so the next word is a positional.
+                    if (flag.value != .none and (eq == null or (eq.? == tok.len - 1 and flag.value != .freeform))) {
                         ctx.pending = flag;
                     }
                 }
@@ -622,9 +625,10 @@ pub fn writeAccountCandidates(
 
 // One candidate per account: the user-chosen alias when it uniquely identifies
 // the account, else a unique email, else the always-unique account key. Shared
-// labels are ambiguous selectors, so they are never offered, and a label that
-// parses as a flag (for example `--all`) is never offered either — accepting
-// it would trigger a command action instead of selecting the account.
+// labels are ambiguous selectors, so they are never offered. A label that
+// parses as a flag (for example `--all`) would trigger a command action
+// instead of selecting the account, and a `:`-leading label is swallowed by
+// the shells' directive-line parsing — neither is offered.
 fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecord) []const u8 {
     if (usableHint(reg, rec.alias)) return rec.alias;
     if (usableHint(reg, rec.email)) return rec.email;
@@ -632,7 +636,7 @@ fn selectorHint(reg: *const registry.Registry, rec: *const registry.AccountRecor
 }
 
 fn usableHint(reg: *const registry.Registry, label: []const u8) bool {
-    return label.len != 0 and label[0] != '-' and labelMatchCount(reg, label) == 1;
+    return label.len != 0 and label[0] != '-' and label[0] != ':' and labelMatchCount(reg, label) == 1;
 }
 
 fn labelMatchCount(reg: *const registry.Registry, label: []const u8) usize {

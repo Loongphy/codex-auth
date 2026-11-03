@@ -2033,6 +2033,7 @@ test "Scenario: Given a flag-like alias when completing an account selector then
     try appendAccount(gpa, &reg, "user-4QmYj7PkN2sLx8AcVbR3TwHd::67fe2bbb-0de6-49a4-b2b3-d1df366d1faf", "alpha@example.com", "--all", .business);
     try appendAccount(gpa, &reg, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960", "shared@example.com", "-n", .plus);
     try appendAccount(gpa, &reg, "user-3KxBq7TzR5mNp9SfLpT8JdEe::a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", "shared@example.com", "", .plus);
+    try appendAccount(gpa, &reg, "user-6MnDq9WzR7mPx5SfLqT2JdFf::b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e", "colon@example.com", ":work", .plus);
     try registry.saveRegistry(gpa, codex_home, &reg);
 
     var aw: std.Io.Writer.Allocating = .init(gpa);
@@ -2043,8 +2044,10 @@ test "Scenario: Given a flag-like alias when completing an account selector then
     const out = aw.written();
     try std.testing.expect(std.mem.find(u8, out, "alpha@example.com\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "user-8LnCq5VzR1mHx9SfKpT4JdWe::518a44d9-ba75-4bad-87e5-ae9377042960\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "colon@example.com\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "--all\t") == null);
     try std.testing.expect(std.mem.find(u8, out, "-n\t") == null);
+    try std.testing.expect(std.mem.find(u8, out, ":work\t") == null);
     try std.testing.expect(std.mem.find(u8, out, "shared@example.com\t") == null);
 }
 
@@ -2203,6 +2206,25 @@ test "Scenario: Given an app platform flag value when completing then choices ar
     defer gpa.free(out);
 
     try std.testing.expectEqualStrings("win\twin\nwsl\twsl\n:36\n", out);
+}
+
+test "Scenario: Given an empty joined choices flag when completing then the choices stay pending" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{ "app", "--platform=", "" };
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings("win\twin\nwsl\twsl\nmac\tmac\n:36\n", out);
+}
+
+test "Scenario: Given an empty joined freeform flag when completing then the flag is consumed" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{ "import", "--alias=", "" };
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expect(std.mem.find(u8, out, "--alias\t") == null);
+    try std.testing.expect(std.mem.endsWith(u8, out, ":0\n"));
 }
 
 test "Scenario: Given an inline flag value when completing then joined candidates are emitted" {
