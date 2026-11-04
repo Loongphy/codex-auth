@@ -42,10 +42,6 @@ pub fn resolveSwitchQueryLocally(
         else => return .{ .multiple = exact },
     }
 
-    if (try findAccountIndexByDisplayNumber(allocator, reg, query)) |account_idx| {
-        return .{ .direct = reg.accounts.items[account_idx].account_key };
-    }
-
     var matches = try findMatchingAccounts(allocator, reg, query);
     if (matches.items.len == 0) {
         matches.deinit(allocator);

@@ -351,12 +351,6 @@ fn resolveRemoveSelectors(
             }
         }
 
-        if (try findAccountIndexByDisplayNumber(allocator, reg, selector)) |account_idx| {
-            try appendSelectedIndex(allocator, &selected, account_idx);
-            try resolutions.append(allocator, .{ .selector = selector, .match = .{ .resolved = account_idx } });
-            continue;
-        }
-
         var matches = try findMatchingAccountsForRemove(allocator, reg, selector);
         defer matches.deinit(allocator);
         switch (matches.items.len) {
