@@ -1046,7 +1046,7 @@ pub fn readTuiEscapeAction(
 
         switch (try pollTuiInput(tty, timeout_ms, poll_error_mask)) {
             .timeout => return .{
-                .action = if (seq_len == 0) .quit else .ignore,
+                .action = if (seq_len == 0 or (seq_len == 1 and seq[0] == 0x1b)) .quit else .ignore,
                 .buffered_bytes_consumed = buffered_bytes_consumed,
             },
             .closed => return .{

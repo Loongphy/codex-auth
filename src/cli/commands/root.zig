@@ -5,6 +5,7 @@ const common = @import("common.zig");
 const app = @import("app.zig");
 const alias = @import("alias.zig");
 const clean = @import("clean.zig");
+const completion = @import("completion.zig");
 const config = @import("config.zig");
 const export_auth = @import("export.zig");
 const import_auth = @import("import.zig");
@@ -40,14 +41,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
         return .{ .command = .{ .version = {} } };
     }
 
-    if (std.mem.eql(u8, cmd, "-")) {
-        if (args.len > 2) {
-            return common.usageErrorResult(allocator, .top_level, "unexpected argument after `-`: `{s}`.", .{
-                std.mem.sliceTo(args[2], 0),
-            });
-        }
-        return .{ .command = .{ .switch_account = .{ .target = .previous } } };
-    }
+    if (std.mem.eql(u8, cmd, "-")) return switch_account.parsePreviousShortcut(allocator, args[2..]);
 
     if (std.mem.eql(u8, cmd, "list")) return list.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "login")) return login.parse(allocator, args[2..]);
@@ -58,6 +52,9 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !type
     if (std.mem.eql(u8, cmd, "reset")) return reset.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "alias")) return alias.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "clean")) return clean.parse(allocator, args[2..]);
+    if (std.mem.eql(u8, cmd, "completion")) return completion.parse(allocator, args[2..]);
+    if (std.mem.eql(u8, cmd, "__complete")) return parseCompleteRequest(allocator, args[2..], true);
+    if (std.mem.eql(u8, cmd, "__completeNoDesc")) return parseCompleteRequest(allocator, args[2..], false);
     if (std.mem.eql(u8, cmd, "config")) return config.parse(allocator, args[2..]);
     if (std.mem.eql(u8, cmd, "app")) return app.parse(allocator, args[2..]);
 
@@ -94,9 +91,27 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
             },
             .clear => |clear_opts| allocator.free(clear_opts.selector),
         },
+        .complete_request => |opts| {
+            common.freeOwnedStringList(allocator, opts.args);
+            allocator.free(opts.args);
+        },
         else => {},
     }
     cmd.* = undefined;
+}
+
+fn parseCompleteRequest(allocator: std.mem.Allocator, args: []const [:0]const u8, descriptions: bool) !types.ParseResult {
+    var owned = std.ArrayList([]const u8).empty;
+    errdefer {
+        common.freeOwnedStringList(allocator, owned.items);
+        owned.deinit(allocator);
+    }
+    for (args) |arg| {
+        const dupe = try allocator.dupe(u8, std.mem.sliceTo(arg, 0));
+        errdefer allocator.free(dupe);
+        try owned.append(allocator, dupe);
+    }
+    return .{ .command = .{ .complete_request = .{ .args = try owned.toOwnedSlice(allocator), .descriptions = descriptions } } };
 }
 
 fn parseHelpArgs(allocator: std.mem.Allocator, rest: []const [:0]const u8) !types.ParseResult {
@@ -122,6 +137,7 @@ fn helpTopicForName(name: []const u8) ?types.HelpTopic {
     if (std.mem.eql(u8, name, "reset")) return .reset_credits;
     if (std.mem.eql(u8, name, "alias")) return .alias;
     if (std.mem.eql(u8, name, "clean")) return .clean;
+    if (std.mem.eql(u8, name, "completion")) return .completion;
     if (std.mem.eql(u8, name, "config")) return .config;
     if (std.mem.eql(u8, name, "app")) return .app;
     return null;

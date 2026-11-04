@@ -6,6 +6,8 @@
 codex-auth app [--id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]
 ```
 
+Value flags also accept the joined `--flag=<value>` form.
+
 ## Behavior
 
 Launches the official Codex App with per-process environment overrides.

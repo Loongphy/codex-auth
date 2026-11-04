@@ -68,13 +68,29 @@ fn replaceAlias(allocator: std.mem.Allocator, rec: *registry.AccountRecord, alia
     rec.alias = owned_alias;
 }
 
+fn isDigitOnly(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch < '0' or ch > '9') return false;
+    }
+    return true;
+}
+
 fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx: usize) !void {
     if (alias_value.len == 0) {
         try cli.output.printInvalidAliasError("alias cannot be empty; use `codex-auth alias clear <selector>` to remove one.");
         return error.InvalidAlias;
     }
-    if (query_mod.parseDisplayNumber(alias_value) != null) {
+    if (isDigitOnly(alias_value)) {
         try cli.output.printInvalidAliasError("alias cannot be only digits because numbers select displayed rows.");
+        return error.InvalidAlias;
+    }
+    if (std.mem.startsWith(u8, alias_value, "-")) {
+        try cli.output.printInvalidAliasError("alias cannot start with '-' because flag-like words are never read as selectors.");
+        return error.InvalidAlias;
+    }
+    if (std.mem.startsWith(u8, alias_value, ":")) {
+        try cli.output.printInvalidAliasError("alias cannot start with ':' because completion protocols reserve leading colons.");
         return error.InvalidAlias;
     }
     for (alias_value) |ch| {
@@ -88,6 +104,10 @@ fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx:
         if (rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, alias_value)) {
             try cli.output.printDuplicateAliasError(alias_value, rec.email);
             return error.DuplicateAlias;
+        }
+        if (std.ascii.eqlIgnoreCase(rec.account_key, alias_value)) {
+            try cli.output.printInvalidAliasError("alias cannot equal another account's key because keys resolve before aliases.");
+            return error.InvalidAlias;
         }
     }
 }

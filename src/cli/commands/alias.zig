@@ -33,7 +33,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (common.isHelpFlag(subcommand)) {
         return common.usageErrorResult(allocator, .alias, "`--help` must be used by itself for `alias`.", .{});
     }
-    if (std.mem.startsWith(u8, subcommand, "-")) {
+    if (subcommand.len > 1 and std.mem.startsWith(u8, subcommand, "-")) {
         return common.usageErrorResult(allocator, .alias, "unknown flag `{s}` for `alias`.", .{subcommand});
     }
     return common.usageErrorResult(allocator, .alias, "unknown alias subcommand `{s}`.", .{subcommand});

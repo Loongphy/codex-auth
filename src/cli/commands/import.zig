@@ -14,8 +14,9 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = std.mem.sliceTo(args[i], 0);
-        if (std.mem.eql(u8, arg, "--alias")) {
-            if (i + 1 >= args.len) {
+        if (std.mem.eql(u8, arg, "--alias") or common.inlineFlagValue(arg, "--alias") != null) {
+            const inline_value = common.inlineFlagValue(arg, "--alias");
+            if (inline_value == null and i + 1 >= args.len) {
                 common.freeImportOptions(allocator, auth_path, alias);
                 return common.usageErrorResult(allocator, .import_auth, "missing value for `--alias`.", .{});
             }
@@ -23,8 +24,8 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
                 common.freeImportOptions(allocator, auth_path, alias);
                 return common.usageErrorResult(allocator, .import_auth, "duplicate `--alias` for `import`.", .{});
             }
-            alias = try allocator.dupe(u8, std.mem.sliceTo(args[i + 1], 0));
-            i += 1;
+            alias = try allocator.dupe(u8, inline_value orelse std.mem.sliceTo(args[i + 1], 0));
+            if (inline_value == null) i += 1;
         } else if (std.mem.eql(u8, arg, "--purge")) {
             if (purge) {
                 common.freeImportOptions(allocator, auth_path, alias);
@@ -40,7 +41,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         } else if (common.isHelpFlag(arg)) {
             common.freeImportOptions(allocator, auth_path, alias);
             return common.usageErrorResult(allocator, .import_auth, "`--help` must be used by itself for `import`.", .{});
-        } else if (std.mem.startsWith(u8, arg, "-")) {
+        } else if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             common.freeImportOptions(allocator, auth_path, alias);
             return common.usageErrorResult(allocator, .import_auth, "unknown flag `{s}` for `import`.", .{arg});
         } else {

@@ -12,6 +12,10 @@ Install with npm:
 npm install -g @loongphy/codex-auth
 ```
 
+Installed command:
+
+- `codex-auth`
+
 You can also run it without a global install:
 
 ```shell
@@ -78,6 +82,41 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
+| [`codex-auth completion <bash\|zsh\|fish\|pwsh>`](./docs/commands/completion.md) | Print a shell completion script |
+
+## Shell Completion
+
+Install Fish completions with:
+
+```shell
+mkdir -p ~/.config/fish/completions
+codex-auth completion fish > ~/.config/fish/completions/codex-auth.fish
+source ~/.config/fish/completions/codex-auth.fish
+```
+
+Install Bash completions with:
+
+```shell
+mkdir -p ~/.local/share/bash-completion/completions
+codex-auth completion bash > ~/.local/share/bash-completion/completions/codex-auth
+```
+
+Install Zsh completions with (the directory must be in `fpath` before `compinit` runs):
+
+```shell
+mkdir -p ~/.zsh/completions
+codex-auth completion zsh > ~/.zsh/completions/_codex-auth
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+autoload -Uz compinit && compinit
+```
+
+Install PowerShell completions with:
+
+```powershell
+codex-auth completion pwsh >> $PROFILE
+```
+
+Tab cycles candidates inline by default on PowerShell 5.1 and 7+; for a menu picker, add `Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete` to your profile.
 
 ## Quick Examples
 

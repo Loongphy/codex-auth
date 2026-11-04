@@ -3,23 +3,21 @@
 ## Usage
 
 ```shell
-codex-auth switch -
+codex-auth - [--json] [--restart-daemon]
 codex-auth switch [--api|--skip-api]
 codex-auth switch --live [--api|--skip-api]
 codex-auth switch <query>
 codex-auth switch <query> --json
-codex-auth switch [<query>|-] --restart-daemon
+codex-auth switch <query> --restart-daemon
 ```
 
 ## Previous Switch
 
-`codex-auth switch -` switches to the previous active account.
+`codex-auth -` switches to the previous active account. It is a shortcut form of `codex-auth switch`: it takes no positional argument and supports the same one-shot flags as query switching (`--json`, `--restart-daemon`), but not the picker-mode flags (`--live`, `--api`, `--skip-api`).
 
-- `codex-auth -` is a shortcut for the same behavior.
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
-- `switch -` does not accept `--live`, `--api`, or `--skip-api`.
-- Previous-account switching is a human CLI convenience and cannot be combined with `--json`.
+- Only the top-level `-` form is the shortcut: `codex-auth switch -` treats `-` as an ordinary account query.
 
 ## Interactive Switch
 
@@ -45,10 +43,14 @@ codex-auth switch [<query>|-] --restart-daemon
 
 Selectors can match:
 
+- account key,
+- exact alias or email,
 - displayed row number,
 - alias fragment,
 - email fragment, or
 - account name fragment.
+
+Shell completion offers one stable selector per account (a unique alias or email, or the account key).
 
 If one account matches, it switches immediately. If multiple accounts match, the command falls back to interactive selection. Query mode does not accept `--live`, `--api`, or `--skip-api`.
 
@@ -75,7 +77,6 @@ One-shot switches detect a responsive daemon and print a restart hint on stderr.
 
 ```shell
 codex-auth switch personal --restart-daemon
-codex-auth switch - --restart-daemon
 codex-auth switch personal --json --restart-daemon
 ```
 

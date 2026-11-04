@@ -8,7 +8,8 @@ codex-auth config live --interval <seconds>
 
 ## Live Refresh Config
 
-`config live --interval <seconds>` sets the live TUI refresh interval.
+`config live --interval <seconds>` sets the live TUI refresh interval. The
+joined `--interval=<seconds>` form is accepted as well.
 
 - Allowed range: `5` to `3600`.
 - Stored in `registry.json` as top-level `interval_seconds`.

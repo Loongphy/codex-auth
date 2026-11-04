@@ -16,6 +16,7 @@ const preflight = @import("preflight.zig");
 const live_flow = @import("live.zig");
 const help_workflow = @import("help.zig");
 const clean_workflow = @import("clean.zig");
+const completion_workflow = @import("completion.zig");
 const config_workflow = @import("config.zig");
 const app_workflow = @import("app.zig");
 const list_workflow = @import("list.zig");
@@ -70,7 +71,6 @@ const selectBestRemainingAccountKeyByUsageAlloc = active_auth.selectBestRemainin
 pub const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
 pub const findMatchingAccounts = query_mod.findMatchingAccounts;
 const findMatchingAccountsForRemove = query_mod.findMatchingAccountsForRemove;
-const findAccountIndexByDisplayNumber = query_mod.findAccountIndexByDisplayNumber;
 pub const isHandledCliError = preflight.isHandledCliError;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
@@ -129,11 +129,15 @@ fn runMain(init: std.process.Init) !void {
     const needs_codex_home = switch (cmd) {
         .version => false,
         .help => false,
+        .completion => false,
+        .complete_request => false,
         else => true,
     };
     const json_requested = commandWantsJson(&cmd);
     const codex_home = if (needs_codex_home)
         registry.resolveCodexHome(allocator) catch |err| return printJsonStartupError(err, json_requested)
+    else if (cmd == .complete_request)
+        registry.resolveCodexHome(allocator) catch null
     else
         null;
     defer if (codex_home) |path| allocator.free(path);
@@ -155,6 +159,8 @@ fn runMain(init: std.process.Init) !void {
         .reset_credits => |opts| try reset_workflow.handleReset(allocator, transport.Transport.curl(), codex_home.?, opts),
         .alias => |opts| try alias_workflow.handleAlias(allocator, codex_home.?, opts),
         .clean => |opts| try clean_workflow.handleClean(allocator, codex_home.?, opts),
+        .completion => |opts| try completion_workflow.handleCompletion(opts),
+        .complete_request => |opts| try completion_workflow.handleCompleteRequest(allocator, codex_home, opts),
     }
 }
 
@@ -173,6 +179,3 @@ fn printJsonStartupError(err: anyerror, json_requested: bool) anyerror {
     return error.RegistryError;
 }
 
-fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {
-    for (items) |item| allocator.free(@constCast(item));
-}

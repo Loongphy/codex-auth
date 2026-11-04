@@ -863,7 +863,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer gpa.free(body);
         try fake_daemon.install(home_dir, body);
         for (0..case.attempts) |_| {
-            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "switch", "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
+            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
             const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, args);
             defer gpa.free(result.stdout);
             defer gpa.free(result.stderr);
@@ -2651,13 +2651,15 @@ test "Scenario: Given previous account exists when running top-level dash then i
         project_root,
         home_root,
         empty_path,
-        &[_][]const u8{ "switch", "-" },
+        &[_][]const u8{ "-", "--json" },
     );
     defer gpa.free(switch_dash_result.stdout);
     defer gpa.free(switch_dash_result.stderr);
     try expectSuccess(switch_dash_result);
-    try std.testing.expectEqualStrings("Switched to backup(backup@example.com)\n", switch_dash_result.stdout);
-    try std.testing.expectEqualStrings("", switch_dash_result.stderr);
+    var parsed_dash = try std.json.parseFromSlice(std.json.Value, gpa, switch_dash_result.stdout, .{});
+    defer parsed_dash.deinit();
+    try std.testing.expectEqualStrings("switch", parsed_dash.value.object.get("command").?.string);
+    try std.testing.expectEqualStrings("backup@example.com", parsed_dash.value.object.get("switched_to").?.object.get("email").?.string);
 
     const auth_after_switch_dash = try fixtures.readFileAlloc(gpa, active_auth_path);
     defer gpa.free(auth_after_switch_dash);
@@ -2763,7 +2765,7 @@ test "Scenario: Given previous is active after remove when running dash then it 
     try std.testing.expectEqualStrings(previous_key, loaded.previous_active_account_key.?);
 }
 
-test "Scenario: Given missing previous account when running switch dash then it fails cleanly" {
+test "Scenario: Given missing previous account when running dash then it fails cleanly" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2790,7 +2792,7 @@ test "Scenario: Given missing previous account when running switch dash then it 
         gpa,
         project_root,
         home_root,
-        &[_][]const u8{ "switch", "-" },
+        &[_][]const u8{"-"},
     );
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
@@ -2914,6 +2916,70 @@ test "Scenario: Given alias set with duplicate alias when running alias then it 
     try expectFailure(result);
     try std.testing.expectEqualStrings("", result.stdout);
     try std.testing.expect(std.mem.find(u8, result.stderr, "alias 'ACTIVE' is already used by active@example.com.") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const idx = registry.findAccountIndexByAccountKey(&loaded, backup_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("backup", loaded.accounts.items[idx].alias);
+}
+
+test "Scenario: Given alias set with an uncompletable or key-colliding alias when running alias then it fails without changing registry" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const dash_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", "-x" },
+    );
+    defer gpa.free(dash_result.stdout);
+    defer gpa.free(dash_result.stderr);
+    try expectFailure(dash_result);
+    try std.testing.expectEqualStrings("", dash_result.stdout);
+    try std.testing.expect(std.mem.find(u8, dash_result.stderr, "alias cannot start with '-'") != null);
+
+    const colon_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", ":x" },
+    );
+    defer gpa.free(colon_result.stdout);
+    defer gpa.free(colon_result.stderr);
+    try expectFailure(colon_result);
+    try std.testing.expect(std.mem.find(u8, colon_result.stderr, "alias cannot start with ':'") != null);
+
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const key_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", active_key },
+    );
+    defer gpa.free(key_result.stdout);
+    defer gpa.free(key_result.stderr);
+    try expectFailure(key_result);
+    try std.testing.expect(std.mem.find(u8, key_result.stderr, "alias cannot equal another account's key") != null);
 
     var loaded = try registry.loadRegistry(gpa, codex_home);
     defer loaded.deinit(gpa);
@@ -5763,4 +5829,186 @@ test "Scenario: consecutive CLI runs keep earlier output when stdout is a file" 
     const contents = try fixtures.readFileAlloc(gpa, output_path);
     defer gpa.free(contents);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, contents, "codex-auth "));
+}
+
+fn runCompleteEndpoint(
+    gpa: std.mem.Allocator,
+    project_root: []const u8,
+    home_root: []const u8,
+    path_override: []const u8,
+    words: []const []const u8,
+) ![]u8 {
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, "__complete");
+    try argv.appendSlice(gpa, words);
+
+    const result = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, path_override, argv.items);
+    defer gpa.free(result.stderr);
+    logRunResultIfFailed("__complete", result);
+    try expectSuccess(result);
+    return result.stdout;
+}
+
+test "Scenario: Given seeded accounts when running __complete through the CLI then context-aware candidates and directives are emitted" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "work" },
+        .{ .email = "beta@example.com", .alias = "" },
+    });
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{"sw"});
+        defer gpa.free(out);
+        try std.testing.expectEqualStrings("switch\tSwitch the active account\n:36\n", out);
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "switch", "" });
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "work\t") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "beta@example.com\t") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "01:") == null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "-\t") == null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "switch", "-" });
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "--live\t") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "--json\t") != null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "alias", "" });
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "set\t") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "clear\t") != null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "alias", "set", "" });
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "work\t") != null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "alias", "set", "work", "" });
+        defer gpa.free(out);
+        try std.testing.expectEqualStrings(":36\n", out);
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "import", "" });
+        defer gpa.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "--alias\t") != null);
+        try std.testing.expect(std.mem.endsWith(u8, out, ":0\n"));
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "app", "--platform", "w" });
+        defer gpa.free(out);
+        try std.testing.expectEqualStrings("win\twin\nwsl\twsl\n:36\n", out);
+    }
+    {
+        const out = try runCompleteEndpoint(gpa, project_root, home_root, empty_path, &[_][]const u8{ "bogus", "" });
+        defer gpa.free(out);
+        try std.testing.expectEqualStrings(":36\n", out);
+    }
+}
+
+test "Scenario: Given the bash trampoline when simulating COMP_WORDS then COMPREPLY reflects the protocol" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "alpha@example.com", &[_]SeedAccount{
+        .{ .email = "alpha@example.com", .alias = "work" },
+        .{ .email = "beta@example.com", .alias = "" },
+        .{ .email = "demo@example.com", .alias = "01:demo" },
+    });
+    try tmp.dir.makePath("empty-bin");
+    const empty_path = try tmp.dir.realpathAlloc(gpa, "empty-bin");
+    defer gpa.free(empty_path);
+
+    const generated = try runCliWithIsolatedHomeAndPath(gpa, project_root, home_root, empty_path, &[_][]const u8{ "completion", "bash" });
+    defer gpa.free(generated.stdout);
+    defer gpa.free(generated.stderr);
+    try expectSuccess(generated);
+    try tmp.dir.writeFile(.{ .sub_path = "completion.bash", .data = generated.stdout });
+    const script_path = try tmp.dir.realpathAlloc(gpa, "completion.bash");
+    defer gpa.free(script_path);
+
+    const exe_path = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe_path);
+    const bin_dir = std.Io.Dir.path.dirname(exe_path) orelse return error.TestUnexpectedResult;
+
+    const driver = try std.fmt.allocPrint(gpa,
+        \\export PATH="{s}:$PATH"
+        \\source "{s}"
+        \\COMP_WORDS=(codex-auth sw); COMP_CWORD=1; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth switch ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth switch 01 : d); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth app --platform = w); COMP_CWORD=4; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth remove work: b); COMP_CWORD=3; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+        \\COMP_WORDS=(codex-auth alias ""); COMP_CWORD=2; _codex_auth_complete; printf '<%s>' "${{COMPREPLY[@]}}"; echo
+    , .{ bin_dir, script_path });
+    defer gpa.free(driver);
+
+    var env_map = try getEnvMap(gpa);
+    defer env_map.deinit();
+    try env_map.put("HOME", home_root);
+    try env_map.put("USERPROFILE", home_root);
+    _ = env_map.swapRemove("CODEX_HOME");
+
+    const result = runCapture(gpa, project_root, &env_map, &[_][]const u8{ "bash", "-c", driver }) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    switch (result.term) {
+        .exited => |code| if (code == 127) return error.SkipZigTest,
+        else => {},
+    }
+    logRunResultIfFailed("bash completion driver", result);
+    try expectSuccess(result);
+
+    var lines = std.mem.splitScalar(u8, result.stdout, '\n');
+    const line_root = lines.next() orelse return error.TestExpectedEqual;
+    const line_switch = lines.next() orelse return error.TestExpectedEqual;
+    const line_colon = lines.next() orelse return error.TestExpectedEqual;
+    const line_platform = lines.next() orelse return error.TestExpectedEqual;
+    const line_separgs = lines.next() orelse return error.TestExpectedEqual;
+    const line_alias = lines.next() orelse return error.TestExpectedEqual;
+
+    try std.testing.expectEqualStrings("<switch>", line_root);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<work>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<beta@example.com>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<01:demo>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<->") == null);
+    try std.testing.expect(std.mem.indexOf(u8, line_switch, "<alpha@example.com>") == null);
+    try std.testing.expectEqualStrings("<demo>", line_colon);
+    try std.testing.expectEqualStrings("<win><wsl>", line_platform);
+    try std.testing.expect(std.mem.indexOf(u8, line_separgs, "<beta@example.com>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_alias, "<set>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line_alias, "<clear>") != null);
 }

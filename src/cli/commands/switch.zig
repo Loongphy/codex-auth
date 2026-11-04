@@ -3,6 +3,14 @@ const types = @import("../types.zig");
 const common = @import("common.zig");
 
 pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    return parseArgs(allocator, args, false);
+}
+
+pub fn parsePreviousShortcut(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.ParseResult {
+    return parseArgs(allocator, args, true);
+}
+
+fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous: bool) !types.ParseResult {
     const json_requested = common.argsContainFlag(args, "--json");
     if (args.len == 1 and common.isHelpFlag(std.mem.sliceTo(args[0], 0))) {
         return .{ .command = .{ .help = .switch_account } };
@@ -63,19 +71,20 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             }
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             freeTarget(allocator, opts.target);
             return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "unknown flag `{s}` for `switch`.", .{arg});
+        }
+        if (previous) {
+            return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "unexpected argument after `-`: `{s}`.", .{arg});
         }
         if (opts.target != .picker) {
             freeTarget(allocator, opts.target);
             return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "unexpected extra query `{s}` for `switch`.", .{arg});
         }
-        opts.target = if (std.mem.eql(u8, arg, "-"))
-            .previous
-        else
-            .{ .query = try allocator.dupe(u8, arg) };
+        opts.target = .{ .query = try allocator.dupe(u8, arg) };
     }
+    if (previous) opts.target = .previous;
     if (opts.live and opts.restart_daemon) {
         freeTarget(allocator, opts.target);
         return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` cannot be combined with `--live`.", .{});
@@ -87,16 +96,22 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     if (opts.json and opts.target == .picker) {
         return common.usageErrorResultWithJson(allocator, .switch_account, true, "`switch --json` requires an explicit account query.", .{});
     }
-    if (opts.json and opts.target == .previous) {
-        return common.usageErrorResultWithJson(allocator, .switch_account, true, "previous-account switching is CLI-only and cannot be combined with `--json`.", .{});
-    }
     if (opts.target != .picker and (opts.api_mode != .default or opts.live)) {
         freeTarget(allocator, opts.target);
+        if (previous) {
+            return common.usageErrorResultWithJson(
+                allocator,
+                .switch_account,
+                json_requested,
+                "`codex-auth -` does not support `--live`, `--api`, or `--skip-api`.",
+                .{},
+            );
+        }
         return common.usageErrorResultWithJson(
             allocator,
             .switch_account,
             json_requested,
-            "`switch -|<alias|email|display-number|query>` does not support `--live`, `--api`, or `--skip-api`.",
+            "`switch <alias|email|display-number|query>` does not support `--live`, `--api`, or `--skip-api`.",
             .{},
         );
     }

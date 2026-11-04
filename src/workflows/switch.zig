@@ -155,31 +155,42 @@ fn handleSwitchPrevious(
     codex_home: []const u8,
     opts: cli.types.SwitchOptions,
 ) !void {
-    std.debug.assert(!opts.json);
     std.debug.assert(opts.api_mode == .default);
     std.debug.assert(!opts.live);
 
-    var reg = try registry.loadRegistry(allocator, codex_home);
+    var reg = registry.loadRegistry(allocator, codex_home) catch |err| return if (opts.json) printJsonWorkflowError(err) else err;
     defer reg.deinit(allocator);
-    if (try registry.syncActiveAccountFromAuth(allocator, codex_home, &reg)) {
-        try registry.saveRegistry(allocator, codex_home, &reg);
+    if (registry.syncActiveAccountFromAuth(allocator, codex_home, &reg) catch |err| return if (opts.json) printJsonWorkflowError(err) else err) {
+        registry.saveRegistry(allocator, codex_home, &reg) catch |err| return if (opts.json) printJsonWorkflowError(err) else err;
     }
 
     const previous_account_key_value = reg.previous_active_account_key orelse {
-        try cli.output.printNoPreviousAccountError();
+        if (opts.json) {
+            try cli.json_output.printError("no_previous_account", "no previous account to switch to.", null);
+        } else {
+            try cli.output.printNoPreviousAccountError();
+        }
         return error.NoPreviousAccount;
     };
     const previous_account_key = try allocator.dupe(u8, previous_account_key_value);
     defer allocator.free(previous_account_key);
 
     if (registry.findAccountIndexByAccountKey(&reg, previous_account_key) == null) {
-        try cli.output.printPreviousAccountUnavailableError();
+        if (opts.json) {
+            try cli.json_output.printError("account_not_found", "previous account is no longer available.", null);
+        } else {
+            try cli.output.printPreviousAccountUnavailableError();
+        }
         return error.PreviousAccountUnavailable;
     }
 
     if (reg.active_account_key) |active_account_key| {
         if (std.mem.eql(u8, active_account_key, previous_account_key)) {
-            try cli.output.printNoPreviousAccountError();
+            if (opts.json) {
+                try cli.json_output.printError("no_previous_account", "no previous account to switch to.", null);
+            } else {
+                try cli.output.printNoPreviousAccountError();
+            }
             return error.NoPreviousAccount;
         }
     }

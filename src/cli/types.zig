@@ -62,6 +62,16 @@ pub const CleanTarget = enum { accounts, background };
 pub const CleanOptions = struct {
     target: CleanTarget = .accounts,
 };
+pub const CompletionShell = enum {
+    bash,
+    zsh,
+    fish,
+    pwsh,
+};
+pub const CompleteRequest = struct {
+    args: []const []const u8,
+    descriptions: bool = true,
+};
 pub const LiveOptions = struct {
     interval_seconds: u16,
 };
@@ -87,6 +97,7 @@ pub const HelpTopic = enum {
     reset_credits,
     alias,
     clean,
+    completion,
     config,
     app,
 };
@@ -101,6 +112,8 @@ pub const Command = union(enum) {
     reset_credits: ResetOptions,
     alias: AliasOptions,
     clean: CleanOptions,
+    completion: CompletionShell,
+    complete_request: CompleteRequest,
     config: ConfigOptions,
     app: AppOptions,
     version: void,

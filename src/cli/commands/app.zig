@@ -21,32 +21,36 @@ fn parseOptions(
         const arg = std.mem.sliceTo(args[i], 0);
         if (std.mem.eql(u8, arg, "--")) return common.usageErrorResult(allocator, .app, "`app` does not accept passthrough arguments.", .{});
         if (common.isHelpFlag(arg)) return .{ .command = .{ .help = .app } };
-        if (std.mem.eql(u8, arg, "--id")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--id`.", .{});
+        if (std.mem.eql(u8, arg, "--id") or common.inlineFlagValue(arg, "--id") != null) {
+            const inline_value = common.inlineFlagValue(arg, "--id");
+            if (inline_value == null and i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--id`.", .{});
             if (opts.app_id != null) return common.usageErrorResult(allocator, .app, "duplicate `--id` for `app`.", .{});
-            i += 1;
-            opts.app_id = std.mem.sliceTo(args[i], 0);
+            if (inline_value == null) i += 1;
+            opts.app_id = inline_value orelse std.mem.sliceTo(args[i], 0);
             continue;
         }
-        if (std.mem.eql(u8, arg, "--codex-cli-path")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-cli-path`.", .{});
+        if (std.mem.eql(u8, arg, "--codex-cli-path") or common.inlineFlagValue(arg, "--codex-cli-path") != null) {
+            const inline_value = common.inlineFlagValue(arg, "--codex-cli-path");
+            if (inline_value == null and i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-cli-path`.", .{});
             if (opts.codex_cli_path != null) return common.usageErrorResult(allocator, .app, "duplicate `--codex-cli-path` for `app`.", .{});
-            i += 1;
-            opts.codex_cli_path = std.mem.sliceTo(args[i], 0);
+            if (inline_value == null) i += 1;
+            opts.codex_cli_path = inline_value orelse std.mem.sliceTo(args[i], 0);
             continue;
         }
-        if (std.mem.eql(u8, arg, "--codex-home")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-home`.", .{});
+        if (std.mem.eql(u8, arg, "--codex-home") or common.inlineFlagValue(arg, "--codex-home") != null) {
+            const inline_value = common.inlineFlagValue(arg, "--codex-home");
+            if (inline_value == null and i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--codex-home`.", .{});
             if (opts.codex_home != null) return common.usageErrorResult(allocator, .app, "duplicate `--codex-home` for `app`.", .{});
-            i += 1;
-            opts.codex_home = std.mem.sliceTo(args[i], 0);
+            if (inline_value == null) i += 1;
+            opts.codex_home = inline_value orelse std.mem.sliceTo(args[i], 0);
             continue;
         }
-        if (std.mem.eql(u8, arg, "--platform")) {
-            if (i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--platform`.", .{});
+        if (std.mem.eql(u8, arg, "--platform") or common.inlineFlagValue(arg, "--platform") != null) {
+            const inline_value = common.inlineFlagValue(arg, "--platform");
+            if (inline_value == null and i + 1 >= args.len) return common.usageErrorResult(allocator, .app, "missing value for `--platform`.", .{});
             if (opts.platform != null) return common.usageErrorResult(allocator, .app, "duplicate `--platform` for `app`.", .{});
-            i += 1;
-            const value = std.mem.sliceTo(args[i], 0);
+            if (inline_value == null) i += 1;
+            const value = inline_value orelse std.mem.sliceTo(args[i], 0);
             if (std.mem.eql(u8, value, "win")) {
                 opts.platform = .win;
             } else if (std.mem.eql(u8, value, "wsl")) {
@@ -63,7 +67,7 @@ fn parseOptions(
             opts.inherit_stdio = true;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "-")) {
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             return common.usageErrorResult(allocator, .app, "unknown flag `{s}` for `app`.", .{arg});
         }
         return common.usageErrorResult(allocator, .app, "unexpected argument `{s}` for `app`.", .{arg});

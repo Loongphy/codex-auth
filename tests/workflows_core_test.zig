@@ -547,6 +547,129 @@ test "Scenario: Given switch query with a display number when resolving locally 
     }
 }
 
+test "Scenario: Given switch query equal to a colon alias when resolving locally then the exact alias wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "01:work", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "01:work");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(primary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query that is a colon alias fragment when resolving locally then it fuzzy matches" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "dev", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "team:development", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "team:dev");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query matching a shared numbered alias when resolving locally then it reports ambiguity" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "01:team", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "01:team", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "01:team");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .multiple => |matches| try std.testing.expectEqual(@as(usize, 2), matches.items.len),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query matching a numeric alias when resolving locally then the row number wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "2", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "2");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query with an exact alias shared with an email prefix when resolving locally then the alias wins" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "dev", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "dev-ops@example.com", "", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "dev");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .direct => |account_key| try std.testing.expectEqualStrings(primary_record_key, account_key),
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query with a duplicated exact email when resolving locally then it stays ambiguous" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "same@example.com", "team-a", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "same@example.com", "team-b", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "same@example.com");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .multiple => |matches| {
+            try std.testing.expectEqual(@as(usize, 2), matches.items.len);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given switch query with a duplicated exact alias when resolving locally then it stays ambiguous" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+
+    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "team", .business);
+    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "team", .plus);
+
+    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "team");
+    defer resolution.deinit(gpa);
+
+    switch (resolution) {
+        .multiple => |matches| {
+            try std.testing.expectEqual(@as(usize, 2), matches.items.len);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "Scenario: Given switch query with an exact account key when resolving locally then it wins directly" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
