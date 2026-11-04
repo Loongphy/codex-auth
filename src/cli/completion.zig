@@ -314,8 +314,8 @@ const export_flags = [_]FlagSpec{
 };
 const switch_flags = [_]FlagSpec{
     .{ .name = "--live", .desc = "Open the live switch UI", .conflicts = &.{ "--restart-daemon", "--json" } },
-    .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{"--skip-api"} },
-    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{"--api"} },
+    .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{ "--skip-api", "--json" } },
+    .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{ "--api", "--json" } },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
     .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
 };

@@ -71,7 +71,6 @@ const selectBestRemainingAccountKeyByUsageAlloc = active_auth.selectBestRemainin
 pub const resolveSwitchQueryLocally = query_mod.resolveSwitchQueryLocally;
 pub const findMatchingAccounts = query_mod.findMatchingAccounts;
 const findMatchingAccountsForRemove = query_mod.findMatchingAccountsForRemove;
-const findAccountIndexByDisplayNumber = query_mod.findAccountIndexByDisplayNumber;
 pub const isHandledCliError = preflight.isHandledCliError;
 const ensureLiveTty = preflight.ensureLiveTty;
 const apiModeUsesApi = preflight.apiModeUsesApi;
@@ -180,6 +179,3 @@ fn printJsonStartupError(err: anyerror, json_requested: bool) anyerror {
     return error.RegistryError;
 }
 
-fn freeOwnedStrings(allocator: std.mem.Allocator, items: []const []const u8) void {
-    for (items) |item| allocator.free(@constCast(item));
-}

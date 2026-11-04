@@ -236,6 +236,7 @@ Resolution status values are `resolved`, `ambiguous`, and `not_found`.
 |------------|---------|
 | `account_not_found` | Switch query has no match |
 | `ambiguous_query` | Switch query has multiple matches |
+| `no_previous_account` | `codex-auth -` ran with no stored previous account |
 | `selector_resolution_failed` | Remove selector resolution failed atomically |
 | `curl_unavailable` | Required API refresh cannot find curl |
 | `registry_error` | State failed before mutation began |
