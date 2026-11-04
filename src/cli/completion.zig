@@ -236,7 +236,14 @@ const pwsh_script =
     \\    return $results
     \\}
     \\
-    \\Register-ArgumentCompleter -Native -CommandName 'codex-auth' -ScriptBlock ${function:__codex_auth_complete}
+    \\if ($PSVersionTable.PSVersion.Major -ge 6) {
+    \\    Register-ArgumentCompleter -Native -CommandName 'codex-auth' -ScriptBlock ${function:__codex_auth_complete}
+    \\} else {
+    \\    # Windows PowerShell 5.1 has no -Native completers; register on the
+    \\    # command name instead, which completes through a `codex-auth` shim
+    \\    # function wrapping the executable.
+    \\    Register-ArgumentCompleter -CommandName 'codex-auth' -ScriptBlock ${function:__codex_auth_complete}
+    \\}
 ;
 
 const Directive = struct {
