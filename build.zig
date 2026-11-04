@@ -104,6 +104,7 @@ pub fn build(b: *std.Build) void {
         "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
         "tests/tui_display_test.zig",
+        "tests/tui_pty_test.zig",
         "tests/tui_session_test.zig",
         "tests/tui_table_test.zig",
         "tests/workflows_core_test.zig",
