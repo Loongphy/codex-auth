@@ -689,7 +689,11 @@ pub fn writeCompleteResponse(
     } else if (ctx.pending) |flag| {
         directive = try writeFlagValueCands(out, flag, cur, descriptions);
     } else if (inlineFlagSpec(ctx.spec, cur)) |flag| {
-        directive = try writeInlineFlagValueCands(out, flag, cur, descriptions);
+        // A joined `--flag=value` word is still one flag occurrence: an already
+        // used or conflicting flag must not offer values the parser rejects.
+        if (!seenFlagNamed(ctx.seenFlags(), flag.name) and !flagBlocked(ctx.spec.?, flag, &ctx)) {
+            directive = try writeInlineFlagValueCands(out, flag, cur, descriptions);
+        }
     } else if (ctx.spec == null) {
         if (std.mem.startsWith(u8, cur, "-") and cur.len > 0) {
             try writeCands(out, &global_cands, cur, descriptions);

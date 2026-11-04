@@ -2395,6 +2395,15 @@ test "Scenario: Given an inline flag value when completing then joined candidate
     try std.testing.expectEqualStrings("--platform=win\twin\n--platform=wsl\twsl\n:36\n", out);
 }
 
+test "Scenario: Given a duplicate joined flag value when completing then no candidates are emitted" {
+    const gpa = std.testing.allocator;
+    const args = [_][]const u8{ "app", "--platform", "win", "--platform=w" };
+    const out = try completeResponse(gpa, "/nonexistent", &args);
+    defer gpa.free(out);
+
+    try std.testing.expectEqualStrings(":36\n", out);
+}
+
 test "Scenario: Given a freeform flag value when completing then no candidates are emitted" {
     const gpa = std.testing.allocator;
     const args = [_][]const u8{ "import", "--alias", "" };
