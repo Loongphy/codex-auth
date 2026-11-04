@@ -22,8 +22,11 @@ each platform. Exact byte sequences and key mappings are pinned by
 
 - A wheel notch is a small fixed-step scroll — `live_tui.mouse_wheel_lines`
   — while an arrow-key scroll uses the larger viewport-scaled step. Wheel
-  reports carry a direction rather than a magnitude, so fast scrolling is
-  just more events.
+  reports carry a direction rather than a magnitude, so the TUI tells
+  gestures apart by timing: events arriving faster than
+  `live_tui.scroll_stream_gap_ms` count as one continuous gesture (a
+  trackpad flick or a spun wheel) and step a single line each, so a flick
+  glides instead of jumping a full notch per event.
 - The notch scrolls the account-list viewport; while the reset-credit rail
   is open it moves the credit highlight instead, the same surface the
   command's arrow keys act on.

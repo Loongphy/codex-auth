@@ -16,6 +16,30 @@ pub const max_mouse_wheel_rows = 12;
 /// step is small and fixed — unlike arrow-key scrolling, whose step doubles
 /// as the "one press" unit and scales with the viewport.
 pub const mouse_wheel_lines: usize = 3;
+
+/// Scroll events closer together than this belong to one continuous gesture
+/// — a trackpad flick or a spun wheel — rather than separate notches.
+pub const scroll_stream_gap_ms: i64 = 100;
+
+/// Tracks wheel-event timing so a dense gesture does not charge a full notch
+/// per event. Terminals report wheel direction but not magnitude: a mouse
+/// notch emits one event, a trackpad swipe emits dozens back to back. An
+/// isolated event scrolls `mouse_wheel_lines`; once events stream faster
+/// than the gap, each one is a single line, so a flick glides instead of
+/// teleporting.
+pub const ScrollStream = struct {
+    last_ms: i64 = 0,
+
+    pub fn step(self: *ScrollStream, now_ms: i64) usize {
+        const streaming = self.last_ms != 0 and now_ms - self.last_ms <= scroll_stream_gap_ms;
+        self.last_ms = now_ms;
+        return if (streaming) 1 else mouse_wheel_lines;
+    }
+};
+
+pub fn nowMs() i64 {
+    return std.Io.Timestamp.now(app_runtime.io(), .awake).toMilliseconds();
+}
 pub const ScrollDirection = enum { up, down };
 
 pub fn mouseWheelRows(max_rows: usize) usize {
@@ -202,6 +226,7 @@ pub fn applyListViewportKey(
     max_rows: usize,
     viewport_start: *usize,
     wheel_rows: usize,
+    scroll_lines: usize,
     key: tui_mod.TuiInputKey,
 ) bool {
     switch (key) {
@@ -230,11 +255,11 @@ pub fn applyListViewportKey(
             return true;
         },
         .scroll_up => {
-            scrollListViewportBy(row_count, max_rows, viewport_start, .up, mouse_wheel_lines);
+            scrollListViewportBy(row_count, max_rows, viewport_start, .up, scroll_lines);
             return true;
         },
         .scroll_down => {
-            scrollListViewportBy(row_count, max_rows, viewport_start, .down, mouse_wheel_lines);
+            scrollListViewportBy(row_count, max_rows, viewport_start, .down, scroll_lines);
             return true;
         },
         .byte => |ch| switch (ch) {

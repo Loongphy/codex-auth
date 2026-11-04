@@ -2830,28 +2830,40 @@ test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
     const max_rows: usize = 20;
     const wheel_rows: usize = live_tui.mouseWheelRows(max_rows);
 
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_up));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .move_up));
     try std.testing.expectEqual(@as(usize, 3), viewport_start);
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .move_down));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
     // A wheel notch is one small step, independent of the arrow-scroll step.
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .scroll_down));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .scroll_down));
     try std.testing.expectEqual(@as(usize, 9 + live_tui.mouse_wheel_lines), viewport_start);
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .scroll_up));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .scroll_up));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .{ .byte = 'j' }));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));
+    try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .{ .byte = 'k' }));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
 
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_down));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .page_down));
     try std.testing.expectEqual(@as(usize, 29), viewport_start);
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .page_up));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .page_up));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .home));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .home));
     try std.testing.expectEqual(@as(usize, 0), viewport_start);
-    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .end));
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, live_tui.mouse_wheel_lines, .end));
     try std.testing.expectEqual(@as(usize, 85), viewport_start);
+}
+
+test "scroll stream charges a full notch only for isolated wheel events" {
+    var stream: live_tui.ScrollStream = .{};
+    // First notch is a full wheel step.
+    try std.testing.expectEqual(live_tui.mouse_wheel_lines, stream.step(1_000));
+    // A dense gesture (trackpad flick) steps one line per event.
+    try std.testing.expectEqual(@as(usize, 1), stream.step(1_050));
+    try std.testing.expectEqual(@as(usize, 1), stream.step(1_050 + live_tui.scroll_stream_gap_ms));
+    // Once the gesture pauses past the gap, the next notch is a full step again.
+    try std.testing.expectEqual(live_tui.mouse_wheel_lines, stream.step(1_151 + live_tui.scroll_stream_gap_ms));
+    try std.testing.expectEqual(live_tui.mouse_wheel_lines, stream.step(60_000));
 }
 
 test "display width counts UTF-8 codepoints instead of bytes" {
