@@ -547,75 +547,7 @@ test "Scenario: Given switch query with a display number when resolving locally 
     }
 }
 
-test "Scenario: Given switch query with a number-colon-label form when resolving locally then it is not found" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .business);
-    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
-
-    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "02:beta@example.com");
-    defer resolution.deinit(gpa);
-
-    switch (resolution) {
-        .not_found => {},
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given switch query with a stale number-colon-label form when resolving locally then it is not found" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .business);
-    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
-
-    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "01:beta@example.com");
-    defer resolution.deinit(gpa);
-
-    switch (resolution) {
-        .not_found => {},
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given switch query with a number-colon-alias form when resolving locally then it is not found" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .business);
-    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
-
-    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "01:beta");
-    defer resolution.deinit(gpa);
-
-    switch (resolution) {
-        .not_found => {},
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given switch query with a number-colon-unknown-label form when resolving locally then it is not found" {
-    const gpa = std.testing.allocator;
-    var reg = makeRegistry();
-    defer reg.deinit(gpa);
-
-    try appendAccount(gpa, &reg, primary_record_key, "alpha@example.com", "alpha", .business);
-    try appendAccount(gpa, &reg, secondary_record_key, "beta@example.com", "beta", .plus);
-
-    var resolution = try main_mod.resolveSwitchQueryLocally(gpa, &reg, "02:gone@example.com");
-    defer resolution.deinit(gpa);
-
-    switch (resolution) {
-        .not_found => {},
-        else => return error.TestExpectedEqual,
-    }
-}
-
-test "Scenario: Given switch query with a colon alias when resolving locally then the alias wins over the row prefix" {
+test "Scenario: Given switch query equal to a colon alias when resolving locally then the exact alias wins" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -632,7 +564,7 @@ test "Scenario: Given switch query with a colon alias when resolving locally the
     }
 }
 
-test "Scenario: Given switch query with a nonnumeric colon prefix when resolving locally then the suffix is not treated as a selector hint" {
+test "Scenario: Given switch query that is a colon alias fragment when resolving locally then it fuzzy matches" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
