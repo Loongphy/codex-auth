@@ -2054,7 +2054,7 @@ test "Scenario: Given grouped accounts sharing an email when completing an accou
     try std.testing.expect(std.mem.find(u8, out, "01:") == null);
 }
 
-test "Scenario: Given a numbered-looking alias when completing an account selector then it stays the hint of its own account" {
+test "Scenario: Given a colon-containing alias when completing an account selector then it stays the hint of its own account" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();

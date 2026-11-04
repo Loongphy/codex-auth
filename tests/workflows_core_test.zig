@@ -581,7 +581,7 @@ test "Scenario: Given switch query that is a colon alias fragment when resolving
     }
 }
 
-test "Scenario: Given switch query matching a shared numbered alias when resolving locally then it reports ambiguity" {
+test "Scenario: Given switch query matching a shared colon alias when resolving locally then it reports ambiguity" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
