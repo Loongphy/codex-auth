@@ -116,6 +116,8 @@ Install PowerShell completions with (see [docs/commands/completion.md](./docs/co
 codex-auth completion pwsh >> $PROFILE
 ```
 
+Tab cycles candidates inline by default on PowerShell 5.1 and 7+; for a menu picker, add `Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete` to your profile.
+
 ## Quick Examples
 
 ```shell
