@@ -105,15 +105,18 @@ const zsh_script =
     \\#compdef codex-auth
     \\
     \\_codex-auth() {
-    \\  local out value desc
-    \\  local -a argv cands descs
+    \\  local out value desc esc
+    \\  local -a argv pairs
     \\  local directive=0
-    \\  argv=("${words[2,CURRENT]}")
+    \\  argv=("${(@)words[2,CURRENT]}")
     \\  out="$(codex-auth __complete "${argv[@]}" 2>/dev/null)"
     \\  while IFS=$'\t' read -r value desc; do
     \\    case "$value" in
     \\      (:*) directive="${value#:}" ;;
-    \\      (*)  cands+=("$value"); descs+=("${desc:-$value}") ;;
+    \\      (*)  esc="${value//\\/\\\\}"
+    \\           esc="${esc//:/\\:}"
+    \\           [[ $desc == "$value" ]] && desc=
+    \\           pairs+=("${esc}${desc:+:$desc}") ;;
     \\    esac
     \\  done <<< "$out"
     \\  (( directive == 1 )) && return 1
@@ -122,13 +125,11 @@ const zsh_script =
     \\    _files -/
     \\    return
     \\  fi
-    \\  if (( ${#cands[@]} > 0 )); then
-    \\    local -a add_opts
-    \\    (( directive & 32 )) && add_opts+=(-o nosort)
-    \\    if (( directive & 2 )); then
-    \\      compadd "${add_opts[@]}" -S '' -d descs -- "${cands[@]}"
+    \\  if (( ${#pairs[@]} > 0 )); then
+    \\    if (( directive & 32 )); then
+    \\      _describe -V "command" pairs
     \\    else
-    \\      compadd "${add_opts[@]}" -d descs -- "${cands[@]}"
+    \\      _describe "command" pairs
     \\    fi
     \\  fi
     \\  (( directive & 4 )) || { compset -P '*='; _files; }

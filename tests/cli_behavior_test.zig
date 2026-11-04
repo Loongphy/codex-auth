@@ -804,10 +804,10 @@ test "Scenario: Given zsh completion when rendering then the script is a __compl
     try std.testing.expect(std.mem.find(u8, script, "#compdef codex-auth") != null);
     try std.testing.expect(std.mem.find(u8, script, "codex-auth __complete \"${argv[@]}\"") != null);
     try std.testing.expect(std.mem.find(u8, script, "compdef _codex-auth codex-auth") != null);
-    try std.testing.expect(std.mem.find(u8, script, "words[2,CURRENT]") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compadd \"${add_opts[@]}\" -d descs -- \"${cands[@]}\"") != null);
-    try std.testing.expect(std.mem.find(u8, script, "add_opts+=(-o nosort)") != null);
-    try std.testing.expect(std.mem.find(u8, script, "compadd -Q") == null);
+    try std.testing.expect(std.mem.find(u8, script, "\"${(@)words[2,CURRENT]}\"") != null);
+    try std.testing.expect(std.mem.find(u8, script, "_describe -V \"command\" pairs") != null);
+    try std.testing.expect(std.mem.find(u8, script, "_describe \"command\" pairs") != null);
+    try std.testing.expect(std.mem.find(u8, script, "compadd") == null);
     try std.testing.expect(std.mem.find(u8, script, "_files -/") != null);
     try std.testing.expect(std.mem.find(u8, script, "compset -P '*='") != null);
 }
