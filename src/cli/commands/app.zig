@@ -67,7 +67,7 @@ fn parseOptions(
             opts.inherit_stdio = true;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "-")) {
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             return common.usageErrorResult(allocator, .app, "unknown flag `{s}` for `app`.", .{arg});
         }
         return common.usageErrorResult(allocator, .app, "unexpected argument `{s}` for `app`.", .{arg});

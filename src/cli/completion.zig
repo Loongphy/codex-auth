@@ -465,7 +465,7 @@ fn resolveContext(prev: []const []const u8) Context {
             }
             sub_taken = true;
         }
-        if (std.mem.startsWith(u8, tok, "-")) {
+        if (tok.len > 1 and std.mem.startsWith(u8, tok, "-")) {
             if (std.mem.startsWith(u8, tok, "--")) {
                 const eq = std.mem.indexOfScalar(u8, tok, '=');
                 const name = if (eq) |i| tok[0..i] else tok;

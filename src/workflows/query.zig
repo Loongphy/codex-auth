@@ -100,24 +100,19 @@ pub fn findMatchingAccountsForRemove(
 }
 
 pub fn parseDisplayNumber(selector: []const u8) ?usize {
-    const number = if (std.mem.indexOfScalar(u8, selector, ':')) |colon_idx|
-        selector[0..colon_idx]
-    else
-        selector;
-
-    if (number.len == 0) return null;
-    for (number) |ch| {
+    if (selector.len == 0) return null;
+    for (selector) |ch| {
         if (ch < '0' or ch > '9') return null;
     }
 
-    const parsed = std.fmt.parseInt(usize, number, 10) catch return null;
+    const parsed = std.fmt.parseInt(usize, selector, 10) catch return null;
     if (parsed == 0) return null;
     return parsed;
 }
 
 // All accounts whose alias or email exactly matches the selector. Callers must
-// distinguish "no match" from "ambiguous" — an ambiguous label that fell
-// through to a row-number lookup could act on an unrelated account.
+// distinguish "no match" from "ambiguous" so a shared label is never resolved
+// to an arbitrary account.
 pub fn findExactLabelIndices(
     allocator: std.mem.Allocator,
     reg: *const registry.Registry,
@@ -133,26 +128,10 @@ pub fn findExactLabelIndices(
     return matches;
 }
 
-pub fn findAccountIndexByExactLabel(reg: *const registry.Registry, selector: []const u8) ?usize {
-    var match: ?usize = null;
-    var ambiguous = false;
-    for (reg.accounts.items, 0..) |*rec, idx| {
-        const alias_hit = rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, selector);
-        const email_hit = std.ascii.eqlIgnoreCase(rec.email, selector);
-        if (!alias_hit and !email_hit) continue;
-        if (match != null) {
-            ambiguous = true;
-        } else {
-            match = idx;
-        }
-    }
-    return if (ambiguous) null else match;
-}
-
 // A bare digit selector names a displayed row before it can name an alias;
 // imported numeric aliases must not shadow row numbers.
 pub fn selectorIsBareRowNumber(selector: []const u8) bool {
-    return std.mem.indexOfScalar(u8, selector, ':') == null and parseDisplayNumber(selector) != null;
+    return parseDisplayNumber(selector) != null;
 }
 
 pub fn findAccountIndexByDisplayNumber(
@@ -160,16 +139,6 @@ pub fn findAccountIndexByDisplayNumber(
     reg: *registry.Registry,
     selector: []const u8,
 ) !?usize {
-    if (std.mem.indexOfScalar(u8, selector, ':')) |colon_idx| {
-        const display_number = parseDisplayNumber(selector[0..colon_idx]) orelse return null;
-        const hint = selector[colon_idx + 1 ..];
-        if (hint.len != 0) {
-            if (registry.findAccountIndexByAccountKey(reg, hint)) |account_idx| return account_idx;
-            if (findAccountIndexByExactLabel(reg, hint)) |account_idx| return account_idx;
-        }
-        return findAccountIndexByRowNumber(allocator, reg, display_number);
-    }
-
     const display_number = parseDisplayNumber(selector) orelse return null;
     return findAccountIndexByRowNumber(allocator, reg, display_number);
 }

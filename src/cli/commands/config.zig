@@ -26,7 +26,7 @@ fn parseLive(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             if (std.mem.eql(u8, flag, "--interval")) {
                 return common.usageErrorResult(allocator, .config, "missing value for `--interval`.", .{});
             }
-            if (std.mem.startsWith(u8, flag, "-")) {
+            if (flag.len > 1 and std.mem.startsWith(u8, flag, "-")) {
                 return common.usageErrorResult(allocator, .config, "unknown flag `{s}` for `config live`.", .{flag});
             }
             return common.usageErrorResult(allocator, .config, "unknown argument `{s}` for `config live`.", .{flag});
@@ -34,7 +34,7 @@ fn parseLive(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     } else if (args.len == 2) {
         const flag = std.mem.sliceTo(args[0], 0);
         if (!std.mem.eql(u8, flag, "--interval")) {
-            if (std.mem.startsWith(u8, flag, "-")) {
+            if (flag.len > 1 and std.mem.startsWith(u8, flag, "-")) {
                 return common.usageErrorResult(allocator, .config, "unknown flag `{s}` for `config live`.", .{flag});
             }
             return common.usageErrorResult(allocator, .config, "unknown argument `{s}` for `config live`.", .{flag});

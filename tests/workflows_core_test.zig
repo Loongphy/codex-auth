@@ -547,7 +547,7 @@ test "Scenario: Given switch query with a display number when resolving locally 
     }
 }
 
-test "Scenario: Given switch query with a display number and email label when resolving locally then it uses the display number" {
+test "Scenario: Given switch query with a number-colon-label form when resolving locally then it is not found" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -559,12 +559,12 @@ test "Scenario: Given switch query with a display number and email label when re
     defer resolution.deinit(gpa);
 
     switch (resolution) {
-        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        .not_found => {},
         else => return error.TestExpectedEqual,
     }
 }
 
-test "Scenario: Given switch query with a stale display number and email label when resolving locally then the label wins" {
+test "Scenario: Given switch query with a stale number-colon-label form when resolving locally then it is not found" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -576,12 +576,12 @@ test "Scenario: Given switch query with a stale display number and email label w
     defer resolution.deinit(gpa);
 
     switch (resolution) {
-        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        .not_found => {},
         else => return error.TestExpectedEqual,
     }
 }
 
-test "Scenario: Given switch query with a display number and alias label when resolving locally then the alias wins" {
+test "Scenario: Given switch query with a number-colon-alias form when resolving locally then it is not found" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -593,12 +593,12 @@ test "Scenario: Given switch query with a display number and alias label when re
     defer resolution.deinit(gpa);
 
     switch (resolution) {
-        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        .not_found => {},
         else => return error.TestExpectedEqual,
     }
 }
 
-test "Scenario: Given switch query with a display number and unknown label when resolving locally then it falls back to the row" {
+test "Scenario: Given switch query with a number-colon-unknown-label form when resolving locally then it is not found" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
     defer reg.deinit(gpa);
@@ -610,7 +610,7 @@ test "Scenario: Given switch query with a display number and unknown label when 
     defer resolution.deinit(gpa);
 
     switch (resolution) {
-        .direct => |account_key| try std.testing.expectEqualStrings(secondary_record_key, account_key),
+        .not_found => {},
         else => return error.TestExpectedEqual,
     }
 }

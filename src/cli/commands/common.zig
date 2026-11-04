@@ -56,7 +56,7 @@ pub fn parseSimpleCommandArgs(
         return .{ .command = .{ .help = topic } };
     }
     const arg = std.mem.sliceTo(rest[0], 0);
-    if (std.mem.startsWith(u8, arg, "-")) {
+    if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
         return usageErrorResult(allocator, topic, "unknown flag `{s}` for `{s}`.", .{ arg, command_name });
     }
     return usageErrorResult(allocator, topic, "unexpected argument `{s}` for `{s}`.", .{ arg, command_name });

@@ -41,7 +41,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         } else if (common.isHelpFlag(arg)) {
             common.freeImportOptions(allocator, auth_path, alias);
             return common.usageErrorResult(allocator, .import_auth, "`--help` must be used by itself for `import`.", .{});
-        } else if (std.mem.startsWith(u8, arg, "-")) {
+        } else if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             common.freeImportOptions(allocator, auth_path, alias);
             return common.usageErrorResult(allocator, .import_auth, "unknown flag `{s}` for `import`.", .{arg});
         } else {

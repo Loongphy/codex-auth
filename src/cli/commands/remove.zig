@@ -51,7 +51,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             opts.all = true;
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "-")) return common.usageErrorResultWithJson(allocator, .remove_account, json_requested, "unknown flag `{s}` for `remove`.", .{arg});
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) return common.usageErrorResultWithJson(allocator, .remove_account, json_requested, "unknown flag `{s}` for `remove`.", .{arg});
         if (opts.all) return common.usageErrorResultWithJson(allocator, .remove_account, json_requested, "`remove` cannot combine `--all` with another selector.", .{});
         try selectors.append(allocator, try allocator.dupe(u8, arg));
     }

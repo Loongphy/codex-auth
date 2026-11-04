@@ -10,7 +10,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
     var selector: ?[]u8 = null;
     for (args) |raw_arg| {
         const arg = std.mem.sliceTo(raw_arg, 0);
-        if (std.mem.startsWith(u8, arg, "-")) {
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             if (selector) |value| allocator.free(value);
             return common.usageErrorResult(allocator, .reset_credits, "unknown flag `{s}` for `reset`.", .{arg});
         }

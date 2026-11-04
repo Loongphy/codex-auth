@@ -43,7 +43,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             continue;
         }
         if (common.isHelpFlag(arg)) return common.usageErrorResultWithJson(allocator, .list, json_requested, "`--help` must be used by itself for `list`.", .{});
-        if (std.mem.startsWith(u8, arg, "-")) return common.usageErrorResultWithJson(allocator, .list, json_requested, "unknown flag `{s}` for `list`.", .{arg});
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) return common.usageErrorResultWithJson(allocator, .list, json_requested, "unknown flag `{s}` for `list`.", .{arg});
         return common.usageErrorResultWithJson(allocator, .list, json_requested, "unexpected argument `{s}` for `list`.", .{arg});
     }
     if (opts.live and opts.json) {

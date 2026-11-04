@@ -21,7 +21,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
         } else if (common.isHelpFlag(arg)) {
             if (dest_path) |path| allocator.free(path);
             return common.usageErrorResult(allocator, .export_auth, "`--help` must be used by itself for `export`.", .{});
-        } else if (std.mem.startsWith(u8, arg, "-")) {
+        } else if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             if (dest_path) |path| allocator.free(path);
             return common.usageErrorResult(allocator, .export_auth, "unknown flag `{s}` for `export`.", .{arg});
         } else {

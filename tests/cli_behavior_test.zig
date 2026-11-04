@@ -1425,13 +1425,22 @@ test "Scenario: Given top-level dash with extra arguments when parsing then usag
     try expectUsageError(result, .switch_account, "unexpected argument after `-`");
 }
 
-test "Scenario: Given switch dash when parsing then it is rejected as an unknown flag" {
+test "Scenario: Given switch dash when parsing then it is read as a query selector" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `-`");
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| switch (opts.target) {
+                .query => |query| try std.testing.expectEqualStrings("-", query),
+                else => return error.TestExpectedEqual,
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "Scenario: Given switch json query when parsing then query target and json mode are preserved" {
@@ -1455,16 +1464,22 @@ test "Scenario: Given switch json query when parsing then query target and json 
     }
 }
 
-test "Scenario: Given switch dash with json when parsing then dash is rejected as an unknown flag" {
+test "Scenario: Given switch dash with json when parsing then dash is a query with json mode" {
     const gpa = std.testing.allocator;
     const args = [_][:0]const u8{ "codex-auth", "switch", "-", "--json" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
     switch (result) {
-        .usage_error => |usage_err| {
-            try std.testing.expect(usage_err.json);
-            try std.testing.expect(std.mem.find(u8, usage_err.message, "unknown flag `-`") != null);
+        .command => |cmd| switch (cmd) {
+            .switch_account => |opts| {
+                try std.testing.expect(opts.json);
+                switch (opts.target) {
+                    .query => |query| try std.testing.expectEqualStrings("-", query),
+                    else => return error.TestExpectedEqual,
+                }
+            },
+            else => return error.TestExpectedEqual,
         },
         else => return error.TestExpectedEqual,
     }
@@ -1605,7 +1620,7 @@ test "Scenario: Given switch dash with api flag when parsing then usage error is
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `-`");
+    try expectUsageError(result, .switch_account, "does not support `--live`, `--api`, or `--skip-api`");
 }
 
 test "Scenario: Given switch dash with live flag when parsing then usage error is returned" {
@@ -1614,7 +1629,7 @@ test "Scenario: Given switch dash with live flag when parsing then usage error i
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `-`");
+    try expectUsageError(result, .switch_account, "does not support `--live`, `--api`, or `--skip-api`");
 }
 
 test "Scenario: Given switch dash with skip-api flag when parsing then usage error is returned" {
@@ -1623,7 +1638,7 @@ test "Scenario: Given switch dash with skip-api flag when parsing then usage err
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .switch_account, "unknown flag `-`");
+    try expectUsageError(result, .switch_account, "does not support `--live`, `--api`, or `--skip-api`");
 }
 
 test "Scenario: Given switch query with removed auto flag when parsing then usage error is returned" {
@@ -2331,11 +2346,11 @@ test "Scenario: Given conflicting flags when completing then rejected combinatio
         try std.testing.expect(std.mem.find(u8, out, "-\t") == null);
     }
     {
-        // A bare `-` is not a valid switch word, so the context is rejected.
+        // A bare `-` is a positional selector, so `switch - --j` may offer `--json`.
         const args = [_][]const u8{ "switch", "-", "--j" };
         const out = try completeResponse(gpa, "/nonexistent", &args);
         defer gpa.free(out);
-        try std.testing.expect(std.mem.find(u8, out, "--json") == null);
+        try std.testing.expect(std.mem.find(u8, out, "--json\t") != null);
     }
     {
         // The PowerShell <7.2 empty-word sentinel normalizes to an empty prefix.
@@ -2534,15 +2549,21 @@ test "Scenario: Given reset without a selector when parsing then usage error is 
     try expectUsageError(result, .reset_credits, "requires an account selector");
 }
 
-test "Scenario: Given reset with a leading dash selector when parsing then usage error is returned" {
+test "Scenario: Given reset with a leading dash selector when parsing then it is read as a selector" {
     const gpa = std.testing.allocator;
-    // `reset` has no previous-account form: a leading dash is reported as an
-    // unknown flag instead of being read as a selector.
+    // A bare `-` is a positional like any other selector word; resolution
+    // reports the no-match error downstream.
     const args = [_][:0]const u8{ "codex-auth", "reset", "-" };
     var result = try cli.commands.parseArgs(gpa, &args);
     defer cli.commands.freeParseResult(gpa, &result);
 
-    try expectUsageError(result, .reset_credits, "unknown flag `-`");
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| try std.testing.expectEqualStrings("-", opts.selector),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
 }
 
 test "Scenario: Given reset with extra args when parsing then usage error is returned" {

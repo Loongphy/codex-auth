@@ -71,7 +71,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous:
             }
             continue;
         }
-        if (std.mem.startsWith(u8, arg, "-")) {
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
             freeTarget(allocator, opts.target);
             return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "unknown flag `{s}` for `switch`.", .{arg});
         }

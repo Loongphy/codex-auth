@@ -16,7 +16,7 @@ pub fn parse(allocator: std.mem.Allocator, args: []const [:0]const u8) !types.Pa
             continue;
         }
         if (common.isHelpFlag(arg)) return common.usageErrorResult(allocator, .login, "`--help` must be used by itself for `login`.", .{});
-        if (std.mem.startsWith(u8, arg, "-")) return common.usageErrorResult(allocator, .login, "unknown flag `{s}` for `login`.", .{arg});
+        if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) return common.usageErrorResult(allocator, .login, "unknown flag `{s}` for `login`.", .{arg});
         return common.usageErrorResult(allocator, .login, "unexpected argument `{s}` for `login`.", .{arg});
     }
     return .{ .command = .{ .login = opts } };
