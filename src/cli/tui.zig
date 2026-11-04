@@ -30,7 +30,11 @@ const win = struct {
     pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 
     pub const KEY_EVENT: WORD = 0x0001;
+    pub const MOUSE_EVENT: WORD = 0x0002;
     pub const WINDOW_BUFFER_SIZE_EVENT: WORD = 0x0004;
+
+    pub const MOUSE_WHEELED: DWORD = 0x0004;
+    pub const MOUSE_HWHEELED: DWORD = 0x0008;
 
     pub const VK_BACK: WORD = 0x08;
     pub const VK_RETURN: WORD = 0x0D;
@@ -67,10 +71,20 @@ const win = struct {
         dwSize: COORD,
     };
 
+    pub const MOUSE_EVENT_RECORD = extern struct {
+        dwMousePosition: COORD,
+        /// Wheel events carry the signed delta in the high word (120 per
+        /// notch, positive up); buttons live in the low word for the rest.
+        dwButtonState: DWORD,
+        dwControlKeyState: DWORD,
+        dwEventFlags: DWORD,
+    };
+
     pub const INPUT_RECORD = extern struct {
         EventType: WORD,
         Event: extern union {
             KeyEvent: KEY_EVENT_RECORD,
+            MouseEvent: MOUSE_EVENT_RECORD,
             WindowBufferSizeEvent: WINDOW_BUFFER_SIZE_RECORD,
         },
     };
@@ -187,16 +201,17 @@ pub const TuiSize = struct {
 pub fn windowsTuiInputMode(saved_input_mode: win.DWORD) win.DWORD {
     var raw_input_mode = saved_input_mode |
         win.ENABLE_EXTENDED_FLAGS |
-        win.ENABLE_WINDOW_INPUT;
-    // Keep resize events enabled for redraws, but leave mouse explicitly disabled
-    // until the TUI has a real click/scroll interaction model.
+        win.ENABLE_WINDOW_INPUT |
+        // The console only reports the wheel while mouse input is on; with
+        // QuickEdit off those events reach the app instead of driving a
+        // selection. Clicks land in the queue too and are discarded.
+        win.ENABLE_MOUSE_INPUT;
     raw_input_mode &= ~@as(
         win.DWORD,
         win.ENABLE_PROCESSED_INPUT |
             win.ENABLE_QUICK_EDIT_MODE |
             win.ENABLE_LINE_INPUT |
             win.ENABLE_ECHO_INPUT |
-            win.ENABLE_MOUSE_INPUT |
             win.ENABLE_VIRTUAL_TERMINAL_INPUT,
     );
     return raw_input_mode;
@@ -234,14 +249,63 @@ else
         }
     }.call;
 
-pub fn writeTuiEnterTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h");
-    try out.writeAll("\x1b[?u\x1b[>7u");
+/// Screen modes the live TUI runs under: alternate screen, hidden cursor,
+/// alternate scroll, and mouse reporting. `?1000h` asks for button events —
+/// wheel notches included — and `?1006h` makes them arrive as SGR
+/// `CSI <button;x;y M`, the same first-class input other full TUIs read. In
+/// terminals that honour mouse reporting the wheel stops arriving as arrow
+/// keys, so `?1007h` stays only as the fallback for terminals that implement
+/// alternate scroll but not mouse reporting. Press/release/motion modes
+/// (`?1002h`/`?1003h`/`?1005h`) are deliberately left off.
+pub fn writeTuiEnterTo(out: *std.Io.Writer, request_kitty: bool) !void {
+    try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h");
+    if (request_kitty) try out.writeAll("\x1b[?u\x1b[>7u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
-pub fn writeTuiExitTo(out: *std.Io.Writer) !void {
-    try out.writeAll("\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l");
+/// `pop_kitty` must mirror the request the enter wrote: `CSI <1u` pops
+/// whoever is on top of the terminal's flag stack, so it is only emitted when
+/// this session actually pushed.
+pub fn writeTuiExitTo(out: *std.Io.Writer, pop_kitty: bool) !void {
+    if (pop_kitty) try out.writeAll("\x1b[<1u");
+    try out.writeAll("\x1b[?1006l\x1b[?1000l\x1b[?1007l\x1b[?25h\x1b[?1049l");
+}
+
+/// Terminal brand hints the shell already exports — no probes, so a slow or
+/// dead terminal can never stall TUI startup.
+pub const TerminalEnvHints = struct {
+    term_program: ?[]const u8 = null,
+    terminal_emulator: ?[]const u8 = null,
+    wt_session: bool = false,
+    vte_version: bool = false,
+};
+
+pub fn terminalEnvHints() TerminalEnvHints {
+    return .{
+        .term_program = app_runtime.envValue("TERM_PROGRAM"),
+        .terminal_emulator = app_runtime.envValue("TERMINAL_EMULATOR"),
+        .wt_session = app_runtime.envHasValue("WT_SESSION"),
+        .vte_version = app_runtime.envHasValue("VTE_VERSION"),
+    };
+}
+
+/// Whether the kitty keyboard enhancement query+push is worth emitting.
+/// Terminals that mis-encode the protocol or half-claim it (xterm.js hosts
+/// like VSCode and its forks, JediTerm, VTE, Apple Terminal, Windows
+/// Terminal) are skipped up front so they cannot answer `CSI ?u` with flags
+/// they do not honor; legacy byte input is fully supported either way. The
+/// Windows console path reads `INPUT_RECORD`s rather than a byte stream, so
+/// the request is meaningless there and is skipped outright.
+pub fn kittyRequestAllowed(hints: TerminalEnvHints) bool {
+    if (comptime builtin.target.os.tag == .windows) return false;
+    if (hints.wt_session or hints.vte_version) return false;
+    const term_program = hints.term_program orelse "";
+    const terminal_emulator = hints.terminal_emulator orelse "";
+    if (std.mem.eql(u8, term_program, "vscode") or
+        std.mem.eql(u8, term_program, "Apple_Terminal")) return false;
+    if (std.mem.indexOf(u8, term_program, "JediTerm") != null or
+        std.mem.indexOf(u8, terminal_emulator, "JediTerm") != null) return false;
+    return true;
 }
 
 pub fn writeTuiResetFrameTo(out: *std.Io.Writer) !void {
@@ -471,6 +535,9 @@ pub const TuiSession = struct {
     pending_windows_key: ?TuiInputKey = null,
     pending_windows_repeat_count: u16 = 0,
     keyboard_enhancement_supported: bool = false,
+    /// Mirrors the kitty request emitted (or withheld) on enter so deinit
+    /// pops the flag stack only when this session pushed onto it.
+    keyboard_enhancement_requested: bool = false,
     last_frame_hash: u64 = 0,
     last_frame_line_count: usize = 0,
     has_last_frame: bool = false,
@@ -483,6 +550,7 @@ pub const TuiSession = struct {
         if (!(try input.isTty(app_runtime.io())) or !(try output.isTty(app_runtime.io()))) {
             return error.TuiRequiresTty;
         }
+        const keyboard_enhancement_requested = kittyRequestAllowed(terminalEnvHints());
 
         if (comptime builtin.target.os.tag == .windows) {
             var saved_input_mode: win.DWORD = 0;
@@ -511,6 +579,7 @@ pub const TuiSession = struct {
                 .output = output,
                 .saved_input_state = saved_input_mode,
                 .saved_output_state = saved_output_mode,
+                .keyboard_enhancement_requested = keyboard_enhancement_requested,
             };
             self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
             self.enter() catch |err| return mapTuiOutputError(err);
@@ -532,6 +601,7 @@ pub const TuiSession = struct {
                 .input = input,
                 .output = output,
                 .saved_input_state = saved_termios,
+                .keyboard_enhancement_requested = keyboard_enhancement_requested,
             };
             self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
             self.enter() catch |err| return mapTuiOutputError(err);
@@ -540,7 +610,7 @@ pub const TuiSession = struct {
 
     pub fn deinit(self: *@This()) void {
         const writer = self.out();
-        writeTuiExitTo(writer) catch {};
+        writeTuiExitTo(writer, self.keyboard_enhancement_requested) catch {};
         writer.flush() catch {};
         if (comptime builtin.target.os.tag == .windows) {
             _ = win.SetConsoleMode(self.output.handle, self.saved_output_state);
@@ -634,6 +704,18 @@ pub const TuiSession = struct {
                 self.pending_windows_repeat_count = 0;
                 return .redraw;
             }
+            if (record.EventType == win.MOUSE_EVENT) {
+                const mouse_event = record.Event.MouseEvent;
+                if (mouse_event.dwEventFlags == win.MOUSE_WHEELED) {
+                    const delta: i16 = @bitCast(@as(u16, @truncate(mouse_event.dwButtonState >> 16)));
+                    // One console event per notch; the delta magnitude (a
+                    // multiple of 120) is folded into the single key the
+                    // same way an SGR wheel report collapses to one scroll.
+                    if (delta > 0) return .scroll_up;
+                    if (delta < 0) return .scroll_down;
+                }
+                continue;
+            }
             if (record.EventType != win.KEY_EVENT) continue;
 
             const key_event = record.Event.KeyEvent;
@@ -667,7 +749,7 @@ pub const TuiSession = struct {
 
     pub fn enter(self: *@This()) !void {
         const writer = self.out();
-        try writeTuiEnterTo(writer);
+        try writeTuiEnterTo(writer, self.keyboard_enhancement_requested);
         try writer.flush();
     }
 
@@ -796,12 +878,14 @@ pub fn terminalSize(file: std.Io.File) ?TuiSize {
     }
 }
 
-fn isKeyboardEnhancementFlagsResponse(seq: []const u8) bool {
-    if (seq.len < 4 or seq[0] != '[' or seq[1] != '?' or seq[seq.len - 1] != 'u') return false;
-    for (seq[2 .. seq.len - 1]) |ch| {
-        if (!std.ascii.isDigit(ch)) return false;
-    }
-    return true;
+/// Parses the flags value out of a `CSI ? flags u` keyboard-enhancement
+/// reply. The value matters, not just the shape: a terminal that answers the
+/// query but applied none of the pushed flags reports `?0u`, and only a reply
+/// with bit 0 (disambiguate) set means legacy bytes may now be enhancement
+/// sequences instead of keys.
+fn keyboardEnhancementFlags(seq: []const u8) ?usize {
+    if (seq.len < 4 or seq[0] != '[' or seq[1] != '?' or seq[seq.len - 1] != 'u') return null;
+    return std.fmt.parseInt(usize, seq[2 .. seq.len - 1], 10) catch null;
 }
 
 fn isEnhancedArrowSuffix(seq: []const u8) bool {
@@ -880,8 +964,15 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
     return switch (seq[0]) {
         '[' => blk: {
             if (seq.len == 1) break :blk .incomplete;
+            // X10 mouse report `ESC [ M Cb Cx Cy`, the encoding terminals
+            // fall back to when they honour `?1000h` but not `?1006h`: the
+            // three bytes after `M` are coordinates, not keys. Eat them so a
+            // digit-shaped column byte cannot leak into a picker prompt.
+            if (seq[1] == 'M') break :blk if (seq.len < 5) .incomplete else .ignore;
             const final = seq[seq.len - 1];
-            if (isKeyboardEnhancementFlagsResponse(seq)) break :blk .keyboard_enhancement_supported;
+            if (keyboardEnhancementFlags(seq)) |flags| {
+                break :blk if (flags & 1 != 0) .keyboard_enhancement_supported else .ignore;
+            }
             if (csiUKey(seq)) |key| break :blk .{ .key = key };
             if (seq[1] == '<') {
                 if (final != 'M' and final != 'm') {
@@ -890,11 +981,20 @@ pub fn classifyTuiEscapeSuffix(seq: []const u8) TuiEscapeClassification {
                 }
                 const first_semicolon = std.mem.findScalar(u8, seq[2 .. seq.len - 1], ';') orelse break :blk .ignore;
                 const button_code = std.fmt.parseInt(usize, seq[2 .. 2 + first_semicolon], 10) catch break :blk .ignore;
-                break :blk switch (button_code) {
-                    64 => .{ .navigation = .scroll_up },
-                    65 => .{ .navigation = .scroll_down },
-                    else => .ignore,
-                };
+                // SGR button codes: bit 6 marks the wheel group, the low two
+                // bits are the direction (0 up, 1 down, 2/3 horizontal), the
+                // middle bits are modifiers, and bit 5 is drag motion. Only
+                // `M` presses scroll — a wheel notch has no `m` release, and
+                // button releases must not re-fire the scroll.
+                const direction: ?TuiNavigation = if (final == 'M' and (button_code & 64) != 0 and (button_code & 32) == 0)
+                    switch (button_code & 3) {
+                        0 => .scroll_up,
+                        1 => .scroll_down,
+                        else => null,
+                    }
+                else
+                    null;
+                break :blk if (direction) |dir| .{ .navigation = dir } else .ignore;
             }
             if (final == 'A' or final == 'B') {
                 const params = seq[1 .. seq.len - 1];

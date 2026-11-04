@@ -1,0 +1,56 @@
+# Terminal input
+
+Live views (`list --live`, `switch --live`, `remove --live`) run as a
+fullscreen TUI on the terminal's alternate screen. This page describes which
+terminal features the TUI asks for and how input reaches the application on
+each platform. Exact byte sequences and key mappings are pinned by
+`tests/tui_session_test.zig`.
+
+## Screen modes
+
+- The TUI switches to the alternate screen and hides the cursor on entry;
+  both are restored on exit, along with every input mode it enabled.
+- Mouse reporting is requested at the button level, which includes wheel
+  notches, in the SGR coordinate encoding. Drag and motion reporting stay
+  off: clicks do not reach the application, and terminals keep whatever
+  selection gestures they offer while button reporting is active.
+- Alternate scroll stays enabled as a fallback. On terminals that implement
+  alternate scroll but not mouse reporting, the wheel arrives as arrow keys
+  and keeps whatever meaning that command's arrow keys already have.
+
+## Mouse wheel
+
+- A wheel notch is a small fixed-step scroll — `live_tui.mouse_wheel_lines`
+  — while an arrow-key scroll uses the larger viewport-scaled step. Wheel
+  reports carry a direction rather than a magnitude, so fast scrolling is
+  just more events.
+- The notch scrolls the account-list viewport; while the reset-credit rail
+  is open it moves the credit highlight instead, the same surface the
+  command's arrow keys act on.
+- A terminal that reports buttons but not the SGR encoding falls back to
+  the legacy X10 report. Those reports are consumed and ignored, so their
+  coordinate bytes can never leak into a digit prompt or key mapping.
+
+## Keyboard enhancement
+
+- On POSIX terminals the TUI asks for the kitty keyboard-enhancement flags
+  and pushes its flag set only when the terminal environment suggests the
+  protocol will be honored. The reply itself must confirm the disambiguate
+  flag took effect before enhanced key sequences are trusted.
+- The request is withheld for terminal families known to mis-encode or
+  half-claim the protocol — xterm.js hosts such as VS Code's integrated
+  terminal and its forks, Apple Terminal, JediTerm, VTE-based terminals, and
+  Windows Terminal — and on native Windows, where input is not a byte
+  stream.
+- Nothing depends on the enhancement: legacy byte input is fully supported
+  either way. Enhanced mode only lets the TUI tell a physical arrow key
+  apart from a wheel-generated one, which is what makes `↑`/`↓` and `j`/`k`
+  diverge on capable terminals.
+
+## Windows console
+
+- On native Windows, input arrives as `INPUT_RECORD`s rather than escape
+  sequences: wheel events map to the same scroll actions as SGR reports,
+  resize records trigger a redraw, and key records map to the same key set.
+- The console mode keeps mouse input enabled and Quick Edit disabled so
+  wheel records reach the application instead of starting a text selection.

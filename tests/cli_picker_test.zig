@@ -2834,6 +2834,11 @@ test "list viewport keys keep paging and accept alternate-scroll wheel arrows" {
     try std.testing.expectEqual(@as(usize, 3), viewport_start);
     try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .move_down));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
+    // A wheel notch is one small step, independent of the arrow-scroll step.
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .scroll_down));
+    try std.testing.expectEqual(@as(usize, 9 + live_tui.mouse_wheel_lines), viewport_start);
+    try std.testing.expect(live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .scroll_up));
+    try std.testing.expectEqual(@as(usize, 9), viewport_start);
     try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'j' }));
     try std.testing.expectEqual(@as(usize, 9), viewport_start);
     try std.testing.expect(!live_tui.applyListViewportKey(row_count, max_rows, &viewport_start, wheel_rows, .{ .byte = 'k' }));

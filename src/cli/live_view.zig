@@ -210,7 +210,6 @@ pub fn selectAccountWithLiveUpdates(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", ""),
                     );
-                    const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
                     for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
@@ -224,11 +223,11 @@ pub fn selectAccountWithLiveUpdates(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, live_tui.mouse_wheel_lines)) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, live_tui.mouse_wheel_lines)) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {

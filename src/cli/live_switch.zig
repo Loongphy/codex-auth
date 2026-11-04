@@ -213,12 +213,12 @@ pub fn runSwitchLiveActions(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, live_tui.mouse_wheel_lines);
                                 follow_selection = false;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, wheel_rows);
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, live_tui.mouse_wheel_lines);
                                 follow_selection = false;
                                 needs_render = true;
                             },

@@ -11,6 +11,11 @@ pub const tick_ms = tui_mod.live_ui_tick_ms;
 pub const key_buffer_len = 64;
 pub const min_mouse_wheel_rows = 6;
 pub const max_mouse_wheel_rows = 12;
+/// Lines a single wheel event scrolls. A real wheel notch (SGR `CSI <64 M`,
+/// a console `MOUSE_WHEELED`, a mux-forwarded arrow) is one event, so the
+/// step is small and fixed — unlike arrow-key scrolling, whose step doubles
+/// as the "one press" unit and scales with the viewport.
+pub const mouse_wheel_lines: usize = 3;
 pub const ScrollDirection = enum { up, down };
 
 pub fn mouseWheelRows(max_rows: usize) usize {
@@ -225,11 +230,11 @@ pub fn applyListViewportKey(
             return true;
         },
         .scroll_up => {
-            scrollListViewportBy(row_count, max_rows, viewport_start, .up, wheel_rows);
+            scrollListViewportBy(row_count, max_rows, viewport_start, .up, mouse_wheel_lines);
             return true;
         },
         .scroll_down => {
-            scrollListViewportBy(row_count, max_rows, viewport_start, .down, wheel_rows);
+            scrollListViewportBy(row_count, max_rows, viewport_start, .down, mouse_wheel_lines);
             return true;
         },
         .byte => |ch| switch (ch) {

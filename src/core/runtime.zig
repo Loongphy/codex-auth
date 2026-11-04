@@ -42,6 +42,19 @@ pub fn envHasValue(comptime name: []const u8) bool {
     return currentEnviron().containsUnemptyConstant(name);
 }
 
+/// Borrowed env lookup for short ASCII values (terminal brand hints) that
+/// must not allocate at startup. The startup `environ_map` serves them
+/// directly; test code falls back to the test runner's environment, which
+/// stores WTF-16 on Windows — callers there should gate on the OS first.
+pub fn envValue(comptime name: []const u8) ?[]const u8 {
+    if (runtime_init) |init| return init.environ_map.get(name);
+    if (builtin.is_test) {
+        if (builtin.target.os.tag == .windows) return null;
+        return std.testing.environ.getPosix(name);
+    }
+    @panic("app_runtime.initRuntime must be called during startup");
+}
+
 pub fn io() std.Io {
     if (runtime_init) |init| return init.io;
     if (builtin.is_test) return std.testing.io;

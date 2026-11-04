@@ -34,6 +34,14 @@ test "Scenario: Given tty arrow escape suffixes when classifying them then both 
 
 test "Scenario: Given keyboard enhancement responses and keys when classifying them then enhanced arrows stay distinct from alternate scroll arrows" {
     try std.testing.expectEqual(TuiEscapeClassification.keyboard_enhancement_supported, classifyTuiEscapeSuffix("[?7u"));
+    // The flags value decides: a `?0u` reply means the query was answered but
+    // no pushed flag applied, so legacy bytes still carry real keys. Only the
+    // disambiguate bit (1) flips the parser into enhancement mode.
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[?0u"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[?2u"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[?8u"));
+    try std.testing.expectEqual(TuiEscapeClassification.keyboard_enhancement_supported, classifyTuiEscapeSuffix("[?1u"));
+    try std.testing.expectEqual(TuiEscapeClassification.keyboard_enhancement_supported, classifyTuiEscapeSuffix("[?9u"));
     switch (classifyTuiEscapeSuffix("[1;1:1A")) {
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.keyboard_up, direction),
         else => return error.TestUnexpectedResult,
@@ -254,12 +262,67 @@ test "Scenario: Given tty paging and mouse wheel escape suffixes when classifyin
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.scroll_up, direction),
         else => return error.TestUnexpectedResult,
     }
+    // Modifier bits ride the middle of the button code — a shifted or
+    // ctrl-held wheel notch is still the same scroll.
+    switch (classifyTuiEscapeSuffix("[<68;12;4M")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.scroll_up, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    switch (classifyTuiEscapeSuffix("[<81;12;4M")) {
+        .navigation => |direction| try std.testing.expectEqual(TuiNavigation.scroll_down, direction),
+        else => return error.TestUnexpectedResult,
+    }
+    // `m` releases and motion-coded reports (bit 5) are not wheel notches.
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[<64;12;4m"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[<96;12;4M"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[<0;12;4M"));
 }
 
 test "Scenario: Given long SGR mouse wheel escape suffix when reading it then the full sequence is consumed" {
     const result = try readTuiEscapeAction(std.Io.File.stdin(), "[<65;120;40M", 0, 0);
     try std.testing.expectEqual(TuiEscapeAction.scroll_down, result.action);
     try std.testing.expectEqual(@as(usize, "[<65;120;40M".len), result.buffered_bytes_consumed);
+}
+
+test "Scenario: Given X10 mouse reports when reading them then the three coordinate bytes are consumed as one ignored report" {
+    // Terminals honouring `?1000h` but not `?1006h` answer wheel notches with
+    // X10 `ESC [ M Cb Cx Cy`. The coordinates must be eaten with the report —
+    // a digit-shaped column byte would otherwise land in a picker prompt.
+    try std.testing.expectEqual(TuiEscapeClassification.incomplete, classifyTuiEscapeSuffix("[M"));
+    try std.testing.expectEqual(TuiEscapeClassification.incomplete, classifyTuiEscapeSuffix("[M\x60\x21"));
+    try std.testing.expectEqual(TuiEscapeClassification.ignore, classifyTuiEscapeSuffix("[M\x60\x21\x21"));
+
+    const result = try readTuiEscapeAction(std.Io.File.stdin(), "[M\x60\x35\x39", 0, 0);
+    try std.testing.expectEqual(TuiEscapeAction.ignore, result.action);
+    try std.testing.expectEqual(@as(usize, 5), result.buffered_bytes_consumed);
+}
+
+test "Scenario: Given terminal env hints when deciding the kitty request then mis-encoding and byte-less brands are skipped" {
+    const builtin = @import("builtin");
+    const kittyRequestAllowed = cli.tui.kittyRequestAllowed;
+
+    // The Windows console reads INPUT_RECORDs, so the request is always
+    // withheld there regardless of brand.
+    if (builtin.target.os.tag == .windows) {
+        try std.testing.expect(!kittyRequestAllowed(.{}));
+        try std.testing.expect(!kittyRequestAllowed(.{ .term_program = "kitty" }));
+        return;
+    }
+
+    // The default — unknown terminals included — still gets the request: the
+    // `?u` query is the honest fallback when the brand is unrecognized.
+    try std.testing.expect(kittyRequestAllowed(.{}));
+    try std.testing.expect(kittyRequestAllowed(.{ .term_program = "iTerm.app" }));
+    try std.testing.expect(kittyRequestAllowed(.{ .term_program = "kitty" }));
+    try std.testing.expect(kittyRequestAllowed(.{ .term_program = "tmux" }));
+
+    // Brands that mis-encode or half-claim the protocol stay on legacy input.
+    try std.testing.expect(!kittyRequestAllowed(.{ .term_program = "vscode" }));
+    try std.testing.expect(!kittyRequestAllowed(.{ .term_program = "Apple_Terminal" }));
+    try std.testing.expect(!kittyRequestAllowed(.{ .term_program = "JetBrains-JediTerm" }));
+    try std.testing.expect(!kittyRequestAllowed(.{ .terminal_emulator = "JetBrains-JediTerm" }));
+    try std.testing.expect(!kittyRequestAllowed(.{ .wt_session = true }));
+    try std.testing.expect(!kittyRequestAllowed(.{ .vte_version = true }));
 }
 
 test "Scenario: Given unrelated tty escape suffixes when classifying them then they are ignored instead of acting like quit" {
@@ -273,19 +336,37 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
 
-    try writeTuiEnterTo(&aw.writer);
-    try writeTuiExitTo(&aw.writer);
+    try writeTuiEnterTo(&aw.writer, true);
+    try writeTuiExitTo(&aw.writer, true);
 
     try std.testing.expectEqualStrings(
-        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?u\x1b[>7u" ++
+        "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h" ++
+            "\x1b[?u\x1b[>7u" ++
             "\x1b[H\x1b[J" ++
-            "\x1b[<1u\x1b[?1007l\x1b[?25h\x1b[?1049l",
+            "\x1b[<1u\x1b[?1006l\x1b[?1000l\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),
     );
     try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1007h") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1007l") != null);
-    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1000h") == null);
-    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1006h") == null);
+    // SGR mouse reporting is the wheel's first-class path; motion and the
+    // legacy X10-coordinate modes stay off on purpose.
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1000h") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1006h") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1002h") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1005h") == null);
+}
+
+test "Scenario: Given the kitty request is withheld when writing the lifecycle then no query push or pop is emitted" {
+    const gpa = std.testing.allocator;
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+
+    try writeTuiEnterTo(&aw.writer, false);
+    try writeTuiExitTo(&aw.writer, false);
+
+    try std.testing.expect(std.mem.find(u8, aw.written(), "u") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1049h") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1049l") != null);
 }
 
 test "Scenario: Given shared TUI frame redraw when writing it then it clears only the alternate screen frame instead of appending full screens" {
@@ -329,7 +410,7 @@ test "Scenario: Given TUI prompt with numeric input when rendering then the curr
     try std.testing.expectEqualStrings("Select account to activate:\n", without_digits.written());
 }
 
-test "Scenario: Given Windows TUI console modes when configuring them then resize stays enabled while mouse and cooked input stay disabled" {
+test "Scenario: Given Windows TUI console modes when configuring them then resize and wheel input stay enabled while cooked input stays disabled" {
     const saved_input_mode: win.DWORD =
         win.ENABLE_MOUSE_INPUT |
         win.ENABLE_WINDOW_INPUT |
@@ -339,7 +420,10 @@ test "Scenario: Given Windows TUI console modes when configuring them then resiz
 
     try std.testing.expect((configured_input_mode & win.ENABLE_WINDOW_INPUT) != 0);
     try std.testing.expect((configured_input_mode & win.ENABLE_EXTENDED_FLAGS) != 0);
-    try std.testing.expect((configured_input_mode & win.ENABLE_MOUSE_INPUT) == 0);
+    // Mouse events are what deliver MOUSE_WHEELED; QuickEdit stays off so the
+    // wheel reaches the app instead of arming a selection.
+    try std.testing.expect((configured_input_mode & win.ENABLE_MOUSE_INPUT) != 0);
+    try std.testing.expect((configured_input_mode & win.ENABLE_QUICK_EDIT_MODE) == 0);
     try std.testing.expect((configured_input_mode & win.ENABLE_LINE_INPUT) == 0);
     try std.testing.expect((configured_input_mode & win.ENABLE_ECHO_INPUT) == 0);
     try std.testing.expect((configured_input_mode & win.ENABLE_VIRTUAL_TERMINAL_INPUT) == 0);
