@@ -2925,6 +2925,59 @@ test "Scenario: Given alias set with duplicate alias when running alias then it 
     try std.testing.expectEqualStrings("backup", loaded.accounts.items[idx].alias);
 }
 
+test "Scenario: Given alias set with a flag-like or key-colliding alias when running alias then it fails without changing registry" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "active@example.com", &[_]SeedAccount{
+        .{ .email = "active@example.com", .alias = "active" },
+        .{ .email = "backup@example.com", .alias = "backup" },
+    });
+
+    const codex_home = try codexHomeAlloc(gpa, home_root);
+    defer gpa.free(codex_home);
+
+    const dash_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", "-x" },
+    );
+    defer gpa.free(dash_result.stdout);
+    defer gpa.free(dash_result.stderr);
+    try expectFailure(dash_result);
+    try std.testing.expectEqualStrings("", dash_result.stdout);
+    try std.testing.expect(std.mem.find(u8, dash_result.stderr, "alias cannot start with '-'") != null);
+
+    const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
+    defer gpa.free(active_key);
+    const key_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", active_key },
+    );
+    defer gpa.free(key_result.stdout);
+    defer gpa.free(key_result.stderr);
+    try expectFailure(key_result);
+    try std.testing.expect(std.mem.find(u8, key_result.stderr, "alias cannot equal another account's key") != null);
+
+    var loaded = try registry.loadRegistry(gpa, codex_home);
+    defer loaded.deinit(gpa);
+    const backup_key = try fixtures.accountKeyForEmailAlloc(gpa, "backup@example.com");
+    defer gpa.free(backup_key);
+    const idx = registry.findAccountIndexByAccountKey(&loaded, backup_key) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("backup", loaded.accounts.items[idx].alias);
+}
+
 test "Scenario: Given switch query with multiple matches when running switch then it asks for one account and switches only that account" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);

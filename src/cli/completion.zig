@@ -476,6 +476,13 @@ fn resolveContext(prev: []const []const u8) Context {
                         ctx.unknown = true;
                         continue;
                     }
+                    // The parser rejects duplicated flags and conflicting or
+                    // positional-blocked combinations, so the rest of the line
+                    // is dead once one is seen.
+                    for (ctx.seenFlags()) |seen| {
+                        if (seen == flag) ctx.unknown = true;
+                    }
+                    if (flagBlocked(spec, flag, &ctx)) ctx.unknown = true;
                     ctx.markFlag(flag);
                     // A `--help` word is only valid on its own; extras are rejected.
                     if (std.mem.eql(u8, name, "--help")) ctx.unknown = true;

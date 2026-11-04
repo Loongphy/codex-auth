@@ -85,6 +85,10 @@ fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx:
         try cli.output.printInvalidAliasError("alias cannot be only digits because numbers select displayed rows.");
         return error.InvalidAlias;
     }
+    if (std.mem.startsWith(u8, alias_value, "-")) {
+        try cli.output.printInvalidAliasError("alias cannot start with '-' because flag-like words are never read as selectors.");
+        return error.InvalidAlias;
+    }
     for (alias_value) |ch| {
         if (ch < 0x20 or ch == 0x7f) {
             try cli.output.printInvalidAliasError("alias cannot contain control characters.");
@@ -96,6 +100,10 @@ fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx:
         if (rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, alias_value)) {
             try cli.output.printDuplicateAliasError(alias_value, rec.email);
             return error.DuplicateAlias;
+        }
+        if (std.ascii.eqlIgnoreCase(rec.account_key, alias_value)) {
+            try cli.output.printInvalidAliasError("alias cannot equal another account's key because keys resolve before aliases.");
+            return error.InvalidAlias;
         }
     }
 }
