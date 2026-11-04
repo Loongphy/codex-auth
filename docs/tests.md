@@ -34,6 +34,8 @@ Tests split by *kind*, not by "interaction vs logic". Pick the layer by what the
 
 So a new key mapping or escape classification gets a unit test in the area file; it earns a PTY case only when the wire contract itself changes — a new DECSET, a new reply that must be consumed, or bytes that must never leak into later input. PTY coverage is gated to platforms the harness supports (`has_pty` in `tests/tui_pty_test.zig`); on other platforms the same contract stays covered at unit level.
 
+Windows is the exception the rule anticipates: there is no pseudo-terminal harness yet (a real one means ConPTY), so the console input path is pinned by pure record→key and mode→flags tests instead — `windowsMouseScrollKey`, `windowsTuiInputMode` — which run on any host since the `win.INPUT_RECORD` shapes are platform-independent.
+
 ## Build Integration
 
 `build.zig` owns the test suite with an explicit `test_files` array. For each entry, it creates a separate `b.addTest` artifact and injects the `codex_auth` package import.

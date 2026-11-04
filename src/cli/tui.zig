@@ -223,6 +223,22 @@ pub fn windowsTuiOutputMode(saved_output_mode: win.DWORD) win.DWORD {
         win.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
 }
 
+/// Maps a console `MOUSE_EVENT_RECORD` to a scroll key. Only `MOUSE_WHEELED`
+/// produces one, by sign of the delta in the high word of `dwButtonState`
+/// (±120 per notch): one console event per notch, and the delta magnitude is
+/// folded into the single key the same way an SGR wheel report collapses to
+/// one scroll. Clicks, moves, and horizontal wheel return null so the
+/// caller's loop keeps draining without mistaking them for keys.
+pub fn windowsMouseScrollKey(record: win.INPUT_RECORD) ?TuiInputKey {
+    if (record.EventType != win.MOUSE_EVENT) return null;
+    const mouse_event = record.Event.MouseEvent;
+    if (mouse_event.dwEventFlags != win.MOUSE_WHEELED) return null;
+    const delta: i16 = @bitCast(@as(u16, @truncate(mouse_event.dwButtonState >> 16)));
+    if (delta > 0) return .scroll_up;
+    if (delta < 0) return .scroll_down;
+    return null;
+}
+
 pub const pollTuiInput = if (builtin.target.os.tag == .windows)
     struct {
         fn call(file: std.Io.File, timeout_ms: i32, _: i16) !TuiPollResult {
@@ -704,18 +720,8 @@ pub const TuiSession = struct {
                 self.pending_windows_repeat_count = 0;
                 return .redraw;
             }
-            if (record.EventType == win.MOUSE_EVENT) {
-                const mouse_event = record.Event.MouseEvent;
-                if (mouse_event.dwEventFlags == win.MOUSE_WHEELED) {
-                    const delta: i16 = @bitCast(@as(u16, @truncate(mouse_event.dwButtonState >> 16)));
-                    // One console event per notch; the delta magnitude (a
-                    // multiple of 120) is folded into the single key the
-                    // same way an SGR wheel report collapses to one scroll.
-                    if (delta > 0) return .scroll_up;
-                    if (delta < 0) return .scroll_down;
-                }
-                continue;
-            }
+            if (windowsMouseScrollKey(record)) |key| return key;
+            if (record.EventType == win.MOUSE_EVENT) continue;
             if (record.EventType != win.KEY_EVENT) continue;
 
             const key_event = record.Event.KeyEvent;

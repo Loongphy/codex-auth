@@ -432,3 +432,44 @@ test "Scenario: Given Windows TUI console modes when configuring them then resiz
     try std.testing.expect((configured_output_mode & win.ENABLE_PROCESSED_OUTPUT) != 0);
     try std.testing.expect((configured_output_mode & win.ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0);
 }
+
+test "Scenario: Given Windows console mouse records when mapping them then only vertical wheel deltas scroll" {
+    const mouseRecord = struct {
+        fn call(flags: win.DWORD, button_state: win.DWORD) win.INPUT_RECORD {
+            return .{
+                .EventType = win.MOUSE_EVENT,
+                .Event = .{ .MouseEvent = .{
+                    .dwMousePosition = .{ .X = 10, .Y = 5 },
+                    .dwButtonState = button_state,
+                    .dwControlKeyState = 0,
+                    .dwEventFlags = flags,
+                } },
+            };
+        }
+    }.call;
+
+    // The wheel delta rides in the high word of dwButtonState (±120/notch):
+    // sign picks the direction, magnitude folds into one key like an SGR
+    // report does.
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_up, cli.tui.windowsMouseScrollKey(mouseRecord(win.MOUSE_WHEELED, 120 << 16)));
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_down, cli.tui.windowsMouseScrollKey(mouseRecord(win.MOUSE_WHEELED, 0xFF88_0000)));
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_up, cli.tui.windowsMouseScrollKey(mouseRecord(win.MOUSE_WHEELED, 240 << 16)));
+
+    // Anything that is not a vertical wheel notch is drained, not mapped:
+    // horizontal wheel, button press/move (flags 0), and non-mouse records.
+    try std.testing.expectEqual(@as(?cli.tui.TuiInputKey, null), cli.tui.windowsMouseScrollKey(mouseRecord(win.MOUSE_HWHEELED, 120 << 16)));
+    try std.testing.expectEqual(@as(?cli.tui.TuiInputKey, null), cli.tui.windowsMouseScrollKey(mouseRecord(0, 1)));
+
+    const key_record: win.INPUT_RECORD = .{
+        .EventType = win.KEY_EVENT,
+        .Event = .{ .KeyEvent = .{
+            .bKeyDown = .TRUE,
+            .wRepeatCount = 1,
+            .wVirtualKeyCode = win.VK_DOWN,
+            .wVirtualScanCode = 0,
+            .uChar = .{ .UnicodeChar = 0 },
+            .dwControlKeyState = 0,
+        } },
+    };
+    try std.testing.expectEqual(@as(?cli.tui.TuiInputKey, null), cli.tui.windowsMouseScrollKey(key_record));
+}
