@@ -29,6 +29,7 @@ If one account matches, the command updates that account immediately. If multipl
 - Empty aliases are rejected.
 - All-digit aliases are rejected because numeric selectors already refer to displayed row numbers.
 - Aliases starting with `-` are rejected because flag-like words are never read as selectors.
+- Aliases starting with `:` are rejected because completion protocols reserve leading colons.
 - Aliases containing control characters are rejected.
 - Aliases equal to another account's key are rejected because keys resolve before aliases.
 - Alias comparison is case-insensitive for duplicate detection.

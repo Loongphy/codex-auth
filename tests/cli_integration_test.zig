@@ -2925,7 +2925,7 @@ test "Scenario: Given alias set with duplicate alias when running alias then it 
     try std.testing.expectEqualStrings("backup", loaded.accounts.items[idx].alias);
 }
 
-test "Scenario: Given alias set with a flag-like or key-colliding alias when running alias then it fails without changing registry" {
+test "Scenario: Given alias set with an uncompletable or key-colliding alias when running alias then it fails without changing registry" {
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
@@ -2956,6 +2956,17 @@ test "Scenario: Given alias set with a flag-like or key-colliding alias when run
     try expectFailure(dash_result);
     try std.testing.expectEqualStrings("", dash_result.stdout);
     try std.testing.expect(std.mem.find(u8, dash_result.stderr, "alias cannot start with '-'") != null);
+
+    const colon_result = try runCliWithIsolatedHome(
+        gpa,
+        project_root,
+        home_root,
+        &[_][]const u8{ "alias", "set", "backup@", ":x" },
+    );
+    defer gpa.free(colon_result.stdout);
+    defer gpa.free(colon_result.stderr);
+    try expectFailure(colon_result);
+    try std.testing.expect(std.mem.find(u8, colon_result.stderr, "alias cannot start with ':'") != null);
 
     const active_key = try fixtures.accountKeyForEmailAlloc(gpa, "active@example.com");
     defer gpa.free(active_key);

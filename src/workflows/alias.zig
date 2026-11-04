@@ -89,6 +89,10 @@ fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx:
         try cli.output.printInvalidAliasError("alias cannot start with '-' because flag-like words are never read as selectors.");
         return error.InvalidAlias;
     }
+    if (std.mem.startsWith(u8, alias_value, ":")) {
+        try cli.output.printInvalidAliasError("alias cannot start with ':' because completion protocols reserve leading colons.");
+        return error.InvalidAlias;
+    }
     for (alias_value) |ch| {
         if (ch < 0x20 or ch == 0x7f) {
             try cli.output.printInvalidAliasError("alias cannot contain control characters.");

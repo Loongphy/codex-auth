@@ -119,6 +119,12 @@ echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
 autoload -Uz compinit && compinit
 ```
 
+Install PowerShell completions with (see [docs/commands/completion.md](./docs/commands/completion.md) for details):
+
+```powershell
+codex-auth completion pwsh >> $PROFILE
+```
+
 ## Quick Examples
 
 ```shell

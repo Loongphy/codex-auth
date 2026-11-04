@@ -113,6 +113,7 @@ const zsh_script =
     \\  while IFS=$'\t' read -r value desc; do
     \\    case "$value" in
     \\      (:*) directive="${value#:}" ;;
+    \\      ("") ;;
     \\      (*)  esc="${value//\\/\\\\}"
     \\           esc="${esc//:/\\:}"
     \\           [[ $desc == "$value" ]] && desc=
@@ -151,7 +152,7 @@ const fish_script =
     \\        if string match -q ':*' -- $line
     \\            set directive (string sub -s 2 -- $line)
     \\        else
-    \\            echo $line
+    \\            echo -- $line
     \\        end
     \\    end
     \\    test "$directive" = "1"; and return
