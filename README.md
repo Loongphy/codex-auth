@@ -82,7 +82,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
-| `codex-auth completion <bash|zsh|fish|pwsh>` | Print a shell completion script |
+| `codex-auth completion <bash\|zsh\|fish\|pwsh>` | Print a shell completion script |
 
 ## Shell Completion
 
