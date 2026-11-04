@@ -86,15 +86,6 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 
 ## Shell Completion
 
-Generate completions with:
-
-```shell
-codex-auth completion bash
-codex-auth completion zsh
-codex-auth completion fish
-codex-auth completion pwsh
-```
-
 Install Fish completions with:
 
 ```shell
