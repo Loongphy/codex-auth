@@ -82,7 +82,7 @@ Detailed command documentation lives in [docs/commands/README.md](./docs/command
 | Command | Description |
 |---------|-------------|
 | [`codex-auth config live --interval <seconds>`](./docs/commands/config.md) | Configure live TUI refresh interval |
-| `codex-auth completion <bash\|zsh\|fish\|pwsh>` | Print a shell completion script |
+| [`codex-auth completion <bash\|zsh\|fish\|pwsh>`](./docs/commands/completion.md) | Print a shell completion script |
 
 ## Shell Completion
 
@@ -110,7 +110,7 @@ echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
 autoload -Uz compinit && compinit
 ```
 
-Install PowerShell completions with (see [docs/commands/completion.md](./docs/commands/completion.md) for details):
+Install PowerShell completions with:
 
 ```powershell
 codex-auth completion pwsh >> $PROFILE

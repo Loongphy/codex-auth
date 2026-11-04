@@ -17,6 +17,7 @@ codex-auth switch <query> --restart-daemon
 
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
+- Only the top-level `-` form is the shortcut: `codex-auth switch -` treats `-` as an ordinary account query.
 
 ## Interactive Switch
 

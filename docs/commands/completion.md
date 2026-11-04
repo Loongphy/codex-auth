@@ -79,12 +79,6 @@ Or load it for the current session only:
 codex-auth completion pwsh | Invoke-Expression
 ```
 
-PSReadLine's default Tab binding cycles candidates inline on both Windows PowerShell 5.1 and PowerShell 7+. For a menu-style picker, add to your profile:
-
-```powershell
-Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
-```
-
 ## Runtime Completion Protocol
 
 The generated scripts are thin trampolines: on every Tab they forward the current command-line words to a hidden endpoint and let the binary decide what to offer.
