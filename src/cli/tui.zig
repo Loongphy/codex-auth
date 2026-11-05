@@ -566,7 +566,9 @@ fn tcGetAttr(handle: std.posix.fd_t) std.posix.TermiosGetError!std.posix.termios
     const linux = std.os.linux;
     if (comptime builtin.target.os.tag != .linux) return std.posix.tcgetattr(handle);
     while (true) {
-        var term: std.posix.termios = undefined;
+        // TCGETS fills only the 36-byte kernel termios; zero the trailing
+        // speed fields so the saved value stays fully defined.
+        var term: std.posix.termios = std.mem.zeroes(std.posix.termios);
         switch (linux.errno(linux.tcgetattr(handle, &term))) {
             .SUCCESS => return term,
             .INTR => continue,
