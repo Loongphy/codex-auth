@@ -4,6 +4,9 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests matching these substrings") orelse &.{};
+    // Point e2e harnesses at a prebuilt CLI (e.g. a ReleaseSafe staging
+    // prefix) instead of the debug zig-out install they build themselves.
+    const cli_prefix = b.option([]const u8, "cli-prefix", "Reuse the CLI installed under this prefix for e2e tests");
     // Stripped binaries start faster cold: non-loadable DWARF sections still
     // get pulled in by kernel readahead around demand-paged .text pages.
     const strip = b.option(bool, "strip", "Strip debug info") orelse (optimize != .debug);
@@ -148,6 +151,9 @@ pub fn build(b: *std.Build) void {
             "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT",
             b.root.joinString(b.allocator, &.{}) catch @panic("OOM"),
         );
+        if (cli_prefix) |prefix| {
+            run_test.setEnvironmentVariable("CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX", prefix);
+        }
         if (std.mem.eql(u8, test_file, "tests/cli_integration_test.zig")) {
             run_test.addFileInput(exe.getEmittedBin());
             run_test.addFileInput(fake_curl_exe.getEmittedBin());
