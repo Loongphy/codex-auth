@@ -802,12 +802,15 @@ pub const TuiSession = struct {
     /// tick to re-check the terminal size: SIGWINCH produces no input
     /// byte, so without this a POSIX picker would keep a stale frame
     /// until the next keypress — the parity of the Windows .redraw path.
+    /// `baseline_rows`/`baseline_cols` must be the size the caller just
+    /// drew the frame with; sampling here instead would turn a resize
+    /// that landed during drawing into the baseline and miss it forever.
     /// Returns null when the window was resized (the caller should
     /// redraw), the byte count otherwise.
-    pub fn readPickerBytes(self: *@This(), buffer: []u8) !?usize {
+    pub fn readPickerBytes(self: *@This(), buffer: []u8, baseline_rows: usize, baseline_cols: usize) !?usize {
         if (comptime builtin.target.os.tag == .windows) unreachable;
-        var last_rows = self.terminalRows();
-        var last_cols = self.terminalCols();
+        var last_rows = baseline_rows;
+        var last_cols = baseline_cols;
         while (true) {
             switch (try pollTuiInput(self.input, picker_resize_poll_ms, tui_poll_error_mask)) {
                 .ready => return try self.read(buffer),

@@ -339,6 +339,7 @@ pub fn viewAccountsWithLiveUpdates(
     // cursor inside the viewport; scroll keys leave it unset, so ↑/↓ and the
     // wheel still roam freely without the cursor snapping the window back.
     var follow_row_cursor: bool = false;
+    var note_needs_follow: bool = false;
     // True only when the frame on screen shows the re-confirm hint for the
     // armed credit, so a redeem always follows a visible confirmation.
     var armed_hint_rendered: bool = false;
@@ -536,11 +537,19 @@ pub fn viewAccountsWithLiveUpdates(
                 // redeem result is drawn below the row. While a confirmation
                 // is pending the armed card's own line is followed instead —
                 // a rail taller than the frame must not leave its hint above
-                // the window. The credit-less row's passive note does not
-                // follow: it is not a mode, so the wheel must stay free to
-                // scroll instead of snapping back every frame.
+                // the window. The credit-less row's passive note is not a
+                // mode either: it follows only on the frame that opens it
+                // (otherwise a probe at the viewport bottom would look dead),
+                // then releases so the wheel stays free to scroll instead of
+                // snapping back every frame.
                 if (credit_selection.expanded and panel_lines > 0)
                     .{ .first = cursor_line, .last = armed_hint_line orelse cursor_line + panel_lines }
+                else if (note_needs_follow and panel_lines > 0)
+                    // The probe note is spliced below its anchor row, so an
+                    // Enter near the viewport bottom would open it entirely
+                    // off-screen — the keypress would look dead. Follow it
+                    // once at open, then release so the wheel stays free.
+                    .{ .first = cursor_line, .last = cursor_line + panel_lines }
                 else if (follow_row_cursor)
                     // A j/k move must stay visible: with the rail closed the
                     // cursor's own line is its span.
@@ -549,6 +558,7 @@ pub fn viewAccountsWithLiveUpdates(
                     null,
             );
             follow_row_cursor = false;
+            note_needs_follow = false;
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
             // A second `Enter` only redeems once the hint it confirms is
@@ -708,6 +718,7 @@ pub fn viewAccountsWithLiveUpdates(
                                     // an empty list there is no row to anchor
                                     // the note to.
                                     credit_selection.note_row = credit_selection.row_cursor;
+                                    note_needs_follow = true;
                                 }
                                 needs_render = true;
                                 continue;

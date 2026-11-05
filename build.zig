@@ -156,6 +156,11 @@ pub fn build(b: *std.Build) void {
             run_test.addFileInput(b.path("build.zig"));
             run_test.addFileInput(b.path("build.zig.zon"));
         }
+        // Each run step — not just the umbrella test step — must wait for
+        // the CLI install: sibling steps are unordered, so the harnesses
+        // resolving zig-out/bin could otherwise race it or reuse a stale
+        // binary from a previous build.
+        run_test.step.dependOn(b.getInstallStep());
         test_step.dependOn(&run_test.step);
     }
 }

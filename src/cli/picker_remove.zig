@@ -154,7 +154,9 @@ fn selectRemoveInteractive(
     while (true) {
         // Fixed lines are the prompt, the column header, and the footer;
         // the table viewport scrolls to keep the cursor inside the frame.
-        const max_rows = tui.terminalRows() -| 3;
+        const frame_rows = tui.terminalRows();
+        const frame_cols = tui.terminalCols();
+        const max_rows = frame_rows -| 3;
         viewport_start = render.liveViewportStartForDisplayIndex(rows.items, idx, max_rows, viewport_start);
         try tui.resetFrame();
         var styled_out = style.StyledWriter.init(out, use_color);
@@ -172,7 +174,7 @@ fn selectRemoveInteractive(
             .{
                 .start_row = viewport_start,
                 .max_rows = max_rows,
-                .max_cols = tui.terminalCols(),
+                .max_cols = frame_cols,
             },
         ) catch |err| return mapTuiOutputError(err);
         try tui.flushOutput();
@@ -260,7 +262,7 @@ fn selectRemoveInteractive(
         }
 
         var b: [8]u8 = undefined;
-        const n = (try tui.readPickerBytes(&b)) orelse continue;
+        const n = (try tui.readPickerBytes(&b, frame_rows, frame_cols)) orelse continue;
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
