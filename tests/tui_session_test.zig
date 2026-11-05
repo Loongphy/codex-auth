@@ -237,6 +237,46 @@ test "Scenario: Given Esc followed by an escape sequence when replaying it then 
     }
 }
 
+test "Scenario: Given a kitty enhancement ACK when reading legacy arrows then they reclassify as wheel scrolls" {
+    const tty = std.Io.File.stdin();
+    var keys: [8]cli.tui.TuiInputKey = undefined;
+    var supported = false;
+    var key_count: usize = 0;
+
+    // The contract this branch ships: before any ACK a bare ESC[A stays a
+    // cursor key so arrows keep working on terminals that never answer.
+    _ = try appendTuiInputKeysFromEscape(tty, "[A", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 1), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.move_up, keys[0]);
+
+    // The terminal's `CSI ?1u` reply sets the flag without emitting a key.
+    key_count = 0;
+    _ = try appendTuiInputKeysFromEscape(tty, "[?1u", &keys, &key_count, &supported);
+    try std.testing.expect(supported);
+    try std.testing.expectEqual(@as(usize, 0), key_count);
+
+    // After the ACK the only producer of a bare ESC[A/ESC[B is the
+    // ?1007h alternate-scroll fallback — it is a wheel notch.
+    key_count = 0;
+    _ = try appendTuiInputKeysFromEscape(tty, "[A", &keys, &key_count, &supported);
+    try std.testing.expectEqual(@as(usize, 1), key_count);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_up, keys[0]);
+
+    key_count = 0;
+    _ = try appendTuiInputKeysFromEscape(tty, "[B", &keys, &key_count, &supported);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_down, keys[0]);
+
+    // SS3 arrows take the same reclass path.
+    key_count = 0;
+    _ = try appendTuiInputKeysFromEscape(tty, "OA", &keys, &key_count, &supported);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.scroll_up, keys[0]);
+
+    // Enhanced kitty arrows are not reclassified — they stay keyboard keys.
+    key_count = 0;
+    _ = try appendTuiInputKeysFromEscape(tty, "[1;1A", &keys, &key_count, &supported);
+    try std.testing.expectEqual(cli.tui.TuiInputKey.keyboard_up, keys[0]);
+}
+
 test "Scenario: Given tty paging and mouse wheel escape suffixes when classifying them then scrolling actions are recognized" {
     switch (classifyTuiEscapeSuffix("[6~")) {
         .navigation => |direction| try std.testing.expectEqual(TuiNavigation.page_down, direction),

@@ -24,8 +24,8 @@ each platform. Exact byte sequences and key mappings are pinned by
 - A wheel notch is a small fixed-step scroll — `live_tui.mouse_wheel_lines`
   — while an arrow-key scroll uses the larger viewport-scaled step. Wheel
   reports carry a direction rather than a magnitude, so the TUI tells
-  gestures apart by timing: events arriving faster than
-  `live_tui.scroll_stream_gap_ms` count as one continuous gesture (a
+  gestures apart by timing: events arriving within
+  `live_tui.scroll_stream_gap_ms` of each other count as one continuous gesture (a
   trackpad flick or a spun wheel) and step a single line each, so a flick
   glides instead of jumping a full notch per event.
 - The notch scrolls the account-list viewport; while the reset-credit rail
@@ -42,10 +42,10 @@ each platform. Exact byte sequences and key mappings are pinned by
   protocol will be honored. The reply must confirm the disambiguate flag
   took effect before enhanced key sequences are trusted.
 - The request is withheld for terminal families known to mis-encode or
-  half-claim the protocol — xterm.js hosts such as VS Code's integrated
-  terminal and its forks, Apple Terminal, JediTerm, VTE-based terminals, and
-  Windows Terminal — and on native Windows, where input is not a byte
-  stream.
+  half-claim the protocol — VS Code's integrated terminal (an exact
+  `TERM_PROGRAM=vscode` match, which covers forks that reuse that value),
+  Apple Terminal, JediTerm, VTE-based terminals, and Windows Terminal —
+  and on native Windows, where input is not a byte stream.
 - Nothing depends on the enhancement: legacy byte input is fully supported
   either way. Enhanced mode only lets the TUI tell a physical arrow key
   apart from a wheel-generated one, which is what makes `↑`/`↓` and `j`/`k`

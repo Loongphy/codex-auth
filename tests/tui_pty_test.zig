@@ -382,6 +382,56 @@ test "pty: live TUI pushes and pops kitty flags on kitty-capable terminals" {
     try std.testing.expect(std.mem.indexOf(u8, out, "\x1b[?1049l") != null);
 }
 
+test "pty: kitty ACK turns bare arrows into wheel scrolls" {
+    if (comptime !has_pty) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    const exe = try builtCliPathAlloc(gpa, project_root);
+    defer gpa.free(exe);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home);
+    const codex_home = try fs.path.join(gpa, &.{ home, ".codex" });
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath(".codex");
+    try seedAccounts(gpa, home, 40);
+
+    // No terminal-brand vars: the kitty request is emitted, and we answer
+    // its `CSI ?u` query ourselves — the only e2e proof of the
+    // push → query → ACK → reclass chain.
+    const spawned = try spawnLiveList(gpa, exe, home, home, codex_home, &.{});
+    var session = spawned.session;
+    const master = spawned.master;
+    defer _ = close(master);
+    defer session.output.deinit(gpa);
+    defer if (!session.done) session.child.kill(fs.io());
+
+    try session.waitMarker(master, "user00@example.com");
+    try std.testing.expect(std.mem.indexOf(u8, session.output.items, "user39@example.com") == null);
+    const inject_at = session.output.items.len;
+
+    // `\x1b[?1u` is the reply a conformant terminal sends our query after
+    // our `>7u` push landed; afterwards a bare ESC[B can only come from
+    // the ?1007h alternate-scroll fallback — a wheel notch scrolling down.
+    var injection_buf: [512]u8 = undefined;
+    var injection: std.ArrayList(u8) = .initBuffer(&injection_buf);
+    injection.appendSliceAssumeCapacity("\x1b[?1u");
+    for (0..25) |_| injection.appendSliceAssumeCapacity("\x1b[B");
+    injection.appendSliceAssumeCapacity("q");
+    try std.testing.expectEqual(@as(isize, @intCast(injection.items.len)), std.c.write(master, injection.items.ptr, injection.items.len));
+
+    try session.waitMarker(master, "user39@example.com");
+    try std.testing.expectEqual(@as(u8, 0), try session.finish(master));
+    // Enhanced-arrow sequences must not have been reinterpreted either:
+    // nothing in the injected tail is a kitty release or modifier report.
+    const after = session.output.items[inject_at..];
+    try std.testing.expect(std.mem.indexOf(u8, after, "user39@example.com") != null);
+}
+
 test "pty: injected SGR and X10 mouse reports are consumed without echo" {
     if (comptime !has_pty) return error.SkipZigTest;
     const gpa = std.testing.allocator;

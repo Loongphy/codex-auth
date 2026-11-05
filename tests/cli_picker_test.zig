@@ -2866,6 +2866,14 @@ test "scroll stream charges a full notch only for isolated wheel events" {
     try std.testing.expectEqual(live_tui.mouse_wheel_lines, stream.step(60_000));
 }
 
+test "scroll stream treats a backwards timestamp as a fresh gesture" {
+    var stream: live_tui.ScrollStream = .{};
+    _ = stream.step(5_000);
+    // A clock step backwards is not "close together" — charge a full notch
+    // rather than a streamed single line.
+    try std.testing.expectEqual(live_tui.mouse_wheel_lines, stream.step(4_900));
+}
+
 test "display width counts UTF-8 codepoints instead of bytes" {
     try std.testing.expectEqual(@as(usize, 7), text_width.displayWidth("Рабочая"));
     try std.testing.expectEqual(@as(usize, 6), text_width.prefixByteLength("Рабочая", 3));

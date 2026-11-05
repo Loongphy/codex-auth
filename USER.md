@@ -45,9 +45,8 @@ mouse costs nothing.
 - Button press/release reports are consumed-and-ignored; X10 reports
   (`ESC [ M` + 3 coordinate bytes) are consumed so coordinate bytes can
   never leak into prompts or key handling.
-- Kitty keyboard enhancement support is queried with `?u`.
-- Keyboard enhancement flags `7` are pushed with `>7u` and popped with `<1u`
-  on exit.
+- Keyboard enhancement flags `7` are pushed with `>7u`, the flags in effect
+  are then queried with `?u`, and the push is popped with `<1u` on exit.
 - The TUI only treats traditional `Esc [ A` and `Esc [ B` as mouse-wheel
   viewport scrolling after it has received a keyboard-enhancement response.
 - Enhanced keyboard Up/Down sequences are parsed as keyboard-only cursor
