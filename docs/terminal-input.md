@@ -37,10 +37,10 @@ each platform. Exact byte sequences and key mappings are pinned by
 
 ## Keyboard enhancement
 
-- On POSIX terminals the TUI asks for the kitty keyboard-enhancement flags
-  and pushes its flag set only when the terminal environment suggests the
-  protocol will be honored. The reply itself must confirm the disambiguate
-  flag took effect before enhanced key sequences are trusted.
+- On POSIX terminals the TUI pushes its kitty flag set and then queries the
+  flags in effect, but only when the terminal environment suggests the
+  protocol will be honored. The reply must confirm the disambiguate flag
+  took effect before enhanced key sequences are trusted.
 - The request is withheld for terminal families known to mis-encode or
   half-claim the protocol — xterm.js hosts such as VS Code's integrated
   terminal and its forks, Apple Terminal, JediTerm, VTE-based terminals, and

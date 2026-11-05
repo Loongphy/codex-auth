@@ -536,8 +536,10 @@ pub fn viewAccountsWithLiveUpdates(
                 // redeem result is drawn below the row. While a confirmation
                 // is pending the armed card's own line is followed instead —
                 // a rail taller than the frame must not leave its hint above
-                // the window.
-                if (panel_lines > 0)
+                // the window. The credit-less row's passive note does not
+                // follow: it is not a mode, so the wheel must stay free to
+                // scroll instead of snapping back every frame.
+                if (credit_selection.expanded and panel_lines > 0)
                     .{ .first = cursor_line, .last = armed_hint_line orelse cursor_line + panel_lines }
                 else if (follow_row_cursor)
                     // A j/k move must stay visible: with the rail closed the

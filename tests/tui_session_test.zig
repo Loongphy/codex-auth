@@ -341,7 +341,7 @@ test "Scenario: Given shared TUI screen lifecycle when writing it then switch an
 
     try std.testing.expectEqualStrings(
         "\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h" ++
-            "\x1b[?u\x1b[>7u" ++
+            "\x1b[>7u\x1b[?u" ++
             "\x1b[H\x1b[J" ++
             "\x1b[<1u\x1b[?1006l\x1b[?1000l\x1b[?1007l\x1b[?25h\x1b[?1049l",
         aw.written(),

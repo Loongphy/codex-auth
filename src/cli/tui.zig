@@ -122,6 +122,8 @@ pub const live_ui_tick_ms: i32 = 100;
 /// How often a blocking POSIX picker wakes to re-check the window size —
 /// SIGWINCH never arrives as input, so this is the redraw heartbeat.
 const picker_resize_poll_ms: i32 = 250;
+/// Per-call bound on Windows console record draining — see readWindowsKey.
+const max_drain_records: usize = 256;
 
 pub const TuiNavigation = enum {
     up,
@@ -282,7 +284,11 @@ else
 /// (`?1002h`/`?1003h`/`?1005h`) are deliberately left off.
 pub fn writeTuiEnterTo(out: *std.Io.Writer, request_kitty: bool) !void {
     try out.writeAll("\x1b[?1049h\x1b[?25l\x1b[?1007h\x1b[?1000h\x1b[?1006h");
-    if (request_kitty) try out.writeAll("\x1b[?u\x1b[>7u");
+    // Push first, query second: `CSI ?u` reports the flags currently in
+    // effect, so it must run after `>7u` — a query emitted first would be
+    // answered with the pre-push stack and the enhancement could never
+    // confirm itself.
+    if (request_kitty) try out.writeAll("\x1b[>7u\x1b[?u");
     try out.writeAll("\x1b[H\x1b[J");
 }
 
@@ -737,7 +743,11 @@ pub const TuiSession = struct {
             return pending;
         }
 
-        while (true) {
+        // Drain is bounded per call: a sustained record flood (mouse-move
+        // reports while the pointer wiggles) must not stretch one call's
+        // latency unboundedly — the rest is picked up next tick.
+        var drained: usize = 0;
+        while (drained < max_drain_records) : (drained += 1) {
             // Earlier iterations may have drained the queue on non-key
             // records; do not block on an empty queue or the caller's
             // timeout cadence stalls. A racing co-reader could still park
@@ -753,11 +763,7 @@ pub const TuiSession = struct {
                 return error.EndOfStream;
             }
             if (events_read == 0) continue;
-            if (record.EventType == win.WINDOW_BUFFER_SIZE_EVENT) {
-                self.pending_windows_key = null;
-                self.pending_windows_repeat_count = 0;
-                return .redraw;
-            }
+            if (record.EventType == win.WINDOW_BUFFER_SIZE_EVENT) return .redraw;
             if (windowsMouseScrollKey(record)) |key| return key;
             if (record.EventType == win.MOUSE_EVENT) continue;
             if (record.EventType != win.KEY_EVENT) continue;
@@ -789,6 +795,7 @@ pub const TuiSession = struct {
             }
             return key;
         }
+        return null;
     }
 
     /// Blocks for input bytes the way `read` does, but wakes on a poll

@@ -621,6 +621,30 @@ fn keyRecord(char: u8) win32.INPUT_RECORD {
     };
 }
 
+/// A key record whose virtual key and translated character deliberately
+/// disagree — Ctrl+C is exactly this shape (VK 'C' + uChar 0x03), and a
+/// dead key carries uChar 0.
+fn keyRecordShaped(vk: u8, uchar: u16, ctrl_state: u32) win32.INPUT_RECORD {
+    return .{
+        .EventType = win32.KEY_EVENT,
+        .Event = .{ .KeyEvent = .{
+            .bKeyDown = .TRUE,
+            .wRepeatCount = 1,
+            .wVirtualKeyCode = vk,
+            .wVirtualScanCode = 0,
+            .uChar = .{ .UnicodeChar = uchar },
+            .dwControlKeyState = ctrl_state,
+        } },
+    };
+}
+
+fn resizeRecord(cols: i16, rows: i16) win32.INPUT_RECORD {
+    return .{
+        .EventType = win32.WINDOW_BUFFER_SIZE_EVENT,
+        .Event = .{ .WindowBufferSizeEvent = .{ .dwSize = .{ .X = cols, .Y = rows } } },
+    };
+}
+
 /// Same resolution contract as `builtCliPathAlloc` in tui_pty_test.zig:
 /// the staged install prefix wins, otherwise fall back to the project's
 /// own zig-out so a native `zig build test` needs no staging.
@@ -768,6 +792,41 @@ test "console: injected MOUSE_WHEELED records scroll the live list" {
     try waitBufferMarker(session.console, &session.buffer, "user39@example.com", session.deadline_ms);
     try session.console.inject(&.{keyRecord('q')});
 
+    const code = session.child.waitAppExit(console_deadline_ms) catch |err| {
+        session.child.kill();
+        return err;
+    };
+    try std.testing.expectEqual(@as(windows.DWORD, 0), code);
+}
+
+test "console: ctrl-c, resize, and dead-key records follow real console semantics" {
+    if (comptime !has_console) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var session = try setupHostedSession(gpa, 3, null, &.{}, false);
+    defer {
+        session.console.deinit();
+        session.child.kill();
+        session.child.deinit();
+        session.buffer.deinit(gpa);
+        session.tmp.cleanup();
+    }
+
+    try waitBufferMarker(session.console, &session.buffer, "ACCOUNT", session.deadline_ms);
+
+    // A resize record redraws, a dead key (uChar=0) maps to nothing — the
+    // app must keep running and keep rendering after both.
+    try session.console.inject(&.{
+        resizeRecord(120, 40),
+        keyRecordShaped('Z', 0, 0),
+    });
+    Sleep(300);
+    try session.console.bufferText(&session.buffer);
+    try std.testing.expect(std.mem.indexOf(u8, session.buffer.items, "ACCOUNT") != null);
+
+    // With PROCESSED_INPUT off, Ctrl+C arrives as a KEY_EVENT whose uChar is
+    // 0x03 — the same byte that quits on every other surface. The virtual
+    // key is 'C', so this pins that the uChar path, not the VK, quits.
+    try session.console.inject(&.{keyRecordShaped('C', 0x03, 0x0008)});
     const code = session.child.waitAppExit(console_deadline_ms) catch |err| {
         session.child.kill();
         return err;
