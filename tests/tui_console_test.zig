@@ -7,6 +7,10 @@
 //! `WriteConsoleInputW` (a MOUSE_EVENT_RECORD with MOUSE_WHEELED is exactly
 //! what a wheel notch produces); output is read back as rendered cells via
 //! `ReadConsoleOutputCharacterW` instead of byte-stream assertions.
+//! One scenario also hosts the app through real shells (powershell.exe /
+//! pwsh.exe) to cover the realistic launch chain — those children need
+//! the inherited user environment to start, so shell legs build the env
+//! block from the parent's rather than a minimal one.
 //!
 //! These tests only run on a real Windows host; nothing here is simulated.
 //! A native `zig build test` covers them there, and WSL's interop layer
@@ -179,34 +183,113 @@ const HostedChild = struct {
     }
 };
 
-/// Finds the pid of `exe_name` whose parent is `parent_pid`.
-fn findChildPid(exe_name: []const u8, parent_pid: windows.DWORD) ?windows.DWORD {
+const ProcEntry = struct {
+    pid: windows.DWORD,
+    ppid: windows.DWORD,
+    is_target: bool,
+};
+
+/// Finds the pid of `exe_name` anywhere under `ancestor_pid`'s process
+/// tree — the app may sit behind an intermediate shell when the scenario
+/// hosts it through powershell.
+fn findDescendantPid(allocator: std.mem.Allocator, exe_name: []const u8, ancestor_pid: windows.DWORD) !?windows.DWORD {
     const snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) orelse return null;
     if (snapshot == INVALID_HANDLE_VALUE) return null;
     defer windows.CloseHandle(snapshot);
+
+    var procs: std.ArrayList(ProcEntry) = .empty;
+    defer procs.deinit(allocator);
+
     var entry: PROCESSENTRY32W = std.mem.zeroes(PROCESSENTRY32W);
     entry.dwSize = @sizeOf(PROCESSENTRY32W);
     if (Process32FirstW(snapshot, &entry) == .FALSE) return null;
     while (true) {
-        if (entry.th32ParentProcessID == parent_pid) {
-            const name_len = std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse entry.szExeFile.len;
-            var name_buf: [260]u8 = undefined;
-            const utf8_len = std.unicode.utf16LeToUtf8(&name_buf, entry.szExeFile[0..name_len]) catch 0;
-            if (std.ascii.eqlIgnoreCase(name_buf[0..utf8_len], exe_name)) return entry.th32ProcessID;
-        }
-        if (Process32NextW(snapshot, &entry) == .FALSE) return null;
+        const name_len = std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse entry.szExeFile.len;
+        var name_buf: [260]u8 = undefined;
+        const utf8_len = std.unicode.utf16LeToUtf8(&name_buf, entry.szExeFile[0..name_len]) catch 0;
+        try procs.append(allocator, .{
+            .pid = entry.th32ProcessID,
+            .ppid = entry.th32ParentProcessID,
+            .is_target = std.ascii.eqlIgnoreCase(name_buf[0..utf8_len], exe_name),
+        });
+        if (Process32NextW(snapshot, &entry) == .FALSE) break;
     }
+
+    for (procs.items) |proc| {
+        if (!proc.is_target) continue;
+        var cursor = proc.ppid;
+        var depth: usize = 0;
+        while (depth < 16) : (depth += 1) {
+            if (cursor == ancestor_pid) return proc.pid;
+            cursor = for (procs.items) |parent| {
+                if (parent.pid == cursor) break parent.ppid;
+            } else break;
+        }
+    }
+    return null;
 }
 
 /// Builds the UTF-16 double-null-terminated environment block
-/// CreateProcessW expects under CREATE_UNICODE_ENVIRONMENT.
-fn buildEnvBlock(allocator: std.mem.Allocator, pairs: []const [2][]const u8) !std.ArrayList(u16) {
+/// CreateProcessW expects under CREATE_UNICODE_ENVIRONMENT. With
+/// `inherit`, the block starts from this process's own environment — a
+/// real user session needs vars like SystemDrive/PSModulePath/APPDATA
+/// that a minimal block lacks (powershell.exe refuses to start without
+/// them). `pairs` override matching keys case-insensitively.
+fn buildEnvBlock(
+    allocator: std.mem.Allocator,
+    pairs: []const [2][]const u8,
+    inherit: bool,
+) !std.ArrayList(u16) {
+    var merged: std.ArrayList([2][]const u8) = .empty;
+    defer merged.deinit(allocator);
+    var seen: std.StringHashMap(void) = .init(allocator);
+    defer seen.deinit();
+    var seen_keys: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (seen_keys.items) |key| allocator.free(key);
+        seen_keys.deinit(allocator);
+    }
+
+    // `merged` borrows the map's key/value slices, so the map must stay
+    // alive until the UTF-16 block is built.
+    var env_map: ?std.process.Environ.Map = null;
+    defer if (env_map) |*map| map.deinit();
+
+    for (pairs) |pair| {
+        const lower = try std.ascii.allocLowerString(allocator, pair[0]);
+        try seen.put(lower, {});
+        try seen_keys.append(allocator, lower);
+    }
+    if (inherit) {
+        env_map = try app_runtime.getEnvMap(allocator);
+        var it = env_map.?.iterator();
+        while (it.next()) |entry| {
+            const lower = try std.ascii.allocLowerString(allocator, entry.key_ptr.*);
+            if (seen.contains(lower)) {
+                allocator.free(lower);
+                continue;
+            }
+            try seen.put(lower, {});
+            try seen_keys.append(allocator, lower);
+            try merged.append(allocator, .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
+    }
+    try merged.appendSlice(allocator, pairs);
+    return buildUtf16Block(allocator, merged.items);
+}
+
+fn buildUtf16Block(allocator: std.mem.Allocator, pairs: []const [2][]const u8) !std.ArrayList(u16) {
     var block: std.ArrayList(u16) = .empty;
     errdefer block.deinit(allocator);
     for (pairs) |pair| {
         const entry = try std.fmt.allocPrint(allocator, "{s}={s}", .{ pair[0], pair[1] });
         defer allocator.free(entry);
-        const wide = try std.unicode.utf8ToUtf16LeAlloc(allocator, entry);
+        // Inherited env vars can carry non-UTF-8 bytes; a var we can't
+        // encode is dropped rather than failing the whole block.
+        const wide = std.unicode.utf8ToUtf16LeAlloc(allocator, entry) catch |err| switch (err) {
+            error.InvalidUtf8 => continue,
+            else => return err,
+        };
         defer allocator.free(wide);
         try block.appendSlice(allocator, wide);
         try block.append(allocator, 0);
@@ -215,16 +298,27 @@ fn buildEnvBlock(allocator: std.mem.Allocator, pairs: []const [2][]const u8) !st
     return block;
 }
 
-/// Spawns `codex-auth list --live --skip-api` inside a headless conhost.
-/// The app sees a real console: stdin/out are FILE_TYPE_CHAR handles and
-/// console APIs work — WriteConsoleInputW and ReadConsoleOutput are the
-/// harness's only way in and out, same as a real console user.
-fn spawnHostedList(
+/// Spawns an inner command line inside a headless conhost — either the app
+/// itself or a shell that launches it. The app sees a real console:
+/// stdin/out are FILE_TYPE_CHAR handles and console APIs work —
+/// WriteConsoleInputW and ReadConsoleOutput are the harness's only way in
+/// and out, same as a real console user.
+fn spawnHosted(
     allocator: std.mem.Allocator,
-    exe: []const u8,
+    inner_cmdline: []const u8,
     home: []const u8,
     codex_home: []const u8,
+    extra_path_dirs: []const []const u8,
+    inherit_env: bool,
 ) !HostedChild {
+    var path: std.ArrayList(u8) = .empty;
+    defer path.deinit(allocator);
+    try path.appendSlice(allocator, "C:\\Windows\\System32;C:\\Windows\\System32\\WindowsPowerShell\\v1.0");
+    for (extra_path_dirs) |dir| {
+        try path.append(allocator, ';');
+        try path.appendSlice(allocator, dir);
+    }
+
     var env_block = try buildEnvBlock(allocator, &.{
         .{ "USERPROFILE", home },
         .{ "HOME", home },
@@ -232,14 +326,14 @@ fn spawnHostedList(
         .{ "TEMP", home },
         .{ "TMP", home },
         .{ "SystemRoot", "C:\\Windows" },
-        .{ "PATH", "C:\\Windows\\System32" },
-    });
+        .{ "PATH", path.items },
+    }, inherit_env);
     defer env_block.deinit(allocator);
 
     const cmdline = try std.fmt.allocPrint(
         allocator,
-        "conhost.exe --headless \"{s}\" list --live --skip-api",
-        .{exe},
+        "conhost.exe --headless {s}",
+        .{inner_cmdline},
     );
     defer allocator.free(cmdline);
     const cmd_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, cmdline);
@@ -266,19 +360,62 @@ fn spawnHostedList(
         windows.CloseHandle(pi.hThread);
     }
 
-    // The app is conhost's child; poll until the process table shows it.
+    // The app may sit behind an intermediate shell; poll the process tree
+    // until codex-auth.exe shows up under this conhost.
     const deadline = nowMs() + console_deadline_ms;
     var app_pid: ?windows.DWORD = null;
     while (app_pid == null and nowMs() < deadline) {
-        app_pid = findChildPid("codex-auth.exe", pi.dwProcessId);
+        app_pid = try findDescendantPid(allocator, "codex-auth.exe", pi.dwProcessId);
         if (app_pid == null) Sleep(50);
+    }
+    if (app_pid == null) {
+        // Diagnostic: list whatever actually appeared under the host.
+        if (CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)) |snapshot| {
+            if (snapshot != INVALID_HANDLE_VALUE) {
+                defer windows.CloseHandle(snapshot);
+                var entry: PROCESSENTRY32W = std.mem.zeroes(PROCESSENTRY32W);
+                entry.dwSize = @sizeOf(PROCESSENTRY32W);
+                if (Process32FirstW(snapshot, &entry) != .FALSE) {
+                    while (Process32NextW(snapshot, &entry) != .FALSE) {
+                        const name_len = std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse entry.szExeFile.len;
+                        var name_buf: [260]u8 = undefined;
+                        const utf8_len = std.unicode.utf16LeToUtf8(&name_buf, entry.szExeFile[0..name_len]) catch 0;
+                        if (entry.th32ParentProcessID == pi.dwProcessId)
+                            std.debug.print("hosted child: pid={} name={s}\n", .{ entry.th32ProcessID, name_buf[0..utf8_len] });
+                    }
+                }
+            }
+        }
+        if (try findDescendantPid(allocator, "powershell.exe", pi.dwProcessId)) |shell_pid| {
+            if (Console.attach(shell_pid)) |console| {
+                defer console.deinit();
+                var buf: std.ArrayList(u8) = .empty;
+                defer buf.deinit(allocator);
+                console.bufferText(&buf) catch {};
+                std.debug.print("console buffer:\n{s}\n", .{buf.items});
+            } else |attach_err| {
+                std.debug.print("attach diagnostic failed: {s}\n", .{@errorName(attach_err)});
+            }
+        }
+        return error.HostedAppNotFound;
     }
     return .{
         .process = pi.hProcess,
         .thread = pi.hThread,
         .pid = pi.dwProcessId,
-        .app_pid = app_pid orelse return error.HostedAppNotFound,
+        .app_pid = app_pid.?,
     };
+}
+
+fn spawnHostedList(
+    allocator: std.mem.Allocator,
+    exe: []const u8,
+    home: []const u8,
+    codex_home: []const u8,
+) !HostedChild {
+    const inner = try std.fmt.allocPrint(allocator, "\"{s}\" list --live --skip-api", .{exe});
+    defer allocator.free(inner);
+    return spawnHosted(allocator, inner, home, codex_home, &.{}, false);
 }
 
 const Console = struct {
@@ -469,15 +606,19 @@ fn seedAccounts(allocator: std.mem.Allocator, codex_home: []const u8, count: usi
     }
 }
 
-fn setupHostedSession(gpa: std.mem.Allocator, account_count: usize) !struct {
+fn setupHostedSession(
+    gpa: std.mem.Allocator,
+    account_count: usize,
+    inner_cmdline: ?[]const u8,
+    extra_path_dirs: []const []const u8,
+    inherit_env: bool,
+) !struct {
     child: HostedChild,
     console: Console,
     buffer: std.ArrayList(u8),
     deadline_ms: i64,
     tmp: fs.TmpDir,
 } {
-    const exe = try exePathAlloc(gpa);
-    defer gpa.free(exe);
     var tmp = fs.tmpDir(.{});
     errdefer tmp.cleanup();
     const home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -487,7 +628,13 @@ fn setupHostedSession(gpa: std.mem.Allocator, account_count: usize) !struct {
     try tmp.dir.makePath(".codex");
     try seedAccounts(gpa, codex_home, account_count);
 
-    const child = try spawnHostedList(gpa, exe, home, codex_home);
+    const child = if (inner_cmdline) |inner|
+        try spawnHosted(gpa, inner, home, codex_home, extra_path_dirs, inherit_env)
+    else blk: {
+        const exe = try exePathAlloc(gpa);
+        defer gpa.free(exe);
+        break :blk try spawnHostedList(gpa, exe, home, codex_home);
+    };
     errdefer {
         child.kill();
         child.deinit();
@@ -505,7 +652,7 @@ fn setupHostedSession(gpa: std.mem.Allocator, account_count: usize) !struct {
 test "console: live list renders on a real console and q exits" {
     if (comptime !has_console) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var session = try setupHostedSession(gpa, 3);
+    var session = try setupHostedSession(gpa, 3, null, &.{}, false);
     defer {
         session.console.deinit();
         session.child.deinit();
@@ -527,7 +674,7 @@ test "console: live list renders on a real console and q exits" {
 test "console: injected MOUSE_WHEELED records scroll the live list" {
     if (comptime !has_console) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var session = try setupHostedSession(gpa, 40);
+    var session = try setupHostedSession(gpa, 40, null, &.{}, false);
     defer {
         session.console.deinit();
         session.child.deinit();
@@ -552,4 +699,71 @@ test "console: injected MOUSE_WHEELED records scroll the live list" {
         return err;
     };
     try std.testing.expectEqual(@as(windows.DWORD, 0), code);
+}
+
+/// Resolves the installed PowerShell 7 binary, if any: the MSI default
+/// first, then the per-user Store execution alias. Override the location
+/// with CODEX_AUTH_CONSOLE_PWSH_EXE when it lives elsewhere.
+fn pwshPathAlloc(gpa: std.mem.Allocator) !?[]u8 {
+    const custom = app_runtime.getEnvVarOwned(gpa, "CODEX_AUTH_CONSOLE_PWSH_EXE") catch null;
+    if (custom) |path| return path;
+    const msi_path = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    if (fs.accessAbsolute(msi_path, .{})) |_| return try gpa.dupe(u8, msi_path) else |_| {}
+    const local_appdata = app_runtime.getEnvVarOwned(gpa, "LOCALAPPDATA") catch return null;
+    defer gpa.free(local_appdata);
+    const store_path = try fs.path.join(gpa, &.{ local_appdata, "Microsoft", "WindowsApps", "pwsh.exe" });
+    errdefer gpa.free(store_path);
+    if (fs.accessAbsolute(store_path, .{})) |_| return store_path else |_| {}
+    gpa.free(store_path);
+    return null;
+}
+
+/// Hosts the app through a real shell inside the console: conhost ->
+/// `shell` -> codex-auth. The shell layer exercises env inheritance
+/// through a process chain; console semantics themselves are identical
+/// (the console belongs to conhost, not the shell).
+fn runShellHostedLeg(gpa: std.mem.Allocator, bin_dir: []const u8, shell: []const u8) !void {
+    const inner = try std.fmt.allocPrint(
+        gpa,
+        "\"{s}\" -NoProfile -Command \"codex-auth.exe list --live --skip-api\"",
+        .{shell},
+    );
+    defer gpa.free(inner);
+    const shell_dir = fs.path.dirname(shell) orelse return error.BadShellPath;
+
+    var session = try setupHostedSession(gpa, 3, inner, &.{ bin_dir, shell_dir }, true);
+    defer {
+        session.console.deinit();
+        session.child.deinit();
+        session.buffer.deinit(gpa);
+        session.tmp.cleanup();
+    }
+
+    try waitBufferMarker(session.console, &session.buffer, "ACCOUNT", session.deadline_ms);
+    try waitBufferMarker(session.console, &session.buffer, "user00@example.com", session.deadline_ms);
+    try session.console.inject(&.{keyRecord('q')});
+
+    const code = session.child.waitAppExit(console_deadline_ms) catch |err| {
+        session.child.kill();
+        return err;
+    };
+    try std.testing.expectEqual(@as(windows.DWORD, 0), code);
+}
+
+test "console: live list under powershell renders and q exits" {
+    if (comptime !has_console) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const exe = try exePathAlloc(gpa);
+    defer gpa.free(exe);
+    const bin_dir = fs.path.dirname(exe) orelse return error.BadExePath;
+
+    // Windows PowerShell 5.1 ships with the OS; PowerShell 7 runs only
+    // when installed.
+    try runShellHostedLeg(gpa, bin_dir, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    if (try pwshPathAlloc(gpa)) |pwsh| {
+        defer gpa.free(pwsh);
+        try runShellHostedLeg(gpa, bin_dir, pwsh);
+    } else {
+        std.debug.print("pwsh.exe not installed; skipping the PowerShell 7 leg\n", .{});
+    }
 }
