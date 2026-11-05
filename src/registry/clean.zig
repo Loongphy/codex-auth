@@ -177,8 +177,8 @@ pub fn resolveStrictAccountAuthPath(
 
 pub fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bool {
     for (reg.accounts.items) |rec| {
-        const expected_name = accountSnapshotFileName(std.heap.page_allocator, rec.account_key) catch continue;
-        defer std.heap.page_allocator.free(expected_name);
+        const expected_name = accountSnapshotFileName(app_runtime.scratchAllocator(), rec.account_key) catch continue;
+        defer app_runtime.scratchAllocator().free(expected_name);
         if (std.mem.eql(u8, entry_name, expected_name)) {
             return true;
         }

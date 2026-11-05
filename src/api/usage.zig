@@ -1,4 +1,5 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const auth = @import("../auth/auth.zig");
 const chatgpt_http = @import("http.zig");
 const registry = @import("../registry/root.zig");
@@ -153,7 +154,7 @@ pub fn fetchUsageForAuthPathsDetailedBatchWithRunner(
 
     if (auth_paths.len == 0) return results;
 
-    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    var arena_state = std.heap.ArenaAllocator.init(app_runtime.fastAllocator());
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

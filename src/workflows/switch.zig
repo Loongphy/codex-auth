@@ -1,4 +1,5 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const cli = @import("../cli/root.zig");
 const registry = @import("../registry/root.zig");
 const live_flow = @import("live.zig");
@@ -62,7 +63,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
         }
 
         try ensureLiveTty(.switch_account);
-        const live_allocator = std.heap.smp_allocator;
+        const live_allocator = app_runtime.fastAllocator();
         const strict_refresh = opts.api_mode == .force_api;
         const loaded = try loadInitialLiveSelectionDisplay(
             live_allocator,

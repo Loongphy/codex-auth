@@ -48,6 +48,35 @@ pub fn io() std.Io {
     @panic("app_runtime.initRuntime must be called during startup");
 }
 
+/// The checked startup allocator. Debug and ReleaseSafe binaries back
+/// `init.gpa` with `std.heap.SafeAllocator`, which reports every leaked
+/// allocation at process exit (with a stack trace in Debug); unit tests get
+/// `std.testing.allocator`, which fails the test on leaks. Tests that install
+/// their own `Init` via `initRuntime` get that `Init`'s `gpa` instead.
+/// Allocations that should be covered by those checks must not bypass this
+/// or the tier helpers below.
+pub fn gpa() std.mem.Allocator {
+    if (runtime_init) |init| return init.gpa;
+    if (builtin.is_test) return std.testing.allocator;
+    @panic("app_runtime.initRuntime must be called during startup");
+}
+
+/// Allocator for hot or long-lived runtime paths (live TUI, background
+/// refresh arenas). Debug and test builds route through `gpa()` so every
+/// allocation is covered by leak checks; release builds keep the
+/// zero-tracking `smp_allocator` singleton — deliberately, even though
+/// ReleaseSafe also has a checked `init.gpa`, for performance.
+pub fn fastAllocator() std.mem.Allocator {
+    return if (builtin.mode == .debug or builtin.is_test) gpa() else std.heap.smp_allocator;
+}
+
+/// Allocator for one-shot scratch work: subprocess output capture, launch
+/// plans, temporary file names. Debug and test builds route through `gpa()`;
+/// release builds keep `page_allocator` — same trade-off as `fastAllocator`.
+pub fn scratchAllocator() std.mem.Allocator {
+    return if (builtin.mode == .debug or builtin.is_test) gpa() else std.heap.page_allocator;
+}
+
 pub fn dupeOwnedNoSentinel(allocator: std.mem.Allocator, z_bytes: [:0]u8) ![]u8 {
     defer allocator.free(z_bytes);
     return try allocator.dupe(u8, z_bytes);

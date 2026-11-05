@@ -1760,3 +1760,9 @@ test "list JSON includes the stored plan expiry timestamp" {
     try std.testing.expectEqual(@as(usize, 1), accounts.len);
     try std.testing.expectEqual(@as(i64, 1_785_326_940), accounts[0].object.get("plan_expires_at").?.integer);
 }
+
+test "Scenario: Given test builds when requesting runtime tier allocators then all route to the checked allocator" {
+    try std.testing.expectEqual(std.testing.allocator.ptr, app_runtime.gpa().ptr);
+    try std.testing.expectEqual(std.testing.allocator.ptr, app_runtime.fastAllocator().ptr);
+    try std.testing.expectEqual(std.testing.allocator.ptr, app_runtime.scratchAllocator().ptr);
+}
