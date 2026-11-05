@@ -200,7 +200,7 @@ const PtySession = struct {
         while (true) {
             const rc = std.c.waitpid(pid, &status, std.c.W.NOHANG);
             if (rc == pid) break;
-            if (rc < 0) return error.ChildWaitFailed;
+            if (rc < 0 and std.posix.errno(rc) != .INTR) return error.ChildWaitFailed;
             if (nowMs() >= self.deadline_ms) {
                 self.child.kill(fs.io());
                 self.done = true;

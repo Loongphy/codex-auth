@@ -561,8 +561,8 @@ const Console = struct {
         }
         // Only the visible window matters — a marker must be on screen,
         // and the full scroll buffer can hold a million stale cells.
-        const width: usize = @intCast(info.dwSize.X);
-        const rows: usize = @intCast(info.srWindow.Bottom - info.srWindow.Top + 1);
+        const width: usize = std.math.cast(usize, info.dwSize.X) orelse return error.ConsoleInfoFailed;
+        const rows: usize = std.math.cast(usize, @as(i32, info.srWindow.Bottom) - info.srWindow.Top + 1) orelse return error.ConsoleInfoFailed;
         const cells = try std.testing.allocator.alloc(u16, width * rows);
         defer std.testing.allocator.free(cells);
         var read_n: windows.DWORD = 0;
