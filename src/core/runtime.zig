@@ -80,14 +80,14 @@ pub fn gpa() std.mem.Allocator {
 /// zero-tracking `smp_allocator` singleton — deliberately, even though
 /// ReleaseSafe also has a checked `init.gpa`, for performance.
 pub fn fastAllocator() std.mem.Allocator {
-    return if (builtin.mode == .debug or builtin.is_test) gpa() else std.heap.smp_allocator;
+    return if (builtin.optimize == .debug or builtin.is_test) gpa() else std.heap.smp_allocator;
 }
 
 /// Allocator for one-shot scratch work: subprocess output capture, launch
 /// plans, temporary file names. Debug and test builds route through `gpa()`;
 /// release builds keep `page_allocator` — same trade-off as `fastAllocator`.
 pub fn scratchAllocator() std.mem.Allocator {
-    return if (builtin.mode == .debug or builtin.is_test) gpa() else std.heap.page_allocator;
+    return if (builtin.optimize == .debug or builtin.is_test) gpa() else std.heap.page_allocator;
 }
 
 pub fn dupeOwnedNoSentinel(allocator: std.mem.Allocator, z_bytes: [:0]u8) ![]u8 {
