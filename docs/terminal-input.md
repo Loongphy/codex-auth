@@ -58,4 +58,4 @@ each platform. Exact byte sequences and key mappings are pinned by
 - The console mode keeps mouse input enabled and Quick Edit disabled so
   wheel records reach the application instead of starting a text selection.
 - The full record-to-scroll path is exercised end to end on a real console
-  by `tests/tui_console_test.zig`; see `docs/tests.md` for how it runs.
+  by `tests/tui_conhost_test.zig`; see `docs/tests.md` for how it runs.

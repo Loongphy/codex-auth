@@ -9,7 +9,7 @@
 //!
 //! POSIX only: native Windows reads `INPUT_RECORD`s rather than a byte
 //! stream, so its faithful harness is the real-console equivalent in
-//! `tests/tui_console_test.zig` (headless conhost + console API injection),
+//! `tests/tui_conhost_test.zig` (headless conhost + console API injection),
 //! not this file's byte-oriented view of the world.
 
 const std = @import("std");

@@ -34,14 +34,14 @@ Tests split by *kind*, not by "interaction vs logic". Pick the layer by what the
 
 So a new key mapping or escape classification gets a unit test in the area file; it earns a PTY case only when the wire contract itself changes — a new DECSET, a new reply that must be consumed, or bytes that must never leak into later input. PTY coverage is gated to platforms the harness supports (`has_pty` in `tests/tui_pty_test.zig`); on other platforms the same contract stays covered at unit level.
 
-Windows has its own counterpart in `tests/tui_console_test.zig`: it hosts the app inside a headless `conhost.exe` — real console handles, not pipes — then attaches to that console to inject `INPUT_RECORD`s with `WriteConsoleInputW` and read the rendered screen buffer back. It is the e2e proof of the `MOUSE_WHEELED` → scroll path. The record→key mapping itself is pinned on any host by the pure `windowsMouseScrollKey`/`windowsTuiInputMode` tests since `win.INPUT_RECORD` shapes are platform-independent.
+Windows has its own counterpart in `tests/tui_conhost_test.zig`: it hosts the app inside a headless `conhost.exe` — real console handles, not pipes — then attaches to that console to inject `INPUT_RECORD`s with `WriteConsoleInputW` and read the rendered screen buffer back. It is the e2e proof of the `MOUSE_WHEELED` → scroll path. The record→key mapping itself is pinned on any host by the pure `windowsMouseScrollKey`/`windowsTuiInputMode` tests since `win.INPUT_RECORD` shapes are platform-independent.
 
 The same file also hosts the app through real shells — `powershell.exe` (Windows PowerShell 5.1, always present) and `pwsh.exe` (PowerShell 7, when installed; override the binary location with `CODEX_AUTH_CONSOLE_PWSH_EXE`). Console semantics are identical whichever shell launched the app — the console belongs to conhost, not the shell — so the shell legs exist to cover the realistic launch chain (env inheritance through a process tree), not a second console contract. They spawn with the parent environment inherited and the test vars overlaid: shells need the full user session (`SystemDrive`, `PSModulePath`, `APPDATA`, …) that a minimal env block lacks.
 
 Running the windows harness needs a real Windows host, where `zig build test` just works — the binary resolves through the same env contract as the pty harness (`CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX`, else `zig-out/bin` under the project root). From WSL, `zig build test -Dtarget=x86_64-windows-gnu` executes the windows test exes through the interop layer; the recommended WSL flow is still to stage `codex-auth.exe` onto the Windows filesystem (not `\\wsl$`) and set the prefix env, since the project-root fallback then hands Windows code a Linux `/coding/...` path that only resolves by accident of the UNC working directory:
 
 ```powershell
-cd <stage>; $env:CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX = "<stage>"; .\tui_console_test.exe
+cd <stage>; $env:CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX = "<stage>"; .\tui_conhost_test.exe
 ```
 
 ## Build Integration

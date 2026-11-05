@@ -103,7 +103,7 @@ pub fn build(b: *std.Build) void {
         "tests/time_relative_test.zig",
         "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
-        "tests/tui_console_test.zig",
+        "tests/tui_conhost_test.zig",
         "tests/tui_display_test.zig",
         "tests/tui_pty_test.zig",
         "tests/tui_session_test.zig",
