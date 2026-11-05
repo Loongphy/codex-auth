@@ -101,7 +101,10 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     try env_map.put("ZIG_LOCAL_CACHE_DIR", local_cache_dir);
     try env_map.put(cli_integration_install_prefix_env, install_prefix);
 
-    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ test_options.zig_exe, "build", "-p", install_prefix, "test-helpers" });
+    // Build the child in the same optimize mode as the test binary: hazards
+    // that only surface under release codegen (e.g. stack-protector tripping)
+    // must not hide behind a Debug child.
+    const result = try runCapture(allocator, project_root, &env_map, &[_][]const u8{ test_options.zig_exe, "build", "-p", install_prefix, "-Doptimize=" ++ @tagName(builtin.optimize), "test-helpers" });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 

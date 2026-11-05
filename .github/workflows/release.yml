@@ -117,6 +117,16 @@ jobs:
       - name: Build native binary
         run: zig build -Doptimize=ReleaseSafe
 
+      # A Debug test suite cannot trip the stack protector on libc-ABI
+      # hazards (e.g. the glibc termios overflow); smoke the shipped binary
+      # on a real pty instead. `script` provides the tty, the delayed 'q'
+      # quits cleanly, and a crash exits nonzero.
+      - name: ReleaseSafe TUI smoke
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          SMOKE_HOME=$(mktemp -d)
+          ( sleep 2; printf q; sleep 2; printf q; sleep 2; printf q ) | HOME=$SMOKE_HOME CODEX_HOME=$SMOKE_HOME timeout 20 script -qec './zig-out/bin/codex-auth list --live --skip-api' /dev/null
+
   release-assets:
     name: Build Release Assets (${{ matrix.id }})
     needs: verify-main-ci
