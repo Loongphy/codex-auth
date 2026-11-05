@@ -68,7 +68,11 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     const install_prefix = try fs.path.join(allocator, &.{ project_root, "zig-out" });
     defer allocator.free(install_prefix);
     const result = std.process.run(std.heap.page_allocator, fs.io(), .{
-        .argv = &.{ test_options.zig_exe, "build", "-p", install_prefix, "test-helpers" },
+        // Match the child's optimize mode to the test binary's: libc-ABI
+        // hazards like the glibc termios overflow only trip the stack
+        // protector in safe-release codegen, so a Debug child would let a
+        // regression pass silently.
+        .argv = &.{ test_options.zig_exe, "build", "-p", install_prefix, "-Doptimize=" ++ @tagName(builtin.optimize), "test-helpers" },
         .cwd = .{ .path = project_root },
         .stdout_limit = .limited(1024 * 1024),
         .stderr_limit = .limited(1024 * 1024),

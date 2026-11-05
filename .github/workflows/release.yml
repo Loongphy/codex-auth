@@ -117,6 +117,24 @@ jobs:
       - name: Build native binary
         run: zig build -Doptimize=ReleaseSafe
 
+      # Debug codegen hides libc-ABI hazards that trip the stack protector
+      # under release codegen (e.g. the glibc termios overflow). Run the e2e
+      # harness against the ReleaseSafe artifact: the install-prefix override
+      # makes it reuse this build instead of rebuilding in Debug.
+      - name: ReleaseSafe e2e (pty)
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          zig build -p zig-out-rs -Doptimize=ReleaseSafe
+          # `pty` would substring-match "empty" tests in cli_integration_test,
+          # which rebuild a Debug child into the staged prefix.
+          zig build test -Dtest-filter=pty: -Dcli-prefix="${{ github.workspace }}/zig-out-rs"
+
+      - name: ReleaseSafe e2e (conhost)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          zig build -p zig-out-rs -Doptimize=ReleaseSafe
+          zig build test -Dtest-filter=console: -Dcli-prefix="${{ github.workspace }}/zig-out-rs" -j1
+
   release-assets:
     name: Build Release Assets (${{ matrix.id }})
     needs: verify-main-ci

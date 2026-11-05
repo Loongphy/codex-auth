@@ -556,6 +556,45 @@ pub fn mapTuiOutputError(err: anyerror) anyerror {
     };
 }
 
+// On Linux, `std.posix.termios` uses the 44-byte kernel layout (NCCS=19), but
+// glibc's `struct termios` is 60 bytes (NCCS=32). The libc-backed
+// `std.posix.tcgetattr` therefore overwrites 16 bytes past its destination,
+// which trips the stack protector in ReleaseSafe builds. Issue the ioctl
+// directly instead: the kernel ABI matches `std.posix.termios` exactly.
+// Other targets keep `std.posix`, whose layout already matches their libc.
+fn tcGetAttr(handle: std.posix.fd_t) std.posix.TermiosGetError!std.posix.termios {
+    const linux = std.os.linux;
+    if (comptime builtin.target.os.tag != .linux) return std.posix.tcgetattr(handle);
+    while (true) {
+        // TCGETS fills only the 36-byte kernel termios; zero the trailing
+        // speed fields so the saved value stays fully defined.
+        var term: std.posix.termios = std.mem.zeroes(std.posix.termios);
+        switch (linux.errno(linux.tcgetattr(handle, &term))) {
+            .SUCCESS => return term,
+            .INTR => continue,
+            .BADF => unreachable,
+            .NOTTY => return error.NotATerminal,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
+}
+
+fn tcSetAttr(handle: std.posix.fd_t, optional_action: std.posix.TCSA, termios_p: std.posix.termios) std.posix.TermiosSetError!void {
+    const linux = std.os.linux;
+    if (comptime builtin.target.os.tag != .linux) return std.posix.tcsetattr(handle, optional_action, termios_p);
+    while (true) {
+        switch (linux.errno(linux.tcsetattr(handle, optional_action, &termios_p))) {
+            .SUCCESS => return,
+            .BADF => unreachable,
+            .INTR => continue,
+            .INVAL => unreachable,
+            .NOTTY => return error.NotATerminal,
+            .IO => return error.ProcessOrphaned,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    }
+}
+
 pub const TuiSession = struct {
     input: std.Io.File,
     output: std.Io.File,
@@ -617,7 +656,7 @@ pub const TuiSession = struct {
             errdefer self.deinit();
             self.enter() catch |err| return mapTuiOutputError(err);
         } else {
-            const saved_termios = try std.posix.tcgetattr(input.handle);
+            const saved_termios = try tcGetAttr(input.handle);
             var raw = saved_termios;
             raw.lflag.ICANON = false;
             raw.lflag.ECHO = false;
@@ -627,8 +666,8 @@ pub const TuiSession = struct {
             raw.lflag.ISIG = false;
             raw.cc[@backingInt(std.c.V.MIN)] = 1;
             raw.cc[@backingInt(std.c.V.TIME)] = 0;
-            try std.posix.tcsetattr(input.handle, .FLUSH, raw);
-            errdefer std.posix.tcsetattr(input.handle, .FLUSH, saved_termios) catch {};
+            try tcSetAttr(input.handle, .FLUSH, raw);
+            errdefer tcSetAttr(input.handle, .FLUSH, saved_termios) catch {};
 
             self.* = .{
                 .input = input,
@@ -650,7 +689,7 @@ pub const TuiSession = struct {
             _ = win.SetConsoleMode(self.output.handle, self.saved_output_state);
             _ = win.SetConsoleMode(self.input.handle, self.saved_input_state);
         } else {
-            std.posix.tcsetattr(self.input.handle, .FLUSH, self.saved_input_state) catch {};
+            tcSetAttr(self.input.handle, .FLUSH, self.saved_input_state) catch {};
         }
         self.* = undefined;
     }

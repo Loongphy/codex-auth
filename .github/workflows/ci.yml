@@ -54,3 +54,15 @@ jobs:
         run: |
           zig version
           zig build test
+
+      # Debug codegen hides libc-ABI hazards that trip the stack protector
+      # under release codegen (e.g. the glibc termios overflow), so point the
+      # pty harness at a ReleaseSafe CLI — it skips its own debug rebuild via
+      # the install-prefix override.
+      - name: ReleaseSafe e2e (pty)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: |
+          zig build -p zig-out-rs -Doptimize=ReleaseSafe
+          # `pty` would substring-match "empty" tests in cli_integration_test,
+          # which rebuild a Debug child into the staged prefix.
+          zig build test -Dtest-filter=pty: -Dcli-prefix="${{ github.workspace }}/zig-out-rs"
