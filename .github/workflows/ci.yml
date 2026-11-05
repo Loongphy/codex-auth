@@ -63,4 +63,6 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           zig build -p zig-out-rs -Doptimize=ReleaseSafe
-          zig build test -Dtest-filter=pty -Dcli-prefix="${{ github.workspace }}/zig-out-rs"
+          # `pty` would substring-match "empty" tests in cli_integration_test,
+          # which rebuild a Debug child into the staged prefix.
+          zig build test -Dtest-filter=pty: -Dcli-prefix="${{ github.workspace }}/zig-out-rs"
