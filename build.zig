@@ -103,6 +103,7 @@ pub fn build(b: *std.Build) void {
         "tests/time_relative_test.zig",
         "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
+        "tests/tui_console_test.zig",
         "tests/tui_display_test.zig",
         "tests/tui_pty_test.zig",
         "tests/tui_session_test.zig",
@@ -129,6 +130,9 @@ pub fn build(b: *std.Build) void {
         });
         test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
+            // Named after the file stem so cross-compiled artifacts (e.g.
+            // the ConPTY harness run on a Windows host) stay identifiable.
+            .name = std.Io.Dir.path.stem(test_file),
             .root_module = test_module,
             .filters = test_filters,
         });

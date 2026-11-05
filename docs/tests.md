@@ -34,7 +34,13 @@ Tests split by *kind*, not by "interaction vs logic". Pick the layer by what the
 
 So a new key mapping or escape classification gets a unit test in the area file; it earns a PTY case only when the wire contract itself changes — a new DECSET, a new reply that must be consumed, or bytes that must never leak into later input. PTY coverage is gated to platforms the harness supports (`has_pty` in `tests/tui_pty_test.zig`); on other platforms the same contract stays covered at unit level.
 
-Windows is the exception the rule anticipates: there is no pseudo-terminal harness yet (a real one means ConPTY), so the console input path is pinned by pure record→key and mode→flags tests instead — `windowsMouseScrollKey`, `windowsTuiInputMode` — which run on any host since the `win.INPUT_RECORD` shapes are platform-independent.
+Windows has its own counterpart in `tests/tui_console_test.zig`: it hosts the app inside a headless `conhost.exe` — real console handles, not pipes — then attaches to that console to inject `INPUT_RECORD`s with `WriteConsoleInputW` and read the rendered screen buffer back. It is the e2e proof of the `MOUSE_WHEELED` → scroll path. The record→key mapping itself is pinned on any host by the pure `windowsMouseScrollKey`/`windowsTuiInputMode` tests since `win.INPUT_RECORD` shapes are platform-independent.
+
+Running the windows harness requires a real Windows host. From WSL: `zig build test -Dtarget=x86_64-windows-gnu`, stage `zig-out/bin/codex-auth.exe` plus the emitted `tui_console_test.exe` on the Windows filesystem (not `\\wsl$`), then run it with `CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX` pointing at the staging dir:
+
+```powershell
+cd <stage>; $env:CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX = "<stage>"; .\tui_console_test.exe
+```
 
 ## Build Integration
 

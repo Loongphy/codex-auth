@@ -8,9 +8,9 @@
 //! the in-process tests (`tests/cli_picker_test.zig`).
 //!
 //! POSIX only: native Windows reads `INPUT_RECORD`s rather than a byte
-//! stream, so a faithful harness there needs ConPTY — a different beast.
-//! Windows protocol coverage stays at the unit level
-//! (`tests/tui_session_test.zig`).
+//! stream, so its faithful harness is the real-console equivalent in
+//! `tests/tui_console_test.zig` (headless conhost + console API injection),
+//! not this file's byte-oriented view of the world.
 
 const std = @import("std");
 const builtin = @import("builtin");
