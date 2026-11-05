@@ -103,16 +103,9 @@ jobs:
           version: 0.17.0
 
       - name: Zig test
-        if: ${{ matrix.os != 'windows-latest' }}
         run: |
           zig version
           zig build test
-
-      - name: Zig test (Windows)
-        if: ${{ matrix.os == 'windows-latest' }}
-        run: |
-          zig version
-          zig build test -j1
 
       - name: Build native binary
         run: zig build -Doptimize=ReleaseSafe
@@ -133,7 +126,7 @@ jobs:
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
           zig build -p zig-out-rs -Doptimize=ReleaseSafe
-          zig build test -Dtest-filter=console: -Dcli-prefix="${{ github.workspace }}/zig-out-rs" -j1
+          zig build test -Dtest-filter=console: -Dcli-prefix="${{ github.workspace }}/zig-out-rs"
 
   release-assets:
     name: Build Release Assets (${{ matrix.id }})
