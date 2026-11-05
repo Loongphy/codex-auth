@@ -118,6 +118,9 @@ pub fn build(b: *std.Build) void {
     test_options.addOptionPathUntracked("project_root", b.path("."));
 
     const test_step = b.step("test", "Run tests");
+    // The windows conhost harness resolves zig-out/bin/codex-auth.exe, so
+    // `zig build test` must also install the CLI binary.
+    test_step.dependOn(b.getInstallStep());
     for (test_files) |test_file| {
         const test_module = b.createModule(.{
             .root_source_file = b.path(test_file),

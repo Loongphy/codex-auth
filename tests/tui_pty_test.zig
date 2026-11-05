@@ -27,6 +27,9 @@ const cli_integration_project_root_env = "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROO
 /// std.c lacks its winsize constant and its grantpt semantics differ, so
 /// widening `has_pty` is a deliberate port, not a flag flip.
 const has_pty = builtin.target.os.tag == .linux;
+/// Referenced only under the linux gate — std.c lacks the constant on
+/// darwin, so it must not be analyzed for other targets.
+const pty_iocswinsz = if (has_pty) std.c.T.IOCSWINSZ else 0;
 
 extern "c" fn posix_openpt(flags: c_int) c_int;
 extern "c" fn grantpt(fd: c_int) c_int;
@@ -53,7 +56,6 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     cli_build_mutex.lockUncancelable(fs.io());
     defer cli_build_mutex.unlock(fs.io());
     if (cli_build_ready) return;
-    defer cli_build_ready = true;
 
     const install_prefix = try fs.path.join(allocator, &.{ project_root, "zig-out" });
     defer allocator.free(install_prefix);
@@ -70,7 +72,10 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     defer std.heap.page_allocator.free(result.stderr);
 
     switch (result.term) {
-        .exited => |code| if (code == 0) return,
+        .exited => |code| if (code == 0) {
+            cli_build_ready = true;
+            return;
+        },
         else => {},
     }
     std.log.err("zig build stdout:\n{s}", .{result.stdout});
@@ -102,7 +107,7 @@ const Pty = struct {
         if (unlockpt(master) != 0) return error.PtyUnlockFailed;
         // A pty defaults to 0x0; the TUI needs a real size to lay out frames.
         var size: std.posix.winsize = .{ .row = rows, .col = cols, .xpixel = 0, .ypixel = 0 };
-        if (ioctl(master, std.c.T.IOCSWINSZ, &size) != 0) return error.PtySizeFailed;
+        if (ioctl(master, pty_iocswinsz, &size) != 0) return error.PtySizeFailed;
         const name = ptsname(master) orelse return error.PtyNameFailed;
         const slave = std.c.open(name, oflags, @as(c_uint, 0));
         if (slave < 0) return error.PtySlaveOpenFailed;
@@ -152,13 +157,18 @@ fn pollReadMaster(master: c_int, out: *std.ArrayList(u8), deadline_ms: i64) !voi
         try out.appendSlice(std.testing.allocator, buf[0..@intCast(n)]);
         return;
     }
-    if (revents & (std.posix.POLL.ERR | std.posix.POLL.HUP) != 0) return error.PtyEof;
+    // NVAL means the fd went bad; without this the loop busy-spins to the
+    // deadline instead of failing fast.
+    if (revents & (std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL) != 0) return error.PtyEof;
 }
 
 const PtySession = struct {
     child: std.process.Child,
     output: std.ArrayList(u8),
     deadline_ms: i64,
+    /// Set once `finish` reaps the child, so a cleanup defer does not kill
+    /// a pid that may have been recycled.
+    done: bool = false,
 
     fn waitMarker(self: *PtySession, master: c_int, needle: []const u8) !void {
         try readMasterUntil(master, &self.output, needle, self.deadline_ms);
@@ -175,6 +185,7 @@ const PtySession = struct {
             },
         };
         const term = try self.child.wait(fs.io());
+        self.done = true;
         return switch (term) {
             .exited => |code| code,
             else => 255,
@@ -281,7 +292,7 @@ test "pty: live TUI emits mouse modes and withholds kitty under WT_SESSION" {
     const master = spawned.master;
     defer _ = close(master);
     defer session.output.deinit(gpa);
-    defer session.child.kill(fs.io());
+    defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "ACCOUNT");
     _ = std.c.write(master, "q", 1);
@@ -327,7 +338,7 @@ test "pty: live TUI pushes and pops kitty flags on kitty-capable terminals" {
     const master = spawned.master;
     defer _ = close(master);
     defer session.output.deinit(gpa);
-    defer session.child.kill(fs.io());
+    defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "ACCOUNT");
     _ = std.c.write(master, "q", 1);
@@ -365,7 +376,7 @@ test "pty: injected SGR and X10 mouse reports are consumed without echo" {
     const master = spawned.master;
     defer _ = close(master);
     defer session.output.deinit(gpa);
-    defer session.child.kill(fs.io());
+    defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "user00@example.com");
     const inject_at = session.output.items.len;

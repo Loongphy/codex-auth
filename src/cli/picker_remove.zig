@@ -178,7 +178,7 @@ fn selectRemoveInteractive(
         try tui.flushOutput();
 
         if (comptime builtin.target.os.tag == .windows) {
-            switch (try tui.readWindowsKey()) {
+            switch (try tui.waitWindowsKey()) {
                 .move_up, .keyboard_up, .scroll_up, .page_up => {
                     if (idx > 0) {
                         idx -= 1;

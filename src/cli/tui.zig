@@ -107,6 +107,10 @@ const win = struct {
         handle: HANDLE,
         milliseconds: DWORD,
     ) callconv(.winapi) DWORD;
+    extern "kernel32" fn GetNumberOfConsoleInputEvents(
+        console_input: HANDLE,
+        number_of_events: *DWORD,
+    ) callconv(.winapi) BOOL;
 };
 
 pub const win32 = win;
@@ -648,6 +652,14 @@ pub const TuiSession = struct {
     pub fn readInputKeys(self: *@This(), timeout_ms: i32, keys: []TuiInputKey) !TuiInputRead {
         std.debug.assert(keys.len != 0);
 
+        if (comptime builtin.target.os.tag == .windows) {
+            // A queued key repeat replays without waiting on console input.
+            if (self.pending_windows_key != null) {
+                keys[0] = (try self.readWindowsKey()).?;
+                return .{ .ready = 1 };
+            }
+        }
+
         switch (try pollTuiInput(self.input, timeout_ms, tui_poll_error_mask)) {
             .timeout => return .timeout,
             .closed => return .closed,
@@ -655,8 +667,14 @@ pub const TuiSession = struct {
         }
 
         if (comptime builtin.target.os.tag == .windows) {
-            keys[0] = try self.readWindowsKey();
-            return .{ .ready = 1 };
+            if (try self.readWindowsKey()) |key| {
+                keys[0] = key;
+                return .{ .ready = 1 };
+            }
+            // The signal came from a non-key record (mouse move, focus…)
+            // that was consumed without producing a key; report a timeout
+            // so the caller's refresh cadence keeps running.
+            return .timeout;
         }
 
         var buffer: [64]u8 = undefined;
@@ -695,7 +713,10 @@ pub const TuiSession = struct {
         return if (cols != 0) cols else 80;
     }
 
-    pub fn readWindowsKey(self: *@This()) !TuiInputKey {
+    /// Drains console input until a key event maps to a TuiInputKey and
+    /// returns it, or returns null once the input queue is empty. Mouse,
+    /// focus, and menu records are consumed without blocking.
+    pub fn readWindowsKey(self: *@This()) !?TuiInputKey {
         if (comptime builtin.target.os.tag != .windows) unreachable;
 
         if (self.pending_windows_key) |pending| {
@@ -709,6 +730,15 @@ pub const TuiSession = struct {
         }
 
         while (true) {
+            // Earlier iterations may have drained the queue on non-key
+            // records; do not block on an empty queue or the caller's
+            // timeout cadence stalls. A racing co-reader could still park
+            // ReadConsoleInputW below, but nothing else consumes input here.
+            var pending_count: win.DWORD = 0;
+            if (win.GetNumberOfConsoleInputEvents(self.input.handle, &pending_count) == .FALSE) {
+                return error.EndOfStream;
+            }
+            if (pending_count == 0) return null;
             var record: win.INPUT_RECORD = undefined;
             var events_read: win.DWORD = 0;
             if (win.ReadConsoleInputW(self.input.handle, &record, 1, &events_read) == .FALSE) {
@@ -750,6 +780,15 @@ pub const TuiSession = struct {
                 self.pending_windows_repeat_count = repeat_count - 1;
             }
             return key;
+        }
+    }
+
+    /// Blocks until a key event maps to a TuiInputKey — the pre-drain
+    /// behavior for pickers that have no refresh cadence to service.
+    pub fn waitWindowsKey(self: *@This()) !TuiInputKey {
+        while (true) {
+            if (try self.readWindowsKey()) |key| return key;
+            _ = win.WaitForSingleObject(self.input.handle, std.math.maxInt(u32));
         }
     }
 

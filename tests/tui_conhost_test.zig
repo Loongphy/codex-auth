@@ -155,31 +155,29 @@ const HostedChild = struct {
     pid: windows.DWORD,
     /// The app running inside the console.
     app_pid: windows.DWORD,
+    /// Kept open for the session so a recycled pid can never be mistaken
+    /// for the app — SYNCHRONIZE|QUERY_LIMITED|TERMINATE rights.
+    app: windows.HANDLE,
 
     /// Waits on the app inside the console, not the host: conhost outlives
     /// its app whenever this test process is still attached, so its handle
     /// alone can never prove the app exited.
     fn waitAppExit(self: HostedChild, timeout_ms: windows.DWORD) !windows.DWORD {
-        const app = OpenProcess(PROCESS_SYNC_QUERY, .FALSE, self.app_pid) orelse
-            return error.OpenProcessFailed;
-        defer windows.CloseHandle(app);
-        if (WaitForSingleObject(app, timeout_ms) != 0) return error.ProcessWaitTimeout;
+        if (WaitForSingleObject(self.app, timeout_ms) != 0) return error.ProcessWaitTimeout;
         var code: windows.DWORD = 0;
-        if (GetExitCodeProcess(app, &code) == .FALSE) return error.ExitCodeFailed;
+        if (GetExitCodeProcess(self.app, &code) == .FALSE) return error.ExitCodeFailed;
         return code;
     }
 
     fn kill(self: HostedChild) void {
-        if (OpenProcess(PROCESS_SYNC_QUERY | 0x1, .FALSE, self.app_pid)) |app| {
-            _ = TerminateProcess(app, 1);
-            windows.CloseHandle(app);
-        }
+        _ = TerminateProcess(self.app, 1);
         _ = TerminateProcess(self.process, 1);
     }
 
     fn deinit(self: HostedChild) void {
         windows.CloseHandle(self.process);
         windows.CloseHandle(self.thread);
+        windows.CloseHandle(self.app);
     }
 };
 
@@ -275,7 +273,19 @@ fn buildEnvBlock(
         }
     }
     try merged.appendSlice(allocator, pairs);
+    // CreateProcessW's environment block must be alphabetically sorted.
+    std.mem.sort([2][]const u8, merged.items, {}, envEntryLessThan);
     return buildUtf16Block(allocator, merged.items);
+}
+
+fn envEntryLessThan(_: void, a: [2][]const u8, b: [2][]const u8) bool {
+    const n = @min(a[0].len, b[0].len);
+    for (a[0][0..n], b[0][0..n]) |ca, cb| {
+        const la = std.ascii.toLower(ca);
+        const lb = std.ascii.toLower(cb);
+        if (la != lb) return la < lb;
+    }
+    return a[0].len < b[0].len;
 }
 
 fn buildUtf16Block(allocator: std.mem.Allocator, pairs: []const [2][]const u8) !std.ArrayList(u16) {
@@ -375,14 +385,13 @@ fn spawnHosted(
                 defer windows.CloseHandle(snapshot);
                 var entry: PROCESSENTRY32W = std.mem.zeroes(PROCESSENTRY32W);
                 entry.dwSize = @sizeOf(PROCESSENTRY32W);
-                if (Process32FirstW(snapshot, &entry) != .FALSE) {
-                    while (Process32NextW(snapshot, &entry) != .FALSE) {
-                        const name_len = std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse entry.szExeFile.len;
-                        var name_buf: [260]u8 = undefined;
-                        const utf8_len = std.unicode.utf16LeToUtf8(&name_buf, entry.szExeFile[0..name_len]) catch 0;
-                        if (entry.th32ParentProcessID == pi.dwProcessId)
-                            std.debug.print("hosted child: pid={} name={s}\n", .{ entry.th32ProcessID, name_buf[0..utf8_len] });
-                    }
+                var have = Process32FirstW(snapshot, &entry) != .FALSE;
+                while (have) : (have = Process32NextW(snapshot, &entry) != .FALSE) {
+                    const name_len = std.mem.indexOfScalar(u16, &entry.szExeFile, 0) orelse entry.szExeFile.len;
+                    var name_buf: [260]u8 = undefined;
+                    const utf8_len = std.unicode.utf16LeToUtf8(&name_buf, entry.szExeFile[0..name_len]) catch 0;
+                    if (entry.th32ParentProcessID == pi.dwProcessId)
+                        std.debug.print("hosted child: pid={} name={s}\n", .{ entry.th32ProcessID, name_buf[0..utf8_len] });
                 }
             }
         }
@@ -399,11 +408,14 @@ fn spawnHosted(
         }
         return error.HostedAppNotFound;
     }
+    const app_handle = OpenProcess(PROCESS_SYNC_QUERY | 0x1, .FALSE, app_pid.?) orelse
+        return error.HostedAppNotFound;
     return .{
         .process = pi.hProcess,
         .thread = pi.hThread,
         .pid = pi.dwProcessId,
         .app_pid = app_pid.?,
+        .app = app_handle,
     };
 }
 
@@ -488,6 +500,7 @@ const Console = struct {
         var written: windows.DWORD = 0;
         if (WriteConsoleInputW(self.input, records.ptr, @intCast(records.len), &written) == .FALSE)
             return error.ConsoleInputFailed;
+        if (written != records.len) return error.ConsoleInputTruncated;
     }
 
     /// Reads the screen buffer's character cells as ASCII (markers and the
@@ -655,6 +668,7 @@ test "console: live list renders on a real console and q exits" {
     var session = try setupHostedSession(gpa, 3, null, &.{}, false);
     defer {
         session.console.deinit();
+        session.child.kill();
         session.child.deinit();
         session.buffer.deinit(gpa);
         session.tmp.cleanup();
@@ -677,12 +691,18 @@ test "console: injected MOUSE_WHEELED records scroll the live list" {
     var session = try setupHostedSession(gpa, 40, null, &.{}, false);
     defer {
         session.console.deinit();
+        session.child.kill();
         session.child.deinit();
         session.buffer.deinit(gpa);
         session.tmp.cleanup();
     }
 
     try waitBufferMarker(session.console, &session.buffer, "user00@example.com", session.deadline_ms);
+
+    // Pin non-vacuity: the tail row must NOT be visible before injection,
+    // or the scroll assertion below could pass without any scrolling.
+    try session.console.bufferText(&session.buffer);
+    try std.testing.expect(std.mem.indexOf(u8, session.buffer.items, "user39@example.com") == null);
 
     // A dense burst of wheel-down records — one MOUSE_EVENT_RECORD per
     // notch, exactly what the console delivers for a flick — should scroll
@@ -734,6 +754,7 @@ fn runShellHostedLeg(gpa: std.mem.Allocator, bin_dir: []const u8, shell: []const
     var session = try setupHostedSession(gpa, 3, inner, &.{ bin_dir, shell_dir }, true);
     defer {
         session.console.deinit();
+        session.child.kill();
         session.child.deinit();
         session.buffer.deinit(gpa);
         session.tmp.cleanup();
