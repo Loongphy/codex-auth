@@ -56,6 +56,7 @@ pub fn runRemoveLiveActions(
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
     var viewport_start: usize = 0;
+    var scroll_stream: live_tui.ScrollStream = .{};
     var follow_selection = true;
     var needs_render = true;
     var last_render_second: i64 = -1;
@@ -177,12 +178,12 @@ pub fn runRemoveLiveActions(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, wheel_rows);
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .up, scroll_stream.step(live_tui.nowMs()));
                                 follow_selection = false;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, wheel_rows);
+                                live_tui.scrollListViewportBy(rows.items.len, page_rows, &viewport_start, .down, scroll_stream.step(live_tui.nowMs()));
                                 follow_selection = false;
                                 needs_render = true;
                             },

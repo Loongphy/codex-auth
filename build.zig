@@ -103,7 +103,9 @@ pub fn build(b: *std.Build) void {
         "tests/time_relative_test.zig",
         "tests/time_timestamp_test.zig",
         "tests/table_layout_test.zig",
+        "tests/tui_conhost_test.zig",
         "tests/tui_display_test.zig",
+        "tests/tui_pty_test.zig",
         "tests/tui_session_test.zig",
         "tests/tui_table_test.zig",
         "tests/workflows_core_test.zig",
@@ -116,6 +118,9 @@ pub fn build(b: *std.Build) void {
     test_options.addOptionPathUntracked("project_root", b.path("."));
 
     const test_step = b.step("test", "Run tests");
+    // The windows conhost harness resolves zig-out/bin/codex-auth.exe, so
+    // `zig build test` must also install the CLI binary.
+    test_step.dependOn(b.getInstallStep());
     for (test_files) |test_file| {
         const test_module = b.createModule(.{
             .root_source_file = b.path(test_file),
@@ -128,6 +133,9 @@ pub fn build(b: *std.Build) void {
         });
         test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
+            // Named after the file stem so cross-compiled artifacts (e.g.
+            // the conhost harness run on a Windows host) stay identifiable.
+            .name = std.Io.Dir.path.stem(test_file),
             .root_module = test_module,
             .filters = test_filters,
         });
@@ -148,6 +156,11 @@ pub fn build(b: *std.Build) void {
             run_test.addFileInput(b.path("build.zig"));
             run_test.addFileInput(b.path("build.zig.zon"));
         }
+        // Each run step — not just the umbrella test step — must wait for
+        // the CLI install: sibling steps are unordered, so the harnesses
+        // resolving zig-out/bin could otherwise race it or reuse a stale
+        // binary from a previous build.
+        run_test.step.dependOn(b.getInstallStep());
         test_step.dependOn(&run_test.step);
     }
 }

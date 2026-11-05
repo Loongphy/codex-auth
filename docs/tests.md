@@ -21,9 +21,30 @@ tests/
   *_test.zig            # behavior and regression tests
   support/
     fixtures.zig        # test-only builders and file helpers
+    codex_daemon.zig    # scripted codex daemon double
+    scripted_transport.zig  # in-memory Transport double (see below)
 ```
 
 Test files should be grouped by product area or workflow, not by implementation detail. Use names such as `api_http_test.zig`, `registry_import_test.zig`, `tui_table_test.zig`, or `workflows_live_test.zig`.
+
+## Choosing a Test Layer
+
+Tests split by *kind*, not by "interaction vs logic". Pick the layer by what the new code changes:
+
+- **Pure mapping and dispatch logic** — bytes → classification, key → viewport delta, rows → rendered lines — belongs in the product-area test file next to its fixtures: input classification in `tests/tui_session_test.zig`, viewport and rail behavior in `tests/cli_picker_test.zig`. Those tests share builders with the rendering tests around them; pulling them into a separate directory would only duplicate fixtures or force cross-file imports.
+- **End-to-end wire tests** that need the real binary on a real terminal belong in `tests/tui_pty_test.zig` (Linux-only pseudo-terminal harness) or `tests/cli_integration_test.zig` (subprocess capture, no tty). They own their harness helpers and assert on the wire contract — mode bytes on enter/exit, reply sequences, input consumption — not on rendered frames, which the in-process tests already pin.
+
+So a new key mapping or escape classification gets a unit test in the area file; it earns a PTY case only when the wire contract itself changes — a new DECSET, a new reply that must be consumed, or bytes that must never leak into later input. PTY coverage is gated to platforms the harness supports (`has_pty` in `tests/tui_pty_test.zig`); on other platforms the same contract stays covered at unit level.
+
+Windows has its own counterpart in `tests/tui_conhost_test.zig`: it hosts the app inside a headless `conhost.exe` — real console handles, not pipes — then attaches to that console to inject `INPUT_RECORD`s with `WriteConsoleInputW` and read the rendered screen buffer back. It is the e2e proof of the `MOUSE_WHEELED` → scroll path. The record→key mapping itself is pinned on any host by the pure `windowsMouseScrollKey`/`windowsTuiInputMode` tests since `win.INPUT_RECORD` shapes are platform-independent.
+
+The same file also hosts the app through real shells — `powershell.exe` (Windows PowerShell 5.1, always present) and `pwsh.exe` (PowerShell 7, when installed; override the binary location with `CODEX_AUTH_CONSOLE_PWSH_EXE`). Console semantics are identical whichever shell launched the app — the console belongs to conhost, not the shell — so the shell legs exist to cover the realistic launch chain (env inheritance through a process tree), not a second console contract. They spawn with the parent environment inherited and the test vars overlaid: shells need the full user session (`SystemDrive`, `PSModulePath`, `APPDATA`, …) that a minimal env block lacks.
+
+Running the windows harness needs a real Windows host with a conhost that accepts `--headless` — a one-time probe skips every console test cleanly on hosts too old for it rather than failing on the descendant-poll deadline. Where supported, `zig build test` just works: the binary resolves through the same env contract as the pty harness (`CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX`, else `zig-out/bin` under the project root, located via `CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT` or the compiled-in root). From WSL, `zig build test -Dtarget=x86_64-windows-gnu` executes the windows test exes through the interop layer; the recommended WSL flow is still to stage `codex-auth.exe` onto the Windows filesystem (not `\\wsl$`) and set the prefix env, since the project-root fallback then hands Windows code a Linux `/coding/...` path that only resolves by accident of the UNC working directory:
+
+```powershell
+cd <stage>; $env:CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX = "<stage>"; .\tui_conhost_test.exe
+```
 
 ## Build Integration
 
@@ -79,6 +100,9 @@ Do not expose fixtures from `src/root.zig`.
 `tests/fake_curl.zig` is the mock backend, installed as `curl` by
 `zig build test-helpers`. `codex-auth` resolves `curl` from `PATH`, so putting the
 mock first shadows the real one without touching any production code path.
+`test-helpers` also installs `tests/fake_curl_fail.zig` as `curl-fail` (a stub
+that always exits 1, for transport-failure paths) and `tests/fake_codex.zig` as
+`fake-codex` (a stand-in `codex` binary for app-launch integration tests).
 
 Without `CODEX_AUTH_FAKE_CURL_DIR` it answers the two fixed bodies the older tests
 were written against. With it, the directory drives the responses:

@@ -132,6 +132,7 @@ pub fn selectAccountWithLiveUpdates(
     var number_buf: [8]u8 = undefined;
     var number_len: usize = 0;
     var viewport_start: usize = 0;
+    var scroll_stream: live_tui.ScrollStream = .{};
     var needs_render = true;
     var last_render_second: i64 = -1;
     var last_rows_minute: i64 = -1;
@@ -210,7 +211,6 @@ pub fn selectAccountWithLiveUpdates(
                         tui.terminalRows(),
                         live_tui.switchFixedLines("status", ""),
                     );
-                    const wheel_rows = live_tui.mouseWheelRows(page_rows);
 
                     for (key_buf[0..key_count]) |key| {
                         const selected_idx = try live_tui.resolveSelectedIndex(allocator, &selected_account_key, rows, borrowed.reg);
@@ -224,11 +224,11 @@ pub fn selectAccountWithLiveUpdates(
                                 needs_render = true;
                             },
                             .scroll_up => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .up, scroll_stream.step(live_tui.nowMs()))) number_len = 0;
                                 needs_render = true;
                             },
                             .scroll_down => {
-                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, wheel_rows)) number_len = 0;
+                                if (try live_tui.moveSelectedIndexBy(allocator, &selected_account_key, rows, borrowed.reg, .down, scroll_stream.step(live_tui.nowMs()))) number_len = 0;
                                 needs_render = true;
                             },
                             .page_up => {
@@ -318,6 +318,7 @@ pub fn viewAccountsWithLiveUpdates(
 
     const use_color = terminal_color.fileColorEnabled(tui.output);
     var viewport_start: usize = 0;
+    var scroll_stream: live_tui.ScrollStream = .{};
     var rendered_row_count: usize = current_display.reg.accounts.items.len;
     var needs_render = true;
     var last_render_second: i64 = -1;
@@ -338,6 +339,7 @@ pub fn viewAccountsWithLiveUpdates(
     // cursor inside the viewport; scroll keys leave it unset, so ↑/↓ and the
     // wheel still roam freely without the cursor snapping the window back.
     var follow_row_cursor: bool = false;
+    var note_needs_follow: bool = false;
     // True only when the frame on screen shows the re-confirm hint for the
     // armed credit, so a redeem always follows a visible confirmation.
     var armed_hint_rendered: bool = false;
@@ -535,9 +537,19 @@ pub fn viewAccountsWithLiveUpdates(
                 // redeem result is drawn below the row. While a confirmation
                 // is pending the armed card's own line is followed instead —
                 // a rail taller than the frame must not leave its hint above
-                // the window.
-                if (panel_lines > 0)
+                // the window. The credit-less row's passive note is not a
+                // mode either: it follows only on the frame that opens it
+                // (otherwise a probe at the viewport bottom would look dead),
+                // then releases so the wheel stays free to scroll instead of
+                // snapping back every frame.
+                if (credit_selection.expanded and panel_lines > 0)
                     .{ .first = cursor_line, .last = armed_hint_line orelse cursor_line + panel_lines }
+                else if (note_needs_follow and panel_lines > 0)
+                    // The probe note is spliced below its anchor row, so an
+                    // Enter near the viewport bottom would open it entirely
+                    // off-screen — the keypress would look dead. Follow it
+                    // once at open, then release so the wheel stays free.
+                    .{ .first = cursor_line, .last = cursor_line + panel_lines }
                 else if (follow_row_cursor)
                     // A j/k move must stay visible: with the rail closed the
                     // cursor's own line is its span.
@@ -546,6 +558,7 @@ pub fn viewAccountsWithLiveUpdates(
                     null,
             );
             follow_row_cursor = false;
+            note_needs_follow = false;
             var bounded_viewport = viewport;
             bounded_viewport.max_cols = tui.terminalCols();
             // A second `Enter` only redeems once the hint it confirms is
@@ -667,7 +680,11 @@ pub fn viewAccountsWithLiveUpdates(
                                 else => {},
                             }
                         }
-                        if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, key)) {
+                        const scroll_lines: usize = switch (key) {
+                            .scroll_up, .scroll_down => scroll_stream.step(live_tui.nowMs()),
+                            else => live_tui.mouse_wheel_lines,
+                        };
+                        if (live_tui.applyListViewportKey(rendered_row_count, max_rows, &viewport_start, wheel_rows, scroll_lines, key)) {
                             needs_render = true;
                             continue;
                         }
@@ -701,6 +718,7 @@ pub fn viewAccountsWithLiveUpdates(
                                     // an empty list there is no row to anchor
                                     // the note to.
                                     credit_selection.note_row = credit_selection.row_cursor;
+                                    note_needs_follow = true;
                                 }
                                 needs_render = true;
                                 continue;
