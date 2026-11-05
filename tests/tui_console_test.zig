@@ -9,12 +9,13 @@
 //! `ReadConsoleOutputCharacterW` instead of byte-stream assertions.
 //!
 //! These tests only run on a real Windows host; nothing here is simulated.
-//! From WSL, build the windows target, stage zig-out/bin on the Windows
-//! filesystem, and run the emitted test executable via pwsh.exe (see
-//! docs/tests.md). On other hosts the cases skip at comptime.
+//! A native `zig build test` covers them there, and WSL's interop layer
+//! executes the cross-compiled test exes too (see docs/tests.md for the
+//! staged-binary contract). On other hosts the cases skip at comptime.
 
 const std = @import("std");
 const builtin = @import("builtin");
+const test_options = @import("test_options");
 const app_runtime = @import("codex_auth").core.runtime;
 const fs = @import("codex_auth").core.compat_fs;
 const registry = @import("codex_auth").registry;
@@ -26,6 +27,7 @@ const windows = std.os.windows;
 /// Same install-prefix contract as tests/tui_pty_test.zig: the launcher
 /// points it at a directory containing bin/codex-auth.exe.
 const cli_integration_install_prefix_env = "CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX";
+const cli_integration_project_root_env = "CODEX_AUTH_CLI_INTEGRATION_PROJECT_ROOT";
 
 const has_console = builtin.target.os.tag == .windows;
 
@@ -418,15 +420,25 @@ fn keyRecord(char: u8) win32.INPUT_RECORD {
     };
 }
 
+/// Same resolution contract as `builtCliPathAlloc` in tui_pty_test.zig:
+/// the staged install prefix wins, otherwise fall back to the project's
+/// own zig-out so a native `zig build test` needs no staging.
 fn exePathAlloc(allocator: std.mem.Allocator) ![]u8 {
     const prefix = app_runtime.getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch |err| switch (err) {
-        // The windows test executable is staged next to the built binary;
-        // without the prefix there is no binary to attach.
-        error.EnvironmentVariableNotFound => return error.SkipZigTest,
+        error.EnvironmentVariableNotFound => null,
         else => return err,
     };
-    defer allocator.free(prefix);
-    return fs.path.join(allocator, &.{ prefix, "bin", "codex-auth.exe" });
+    defer if (prefix) |dir| allocator.free(dir);
+    if (prefix) |dir| return fs.path.join(allocator, &.{ dir, "bin", "codex-auth.exe" });
+
+    const project_root = app_runtime.getEnvVarOwned(allocator, cli_integration_project_root_env) catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    defer if (project_root) |dir| allocator.free(dir);
+    const root = project_root orelse try fs.realpathAlloc(allocator, test_options.project_root);
+    defer if (project_root == null) allocator.free(root);
+    return fs.path.join(allocator, &.{ root, "zig-out", "bin", "codex-auth.exe" });
 }
 
 fn seedAccounts(allocator: std.mem.Allocator, codex_home: []const u8, count: usize) !void {

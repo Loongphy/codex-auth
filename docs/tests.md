@@ -36,7 +36,7 @@ So a new key mapping or escape classification gets a unit test in the area file;
 
 Windows has its own counterpart in `tests/tui_console_test.zig`: it hosts the app inside a headless `conhost.exe` — real console handles, not pipes — then attaches to that console to inject `INPUT_RECORD`s with `WriteConsoleInputW` and read the rendered screen buffer back. It is the e2e proof of the `MOUSE_WHEELED` → scroll path. The record→key mapping itself is pinned on any host by the pure `windowsMouseScrollKey`/`windowsTuiInputMode` tests since `win.INPUT_RECORD` shapes are platform-independent.
 
-Running the windows harness requires a real Windows host. From WSL: `zig build test -Dtarget=x86_64-windows-gnu`, stage `zig-out/bin/codex-auth.exe` plus the emitted `tui_console_test.exe` on the Windows filesystem (not `\\wsl$`), then run it with `CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX` pointing at the staging dir:
+Running the windows harness needs a real Windows host, where `zig build test` just works — the binary resolves through the same env contract as the pty harness (`CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX`, else `zig-out/bin` under the project root). From WSL it still runs end to end: `zig build test -Dtarget=x86_64-windows-gnu` executes the windows test exes through the interop layer. For an explicit staged binary, copy `codex-auth.exe` and the emitted `tui_console_test.exe` onto the Windows filesystem (not `\\wsl$`) and run it with the prefix env set:
 
 ```powershell
 cd <stage>; $env:CODEX_AUTH_CLI_INTEGRATION_INSTALL_PREFIX = "<stage>"; .\tui_console_test.exe
