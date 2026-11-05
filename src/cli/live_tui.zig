@@ -31,7 +31,10 @@ pub const ScrollStream = struct {
     last_ms: i64 = 0,
 
     pub fn step(self: *ScrollStream, now_ms: i64) usize {
-        const streaming = self.last_ms != 0 and now_ms - self.last_ms <= scroll_stream_gap_ms;
+        // A negative delta (clock stepping backwards) is not "close
+        // together" — treat it as a fresh gesture rather than a stream.
+        const delta = now_ms - self.last_ms;
+        const streaming = self.last_ms != 0 and delta >= 0 and delta <= scroll_stream_gap_ms;
         self.last_ms = now_ms;
         return if (streaming) 1 else mouse_wheel_lines;
     }

@@ -119,6 +119,9 @@ pub const tui_poll_input_mask: i16 = if (builtin.target.os.tag == .windows) 0 el
 pub const tui_poll_error_mask: i16 = if (builtin.target.os.tag == .windows) 0 else std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
 pub const tui_escape_sequence_timeout_ms: i32 = 100;
 pub const live_ui_tick_ms: i32 = 100;
+/// How often a blocking POSIX picker wakes to re-check the window size —
+/// SIGWINCH never arrives as input, so this is the redraw heartbeat.
+const picker_resize_poll_ms: i32 = 250;
 
 pub const TuiNavigation = enum {
     up,
@@ -602,6 +605,10 @@ pub const TuiSession = struct {
                 .keyboard_enhancement_requested = keyboard_enhancement_requested,
             };
             self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
+            // A failed enter can leave the DECSET modes half-applied even
+            // though the console modes restore via errdefer — run the full
+            // exit sequence best-effort on that path too.
+            errdefer self.deinit();
             self.enter() catch |err| return mapTuiOutputError(err);
         } else {
             const saved_termios = try std.posix.tcgetattr(input.handle);
@@ -624,6 +631,7 @@ pub const TuiSession = struct {
                 .keyboard_enhancement_requested = keyboard_enhancement_requested,
             };
             self.writer = self.output.writer(app_runtime.io(), &self.writer_buffer);
+            errdefer self.deinit();
             self.enter() catch |err| return mapTuiOutputError(err);
         }
     }
@@ -780,6 +788,31 @@ pub const TuiSession = struct {
                 self.pending_windows_repeat_count = repeat_count - 1;
             }
             return key;
+        }
+    }
+
+    /// Blocks for input bytes the way `read` does, but wakes on a poll
+    /// tick to re-check the terminal size: SIGWINCH produces no input
+    /// byte, so without this a POSIX picker would keep a stale frame
+    /// until the next keypress — the parity of the Windows .redraw path.
+    /// Returns null when the window was resized (the caller should
+    /// redraw), the byte count otherwise.
+    pub fn readPickerBytes(self: *@This(), buffer: []u8) !?usize {
+        if (comptime builtin.target.os.tag == .windows) unreachable;
+        var last_rows = self.terminalRows();
+        var last_cols = self.terminalCols();
+        while (true) {
+            switch (try pollTuiInput(self.input, picker_resize_poll_ms, tui_poll_error_mask)) {
+                .ready => return try self.read(buffer),
+                .closed => return error.EndOfStream,
+                .timeout => {
+                    const rows = self.terminalRows();
+                    const cols = self.terminalCols();
+                    if (rows != last_rows or cols != last_cols) return null;
+                    last_rows = rows;
+                    last_cols = cols;
+                },
+            }
         }
     }
 
@@ -1200,7 +1233,7 @@ pub fn readTuiEscapeAction(
 
         switch (try pollTuiInput(tty, timeout_ms, poll_error_mask)) {
             .timeout => return .{
-                .action = if (seq_len == 0 or (seq_len == 1 and seq[0] == 0x1b)) .quit else .ignore,
+                .action = if (seq_len == 0) .quit else .ignore,
                 .buffered_bytes_consumed = buffered_bytes_consumed,
             },
             .closed => return .{

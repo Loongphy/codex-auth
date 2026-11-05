@@ -298,7 +298,7 @@ fn selectInteractiveFromIndices(
         }
 
         var b: [8]u8 = undefined;
-        const n = try tui.read(&b);
+        const n = (try tui.readPickerBytes(&b)) orelse continue;
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
@@ -530,7 +530,7 @@ fn selectInteractive(
         }
 
         var b: [8]u8 = undefined;
-        const n = try tui.read(&b);
+        const n = (try tui.readPickerBytes(&b)) orelse continue;
         var i: usize = 0;
         while (i < n) : (i += 1) {
             if (b[i] == 0x1b) {
