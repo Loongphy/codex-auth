@@ -21,6 +21,8 @@ tests/
   *_test.zig            # behavior and regression tests
   support/
     fixtures.zig        # test-only builders and file helpers
+    codex_daemon.zig    # scripted codex daemon double
+    scripted_transport.zig  # in-memory Transport double (see below)
 ```
 
 Test files should be grouped by product area or workflow, not by implementation detail. Use names such as `api_http_test.zig`, `registry_import_test.zig`, `tui_table_test.zig`, or `workflows_live_test.zig`.
@@ -30,7 +32,7 @@ Test files should be grouped by product area or workflow, not by implementation 
 Tests split by *kind*, not by "interaction vs logic". Pick the layer by what the new code changes:
 
 - **Pure mapping and dispatch logic** — bytes → classification, key → viewport delta, rows → rendered lines — belongs in the product-area test file next to its fixtures: input classification in `tests/tui_session_test.zig`, viewport and rail behavior in `tests/cli_picker_test.zig`. Those tests share builders with the rendering tests around them; pulling them into a separate directory would only duplicate fixtures or force cross-file imports.
-- **End-to-end wire tests** that need the real binary on a real terminal belong in `tests/tui_pty_test.zig` (POSIX pseudo-terminal) or `tests/cli_integration_test.zig` (subprocess capture, no tty). They own their harness helpers and assert on the wire contract — mode bytes on enter/exit, reply sequences, input consumption — not on rendered frames, which the in-process tests already pin.
+- **End-to-end wire tests** that need the real binary on a real terminal belong in `tests/tui_pty_test.zig` (Linux-only pseudo-terminal harness) or `tests/cli_integration_test.zig` (subprocess capture, no tty). They own their harness helpers and assert on the wire contract — mode bytes on enter/exit, reply sequences, input consumption — not on rendered frames, which the in-process tests already pin.
 
 So a new key mapping or escape classification gets a unit test in the area file; it earns a PTY case only when the wire contract itself changes — a new DECSET, a new reply that must be consumed, or bytes that must never leak into later input. PTY coverage is gated to platforms the harness supports (`has_pty` in `tests/tui_pty_test.zig`); on other platforms the same contract stays covered at unit level.
 
@@ -98,6 +100,9 @@ Do not expose fixtures from `src/root.zig`.
 `tests/fake_curl.zig` is the mock backend, installed as `curl` by
 `zig build test-helpers`. `codex-auth` resolves `curl` from `PATH`, so putting the
 mock first shadows the real one without touching any production code path.
+`test-helpers` also installs `tests/fake_curl_fail.zig` as `curl-fail` (a stub
+that always exits 1, for transport-failure paths) and `tests/fake_codex.zig` as
+`fake-codex` (a stand-in `codex` binary for app-launch integration tests).
 
 Without `CODEX_AUTH_FAKE_CURL_DIR` it answers the two fixed bodies the older tests
 were written against. With it, the directory drives the responses:

@@ -364,7 +364,11 @@ test "Scenario: Given the kitty request is withheld when writing the lifecycle t
     try writeTuiEnterTo(&aw.writer, false);
     try writeTuiExitTo(&aw.writer, false);
 
-    try std.testing.expect(std.mem.find(u8, aw.written(), "u") == null);
+    // The kitty query, push, and pop all end in 'u' but so could unrelated
+    // output — pin the full sequences rather than the bare letter.
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?u") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[>") == null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[<") == null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1049h") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "\x1b[?1049l") != null);
 }

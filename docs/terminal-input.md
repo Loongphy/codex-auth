@@ -11,9 +11,10 @@ each platform. Exact byte sequences and key mappings are pinned by
 - The TUI switches to the alternate screen and hides the cursor on entry;
   both are restored on exit, along with every input mode it enabled.
 - Mouse reporting is requested at the button level, which includes wheel
-  notches, in the SGR coordinate encoding. Drag and motion reporting stay
-  off: clicks do not reach the application, and terminals keep whatever
-  selection gestures they offer while button reporting is active.
+  notches, in the SGR coordinate encoding. Button press and release
+  reports do reach the application and are consumed-and-ignored; only
+  drag and pointer-motion tracking stay off, so moving the mouse
+  generates nothing.
 - Alternate scroll stays enabled as a fallback. On terminals that implement
   alternate scroll but not mouse reporting, the wheel arrives as arrow keys
   and keeps whatever meaning that command's arrow keys already have.

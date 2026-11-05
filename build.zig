@@ -134,7 +134,7 @@ pub fn build(b: *std.Build) void {
         test_module.addOptions("test_options", test_options);
         const test_artifact = b.addTest(.{
             // Named after the file stem so cross-compiled artifacts (e.g.
-            // the ConPTY harness run on a Windows host) stay identifiable.
+            // the conhost harness run on a Windows host) stay identifiable.
             .name = std.Io.Dir.path.stem(test_file),
             .root_module = test_module,
             .filters = test_filters,

@@ -57,6 +57,14 @@ fn buildCliBinary(allocator: std.mem.Allocator, project_root: []const u8) !void 
     defer cli_build_mutex.unlock(fs.io());
     if (cli_build_ready) return;
 
+    // A staged install prefix already carries the binary — building a
+    // local zig-out it never uses would just contend on the cache.
+    if (app_runtime.getEnvVarOwned(allocator, cli_integration_install_prefix_env) catch null) |prefix| {
+        defer allocator.free(prefix);
+        cli_build_ready = true;
+        return;
+    }
+
     const install_prefix = try fs.path.join(allocator, &.{ project_root, "zig-out" });
     defer allocator.free(install_prefix);
     const result = std.process.run(std.heap.page_allocator, fs.io(), .{
@@ -184,8 +192,27 @@ const PtySession = struct {
                 return err;
             },
         };
-        const term = try self.child.wait(fs.io());
+        // child.wait blocks forever; a child that closed the pty but kept
+        // running would hang the test past its deadline. Poll with WNOHANG
+        // and reap manually so the timeout path stays finite.
+        const pid = self.child.id orelse return error.ChildReaped;
+        var status: c_int = 0;
+        while (true) {
+            const rc = std.c.waitpid(pid, &status, std.c.W.NOHANG);
+            if (rc == pid) break;
+            if (rc < 0) return error.ChildWaitFailed;
+            if (nowMs() >= self.deadline_ms) {
+                self.child.kill(fs.io());
+                self.done = true;
+                return error.PtyTimeout;
+            }
+            try std.Io.sleep(fs.io(), .fromMilliseconds(20), .awake);
+        }
+        // Reaped already; keep child.id null so cleanup's kill stays a
+        // no-op on this recycled pid.
+        self.child.id = null;
         self.done = true;
+        const term = std.Io.Threaded.statusToTerm(@bitCast(status));
         return switch (term) {
             .exited => |code| code,
             else => 255,
@@ -241,16 +268,18 @@ fn seedAccounts(allocator: std.mem.Allocator, home_root: []const u8, count: usiz
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(allocator);
     var emails = try allocator.alloc([]u8, count);
+    var filled: usize = 0;
     defer {
-        for (emails) |email| allocator.free(email);
+        for (emails[0..filled]) |email| allocator.free(email);
         allocator.free(emails);
     }
     var i: usize = 0;
     while (i < count) : (i += 1) {
         const email = try std.fmt.allocPrint(allocator, "user{d:0>2}@example.com", .{i});
+        emails[i] = email;
+        filled += 1;
         const alias = try std.fmt.allocPrint(allocator, "u{d:0>2}", .{i});
         defer allocator.free(alias);
-        emails[i] = email;
         try fixtures.appendAccount(allocator, &reg, email, alias, null);
     }
     try registry.saveRegistry(allocator, codex_home, &reg);
@@ -295,7 +324,7 @@ test "pty: live TUI emits mouse modes and withholds kitty under WT_SESSION" {
     defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "ACCOUNT");
-    _ = std.c.write(master, "q", 1);
+    try std.testing.expectEqual(@as(isize, 1), std.c.write(master, "q", 1));
     try std.testing.expectEqual(@as(u8, 0), try session.finish(master));
 
     const out = session.output.items;
@@ -341,7 +370,7 @@ test "pty: live TUI pushes and pops kitty flags on kitty-capable terminals" {
     defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "ACCOUNT");
-    _ = std.c.write(master, "q", 1);
+    try std.testing.expectEqual(@as(isize, 1), std.c.write(master, "q", 1));
     try std.testing.expectEqual(@as(u8, 0), try session.finish(master));
 
     const out = session.output.items;
@@ -379,13 +408,22 @@ test "pty: injected SGR and X10 mouse reports are consumed without echo" {
     defer if (!session.done) session.child.kill(fs.io());
 
     try session.waitMarker(master, "user00@example.com");
+    // Non-vacuity pin, same idea as the conhost wheel test: the tail row
+    // must be absent from the emitted frames before the wheel reports.
+    try std.testing.expect(std.mem.indexOf(u8, session.output.items, "user39@example.com") == null);
     const inject_at = session.output.items.len;
 
-    // SGR wheel burst, a release suffix, and an X10 report whose coordinate
-    // bytes are ASCII digits — digits must never reach the key layer, and in
-    // raw mode none of these bytes echo back onto the wire.
-    const injection = "\x1b[<65;10;10M\x1b[<65;10;10M\x1b[<64;10;10M\x1b[<64;10;10m\x1b[M\x21\x37\x38q";
-    try std.testing.expectEqual(@as(isize, injection.len), std.c.write(master, injection, injection.len));
+    // A wheel-down burst, a release suffix, and an X10 report whose
+    // coordinate bytes are ASCII digits — the wheel must actually scroll
+    // the list, digit bytes must never reach the key layer, and in raw
+    // mode none of this echoes back onto the wire.
+    var injection_buf: [512]u8 = undefined;
+    var injection: std.ArrayList(u8) = .initBuffer(&injection_buf);
+    for (0..25) |_| injection.appendSliceAssumeCapacity("\x1b[<65;10;10M");
+    injection.appendSliceAssumeCapacity("\x1b[<64;10;10m" ++ "\x1b[M\x21\x37\x38" ++ "q");
+    try std.testing.expectEqual(@as(isize, @intCast(injection.items.len)), std.c.write(master, injection.items.ptr, injection.items.len));
+    // The scroll is observable on the wire: tail rows join later frames.
+    try session.waitMarker(master, "user39@example.com");
     const exit_code = session.finish(master) catch |err| {
         std.debug.print("pty output tail after inject:\n{s}\n", .{session.output.items[@max(session.output.items.len -| 2000, inject_at)..]});
         return err;

@@ -141,11 +141,48 @@ extern "kernel32" fn OpenProcess(
 ) callconv(.winapi) ?windows.HANDLE;
 
 const PROCESS_SYNC_QUERY: windows.DWORD = 0x0010_1000;
+const PROCESS_TERMINATE: windows.DWORD = 0x0000_0001;
 
 const console_deadline_ms: i64 = 30_000;
 
+var headless_probe_done = false;
+var headless_probe_mutex: std.Io.Mutex = .init;
+
 fn nowMs() i64 {
     return std.Io.Timestamp.now(fs.io(), .awake).toMilliseconds();
+}
+
+/// Older conhost builds exit immediately on `--headless`. Probe once with
+/// a trivial inner command — a liveness check on the flag, not a shell
+/// leg — so unsupported hosts skip cleanly instead of failing every
+/// hosted test on the descendant-poll deadline.
+fn ensureHeadlessConhost(allocator: std.mem.Allocator) !void {
+    headless_probe_mutex.lockUncancelable(fs.io());
+    defer headless_probe_mutex.unlock(fs.io());
+    if (headless_probe_done) return;
+
+    const cmd_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, "conhost.exe --headless cmd.exe /c exit");
+    defer allocator.free(cmd_w);
+    var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+    si.cb = @sizeOf(windows.STARTUPINFOW);
+    var pi: windows.PROCESS.INFORMATION = undefined;
+    if (CreateProcessW(null, cmd_w.ptr, null, null, .FALSE, 0, null, null, &si, &pi) == .FALSE) {
+        std.debug.print("conhost could not be spawned; skipping\n", .{});
+        return error.SkipZigTest;
+    }
+    defer windows.CloseHandle(pi.hProcess);
+    defer windows.CloseHandle(pi.hThread);
+    if (WaitForSingleObject(pi.hProcess, 10_000) != 0) {
+        _ = TerminateProcess(pi.hProcess, 1);
+        std.debug.print("conhost --headless probe did not exit; skipping\n", .{});
+        return error.SkipZigTest;
+    }
+    var code: windows.DWORD = 0;
+    if (GetExitCodeProcess(pi.hProcess, &code) == .FALSE or code != 0) {
+        std.debug.print("conhost --headless unsupported on this host (exit={d}); skipping\n", .{code});
+        return error.SkipZigTest;
+    }
+    headless_probe_done = true;
 }
 
 const HostedChild = struct {
@@ -172,6 +209,10 @@ const HostedChild = struct {
     fn kill(self: HostedChild) void {
         _ = TerminateProcess(self.app, 1);
         _ = TerminateProcess(self.process, 1);
+        // TerminateProcess returns before teardown finishes; a tmp cleanup
+        // right after this would race files the dying process still holds.
+        _ = WaitForSingleObject(self.app, 2000);
+        _ = WaitForSingleObject(self.process, 2000);
     }
 
     fn deinit(self: HostedChild) void {
@@ -371,12 +412,19 @@ fn spawnHosted(
     }
 
     // The app may sit behind an intermediate shell; poll the process tree
-    // until codex-auth.exe shows up under this conhost.
+    // until codex-auth.exe shows up under this conhost. A conhost that
+    // exits first means the inner command failed outright — no point
+    // waiting out the deadline for an app that can never appear.
     const deadline = nowMs() + console_deadline_ms;
     var app_pid: ?windows.DWORD = null;
     while (app_pid == null and nowMs() < deadline) {
         app_pid = try findDescendantPid(allocator, "codex-auth.exe", pi.dwProcessId);
-        if (app_pid == null) Sleep(50);
+        if (app_pid != null) break;
+        if (WaitForSingleObject(pi.hProcess, 0) == 0) {
+            std.debug.print("conhost exited before hosting the app\n", .{});
+            break;
+        }
+        Sleep(50);
     }
     if (app_pid == null) {
         // Diagnostic: list whatever actually appeared under the host.
@@ -408,7 +456,7 @@ fn spawnHosted(
         }
         return error.HostedAppNotFound;
     }
-    const app_handle = OpenProcess(PROCESS_SYNC_QUERY | 0x1, .FALSE, app_pid.?) orelse
+    const app_handle = OpenProcess(PROCESS_SYNC_QUERY | PROCESS_TERMINATE, .FALSE, app_pid.?) orelse
         return error.HostedAppNotFound;
     return .{
         .process = pi.hProcess,
@@ -511,15 +559,18 @@ const Console = struct {
             std.debug.print("GetConsoleScreenBufferInfo failed: GetLastError={d}\n", .{GetLastError()});
             return error.ConsoleInfoFailed;
         }
-        const cell_count: usize = @as(usize, @intCast(info.dwSize.X)) * @as(usize, @intCast(info.dwSize.Y));
-        const cells = try std.testing.allocator.alloc(u16, cell_count);
+        // Only the visible window matters — a marker must be on screen,
+        // and the full scroll buffer can hold a million stale cells.
+        const width: usize = @intCast(info.dwSize.X);
+        const rows: usize = @intCast(info.srWindow.Bottom - info.srWindow.Top + 1);
+        const cells = try std.testing.allocator.alloc(u16, width * rows);
         defer std.testing.allocator.free(cells);
         var read_n: windows.DWORD = 0;
         if (ReadConsoleOutputCharacterW(
             self.output,
             cells.ptr,
             @intCast(cells.len),
-            .{ .X = 0, .Y = 0 },
+            .{ .X = 0, .Y = info.srWindow.Top },
             &read_n,
         ) == .FALSE) {
             std.debug.print("ReadConsoleOutputCharacterW failed: GetLastError={d}\n", .{GetLastError()});
@@ -595,12 +646,14 @@ fn seedAccounts(allocator: std.mem.Allocator, codex_home: []const u8, count: usi
     var reg = fixtures.makeEmptyRegistry();
     defer reg.deinit(allocator);
     const emails = try allocator.alloc([]u8, count);
+    var filled: usize = 0;
     defer {
-        for (emails) |email| allocator.free(email);
+        for (emails[0..filled]) |email| allocator.free(email);
         allocator.free(emails);
     }
     for (emails, 0..) |*email, i| {
         email.* = try std.fmt.allocPrint(allocator, "user{d:0>2}@example.com", .{i});
+        filled += 1;
         const alias = try std.fmt.allocPrint(allocator, "u{d:0>2}", .{i});
         defer allocator.free(alias);
         try fixtures.appendAccount(allocator, &reg, email.*, alias, null);
@@ -632,6 +685,7 @@ fn setupHostedSession(
     deadline_ms: i64,
     tmp: fs.TmpDir,
 } {
+    try ensureHeadlessConhost(gpa);
     var tmp = fs.tmpDir(.{});
     errdefer tmp.cleanup();
     const home = try tmp.dir.realpathAlloc(gpa, ".");
@@ -722,13 +776,25 @@ test "console: injected MOUSE_WHEELED records scroll the live list" {
 }
 
 /// Resolves the installed PowerShell 7 binary, if any: the MSI default
-/// first, then the per-user Store execution alias. Override the location
-/// with CODEX_AUTH_CONSOLE_PWSH_EXE when it lives elsewhere.
+/// first, then PATH (Scoop/Chocolatey prefixes), then the per-user Store
+/// execution alias. Override the location with CODEX_AUTH_CONSOLE_PWSH_EXE
+/// when it lives elsewhere.
 fn pwshPathAlloc(gpa: std.mem.Allocator) !?[]u8 {
     const custom = app_runtime.getEnvVarOwned(gpa, "CODEX_AUTH_CONSOLE_PWSH_EXE") catch null;
     if (custom) |path| return path;
     const msi_path = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
     if (fs.accessAbsolute(msi_path, .{})) |_| return try gpa.dupe(u8, msi_path) else |_| {}
+    if (app_runtime.getEnvVarOwned(gpa, "PATH") catch null) |path_env| {
+        defer gpa.free(path_env);
+        var dirs = std.mem.splitScalar(u8, path_env, ';');
+        while (dirs.next()) |dir| {
+            if (dir.len == 0) continue;
+            const candidate = try fs.path.join(gpa, &.{ dir, "pwsh.exe" });
+            if (fs.accessAbsolute(candidate, .{})) |_| return candidate else |_| {
+                gpa.free(candidate);
+            }
+        }
+    }
     const local_appdata = app_runtime.getEnvVarOwned(gpa, "LOCALAPPDATA") catch return null;
     defer gpa.free(local_appdata);
     const store_path = try fs.path.join(gpa, &.{ local_appdata, "Microsoft", "WindowsApps", "pwsh.exe" });

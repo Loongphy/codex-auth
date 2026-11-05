@@ -788,7 +788,10 @@ pub const TuiSession = struct {
     pub fn waitWindowsKey(self: *@This()) !TuiInputKey {
         while (true) {
             if (try self.readWindowsKey()) |key| return key;
-            _ = win.WaitForSingleObject(self.input.handle, std.math.maxInt(u32));
+            // WAIT_FAILED (0xffffffff) must not spin: a permanently broken
+            // input handle would otherwise loop here forever.
+            if (win.WaitForSingleObject(self.input.handle, std.math.maxInt(u32)) == 0xffff_ffff)
+                return error.EndOfStream;
         }
     }
 
@@ -865,6 +868,12 @@ pub fn appendTuiInputKeysFromEscape(
         switch (escape.action) {
             .enter => appendTuiInputKey(keys, key_count, .enter),
             .backspace => appendTuiInputKey(keys, key_count, .backspace),
+            // Once the terminal confirms kitty support, real arrow presses
+            // arrive as enhanced sequences (keyboard_up/down), so a bare
+            // ESC[A/B can only come from the ?1007h alternate-scroll
+            // fallback — it is a wheel notch, not a cursor key. Terminals
+            // that ACK the flag yet still send legacy arrows are
+            // non-conformant; before the ACK arrows keep moving.
             .move_up => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_up else .move_up),
             .move_down => appendTuiInputKey(keys, key_count, if (keyboard_enhancement_supported.*) .scroll_down else .move_down),
             .keyboard_up => appendTuiInputKey(keys, key_count, .keyboard_up),
