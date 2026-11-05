@@ -1,4 +1,5 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const registry = @import("../registry/root.zig");
 const sessions = @import("../session.zig");
 const usage_api = @import("../api/usage.zig");
@@ -359,7 +360,7 @@ pub fn refreshForegroundUsageForDisplayWithApiFetchersWithPoolInitUsingApiEnable
     for (worker_results) |*worker_result| worker_result.* = .{};
 
     if (batch_fetcher) |fetch_batch| batch_fetch: {
-        var auth_path_arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        var auth_path_arena_state = std.heap.ArenaAllocator.init(app_runtime.fastAllocator());
         defer auth_path_arena_state.deinit();
         const auth_path_arena = auth_path_arena_state.allocator();
 
@@ -676,7 +677,7 @@ fn foregroundUsageRefreshWorker(
 
     results[account_idx].requested = true;
 
-    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    var arena_state = std.heap.ArenaAllocator.init(app_runtime.fastAllocator());
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

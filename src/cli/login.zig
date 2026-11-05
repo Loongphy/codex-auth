@@ -389,13 +389,13 @@ fn launchUsesWindowsPowerShellHost(launch: *const CodexLaunch) bool {
 }
 
 pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
-    var env_map = try app_runtime.getEnvMap(std.heap.page_allocator);
+    var env_map = try app_runtime.getEnvMap(app_runtime.scratchAllocator());
     defer env_map.deinit();
     try env_map.put("CODEX_HOME", codex_home);
 
     if (builtin.target.os.tag == .windows) {
-        var candidates = try collectWindowsCodexPathsAlloc(std.heap.page_allocator);
-        defer deinitWindowsCodexPathList(std.heap.page_allocator, &candidates);
+        var candidates = try collectWindowsCodexPathsAlloc(app_runtime.scratchAllocator());
+        defer deinitWindowsCodexPathList(app_runtime.scratchAllocator(), &candidates);
 
         if (candidates.items.len == 0) {
             writeCodexLoginLaunchFailureHint("FileNotFound") catch {};
@@ -405,7 +405,7 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
         var last_retryable_spawn_error: ?std.process.SpawnError = null;
         var last_retryable_build_error: ?RetryableWindowsCodexBuildError = null;
         candidate_loop: for (candidates.items) |*candidate| {
-            var launch = buildWindowsCodexLaunchAlloc(std.heap.page_allocator, candidate, opts) catch |err| {
+            var launch = buildWindowsCodexLaunchAlloc(app_runtime.scratchAllocator(), candidate, opts) catch |err| {
                 if (shouldRetryWindowsCodexBuild(err, candidate.kind)) |retryable_err| {
                     last_retryable_build_error = retryable_err;
                     continue :candidate_loop;
@@ -425,9 +425,9 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
                     }) catch |err| {
                         if (candidate.kind == .ps1 and launchUsesWindowsPowerShellHost(&launch) and err == error.AccessDenied) {
                             last_retryable_spawn_error = err;
-                            launch.deinit(std.heap.page_allocator);
+                            launch.deinit(app_runtime.scratchAllocator());
                             launch = buildWindowsPowerShellCodexLaunchAlloc(
-                                std.heap.page_allocator,
+                                app_runtime.scratchAllocator(),
                                 candidate.path,
                                 opts,
                                 .pwsh,
@@ -442,7 +442,7 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
                             continue :spawn_attempt;
                         }
 
-                        launch.deinit(std.heap.page_allocator);
+                        launch.deinit(app_runtime.scratchAllocator());
                         if (shouldRetryWindowsCodexLaunch(err, candidate.kind)) {
                             last_retryable_spawn_error = err;
                             continue :candidate_loop;
@@ -452,7 +452,7 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
                     };
                 }
             };
-            launch.deinit(std.heap.page_allocator);
+            launch.deinit(app_runtime.scratchAllocator());
 
             const term = child.wait(app_runtime.io()) catch |err| {
                 writeCodexLoginLaunchFailureHint(@errorName(err)) catch {};
@@ -469,11 +469,11 @@ pub fn runCodexLogin(opts: types.LoginOptions, codex_home: []const u8) !void {
         return failure.err;
     }
 
-    var launch = buildCodexLaunchAlloc(std.heap.page_allocator, opts) catch |err| {
+    var launch = buildCodexLaunchAlloc(app_runtime.scratchAllocator(), opts) catch |err| {
         writeCodexLoginLaunchFailureHint(@errorName(err)) catch {};
         return err;
     };
-    defer launch.deinit(std.heap.page_allocator);
+    defer launch.deinit(app_runtime.scratchAllocator());
 
     var child = std.process.spawn(app_runtime.io(), .{
         .argv = launch.argv(),

@@ -87,7 +87,7 @@ pub fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
     const interactive_remove = !opts.all and opts.selectors.len == 0;
     if (interactive_remove and opts.live) {
         try ensureLiveTty(.remove_account);
-        const live_allocator = std.heap.smp_allocator;
+        const live_allocator = app_runtime.fastAllocator();
         const loaded = try loadInitialLiveSelectionDisplay(
             live_allocator,
             codex_home,

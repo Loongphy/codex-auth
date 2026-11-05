@@ -232,6 +232,10 @@ pub fn systemProxy(endpoint: []const u8) SystemProxy {
     defer system_proxy_mutex.unlock();
     if (@atomicLoad(?*const SystemProxy, &system_proxy_cached, .acquire)) |cached| return cached.*;
 
+    // The cached struct and the server/bypass slices inside it live for the
+    // process lifetime and are never freed, so they stay on page_allocator —
+    // routing through app_runtime.gpa() would make the exit-time leak check
+    // report them as false positives.
     const stored = std.heap.page_allocator.create(SystemProxy) catch return readSystemProxy(endpoint);
     stored.* = readSystemProxy(endpoint);
     @atomicStore(?*const SystemProxy, &system_proxy_cached, stored, .release);

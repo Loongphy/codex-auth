@@ -124,7 +124,7 @@ pub fn writeAccountsTableWithUsageOverridesForCols(
     // few buffer growths and a single release. The arena grows out of a
     // stack buffer first — typical registries render without touching mmap.
     var stack_buffer: [256 * 1024]u8 = undefined;
-    var sfba = std.heap.BufferFirstAllocator.init(&stack_buffer, std.heap.page_allocator);
+    var sfba = std.heap.BufferFirstAllocator.init(&stack_buffer, app_runtime.scratchAllocator());
     var arena = std.heap.ArenaAllocator.init(sfba.allocator());
     defer arena.deinit();
     const cell_allocator = arena.allocator();

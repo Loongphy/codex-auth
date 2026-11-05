@@ -1,4 +1,5 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const cli = @import("../cli/root.zig");
 const format = @import("../tui/table.zig");
 const registry = @import("../registry/root.zig");
@@ -36,7 +37,7 @@ const ListComputation = struct {
 pub fn handleList(allocator: std.mem.Allocator, transport: transport_mod.Transport, codex_home: []const u8, opts: cli.types.ListOptions) !void {
     if (opts.live) {
         try ensureLiveTty(.list);
-        const live_allocator = std.heap.smp_allocator;
+        const live_allocator = app_runtime.fastAllocator();
         const loaded = try loadInitialLiveSelectionDisplay(
             live_allocator,
             codex_home,
