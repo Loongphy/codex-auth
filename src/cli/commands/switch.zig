@@ -19,12 +19,16 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous:
     var opts: types.SwitchOptions = .{};
     for (args) |raw_arg| {
         const arg = std.mem.sliceTo(raw_arg, 0);
-        if (std.mem.eql(u8, arg, "--restart-daemon")) {
-            if (opts.restart_daemon) {
+        if (std.mem.eql(u8, arg, "--restart-daemon") or common.inlineFlagValue(arg, "--restart-daemon") != null) {
+            freeTarget(allocator, opts.target);
+            return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` was removed; `switch` now coordinates the daemon automatically. Pass `--no-restart-daemon` to skip the restart fallback.", .{});
+        }
+        if (std.mem.eql(u8, arg, "--no-restart-daemon")) {
+            if (opts.no_restart_daemon) {
                 freeTarget(allocator, opts.target);
-                return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "duplicate `--restart-daemon` for `switch`.", .{});
+                return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "duplicate `--no-restart-daemon` for `switch`.", .{});
             }
-            opts.restart_daemon = true;
+            opts.no_restart_daemon = true;
             continue;
         }
         if (std.mem.eql(u8, arg, "--live")) {
@@ -85,10 +89,6 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous:
         opts.target = .{ .query = try allocator.dupe(u8, arg) };
     }
     if (previous) opts.target = .previous;
-    if (opts.live and opts.restart_daemon) {
-        freeTarget(allocator, opts.target);
-        return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` cannot be combined with `--live`.", .{});
-    }
     if (opts.live and opts.json) {
         freeTarget(allocator, opts.target);
         return common.usageErrorResultWithJson(allocator, .switch_account, true, "`--live` cannot be combined with `--json`.", .{});

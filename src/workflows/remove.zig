@@ -105,6 +105,7 @@ pub fn handleRemove(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             opts.api_mode == .force_api,
             loaded.policy,
             loaded.refresh_error_name,
+            false,
         );
         defer runtime.deinit();
 

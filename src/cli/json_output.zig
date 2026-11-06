@@ -75,6 +75,8 @@ pub fn writeSwitchResult(out: *std.Io.Writer, result: *const results.SwitchResul
     try jw.write("switch");
     try jw.objectField("switched_to");
     try writeAccount(&jw, &result.switched_to);
+    try jw.objectField("daemon");
+    try jw.write(@tagName(result.daemon));
     try jw.endObject();
 }
 

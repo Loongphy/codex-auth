@@ -3,17 +3,16 @@
 ## Usage
 
 ```shell
-codex-auth - [--json] [--restart-daemon]
-codex-auth switch [--api|--skip-api]
-codex-auth switch --live [--api|--skip-api]
-codex-auth switch <query>
-codex-auth switch <query> --json
-codex-auth switch <query> --restart-daemon
+codex-auth - [--json] [--no-restart-daemon]
+codex-auth switch [--api|--skip-api] [--no-restart-daemon]
+codex-auth switch --live [--api|--skip-api] [--no-restart-daemon]
+codex-auth switch <query> [--no-restart-daemon]
+codex-auth switch <query> --json [--no-restart-daemon]
 ```
 
 ## Previous Switch
 
-`codex-auth -` switches to the previous active account. It is a shortcut form of `codex-auth switch`: it takes no positional argument and supports the same one-shot flags as query switching (`--json`, `--restart-daemon`), but not the picker-mode flags (`--live`, `--api`, `--skip-api`).
+`codex-auth -` switches to the previous active account. It is a shortcut form of `codex-auth switch`: it takes no positional argument and supports the same one-shot flags as query switching (`--json`, `--no-restart-daemon`), but not the picker-mode flags (`--live`, `--api`, `--skip-api`).
 
 - The command fails when no previous account has been recorded.
 - The command fails when the recorded previous account was removed.
@@ -71,26 +70,19 @@ The previous-account pointer is internal CLI state and is not included in JSON r
 
 ## Applying a Switch to a Running Daemon
 
-Modern Codex clients can share a background app-server daemon that caches authentication. Updating `auth.json` alone may leave that daemon using the previous account, including when another terminal client connects.
+Modern Codex clients can share a background app-server daemon that caches authentication. Updating `auth.json` alone may leave that daemon using the previous account, including when another terminal client connects, so every one-shot switch also coordinates the daemon automatically — no flag is needed.
 
-After every one-shot switch, the CLI asks a responsive daemon to reload the credentials in place — no flag is needed. Daemons that support the reload apply it without interrupting attached sessions; a busy daemon skips the reload while a turn runs, so the switch should be rerun after the turn finishes. Daemons that cannot reload keep their cached credentials, and a stderr diagnostic points at `--restart-daemon`. The automatic reload never restarts the daemon, never disconnects clients, and never changes the exit code.
+Daemons that support an in-place auth reload apply the credentials without interrupting attached sessions; a busy daemon skips the reload while a turn runs, so the switch should be rerun after the turn finishes. Daemons that do not support reload are restarted instead, which can interrupt all attached sessions. A daemon that accepts the reload command but reports a failure is left running, because a restart re-reads the same auth file and would interrupt sessions for nothing. This covers stale daemon authentication, unchanged-file recovery, and retries after a failed attempt. Reconnect, verify the account, and resume work as needed.
 
-Restarting is opt-in:
-
-```shell
-codex-auth switch personal --restart-daemon
-codex-auth switch personal --json --restart-daemon
-```
-
-`--restart-daemon` performs the same in-place reload first and restarts the daemon only when the reload is unsupported or fails. Restarting can interrupt all attached sessions. It also covers stale daemon authentication, unchanged-file recovery, and retries after a failed attempt. Reconnect, verify the account, and resume work as needed.
+`--no-restart-daemon` caps coordination at the non-disruptive reload: the daemon is never restarted even when it cannot reload, and daemon issues never change the exit code. Use it when a running daemon's work must not be interrupted and you would rather coordinate it manually later. It also works with `--live`, where it keeps each apply non-blocking even against daemons that cannot reload.
 
 - The selected `CODEX_HOME` is passed to both lifecycle commands. The home’s managed executable is preferred, with supported legacy layouts and a PATH fallback.
-- Responsiveness is checked with `codex app-server daemon version` before any reload or restart. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; an explicit `--restart-daemon` request then fails without invoking restart.
+- Responsiveness is checked with `codex app-server daemon version` before any reload or restart. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; nothing is invoked and the switch still succeeds.
 - The responsiveness check occurs immediately before restart. If the daemon disappears afterward, Codex’s supported restart command can start one; this race is accepted.
 - The restart helper has a fixed 120-second timeout. Failure or timeout preserves the selected files, reports an unconfirmed daemon account state, and returns exit code 1. Only the helper process is terminated and reaped on timeout; daemon shutdown/startup may already have begun. No automatic retry or credential rollback occurs.
 - Diagnostics and manual status/recovery commands are printed on stderr, with the selected home and executable. A successful version response proves responsiveness, not account identity.
-- In JSON mode, stdout remains the existing switch-selection document. It can accompany exit code 1 when the subsequent requested restart fails.
-- `--restart-daemon` is rejected with `--live`. Live switching, login, import, and remove retain their existing activation behavior and may also require manual daemon coordination.
-- Older installations without a daemon endpoint remain a successful no-op. Platforms outside Linux, macOS, and Windows receive an honest unsupported-coordination hint for explicit requests.
+- In JSON mode, the switch-selection document carries a `daemon` field with the coordination outcome (for example `reloaded`, `deferred`, `restarted`, or `restart_failed`). The document can still accompany exit code 1 when the daemon restart fails.
+- `--live` runs the same coordination on a background thread after each accepted selection, reporting progress and the outcome on the status line without blocking input. Login, import, and remove retain their existing activation behavior and may also require manual daemon coordination.
+- Older installations without a daemon endpoint remain a successful no-op. Platforms outside Linux, macOS, and Windows receive an honest unsupported-coordination hint.
 
 No daemon-restart preference is persisted and the registry schema is unchanged.

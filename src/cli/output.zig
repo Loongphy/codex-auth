@@ -12,19 +12,16 @@ const io = @import("io.zig");
 
 const UsageError = types.UsageError;
 
-pub fn printCodexDaemonDiagnostic(home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+pub fn printCodexDaemonDiagnostic(home: []const u8, executable: []const u8, outcome: daemon.Outcome) !void {
     var stderr: io_util.Stderr = undefined;
     stderr.init();
-    try writeCodexDaemonDiagnosticTo(stderr.out(), home, executable, outcome, requested);
+    try writeCodexDaemonDiagnosticTo(stderr.out(), home, executable, outcome);
     try stderr.out().flush();
 }
 
-pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, outcome: daemon.Outcome, requested: bool) !void {
+pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, executable: []const u8, outcome: daemon.Outcome) !void {
     switch (outcome) {
-        .not_running => {
-            if (requested) try out.writeAll("Account files switched successfully; no running Codex daemon was found, so no restart was attempted.\n");
-            return;
-        },
+        .not_running => return,
         .restarted => {
             try out.writeAll("Account files switched successfully; Codex daemon restart completed. Reconnect and verify the selected account.\n");
             return;
@@ -37,15 +34,12 @@ pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, execu
             try out.writeAll("Account files switched successfully; the daemon deferred the reload until the running turn finishes. Rerun the switch afterwards.\n");
             return;
         },
-        .running => try out.writeAll("A running Codex daemon may still use cached credentials. Use `switch --restart-daemon` to apply the selection or repair stale authentication. Restarting can interrupt attached sessions.\n"),
-        .unknown => try out.writeAll(if (requested)
-            "Account files switched successfully; daemon responsiveness could not be confirmed. The requested restart was not attempted.\n"
-        else
-            "Account files switched successfully; daemon responsiveness could not be confirmed. Its account state is unconfirmed.\n"),
-        .restart_failed => try out.writeAll("Account files switched successfully; requested daemon restart failed. The daemon may be stopping or starting; its account state is unconfirmed.\n"),
+        .running => try out.writeAll("Account files switched successfully; a running Codex daemon may still use cached credentials.\n"),
+        .unknown => try out.writeAll("Account files switched successfully; daemon responsiveness could not be confirmed. Its account state is unconfirmed.\n"),
+        .reload_failed => try out.writeAll("Account files switched successfully; the running daemon reported an auth reload failure. Its account state is unconfirmed.\n"),
+        .restart_failed => try out.writeAll("Account files switched successfully; the daemon restart failed. The daemon may be stopping or starting; its account state is unconfirmed.\n"),
         .timed_out => try out.writeAll("Account files switched successfully; daemon restart did not complete within 120 seconds. The daemon may still be stopping or starting; its account state is unconfirmed.\n"),
         .unsupported => {
-            if (!requested) return;
             try out.writeAll("Account files switched successfully; automatic daemon coordination is unsupported on this platform. Check which lifecycle commands your Codex installation supports.\n");
         },
     }
