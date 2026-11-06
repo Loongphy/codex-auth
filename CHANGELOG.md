@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `codex-auth switch` now asks a responsive Codex daemon to reload the new credentials in place after every one-shot switch — no flag needed. The automatic reload never restarts the daemon and never changes the exit code. `--restart-daemon` remains as the opt-in escalation that restarts the daemon when the reload cannot apply; its exit-code contract is unchanged.
+
 ## v0.3.0
 
 This release is a major rework since `v0.2.x`: the experimental background auto-switch is gone,

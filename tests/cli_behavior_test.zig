@@ -2506,7 +2506,7 @@ test "Scenario: Given a dash prefix inside switch when completing then the resta
     const out = try completeResponse(gpa, "/nonexistent", &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("--restart-daemon\tApply the selected credentials to the running daemon\n:36\n", out);
+    try std.testing.expectEqualStrings("--restart-daemon\tRestart the running daemon to apply the selected credentials\n:36\n", out);
 }
 
 test "Scenario: Given a flag prefix after the top-level dash when completing then one-shot flags are emitted" {

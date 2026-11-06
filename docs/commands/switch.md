@@ -73,17 +73,19 @@ The previous-account pointer is internal CLI state and is not included in JSON r
 
 Modern Codex clients can share a background app-server daemon that caches authentication. Updating `auth.json` alone may leave that daemon using the previous account, including when another terminal client connects.
 
-One-shot switches detect a responsive daemon and print a restart hint on stderr. Restarting is opt-in:
+After every one-shot switch, the CLI asks a responsive daemon to reload the credentials in place — no flag is needed. Daemons that support the reload apply it without interrupting attached sessions; a busy daemon skips the reload while a turn runs, so the switch should be rerun after the turn finishes. Daemons that cannot reload keep their cached credentials, and a stderr diagnostic points at `--restart-daemon`. The automatic reload never restarts the daemon, never disconnects clients, and never changes the exit code.
+
+Restarting is opt-in:
 
 ```shell
 codex-auth switch personal --restart-daemon
 codex-auth switch personal --json --restart-daemon
 ```
 
-`--restart-daemon` applies the selected credentials to the running daemon after account activation and registry persistence succeed. Codex daemons reload auth in place without interrupting attached sessions; upstream daemons without reload support are restarted instead, which can interrupt all attached sessions. It also covers stale daemon authentication and retries after a failed attempt. Reconnect, verify the account, and resume work as needed.
+`--restart-daemon` performs the same in-place reload first and restarts the daemon only when the reload is unsupported or fails. Restarting can interrupt all attached sessions. It also covers stale daemon authentication, unchanged-file recovery, and retries after a failed attempt. Reconnect, verify the account, and resume work as needed.
 
 - The selected `CODEX_HOME` is passed to both lifecycle commands. The home’s managed executable is preferred, with supported legacy layouts and a PATH fallback.
-- Responsiveness is checked with `codex app-server daemon version`. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; an explicit request then fails without invoking restart.
+- Responsiveness is checked with `codex app-server daemon version` before any reload or restart. A missing control endpoint is treated as best-effort absence: no daemon is started. A stale endpoint or other probe error leaves the state unconfirmed; an explicit `--restart-daemon` request then fails without invoking restart.
 - The responsiveness check occurs immediately before restart. If the daemon disappears afterward, Codex’s supported restart command can start one; this race is accepted.
 - The restart helper has a fixed 120-second timeout. Failure or timeout preserves the selected files, reports an unconfirmed daemon account state, and returns exit code 1. Only the helper process is terminated and reaped on timeout; daemon shutdown/startup may already have begun. No automatic retry or credential rollback occurs.
 - Diagnostics and manual status/recovery commands are printed on stderr, with the selected home and executable. A successful version response proves responsiveness, not account identity.
