@@ -623,6 +623,8 @@ test "live deinit cancels an in-flight daemon round promptly" {
             null,
             false,
         );
+        var runtime_deinit_pending = true;
+        defer if (runtime_deinit_pending) runtime.deinit();
 
         var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
         defer current_display.display.deinit(gpa);
@@ -654,9 +656,13 @@ test "live deinit cancels an in-flight daemon round promptly" {
         }
         try std.testing.expect(helper_started);
 
+        // The bound must stay well below the 5s `version` command deadline:
+        // with cancellation broken, deinit would have to wait out that
+        // deadline and could still satisfy a looser bound.
         const started_ms = nowMilliseconds();
         runtime.deinit();
-        try std.testing.expect(nowMilliseconds() - started_ms < 5_000);
+        runtime_deinit_pending = false;
+        try std.testing.expect(nowMilliseconds() - started_ms < 2_000);
     }
 }
 
