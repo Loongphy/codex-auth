@@ -30,9 +30,15 @@ pub const reload_changed = running ++ "[ \"$3\" = reload-auth ] || exit 91\nprin
 pub const reload_busy = running ++ "[ \"$3\" = reload-auth ] || exit 91\nprintf '%s\\n' 'Daemon skipped the auth reload because a turn is running.'\n";
 pub const reload_unsupported_succeed = running ++ reload_unsupported ++ "[ \"$3\" = restart ] || exit 91\nprintf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\n";
 pub const reload_failed_succeed = running ++ "if [ \"$3\" = reload-auth ]; then printf '%s\\n' 'account/reload failed: failed to reload auth from storage' >&2; exit 1; fi\n" ++ "[ \"$3\" = restart ] || exit 91\nprintf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\n";
+/// reload-auth stalls forever so callers can observe the reload deadline
+/// without needing the daemon to be unsupported.
+pub const reload_slow = running ++ "if [ \"$3\" = reload-auth ]; then sleep 60; fi\n" ++ "[ \"$3\" = restart ] || exit 91\nprintf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\n";
 /// Every lifecycle call sleeps far past the caller's cancel poll window, so
 /// teardown exercises cancellation instead of the command deadline.
 pub const sleep_forever = "sleep 60\n";
+/// Same stall but with both pipes closed first: the reader sees EOF while the
+/// helper is still alive, exercising cancellation inside waitForExit.
+pub const sleep_no_output = "exec 1>&- 2>&-; sleep 60\n";
 /// version sleeps briefly so a second apply lands while the worker is busy.
 pub const slow_reload_changed = "if [ \"$3\" = version ]; then sleep 1; printf '%s\\n' '{\"status\":\"running\",\"appServerVersion\":\"0.160.0\",\"backend\":\"pid\"}'; exit 0; fi\n" ++ "[ \"$3\" = reload-auth ] || exit 91\nprintf '%s\\n' 'Daemon reloaded auth; the account changed.'\n";
 

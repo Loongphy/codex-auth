@@ -19,12 +19,16 @@ pub const Client = struct {
     /// waits. Lifecycle helpers bail out with error.Canceled once it flips, so
     /// a caller (the live-switch worker) can stop a slow helper promptly.
     cancel: ?*const std.atomic.Value(bool) = null,
+    /// reload-auth RPC deadline; tests override it to exercise timeouts
+    /// without waiting for the full default.
+    reload_timeout_ms: u64,
 
     pub fn init(allocator: std.mem.Allocator, codex_home: []const u8) !Client {
         return .{
             .allocator = allocator,
             .codex_home = codex_home,
             .executable = try resolveExecutable(allocator, codex_home),
+            .reload_timeout_ms = reload_timeout_ms,
         };
     }
 
@@ -107,9 +111,11 @@ pub const Client = struct {
     /// Returns the reload outcome when the daemon understood the request;
     /// null means the command is unavailable and the caller should fall back
     /// to a restart. A non-zero exit without the unsupported marker means the
-    /// RPC itself failed, which a restart cannot fix.
+    /// RPC itself failed, which a restart cannot fix. A timeout is likewise
+    /// not evidence of a missing command: a slow helper gets .unknown instead
+    /// of a restart that would interrupt attached sessions for nothing.
     fn tryReload(self: *const Client) !?Outcome {
-        const result = self.runLifecycle("reload-auth", reload_timeout_ms) catch |err| switch (err) {
+        const result = self.runLifecycle("reload-auth", self.reload_timeout_ms) catch |err| switch (err) {
             error.OutOfMemory, error.Canceled => return err,
             // Output overflow means the helper ran but became unreadable;
             // that is an RPC failure, not a missing command.
@@ -117,7 +123,7 @@ pub const Client = struct {
             else => return null,
         };
         defer result.deinit(self.allocator);
-        if (result.timed_out) return null;
+        if (result.timed_out) return .unknown;
         if (!result.succeeded)
             return if (looksUnsupported(result.stderr)) null else .reload_failed;
         if (std.mem.find(u8, result.stdout, "skipped the auth reload") != null) return .deferred;
