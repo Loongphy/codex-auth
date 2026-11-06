@@ -582,65 +582,88 @@ test "switch live apply coordinates the daemon in the background" {
 test "live deinit cancels an in-flight daemon round promptly" {
     if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
-    defer gpa.free(codex_home);
+    // Two stall shapes: blocked inside a pipe read (sleep_forever) and blocked
+    // in waitForExit after the helper closed its pipes (sleep_no_output).
+    const bodies = [_][]const u8{ fake_daemon.sleep_forever, fake_daemon.sleep_no_output };
+    for (bodies) |body| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+        defer gpa.free(codex_home);
 
-    const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
-    defer gpa.free(alpha_key);
-    const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
-    defer gpa.free(beta_key);
+        const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+        defer gpa.free(alpha_key);
+        const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+        defer gpa.free(beta_key);
 
-    var reg = fixtures.makeEmptyRegistry();
-    defer reg.deinit(gpa);
-    try appendLiveMergeTestAccount(gpa, &reg, alpha_key, "alpha@example.com", "");
-    try appendLiveMergeTestAccount(gpa, &reg, beta_key, "beta@example.com", "");
-    try registry.setActiveAccountKey(gpa, &reg, alpha_key);
-    try registry.saveRegistry(gpa, codex_home, &reg);
-    try writeLiveActionTestSnapshot(gpa, codex_home, alpha_key, "alpha@example.com", "team");
-    try writeLiveActionTestSnapshot(gpa, codex_home, beta_key, "beta@example.com", "plus");
-    var home_dir = try compat_fs.cwd().openDir(codex_home, .{});
-    defer home_dir.close();
-    try fake_daemon.install(home_dir, fake_daemon.sleep_forever);
+        var reg = fixtures.makeEmptyRegistry();
+        defer reg.deinit(gpa);
+        try appendLiveMergeTestAccount(gpa, &reg, alpha_key, "alpha@example.com", "");
+        try appendLiveMergeTestAccount(gpa, &reg, beta_key, "beta@example.com", "");
+        try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+        try registry.saveRegistry(gpa, codex_home, &reg);
+        try writeLiveActionTestSnapshot(gpa, codex_home, alpha_key, "alpha@example.com", "team");
+        try writeLiveActionTestSnapshot(gpa, codex_home, beta_key, "beta@example.com", "plus");
+        var home_dir = try compat_fs.cwd().openDir(codex_home, .{});
+        defer home_dir.close();
+        try fake_daemon.install(home_dir, body);
 
-    var runtime = SwitchLiveRuntime.init(
-        gpa,
-        codex_home,
-        .switch_account,
-        .skip_api,
-        false,
-        .{
-            .usage_api_enabled = false,
-            .account_api_enabled = false,
-            .interval_ms = switch_live_default_refresh_interval_ms,
-            .label = "local",
-        },
-        null,
-        false,
-    );
+        var runtime = SwitchLiveRuntime.init(
+            gpa,
+            codex_home,
+            .switch_account,
+            .skip_api,
+            false,
+            .{
+                .usage_api_enabled = false,
+                .account_api_enabled = false,
+                .interval_ms = switch_live_default_refresh_interval_ms,
+                .label = "local",
+            },
+            null,
+            false,
+        );
+        var runtime_deinit_pending = true;
+        defer if (runtime_deinit_pending) runtime.deinit();
 
-    var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
-    defer current_display.display.deinit(gpa);
-    defer if (current_display.refresh_error_name) |name| gpa.free(name);
+        var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
+        defer current_display.display.deinit(gpa);
+        defer if (current_display.refresh_error_name) |name| gpa.free(name);
 
-    const outcome = try switchLiveRuntimeApplySelection(
-        @ptrCast(&runtime),
-        gpa,
-        current_display.display.borrowed(),
-        beta_key,
-    );
-    defer {
-        if (outcome.action_message) |message| gpa.free(message);
-        var owned_display = outcome.updated_display;
-        owned_display.deinit(gpa);
+        const outcome = try switchLiveRuntimeApplySelection(
+            @ptrCast(&runtime),
+            gpa,
+            current_display.display.borrowed(),
+            beta_key,
+        );
+        defer {
+            if (outcome.action_message) |message| gpa.free(message);
+            var owned_display = outcome.updated_display;
+            owned_display.deinit(gpa);
+        }
+
+        // Wait until the helper is actually running inside its stall so deinit
+        // exercises cancellation during a blocked read/wait, not the
+        // pre-spawn cancellation check.
+        var helper_started = false;
+        const wait_deadline_ms = nowMilliseconds() + 5_000;
+        while (!helper_started and nowMilliseconds() < wait_deadline_ms) {
+            if (fake_daemon.read(home_dir, "lifecycle-calls") catch null) |calls| {
+                defer gpa.free(calls);
+                helper_started = std.mem.find(u8, calls, "version") != null;
+            }
+            if (!helper_started) std.Io.sleep(app_runtime.io(), .fromMilliseconds(10), .awake) catch {};
+        }
+        try std.testing.expect(helper_started);
+
+        // The bound must stay well below the 5s `version` command deadline:
+        // with cancellation broken, deinit would have to wait out that
+        // deadline and could still satisfy a looser bound.
+        const started_ms = nowMilliseconds();
+        runtime.deinit();
+        runtime_deinit_pending = false;
+        try std.testing.expect(nowMilliseconds() - started_ms < 2_000);
     }
-
-    // The worker is blocked inside the 60s `version` helper. Cancellation
-    // must unwind it within the poll window, not the command deadline.
-    const started_ms = nowMilliseconds();
-    runtime.deinit();
-    try std.testing.expect(nowMilliseconds() - started_ms < 5_000);
 }
 
 test "a second live apply while the daemon worker is busy runs exactly one more round" {
