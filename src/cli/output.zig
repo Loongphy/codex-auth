@@ -36,6 +36,7 @@ pub fn writeCodexDaemonDiagnosticTo(out: *std.Io.Writer, home: []const u8, execu
         },
         .running => try out.writeAll("A running Codex daemon may still use cached credentials.\n"),
         .unknown => try out.writeAll("Account files switched successfully; daemon responsiveness could not be confirmed. Its account state is unconfirmed.\n"),
+        .reload_failed => try out.writeAll("Account files switched successfully; the running daemon reported an auth reload failure. Its account state is unconfirmed.\n"),
         .restart_failed => try out.writeAll("Account files switched successfully; the daemon restart failed. The daemon may be stopping or starting; its account state is unconfirmed.\n"),
         .timed_out => try out.writeAll("Account files switched successfully; daemon restart did not complete within 120 seconds. The daemon may still be stopping or starting; its account state is unconfirmed.\n"),
         .unsupported => {

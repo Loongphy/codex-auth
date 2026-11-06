@@ -570,7 +570,7 @@ test "switch live apply coordinates the daemon in the background" {
         const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
         defer gpa.free(calls);
         try std.testing.expectEqualStrings(case.calls, calls);
-        try std.testing.expectEqualStrings(case.message, runtime.daemon_message.?);
+        try std.testing.expectEqualStrings(case.message, runtime.daemon_worker.?.message.?);
 
         const status = try runtime.buildStatusLine(gpa, current_display.display.borrowed(), null);
         defer gpa.free(status);

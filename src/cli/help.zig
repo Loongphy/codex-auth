@@ -217,8 +217,8 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
         .switch_account => {
             try out.writeAll("  codex-auth - [--json] [--no-restart-daemon]\n");
             try out.writeAll("  codex-auth switch [--live] [--api|--skip-api] [--no-restart-daemon]\n");
-            try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
-            try out.writeAll("  codex-auth switch <query> --json\n");
+            try out.writeAll("  codex-auth switch <alias|email|display-number|query> [--no-restart-daemon]\n");
+            try out.writeAll("  codex-auth switch <query> --json [--no-restart-daemon]\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
@@ -301,11 +301,11 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive switch.\n");
-            try out.writeAll("               After switching, a responsive daemon reloads the credentials in place or is\n");
-            try out.writeAll("               restarted when it cannot. Restarting can interrupt attached sessions.\n");
             try out.writeAll("  --no-restart-daemon\n");
-            try out.writeAll("               Reload the running daemon in place after switching but never restart it,\n");
-            try out.writeAll("               even when it cannot reload. Daemon issues never change the exit code.\n");
+            try out.writeAll("               After switching, a responsive daemon normally reloads the credentials in\n");
+            try out.writeAll("               place or is restarted when it cannot; restarting can interrupt attached\n");
+            try out.writeAll("               sessions. This flag still attempts an in-place reload but never restarts,\n");
+            try out.writeAll("               and daemon issues never change the exit code.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
         },

@@ -101,6 +101,38 @@ test "Scenario: Given a busy daemon then the reload defers without restarting" {
     try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("restarted-home", .{}));
 }
 
+test "Scenario: Given a daemon that fails the reload then ensure reports the failure without restarting" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    try fake.install(tmp.dir, fake.reload_failed_succeed);
+    const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(home);
+    var client = try daemon.Client.init(std.testing.allocator, home);
+    defer client.deinit();
+    try std.testing.expectEqual(daemon.Outcome.reload_failed, try client.ensure(1_000));
+    const calls = try fake.read(tmp.dir, "lifecycle-calls");
+    defer std.testing.allocator.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\n", calls);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("restarted-home", .{}));
+}
+
+test "Scenario: Given a daemon that fails the reload then the default reload reports the failure" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    try fake.install(tmp.dir, fake.reload_failed_succeed);
+    const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(home);
+    var client = try daemon.Client.init(std.testing.allocator, home);
+    defer client.deinit();
+    try std.testing.expectEqual(daemon.Outcome.reload_failed, try client.reload());
+    const calls = try fake.read(tmp.dir, "lifecycle-calls");
+    defer std.testing.allocator.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\n", calls);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("restarted-home", .{}));
+}
+
 test "Scenario: Given a missing daemon endpoint then the default reload stays a no-op" {
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();

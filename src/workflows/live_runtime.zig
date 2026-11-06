@@ -35,6 +35,23 @@ pub const SwitchLiveRefreshTaskContext = struct {
     display_generation: u64,
 };
 
+/// Post-apply daemon coordination state owned by the worker thread, including
+/// its own codex_home copy so it never depends on runtime lifetime. busy,
+/// dirty, and message are guarded by mutex; shutdown is an atomic cancel flag
+/// the daemon client polls inside subprocess waits. The worker is joined in
+/// deinit — cancellation bounds the wait to ~cancel_poll_ms — so it can never
+/// outlive the runtime or leak its context.
+pub const DaemonWorker = struct {
+    allocator: std.mem.Allocator,
+    codex_home: []u8,
+    no_restart_daemon: bool,
+    mutex: std.Io.Mutex = .init,
+    busy: bool = true,
+    dirty: bool = false,
+    shutdown: std.atomic.Value(bool) = .init(false),
+    message: ?[]u8 = null,
+};
+
 pub const SwitchLiveRuntime = struct {
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -55,14 +72,10 @@ pub const SwitchLiveRuntime = struct {
     refresh_interval_ms: i64,
     mode_label: []const u8,
     no_restart_daemon: bool = false,
-    // Post-apply daemon coordination runs on a dedicated thread so the input
-    // loop never blocks on reload/restart helpers. Only the TUI thread reads
-    // or joins `daemon_thread`; busy/dirty/message are guarded by the mutex.
-    daemon_mutex: std.Io.Mutex = .init,
+    // TUI-thread-owned daemon coordination state: only controller callbacks
+    // (always invoked on the TUI thread) read, swap, and free these fields.
+    daemon_worker: ?*DaemonWorker = null,
     daemon_thread: ?std.Thread = null,
-    daemon_busy: bool = false,
-    daemon_dirty: bool = false,
-    daemon_message: ?[]u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -95,12 +108,25 @@ pub const SwitchLiveRuntime = struct {
 
     pub fn deinit(self: *@This()) void {
         self.cancelRefresh();
-        self.awaitDaemonIdle();
-        if (self.daemon_message) |message| self.allocator.free(message);
+        if (self.daemon_worker) |worker| {
+            worker.shutdown.store(true, .release);
+            // Cancellation bounds the join to ~cancel_poll_ms plus process
+            // reap; a helper (e.g. a 120s restart) is killed by its own defer.
+            if (self.daemon_thread) |thread| thread.join();
+            self.daemon_thread = null;
+            self.freeDaemonWorker(worker);
+            self.daemon_worker = null;
+        }
         if (self.updated_display) |*display| display.deinit(self.allocator);
         if (self.last_refresh_error_name) |name| self.allocator.free(name);
         self.io_impl.deinit();
         self.* = undefined;
+    }
+
+    fn freeDaemonWorker(self: *@This(), worker: *DaemonWorker) void {
+        if (worker.message) |message| self.allocator.free(message);
+        self.allocator.free(worker.codex_home);
+        self.allocator.destroy(worker);
     }
 
     /// Applies queue daemon coordination behind the file switch. A running
@@ -108,52 +134,57 @@ pub const SwitchLiveRuntime = struct {
     /// the worker dirty and it runs one more round instead of stacking threads.
     fn startDaemonCoordination(self: *@This()) void {
         const io = app_runtime.io();
-        self.daemon_mutex.lockUncancelable(io);
-        if (self.daemon_busy) {
-            self.daemon_dirty = true;
-            self.daemon_mutex.unlock(io);
-            return;
-        }
-        self.daemon_busy = true;
-        self.daemon_mutex.unlock(io);
-        if (self.daemon_thread) |finished| {
-            finished.join();
-            self.daemon_thread = null;
-        }
-        if (std.Thread.spawn(.{}, daemonWorkerMain, .{self})) |thread| {
-            self.daemon_thread = thread;
-            self.setDaemonMessage(self.allocator.dupe(u8, "coordinating") catch null);
-        } else |_| {
-            self.daemon_mutex.lockUncancelable(io);
-            self.daemon_busy = false;
-            self.daemon_mutex.unlock(io);
-        }
-    }
-
-    fn setDaemonMessage(self: *@This(), message: ?[]u8) void {
-        const io = app_runtime.io();
-        self.daemon_mutex.lockUncancelable(io);
-        if (self.daemon_message) |old| self.allocator.free(old);
-        self.daemon_message = message;
-        self.daemon_mutex.unlock(io);
-    }
-
-    /// Join the worker once it finishes its current round. deinit relies on
-    /// this before freeing the runtime; tests use it to await the lifecycle
-    /// calls deterministically.
-    pub fn awaitDaemonIdle(self: *@This()) void {
-        const io = app_runtime.io();
-        while (true) {
-            self.daemon_mutex.lockUncancelable(io);
-            const busy = self.daemon_busy;
-            self.daemon_mutex.unlock(io);
-            if (!busy) {
-                if (self.daemon_thread) |thread| {
-                    thread.join();
-                    self.daemon_thread = null;
-                }
+        if (self.daemon_worker) |worker| {
+            worker.mutex.lockUncancelable(io);
+            if (worker.busy) {
+                worker.dirty = true;
+                worker.mutex.unlock(io);
                 return;
             }
+            worker.mutex.unlock(io);
+            // busy==false is the worker's last write, so its thread has
+            // returned (or is in epilogue): joining cannot block here.
+            if (self.daemon_thread) |finished| finished.join();
+            self.daemon_thread = null;
+            self.freeDaemonWorker(worker);
+            self.daemon_worker = null;
+        }
+
+        const worker = self.allocator.create(DaemonWorker) catch return;
+        worker.* = .{
+            .allocator = self.allocator,
+            .codex_home = self.allocator.dupe(u8, self.codex_home) catch {
+                self.allocator.destroy(worker);
+                return;
+            },
+            .no_restart_daemon = self.no_restart_daemon,
+            .message = self.allocator.dupe(u8, "coordinating") catch null,
+        };
+        if (std.Thread.spawn(.{}, daemonWorkerMain, .{worker})) |thread| {
+            self.daemon_thread = thread;
+            self.daemon_worker = worker;
+        } else |_| {
+            // Keep the finished context so the status line can explain why no
+            // coordination ran; the next apply or deinit frees it.
+            worker.mutex.lockUncancelable(io);
+            worker.busy = false;
+            if (worker.message) |old| self.allocator.free(old);
+            worker.message = self.allocator.dupe(u8, "coordination unavailable") catch null;
+            worker.mutex.unlock(io);
+            self.daemon_worker = worker;
+        }
+    }
+
+    /// Wait until the daemon worker finishes its current round. Tests use it
+    /// to observe lifecycle calls deterministically.
+    pub fn awaitDaemonIdle(self: *@This()) void {
+        const io = app_runtime.io();
+        const worker = self.daemon_worker orelse return;
+        while (true) {
+            worker.mutex.lockUncancelable(io);
+            const busy = worker.busy;
+            worker.mutex.unlock(io);
+            if (!busy) return;
             std.Io.sleep(io, .fromMilliseconds(1), .awake) catch {};
         }
     }
@@ -280,12 +311,14 @@ pub const SwitchLiveRuntime = struct {
             try allocator.print("Refresh in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
         defer allocator.free(refresh_state);
 
-        self.daemon_mutex.lockUncancelable(io);
-        const daemon_suffix = if (self.daemon_message) |message|
-            try allocator.print(" | daemon: {s}", .{message})
-        else
-            try allocator.dupe(u8, "");
-        self.daemon_mutex.unlock(io);
+        const daemon_suffix = if (self.daemon_worker) |worker| blk: {
+            worker.mutex.lockUncancelable(io);
+            defer worker.mutex.unlock(io);
+            break :blk if (worker.message) |message|
+                try allocator.print(" | daemon: {s}", .{message})
+            else
+                try allocator.dupe(u8, "");
+        } else try allocator.dupe(u8, "");
         defer allocator.free(daemon_suffix);
 
         const error_suffix = if (refresh_error_name) |value|
@@ -512,47 +545,58 @@ pub fn switchLiveRuntimeApplySelection(
     };
 }
 
-fn daemonWorkerMain(runtime: *SwitchLiveRuntime) void {
+fn daemonWorkerMain(worker: *DaemonWorker) void {
     const io = app_runtime.io();
     while (true) {
-        runDaemonRound(runtime);
-        runtime.daemon_mutex.lockUncancelable(io);
-        const dirty = runtime.daemon_dirty;
-        if (dirty) {
-            runtime.daemon_dirty = false;
+        runDaemonRound(worker);
+        worker.mutex.lockUncancelable(io);
+        const rerun = worker.dirty and !worker.shutdown.load(.acquire);
+        if (rerun) {
+            worker.dirty = false;
         } else {
-            runtime.daemon_busy = false;
+            worker.busy = false;
         }
-        runtime.daemon_mutex.unlock(io);
-        if (!dirty) return;
+        worker.mutex.unlock(io);
+        if (!rerun) return;
     }
 }
 
-fn runDaemonRound(runtime: *SwitchLiveRuntime) void {
-    const allocator = runtime.allocator;
+fn runDaemonRound(worker: *DaemonWorker) void {
+    const allocator = worker.allocator;
     const text: ?[]const u8 = blk: {
-        var client = daemon.Client.init(allocator, runtime.codex_home) catch |err| {
-            if (err == error.OutOfMemory) break :blk null;
+        var client = daemon.Client.init(allocator, worker.codex_home) catch |err| {
+            if (err == error.OutOfMemory) break :blk "out of memory";
             break :blk "daemon state unconfirmed";
         };
         defer client.deinit();
-        const outcome = (if (runtime.no_restart_daemon)
+        client.cancel = &worker.shutdown;
+        const outcome = (if (worker.no_restart_daemon)
             client.reload()
         else
-            client.ensure(daemon.restart_timeout_ms)) catch break :blk "daemon coordination failed";
+            client.ensure(daemon.restart_timeout_ms)) catch |err| break :blk switch (err) {
+            error.Canceled => "canceled",
+            error.OutOfMemory => "out of memory",
+            else => "daemon coordination failed",
+        };
         break :blk switch (outcome) {
             .reloaded => "reloaded",
             .deferred => "reload deferred until the turn finishes",
             .restarted => "restarted",
             .running => "may still use cached credentials",
             .unknown => "state unconfirmed",
+            .reload_failed => "reload failed",
             .restart_failed => "restart failed",
             .timed_out => "restart timed out",
             .unsupported => "coordination unsupported on this platform",
             .not_running => null,
         };
     };
-    runtime.setDaemonMessage(if (text) |value| allocator.dupe(u8, value) catch null else null);
+    const message = if (text) |value| allocator.dupe(u8, value) catch null else null;
+    const io = app_runtime.io();
+    worker.mutex.lockUncancelable(io);
+    if (worker.message) |old| allocator.free(old);
+    worker.message = message;
+    worker.mutex.unlock(io);
 }
 
 pub fn removeLiveRuntimeApplySelection(
@@ -590,6 +634,9 @@ pub fn removeLiveRuntimeApplySelection(
         removed_labels.deinit(allocator);
     }
 
+    // Daemon coordination intentionally stays out of remove: a live daemon
+    // reloads auth at its next request boundary anyway, and removing an
+    // account is not an account switch that needs immediate propagation.
     try removeSelectedAccountsAndPersist(allocator, runtime.codex_home, &reg, selected, false);
 
     var updated_display = try buildRemoveLiveActionDisplay(

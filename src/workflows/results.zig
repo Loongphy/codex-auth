@@ -3,6 +3,7 @@ const app_runtime = @import("../core/runtime.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const usage_refresh = @import("usage.zig");
+const codex_daemon = @import("codex_daemon.zig");
 
 pub const UsageSource = enum {
     api,
@@ -111,6 +112,7 @@ pub const ListResult = struct {
 
 pub const SwitchResult = struct {
     switched_to: AccountView,
+    daemon: codex_daemon.Outcome,
 
     pub fn deinit(self: *SwitchResult, allocator: std.mem.Allocator) void {
         self.switched_to.deinit(allocator);
@@ -187,12 +189,14 @@ pub fn buildSwitchResult(
     allocator: std.mem.Allocator,
     reg: *const registry.Registry,
     account_key: []const u8,
+    daemon: codex_daemon.Outcome,
 ) !SwitchResult {
     var switched_to = try buildAccountViewForKey(allocator, reg, null, account_key);
     errdefer switched_to.deinit(allocator);
 
     return .{
         .switched_to = switched_to,
+        .daemon = daemon,
     };
 }
 

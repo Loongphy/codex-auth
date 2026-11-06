@@ -601,7 +601,7 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.find(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.find(u8, help, "If a target is ambiguous") == null);
     try std.testing.expect(std.mem.find(u8, help, "--no-restart-daemon") != null);
-    try std.testing.expect(std.mem.find(u8, help, "Restarting can interrupt attached sessions") != null);
+    try std.testing.expect(std.mem.find(u8, help, "daemon issues never change the exit code") != null);
 }
 
 test "Scenario: Given no-restart opt-out on one-shot switch forms then parser preserves the request" {
@@ -630,6 +630,7 @@ test "Scenario: Given removed or duplicate daemon flags then parser rejects them
     const gpa = std.testing.allocator;
     const cases = [_]struct { args: []const [:0]const u8, message: []const u8 }{
         .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon" }, .message = "`--restart-daemon` was removed" },
+        .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon=yes" }, .message = "`--restart-daemon` was removed" },
         .{ .args = &.{ "codex-auth", "switch", "beta", "--no-restart-daemon", "--no-restart-daemon", "--json" }, .message = "duplicate `--no-restart-daemon`" },
     };
     for (cases) |case| {
@@ -2507,7 +2508,7 @@ test "Scenario: Given a dash prefix inside switch when completing then the no-re
     const out = try completeResponse(gpa, "/nonexistent", &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("--no-restart-daemon\tReload the running daemon in place; never restart it\n:36\n", out);
+    try std.testing.expectEqualStrings("--no-restart-daemon\tAttempt in-place daemon reload; never restart\n:36\n", out);
 }
 
 test "Scenario: Given a flag prefix after the top-level dash when completing then one-shot flags are emitted" {

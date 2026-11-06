@@ -856,12 +856,12 @@ test "Scenario: Given daemon-aware switching then automatic restart preserves se
             try registry.saveRegistry(gpa, home, &reg);
         }
         const body = try gpa.print(
-            "{s}" ++
+            "{s}{s}" ++
                 "[ \"$3\" = restart ] || exit 91\n" ++
                 "grep -F 'access-beta@example.com' \"$CODEX_HOME/auth.json\" >/dev/null || exit 92\n" ++
                 "grep -F '\"active_account_key\": \"{s}\"' \"$CODEX_HOME/accounts/registry.json\" >/dev/null || exit 93\n" ++
                 "printf '%s\\n' \"$CODEX_HOME\" > \"$CODEX_HOME/restarted-home\"\nexit {d}\n",
-            .{ fake_daemon.running, beta_key, @as(u8, if (case.fail) 42 else 0) },
+            .{ fake_daemon.running, fake_daemon.reload_unsupported, beta_key, @as(u8, if (case.fail) 42 else 0) },
         );
         defer gpa.free(body);
         try fake_daemon.install(home_dir, body);
@@ -880,9 +880,10 @@ test "Scenario: Given daemon-aware switching then automatic restart preserves se
                 var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
                 defer parsed.deinit();
                 const doc = parsed.value.object;
-                try std.testing.expectEqual(@as(usize, 3), doc.count());
+                try std.testing.expectEqual(@as(usize, 4), doc.count());
                 try std.testing.expectEqualStrings("switch", doc.get("command").?.string);
                 try std.testing.expectEqualStrings("beta@example.com", doc.get("switched_to").?.object.get("email").?.string);
+                try std.testing.expectEqualStrings(if (case.fail) "restart_failed" else "restarted", doc.get("daemon").?.string);
             }
             var reg = try registry.loadRegistry(gpa, home);
             defer reg.deinit(gpa);
@@ -1048,6 +1049,7 @@ test "Scenario: Given absent or indeterminate daemons then switching never start
         var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
         defer parsed.deinit();
         try std.testing.expectEqualStrings("switch", parsed.value.object.get("command").?.string);
+        try std.testing.expectEqualStrings(if (stale) "unknown" else "not_running", parsed.value.object.get("daemon").?.string);
         if (stale) {
             try std.testing.expect(std.mem.find(u8, result.stderr, "responsiveness could not be confirmed") != null);
             const calls = try fake_daemon.read(dir, "lifecycle-calls");

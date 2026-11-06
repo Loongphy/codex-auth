@@ -251,16 +251,14 @@ fn activateSelection(
     registry.saveRegistry(allocator, codex_home, reg) catch |err| {
         return if (opts.json) printJsonMutationError(err) else err;
     };
-    if (opts.json) {
-        var result = results.buildSwitchResult(allocator, reg, account_key) catch |err| return printJsonWorkflowError(err);
-        defer result.deinit(allocator);
-        try cli.json_output.printSwitchResult(&result);
-    } else {
-        try cli.output.printSwitchedAccount(allocator, reg, account_key);
-    }
+    if (!opts.json) try cli.output.printSwitchedAccount(allocator, reg, account_key);
     var client = daemon.Client.init(allocator, codex_home) catch |err| {
         if (err == error.OutOfMemory) return err;
         try cli.output.printCodexDaemonDiagnostic(codex_home, "codex", .unknown);
+        if (!opts.json) return;
+        var result = results.buildSwitchResult(allocator, reg, account_key, .unknown) catch |build_err| return printJsonWorkflowError(build_err);
+        defer result.deinit(allocator);
+        try cli.json_output.printSwitchResult(&result);
         return;
     };
     defer client.deinit();
@@ -269,6 +267,11 @@ fn activateSelection(
     else
         try client.ensure(daemon.restart_timeout_ms);
     try cli.output.printCodexDaemonDiagnostic(codex_home, client.executable, outcome);
+    if (opts.json) {
+        var result = results.buildSwitchResult(allocator, reg, account_key, outcome) catch |err| return printJsonWorkflowError(err);
+        defer result.deinit(allocator);
+        try cli.json_output.printSwitchResult(&result);
+    }
     if (outcome == .restart_failed or outcome == .timed_out)
         return error.CodexDaemonRestartFailed;
 }

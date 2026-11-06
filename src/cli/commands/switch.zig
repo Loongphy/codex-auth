@@ -19,7 +19,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous:
     var opts: types.SwitchOptions = .{};
     for (args) |raw_arg| {
         const arg = std.mem.sliceTo(raw_arg, 0);
-        if (std.mem.eql(u8, arg, "--restart-daemon")) {
+        if (std.mem.startsWith(u8, arg, "--restart-daemon")) {
             freeTarget(allocator, opts.target);
             return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` was removed; `switch` now coordinates the daemon automatically.", .{});
         }
