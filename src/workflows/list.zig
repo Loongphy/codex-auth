@@ -55,6 +55,7 @@ pub fn handleList(allocator: std.mem.Allocator, transport: transport_mod.Transpo
             opts.api_mode == .force_api,
             loaded.policy,
             loaded.refresh_error_name,
+            false,
         );
         defer runtime.deinit();
 

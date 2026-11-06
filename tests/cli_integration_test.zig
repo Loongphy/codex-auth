@@ -819,19 +819,19 @@ fn seedDaemonSwitchFixture(allocator: std.mem.Allocator, home_root: []const u8, 
     return home;
 }
 
-test "Scenario: Given daemon-aware switching then explicit recovery preserves selection JSON and restart failures remain visible" {
+test "Scenario: Given daemon-aware switching then automatic restart preserves selection JSON and restart failures remain visible" {
     if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
     defer gpa.free(project_root);
     try buildCliBinary(gpa, project_root);
-    const cases = [_]struct { unchanged: bool = false, requested: bool = true, json: bool = false, fail: bool = false, previous: bool = false, attempts: usize = 1 }{
+    const cases = [_]struct { unchanged: bool = false, no_restart: bool = false, json: bool = false, fail: bool = false, previous: bool = false, attempts: usize = 1 }{
         .{},
         .{ .json = true },
         .{ .unchanged = true },
         .{ .previous = true },
-        .{ .unchanged = true, .requested = false },
-        .{ .requested = false },
+        .{ .unchanged = true, .no_restart = true },
+        .{ .no_restart = true },
         .{ .fail = true },
         .{ .fail = true, .json = true, .attempts = 2 },
     };
@@ -866,7 +866,7 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         defer gpa.free(body);
         try fake_daemon.install(home_dir, body);
         for (0..case.attempts) |_| {
-            const args: []const []const u8 = if (!case.requested) &.{ "switch", "beta" } else if (case.previous) &.{ "-", "--restart-daemon" } else if (case.json) &.{ "switch", "beta", "--json", "--restart-daemon" } else &.{ "switch", "beta", "--restart-daemon" };
+            const args: []const []const u8 = if (case.no_restart) &.{ "switch", "beta", "--no-restart-daemon" } else if (case.previous) &.{"-"} else if (case.json) &.{ "switch", "beta", "--json" } else &.{ "switch", "beta" };
             const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, args);
             defer gpa.free(result.stdout);
             defer gpa.free(result.stderr);
@@ -874,8 +874,8 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
                 .exited => |code| try std.testing.expectEqual(@as(u8, if (case.fail) 1 else 0), code),
                 else => return error.TestUnexpectedResult,
             }
-            if (case.fail) try std.testing.expect(std.mem.find(u8, result.stderr, "requested daemon restart failed") != null);
-            if (!case.requested) try std.testing.expect(std.mem.find(u8, result.stderr, "--restart-daemon") != null);
+            if (case.fail) try std.testing.expect(std.mem.find(u8, result.stderr, "daemon restart failed") != null);
+            if (case.no_restart) try std.testing.expect(std.mem.find(u8, result.stderr, "may still use cached credentials") != null);
             if (case.json) {
                 var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
                 defer parsed.deinit();
@@ -896,9 +896,9 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         }
         const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
         defer gpa.free(calls);
-        const expected = if (!case.requested) "version\nreload-auth\n" else if (case.attempts == 2) "version\nreload-auth\nversion\nrestart\nversion\nreload-auth\nversion\nrestart\n" else "version\nreload-auth\nversion\nrestart\n";
+        const expected = if (case.no_restart) "version\nreload-auth\n" else if (case.attempts == 2) "version\nreload-auth\nversion\nrestart\nversion\nreload-auth\nversion\nrestart\n" else "version\nreload-auth\nversion\nrestart\n";
         try std.testing.expectEqualStrings(expected, calls);
-        if (case.requested) {
+        if (!case.no_restart) {
             const forwarded = try fake_daemon.read(home_dir, "restarted-home");
             defer gpa.free(forwarded);
             try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
@@ -968,7 +968,7 @@ test "Scenario: Given no managed executable then daemon restart resolves relativ
         try env.put("CODEX_HOME", home);
         try env.put("PATH", path);
         try env.put("CODEX_AUTH_SKIP_SERVICE_RECONCILE", "1");
-        const result = try runCapture(gpa, root, &env, &.{ exe, "switch", "beta", "--restart-daemon" });
+        const result = try runCapture(gpa, root, &env, &.{ exe, "switch", "beta" });
         defer gpa.free(result.stdout);
         defer gpa.free(result.stderr);
         try expectSuccess(result);
@@ -1012,7 +1012,7 @@ test "Scenario: Given a non-executable codex first in PATH then daemon restart u
     defer gpa.free(fallback);
     const path = try gpa.print("{s}:{s}", .{ decoy, fallback });
     defer gpa.free(path);
-    const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, root, home, path, &.{ "switch", "beta", "--restart-daemon" });
+    const result = try runCliWithIsolatedHomeAndCodexHomeAndPath(gpa, project_root, root, home, path, &.{ "switch", "beta" });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     try expectSuccess(result);
@@ -1041,23 +1041,19 @@ test "Scenario: Given absent or indeterminate daemons then switching never start
         var dir = try tmp.dir.openDir(".codex", .{});
         defer dir.close();
         if (stale) try fake_daemon.install(dir, "exit 1\n");
-        const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "beta", "--restart-daemon", "--json" });
+        const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "beta", "--json" });
         defer gpa.free(result.stdout);
         defer gpa.free(result.stderr);
-        switch (result.term) {
-            .exited => |code| try std.testing.expectEqual(@as(u8, if (stale) 1 else 0), code),
-            else => return error.TestUnexpectedResult,
-        }
+        try expectSuccess(result);
         var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
         defer parsed.deinit();
         try std.testing.expectEqualStrings("switch", parsed.value.object.get("command").?.string);
         if (stale) {
-            try std.testing.expect(std.mem.find(u8, result.stderr, "restart was not attempted") != null);
+            try std.testing.expect(std.mem.find(u8, result.stderr, "responsiveness could not be confirmed") != null);
             const calls = try fake_daemon.read(dir, "lifecycle-calls");
             defer gpa.free(calls);
             try std.testing.expectEqualStrings("version\n", calls);
         } else {
-            try std.testing.expect(std.mem.find(u8, result.stderr, "no running Codex daemon") != null);
             try std.testing.expectError(error.FileNotFound, dir.openFile("lifecycle-calls", .{}));
         }
     }
@@ -1078,7 +1074,7 @@ test "Scenario: Given failed account selection then daemon lifecycle commands ar
     var dir = try tmp.dir.openDir(".codex", .{});
     defer dir.close();
     try fake_daemon.install(dir, fake_daemon.succeed);
-    const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "missing", "--restart-daemon", "--json" });
+    const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, root, home, &.{ "switch", "missing", "--json" });
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     try expectFailure(result);
@@ -3083,7 +3079,7 @@ test "Scenario: Given switch query with multiple matches when running switch the
         project_root,
         home_root,
         empty_path,
-        if (builtin.target.os.tag == .windows) &[_][]const u8{ "switch", "team" } else &[_][]const u8{ "switch", "team", "--restart-daemon" },
+        &[_][]const u8{ "switch", "team" },
         "2\n",
     );
     defer gpa.free(result.stdout);

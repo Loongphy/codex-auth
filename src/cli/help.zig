@@ -48,7 +48,6 @@ pub fn writeHelp(
     try writeCommandDetail(out, use_color, "switch [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "switch <alias|email|display-number|query>");
     try writeCommandDetail(out, use_color, "switch <query> --json");
-    try writeCommandDetail(out, use_color, "switch <query> --restart-daemon");
     try writeCommandSummary(out, use_color, "remove", "Remove one or more accounts");
     try writeCommandDetail(out, use_color, "remove [--live] [--api|--skip-api]");
     try writeCommandDetail(out, use_color, "remove <alias|email|display-number|query>...");
@@ -197,7 +196,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
     switch (topic) {
         .top_level => {
             try out.writeAll("  codex-auth <command>\n");
-            try out.writeAll("  codex-auth - [--json] [--restart-daemon]\n");
+            try out.writeAll("  codex-auth - [--json] [--no-restart-daemon]\n");
             try out.writeAll("  codex-auth --help\n");
             try out.writeAll("  codex-auth help <command>\n");
         },
@@ -216,11 +215,10 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth export --cpa [<dir>]\n");
         },
         .switch_account => {
-            try out.writeAll("  codex-auth - [--json] [--restart-daemon]\n");
-            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api]\n");
+            try out.writeAll("  codex-auth - [--json] [--no-restart-daemon]\n");
+            try out.writeAll("  codex-auth switch [--live] [--api|--skip-api] [--no-restart-daemon]\n");
             try out.writeAll("  codex-auth switch <alias|email|display-number|query>\n");
             try out.writeAll("  codex-auth switch <query> --json\n");
-            try out.writeAll("  codex-auth switch <query> --restart-daemon\n");
         },
         .remove_account => {
             try out.writeAll("  codex-auth remove [--live] [--api|--skip-api]\n");
@@ -303,10 +301,11 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --api        Load usage and account data from APIs.\n");
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive switch.\n");
-            try out.writeAll("  --restart-daemon\n");
-            try out.writeAll("               Restart a responsive daemon after switching when its auth reload cannot apply,\n");
-            try out.writeAll("               including unchanged-file recovery.\n");
-            try out.writeAll("               Can interrupt attached sessions; cannot be combined with --live.\n");
+            try out.writeAll("               After switching, a responsive daemon reloads the credentials in place or is\n");
+            try out.writeAll("               restarted when it cannot. Restarting can interrupt attached sessions.\n");
+            try out.writeAll("  --no-restart-daemon\n");
+            try out.writeAll("               Reload the running daemon in place after switching but never restart it,\n");
+            try out.writeAll("               even when it cannot reload. Daemon issues never change the exit code.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
         },
@@ -394,7 +393,6 @@ fn writeExampleLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth switch --api\n");
             try out.writeAll("  codex-auth switch --skip-api\n");
             try out.writeAll("  codex-auth switch personal\n");
-            try out.writeAll("  codex-auth switch personal --restart-daemon\n");
             try out.writeAll("  codex-auth switch john@example.com\n");
             try out.writeAll("  codex-auth switch 02\n");
             try out.writeAll("  codex-auth switch work\n");

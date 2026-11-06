@@ -55,9 +55,9 @@ pub const Client = struct {
         return if (std.mem.eql(u8, status.string, "running")) .running else .unknown;
     }
 
-    /// The default post-switch coordination: one best-effort auth reload, never
-    /// a restart. Daemons that cannot reload stay `.running` so callers can
-    /// still point at `--restart-daemon`; nothing here disconnects clients.
+    /// The `--no-restart-daemon` coordination: one best-effort auth reload,
+    /// never a restart. Daemons that cannot reload stay `.running` so callers
+    /// can still point at manual recovery; nothing here disconnects clients.
     pub fn reload(self: *const Client) !Outcome {
         const state = try self.probe();
         if (state != .running) return state;

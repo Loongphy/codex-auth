@@ -1,10 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const codex_auth = @import("codex_auth");
 
 const account_api = codex_auth.api.account;
 const app_runtime = codex_auth.core.runtime;
+const compat_fs = codex_auth.core.compat_fs;
 const cli = codex_auth.cli;
 const fixtures = @import("support/fixtures.zig");
+const fake_daemon = @import("support/codex_daemon.zig");
 const test_fixtures = fixtures;
 const main_mod = codex_auth.workflows;
 const registry = codex_auth.registry;
@@ -356,6 +359,7 @@ test "switch live action patches the current display after switching" {
             .label = "local",
         },
         try gpa.dupe(u8, "PreviousRefreshError"),
+        false,
     );
     defer runtime.deinit();
 
@@ -459,6 +463,7 @@ test "switch live action does not wait for an in-flight refresh" {
             .label = "local",
         },
         null,
+        false,
     );
     defer runtime.deinit();
 
@@ -493,6 +498,85 @@ test "switch live action does not wait for an in-flight refresh" {
     try std.testing.expect(elapsed_ms < 500);
     try std.testing.expectEqualStrings("Switched to beta@example.com", outcome.action_message.?);
     try std.testing.expectEqual(@as(u64, 1), runtime.display_generation);
+}
+
+test "switch live apply coordinates the daemon in the background" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { body: []const u8, no_restart: bool = false, calls: []const u8, message: []const u8 }{
+        .{ .body = fake_daemon.reload_changed, .calls = "version\nreload-auth\n", .message = "reloaded" },
+        .{ .body = fake_daemon.reload_busy, .calls = "version\nreload-auth\n", .message = "reload deferred until the turn finishes" },
+        .{ .body = fake_daemon.succeed, .calls = "version\nreload-auth\nversion\nrestart\n", .message = "restarted" },
+        .{ .body = fake_daemon.succeed, .no_restart = true, .calls = "version\nreload-auth\n", .message = "may still use cached credentials" },
+    };
+    for (cases) |case| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+        defer gpa.free(codex_home);
+
+        const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+        defer gpa.free(alpha_key);
+        const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+        defer gpa.free(beta_key);
+
+        var reg = fixtures.makeEmptyRegistry();
+        defer reg.deinit(gpa);
+        try appendLiveMergeTestAccount(gpa, &reg, alpha_key, "alpha@example.com", "");
+        try appendLiveMergeTestAccount(gpa, &reg, beta_key, "beta@example.com", "");
+        try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+        try registry.saveRegistry(gpa, codex_home, &reg);
+        try writeLiveActionTestSnapshot(gpa, codex_home, alpha_key, "alpha@example.com", "team");
+        try writeLiveActionTestSnapshot(gpa, codex_home, beta_key, "beta@example.com", "plus");
+        var home_dir = try compat_fs.cwd().openDir(codex_home, .{});
+        defer home_dir.close();
+        try fake_daemon.install(home_dir, case.body);
+
+        var runtime = SwitchLiveRuntime.init(
+            gpa,
+            codex_home,
+            .switch_account,
+            .skip_api,
+            false,
+            .{
+                .usage_api_enabled = false,
+                .account_api_enabled = false,
+                .interval_ms = switch_live_default_refresh_interval_ms,
+                .label = "local",
+            },
+            null,
+            case.no_restart,
+        );
+        defer runtime.deinit();
+
+        var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
+        defer current_display.display.deinit(gpa);
+        defer if (current_display.refresh_error_name) |name| gpa.free(name);
+
+        const outcome = try switchLiveRuntimeApplySelection(
+            @ptrCast(&runtime),
+            gpa,
+            current_display.display.borrowed(),
+            beta_key,
+        );
+        defer {
+            if (outcome.action_message) |message| gpa.free(message);
+            var owned_display = outcome.updated_display;
+            owned_display.deinit(gpa);
+        }
+        try std.testing.expectEqualStrings("Switched to beta@example.com", outcome.action_message.?);
+
+        runtime.awaitDaemonIdle();
+        const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
+        defer gpa.free(calls);
+        try std.testing.expectEqualStrings(case.calls, calls);
+        try std.testing.expectEqualStrings(case.message, runtime.daemon_message.?);
+
+        const status = try runtime.buildStatusLine(gpa, current_display.display.borrowed(), null);
+        defer gpa.free(status);
+        try std.testing.expect(std.mem.find(u8, status, "daemon: ") != null);
+        try std.testing.expect(std.mem.find(u8, status, case.message) != null);
+    }
 }
 
 test "remove live action patches the current display after deleting the active account" {
@@ -547,6 +631,7 @@ test "remove live action patches the current display after deleting the active a
             .label = "local",
         },
         try gpa.dupe(u8, "PreviousRefreshError"),
+        false,
     );
     defer runtime.deinit();
 
@@ -655,6 +740,7 @@ test "remove live action does not wait for an in-flight refresh" {
             .label = "local",
         },
         null,
+        false,
     );
     defer runtime.deinit();
 
@@ -708,6 +794,7 @@ test "live runtime deinit cancels an in-flight refresh promptly" {
             .label = "local",
         },
         null,
+        false,
     );
 
     const live_io = runtime.io_impl.io();
@@ -797,6 +884,7 @@ test "buildStatusLine releases mutex on allocation failure" {
             .label = "local",
         },
         try gpa.dupe(u8, "CurlRequired"),
+        false,
     );
     defer runtime.deinit();
 

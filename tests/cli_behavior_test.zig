@@ -600,24 +600,25 @@ test "Scenario: Given switch command help when rendering then target forms and m
     try std.testing.expect(std.mem.find(u8, help, "Options:\n  --live       Open the live switch UI.") != null);
     try std.testing.expect(std.mem.find(u8, help, "Switch directly when the target resolves to one account.") != null);
     try std.testing.expect(std.mem.find(u8, help, "If a target is ambiguous") == null);
-    try std.testing.expect(std.mem.find(u8, help, "--restart-daemon") != null);
-    try std.testing.expect(std.mem.find(u8, help, "unchanged-file recovery") != null);
+    try std.testing.expect(std.mem.find(u8, help, "--no-restart-daemon") != null);
+    try std.testing.expect(std.mem.find(u8, help, "Restarting can interrupt attached sessions") != null);
 }
 
-test "Scenario: Given explicit restart on one-shot switch forms then parser preserves the request" {
+test "Scenario: Given no-restart opt-out on one-shot switch forms then parser preserves the request" {
     const gpa = std.testing.allocator;
     const cases = [_][]const [:0]const u8{
-        &.{ "codex-auth", "switch", "beta", "--restart-daemon" },
-        &.{ "codex-auth", "switch", "--restart-daemon", "beta", "--json" },
-        &.{ "codex-auth", "switch", "--skip-api", "--restart-daemon" },
-        &.{ "codex-auth", "switch", "--api", "--restart-daemon" },
+        &.{ "codex-auth", "switch", "beta", "--no-restart-daemon" },
+        &.{ "codex-auth", "switch", "--no-restart-daemon", "beta", "--json" },
+        &.{ "codex-auth", "switch", "--skip-api", "--no-restart-daemon" },
+        &.{ "codex-auth", "switch", "--api", "--no-restart-daemon" },
+        &.{ "codex-auth", "switch", "--live", "--no-restart-daemon" },
     };
     for (cases) |args| {
         var result = try cli.commands.parseArgs(gpa, args);
         defer cli.commands.freeParseResult(gpa, &result);
         switch (result) {
             .command => |cmd| switch (cmd) {
-                .switch_account => |opts| try std.testing.expect(opts.restart_daemon),
+                .switch_account => |opts| try std.testing.expect(opts.no_restart_daemon),
                 else => return error.TestExpectedEqual,
             },
             else => return error.TestExpectedEqual,
@@ -625,11 +626,11 @@ test "Scenario: Given explicit restart on one-shot switch forms then parser pres
     }
 }
 
-test "Scenario: Given live or duplicate explicit restart then parser rejects the combination" {
+test "Scenario: Given removed or duplicate daemon flags then parser rejects them" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { args: []const [:0]const u8, message: []const u8 }{
-        .{ .args = &.{ "codex-auth", "switch", "--live", "--restart-daemon" }, .message = "`--restart-daemon` cannot be combined with `--live`." },
-        .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon", "--restart-daemon", "--json" }, .message = "duplicate `--restart-daemon`" },
+        .{ .args = &.{ "codex-auth", "switch", "beta", "--restart-daemon" }, .message = "`--restart-daemon` was removed" },
+        .{ .args = &.{ "codex-auth", "switch", "beta", "--no-restart-daemon", "--no-restart-daemon", "--json" }, .message = "duplicate `--no-restart-daemon`" },
     };
     for (cases) |case| {
         var result = try cli.commands.parseArgs(gpa, case.args);
@@ -642,7 +643,7 @@ test "Scenario: Given daemon timeout then diagnostic distinguishes selected file
     const gpa = std.testing.allocator;
     var aw: std.Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
-    try cli.output.writeCodexDaemonDiagnosticTo(&aw.writer, "/tmp/home's space", "/tmp/bin's space/codex", .timed_out, true);
+    try cli.output.writeCodexDaemonDiagnosticTo(&aw.writer, "/tmp/home's space", "/tmp/bin's space/codex", .timed_out);
     try std.testing.expect(std.mem.find(u8, aw.written(), "Account files switched successfully") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "120 seconds") != null);
     try std.testing.expect(std.mem.find(u8, aw.written(), "account state is unconfirmed") != null);
@@ -1381,10 +1382,10 @@ test "Scenario: Given top-level dash when parsing then previous switch is select
 
 test "Scenario: Given top-level dash with switch flags when parsing then the shortcut accepts one-shot flags" {
     const gpa = std.testing.allocator;
-    const cases = [_]struct { args: []const [:0]const u8, json: bool = false, restart: bool = false }{
+    const cases = [_]struct { args: []const [:0]const u8, json: bool = false, no_restart: bool = false }{
         .{ .args = &.{ "codex-auth", "-", "--json" }, .json = true },
-        .{ .args = &.{ "codex-auth", "-", "--restart-daemon" }, .restart = true },
-        .{ .args = &.{ "codex-auth", "-", "--json", "--restart-daemon" }, .json = true, .restart = true },
+        .{ .args = &.{ "codex-auth", "-", "--no-restart-daemon" }, .no_restart = true },
+        .{ .args = &.{ "codex-auth", "-", "--json", "--no-restart-daemon" }, .json = true, .no_restart = true },
     };
     for (cases) |case| {
         var result = try cli.commands.parseArgs(gpa, case.args);
@@ -1394,7 +1395,7 @@ test "Scenario: Given top-level dash with switch flags when parsing then the sho
                 .switch_account => |opts| {
                     try std.testing.expectEqual(cli.types.SwitchTarget.previous, opts.target);
                     try std.testing.expectEqual(case.json, opts.json);
-                    try std.testing.expectEqual(case.restart, opts.restart_daemon);
+                    try std.testing.expectEqual(case.no_restart, opts.no_restart_daemon);
                 },
                 else => return error.TestExpectedEqual,
             },
@@ -2500,13 +2501,13 @@ test "Scenario: Given a reset selector position when completing then account can
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }
 
-test "Scenario: Given a dash prefix inside switch when completing then the restart-daemon flag is emitted" {
+test "Scenario: Given a dash prefix inside switch when completing then the no-restart flag is emitted" {
     const gpa = std.testing.allocator;
-    const args = [_][]const u8{ "switch", "--r" };
+    const args = [_][]const u8{ "switch", "--n" };
     const out = try completeResponse(gpa, "/nonexistent", &args);
     defer gpa.free(out);
 
-    try std.testing.expectEqualStrings("--restart-daemon\tRestart the running daemon to apply the selected credentials\n:36\n", out);
+    try std.testing.expectEqualStrings("--no-restart-daemon\tReload the running daemon in place; never restart it\n:36\n", out);
 }
 
 test "Scenario: Given a flag prefix after the top-level dash when completing then one-shot flags are emitted" {
@@ -2516,7 +2517,7 @@ test "Scenario: Given a flag prefix after the top-level dash when completing the
     defer gpa.free(out);
 
     try std.testing.expect(std.mem.find(u8, out, "--json\t") != null);
-    try std.testing.expect(std.mem.find(u8, out, "--restart-daemon\t") != null);
+    try std.testing.expect(std.mem.find(u8, out, "--no-restart-daemon\t") != null);
     try std.testing.expect(std.mem.find(u8, out, "--live") == null);
     try std.testing.expect(std.mem.endsWith(u8, out, ":36\n"));
 }

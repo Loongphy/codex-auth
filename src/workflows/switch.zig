@@ -82,6 +82,7 @@ pub fn handleSwitch(allocator: std.mem.Allocator, codex_home: []const u8, opts: 
             strict_refresh,
             loaded.policy,
             loaded.refresh_error_name,
+            opts.no_restart_daemon,
         );
         defer runtime.deinit();
 
@@ -259,17 +260,16 @@ fn activateSelection(
     }
     var client = daemon.Client.init(allocator, codex_home) catch |err| {
         if (err == error.OutOfMemory) return err;
-        try cli.output.printCodexDaemonDiagnostic(codex_home, "codex", .unknown, opts.restart_daemon);
-        if (opts.restart_daemon) return error.CodexDaemonRestartFailed;
+        try cli.output.printCodexDaemonDiagnostic(codex_home, "codex", .unknown);
         return;
     };
     defer client.deinit();
-    const outcome = if (opts.restart_daemon)
-        try client.ensure(daemon.restart_timeout_ms)
+    const outcome = if (opts.no_restart_daemon)
+        try client.reload()
     else
-        try client.reload();
-    try cli.output.printCodexDaemonDiagnostic(codex_home, client.executable, outcome, opts.restart_daemon);
-    if (opts.restart_daemon and (outcome == .unknown or outcome == .restart_failed or outcome == .timed_out))
+        try client.ensure(daemon.restart_timeout_ms);
+    try cli.output.printCodexDaemonDiagnostic(codex_home, client.executable, outcome);
+    if (outcome == .restart_failed or outcome == .timed_out)
         return error.CodexDaemonRestartFailed;
 }
 

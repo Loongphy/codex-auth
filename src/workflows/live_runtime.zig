@@ -1,8 +1,10 @@
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const cli = @import("../cli/root.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
 const active_auth = @import("active_auth.zig");
+const daemon = @import("codex_daemon.zig");
 const targets = @import("targets.zig");
 const workflow_env = @import("env.zig");
 const live_types = @import("live_types.zig");
@@ -52,6 +54,15 @@ pub const SwitchLiveRuntime = struct {
     last_refresh_error_name: ?[]u8 = null,
     refresh_interval_ms: i64,
     mode_label: []const u8,
+    no_restart_daemon: bool = false,
+    // Post-apply daemon coordination runs on a dedicated thread so the input
+    // loop never blocks on reload/restart helpers. Only the TUI thread reads
+    // or joins `daemon_thread`; busy/dirty/message are guarded by the mutex.
+    daemon_mutex: std.Io.Mutex = .init,
+    daemon_thread: ?std.Thread = null,
+    daemon_busy: bool = false,
+    daemon_dirty: bool = false,
+    daemon_message: ?[]u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -61,6 +72,7 @@ pub const SwitchLiveRuntime = struct {
         strict_refresh: bool,
         initial_policy: SwitchLiveRefreshPolicy,
         initial_refresh_error_name: ?[]u8,
+        no_restart_daemon: bool,
     ) @This() {
         const io_impl = std.Io.Threaded.init(allocator, .{
             .concurrent_limit = .limited(1),
@@ -77,15 +89,73 @@ pub const SwitchLiveRuntime = struct {
             .refresh_interval_ms = initial_policy.interval_ms,
             .mode_label = initial_policy.label,
             .last_refresh_error_name = initial_refresh_error_name,
+            .no_restart_daemon = no_restart_daemon,
         };
     }
 
     pub fn deinit(self: *@This()) void {
         self.cancelRefresh();
+        self.awaitDaemonIdle();
+        if (self.daemon_message) |message| self.allocator.free(message);
         if (self.updated_display) |*display| display.deinit(self.allocator);
         if (self.last_refresh_error_name) |name| self.allocator.free(name);
         self.io_impl.deinit();
         self.* = undefined;
+    }
+
+    /// Applies queue daemon coordination behind the file switch. A running
+    /// worker already sees the latest auth.json, so a second apply just marks
+    /// the worker dirty and it runs one more round instead of stacking threads.
+    fn startDaemonCoordination(self: *@This()) void {
+        const io = app_runtime.io();
+        self.daemon_mutex.lockUncancelable(io);
+        if (self.daemon_busy) {
+            self.daemon_dirty = true;
+            self.daemon_mutex.unlock(io);
+            return;
+        }
+        self.daemon_busy = true;
+        self.daemon_mutex.unlock(io);
+        if (self.daemon_thread) |finished| {
+            finished.join();
+            self.daemon_thread = null;
+        }
+        if (std.Thread.spawn(.{}, daemonWorkerMain, .{self})) |thread| {
+            self.daemon_thread = thread;
+            self.setDaemonMessage(self.allocator.dupe(u8, "coordinating") catch null);
+        } else |_| {
+            self.daemon_mutex.lockUncancelable(io);
+            self.daemon_busy = false;
+            self.daemon_mutex.unlock(io);
+        }
+    }
+
+    fn setDaemonMessage(self: *@This(), message: ?[]u8) void {
+        const io = app_runtime.io();
+        self.daemon_mutex.lockUncancelable(io);
+        if (self.daemon_message) |old| self.allocator.free(old);
+        self.daemon_message = message;
+        self.daemon_mutex.unlock(io);
+    }
+
+    /// Join the worker once it finishes its current round. deinit relies on
+    /// this before freeing the runtime; tests use it to await the lifecycle
+    /// calls deterministically.
+    pub fn awaitDaemonIdle(self: *@This()) void {
+        const io = app_runtime.io();
+        while (true) {
+            self.daemon_mutex.lockUncancelable(io);
+            const busy = self.daemon_busy;
+            self.daemon_mutex.unlock(io);
+            if (!busy) {
+                if (self.daemon_thread) |thread| {
+                    thread.join();
+                    self.daemon_thread = null;
+                }
+                return;
+            }
+            std.Io.sleep(io, .fromMilliseconds(1), .awake) catch {};
+        }
     }
 
     fn cancelRefresh(self: *@This()) void {
@@ -210,6 +280,14 @@ pub const SwitchLiveRuntime = struct {
             try allocator.print("Refresh in {d}s", .{@divFloor((next_refresh_not_before_ms - now_ms) + 999, 1000)});
         defer allocator.free(refresh_state);
 
+        self.daemon_mutex.lockUncancelable(io);
+        const daemon_suffix = if (self.daemon_message) |message|
+            try allocator.print(" | daemon: {s}", .{message})
+        else
+            try allocator.dupe(u8, "");
+        self.daemon_mutex.unlock(io);
+        defer allocator.free(daemon_suffix);
+
         const error_suffix = if (refresh_error_name) |value|
             try allocator.print(" | Error: {s}", .{value})
         else
@@ -217,15 +295,15 @@ pub const SwitchLiveRuntime = struct {
         defer allocator.free(error_suffix);
 
         const full = try allocator.print(
-            "Live refresh: {s} | {s}{s}",
-            .{ mode_label, refresh_state, error_suffix },
+            "Live refresh: {s}{s} | {s}{s}",
+            .{ mode_label, daemon_suffix, refresh_state, error_suffix },
         );
         // Status text is pure ASCII, so byte length is display width. When the
         // full line cannot fit, the compact variant drops the `Live refresh:`
-        // prefix but keeps the mode, state, and error — the parts that change.
+        // prefix but keeps the mode, daemon state, and error — the parts that change.
         if (max_cols != null and full.len > max_cols.?) {
             defer allocator.free(full);
-            return allocator.print("{s} | {s}{s}", .{ mode_label, refresh_state, error_suffix });
+            return allocator.print("{s}{s} | {s}{s}", .{ mode_label, daemon_suffix, refresh_state, error_suffix });
         }
         return full;
     }
@@ -426,10 +504,55 @@ pub fn switchLiveRuntimeApplySelection(
     errdefer updated_display.deinit(allocator);
     runtime.recordCompletedDisplayReload(reload_started_ms, switchLiveRefreshPolicy(&reg, runtime.target, runtime.api_mode));
 
+    runtime.startDaemonCoordination();
+
     return .{
         .updated_display = updated_display,
         .action_message = try allocator.print("Switched to {s}", .{label}),
     };
+}
+
+fn daemonWorkerMain(runtime: *SwitchLiveRuntime) void {
+    const io = app_runtime.io();
+    while (true) {
+        runDaemonRound(runtime);
+        runtime.daemon_mutex.lockUncancelable(io);
+        const dirty = runtime.daemon_dirty;
+        if (dirty) {
+            runtime.daemon_dirty = false;
+        } else {
+            runtime.daemon_busy = false;
+        }
+        runtime.daemon_mutex.unlock(io);
+        if (!dirty) return;
+    }
+}
+
+fn runDaemonRound(runtime: *SwitchLiveRuntime) void {
+    const allocator = runtime.allocator;
+    const text: ?[]const u8 = blk: {
+        var client = daemon.Client.init(allocator, runtime.codex_home) catch |err| {
+            if (err == error.OutOfMemory) break :blk null;
+            break :blk "daemon state unconfirmed";
+        };
+        defer client.deinit();
+        const outcome = (if (runtime.no_restart_daemon)
+            client.reload()
+        else
+            client.ensure(daemon.restart_timeout_ms)) catch break :blk "daemon coordination failed";
+        break :blk switch (outcome) {
+            .reloaded => "reloaded",
+            .deferred => "reload deferred until the turn finishes",
+            .restarted => "restarted",
+            .running => "may still use cached credentials",
+            .unknown => "state unconfirmed",
+            .restart_failed => "restart failed",
+            .timed_out => "restart timed out",
+            .unsupported => "coordination unsupported on this platform",
+            .not_running => null,
+        };
+    };
+    runtime.setDaemonMessage(if (text) |value| allocator.dupe(u8, value) catch null else null);
 }
 
 pub fn removeLiveRuntimeApplySelection(
