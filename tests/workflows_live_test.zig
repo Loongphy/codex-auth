@@ -579,6 +579,148 @@ test "switch live apply coordinates the daemon in the background" {
     }
 }
 
+test "live deinit cancels an in-flight daemon round promptly" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+
+    const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+
+    var reg = fixtures.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try appendLiveMergeTestAccount(gpa, &reg, alpha_key, "alpha@example.com", "");
+    try appendLiveMergeTestAccount(gpa, &reg, beta_key, "beta@example.com", "");
+    try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeLiveActionTestSnapshot(gpa, codex_home, alpha_key, "alpha@example.com", "team");
+    try writeLiveActionTestSnapshot(gpa, codex_home, beta_key, "beta@example.com", "plus");
+    var home_dir = try compat_fs.cwd().openDir(codex_home, .{});
+    defer home_dir.close();
+    try fake_daemon.install(home_dir, fake_daemon.sleep_forever);
+
+    var runtime = SwitchLiveRuntime.init(
+        gpa,
+        codex_home,
+        .switch_account,
+        .skip_api,
+        false,
+        .{
+            .usage_api_enabled = false,
+            .account_api_enabled = false,
+            .interval_ms = switch_live_default_refresh_interval_ms,
+            .label = "local",
+        },
+        null,
+        false,
+    );
+
+    var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
+    defer current_display.display.deinit(gpa);
+    defer if (current_display.refresh_error_name) |name| gpa.free(name);
+
+    const outcome = try switchLiveRuntimeApplySelection(
+        @ptrCast(&runtime),
+        gpa,
+        current_display.display.borrowed(),
+        beta_key,
+    );
+    defer {
+        if (outcome.action_message) |message| gpa.free(message);
+        var owned_display = outcome.updated_display;
+        owned_display.deinit(gpa);
+    }
+
+    // The worker is blocked inside the 60s `version` helper. Cancellation
+    // must unwind it within the poll window, not the command deadline.
+    const started_ms = nowMilliseconds();
+    runtime.deinit();
+    try std.testing.expect(nowMilliseconds() - started_ms < 5_000);
+}
+
+test "a second live apply while the daemon worker is busy runs exactly one more round" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const codex_home = try app_runtime.realPathFileAlloc(gpa, tmp.dir, ".");
+    defer gpa.free(codex_home);
+
+    const alpha_key = try fixtures.accountKeyForEmailAlloc(gpa, "alpha@example.com");
+    defer gpa.free(alpha_key);
+    const beta_key = try fixtures.accountKeyForEmailAlloc(gpa, "beta@example.com");
+    defer gpa.free(beta_key);
+
+    var reg = fixtures.makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try appendLiveMergeTestAccount(gpa, &reg, alpha_key, "alpha@example.com", "");
+    try appendLiveMergeTestAccount(gpa, &reg, beta_key, "beta@example.com", "");
+    try registry.setActiveAccountKey(gpa, &reg, alpha_key);
+    try registry.saveRegistry(gpa, codex_home, &reg);
+    try writeLiveActionTestSnapshot(gpa, codex_home, alpha_key, "alpha@example.com", "team");
+    try writeLiveActionTestSnapshot(gpa, codex_home, beta_key, "beta@example.com", "plus");
+    var home_dir = try compat_fs.cwd().openDir(codex_home, .{});
+    defer home_dir.close();
+    try fake_daemon.install(home_dir, fake_daemon.slow_reload_changed);
+
+    var runtime = SwitchLiveRuntime.init(
+        gpa,
+        codex_home,
+        .switch_account,
+        .skip_api,
+        false,
+        .{
+            .usage_api_enabled = false,
+            .account_api_enabled = false,
+            .interval_ms = switch_live_default_refresh_interval_ms,
+            .label = "local",
+        },
+        null,
+        false,
+    );
+    defer runtime.deinit();
+
+    var current_display = try loadStoredSwitchSelectionDisplay(gpa, codex_home, .switch_account, .skip_api);
+    defer current_display.display.deinit(gpa);
+    defer if (current_display.refresh_error_name) |name| gpa.free(name);
+
+    const first = try switchLiveRuntimeApplySelection(
+        @ptrCast(&runtime),
+        gpa,
+        current_display.display.borrowed(),
+        beta_key,
+    );
+    defer {
+        if (first.action_message) |message| gpa.free(message);
+        var owned_display = first.updated_display;
+        owned_display.deinit(gpa);
+    }
+    // The first round is still inside the 1s `version` sleep, so this apply
+    // marks the worker dirty instead of spawning a second thread.
+    const second = try switchLiveRuntimeApplySelection(
+        @ptrCast(&runtime),
+        gpa,
+        current_display.display.borrowed(),
+        alpha_key,
+    );
+    defer {
+        if (second.action_message) |message| gpa.free(message);
+        var owned_display = second.updated_display;
+        owned_display.deinit(gpa);
+    }
+
+    runtime.awaitDaemonIdle();
+    const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
+    defer gpa.free(calls);
+    try std.testing.expectEqualStrings("version\nreload-auth\nversion\nreload-auth\n", calls);
+    try std.testing.expectEqualStrings("reloaded", runtime.daemon_worker.?.message.?);
+}
+
 test "remove live action patches the current display after deleting the active account" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

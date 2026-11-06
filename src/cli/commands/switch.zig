@@ -19,9 +19,9 @@ fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8, previous:
     var opts: types.SwitchOptions = .{};
     for (args) |raw_arg| {
         const arg = std.mem.sliceTo(raw_arg, 0);
-        if (std.mem.startsWith(u8, arg, "--restart-daemon")) {
+        if (std.mem.eql(u8, arg, "--restart-daemon") or common.inlineFlagValue(arg, "--restart-daemon") != null) {
             freeTarget(allocator, opts.target);
-            return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` was removed; `switch` now coordinates the daemon automatically.", .{});
+            return common.usageErrorResultWithJson(allocator, .switch_account, json_requested, "`--restart-daemon` was removed; `switch` now coordinates the daemon automatically. Pass `--no-restart-daemon` to skip the restart fallback.", .{});
         }
         if (std.mem.eql(u8, arg, "--no-restart-daemon")) {
             if (opts.no_restart_daemon) {

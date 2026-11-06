@@ -111,6 +111,9 @@ pub const Client = struct {
     fn tryReload(self: *const Client) !?Outcome {
         const result = self.runLifecycle("reload-auth", reload_timeout_ms) catch |err| switch (err) {
             error.OutOfMemory, error.Canceled => return err,
+            // Output overflow means the helper ran but became unreadable;
+            // that is an RPC failure, not a missing command.
+            error.StreamTooLong => return .reload_failed,
             else => return null,
         };
         defer result.deinit(self.allocator);
@@ -122,11 +125,15 @@ pub const Client = struct {
     }
 
     /// codext prints "does not implement account/reload" for a daemon without
-    /// the RPC; a CLI too old to know the subcommand fails argument parsing
-    /// with "unrecognized". Both mean restart is the only coordination left.
+    /// the RPC; a CLI too old to know the subcommand fails argument parsing —
+    /// clap 4 says "unrecognized subcommand", older clap says the argument
+    /// "wasn't recognized"/"wasn't expected". All mean restart is the only
+    /// coordination left.
     fn looksUnsupported(stderr: []const u8) bool {
         return std.mem.find(u8, stderr, "does not implement account/reload") != null or
-            std.mem.find(u8, stderr, "unrecognized subcommand") != null;
+            std.mem.find(u8, stderr, "unrecognized subcommand") != null or
+            std.mem.find(u8, stderr, "wasn't recognized") != null or
+            std.mem.find(u8, stderr, "wasn't expected") != null;
     }
 
     fn cancelRequested(self: *const Client) bool {
@@ -148,6 +155,7 @@ pub const Client = struct {
 
     fn runLifecycle(self: *const Client, command: []const u8, timeout_ms: u64) !Result {
         const io = runtime.io();
+        if (self.cancelRequested()) return error.Canceled;
         const deadline = std.Io.Clock.Timestamp.now(io, .awake).addDuration(.{
             .clock = .awake,
             .raw = .fromMilliseconds(@intCast(timeout_ms)),

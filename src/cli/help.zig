@@ -305,7 +305,7 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("               After switching, a responsive daemon normally reloads the credentials in\n");
             try out.writeAll("               place or is restarted when it cannot; restarting can interrupt attached\n");
             try out.writeAll("               sessions. This flag still attempts an in-place reload but never restarts,\n");
-            try out.writeAll("               and daemon issues never change the exit code.\n");
+            try out.writeAll("               and with this flag, daemon issues never change the exit code.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");
         },
