@@ -896,13 +896,48 @@ test "Scenario: Given daemon-aware switching then explicit recovery preserves se
         }
         const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
         defer gpa.free(calls);
-        const expected = if (!case.requested) "version\n" else if (case.attempts == 2) "version\nreload-auth\nversion\nrestart\nversion\nreload-auth\nversion\nrestart\n" else "version\nreload-auth\nversion\nrestart\n";
+        const expected = if (!case.requested) "version\nreload-auth\n" else if (case.attempts == 2) "version\nreload-auth\nversion\nrestart\nversion\nreload-auth\nversion\nrestart\n" else "version\nreload-auth\nversion\nrestart\n";
         try std.testing.expectEqualStrings(expected, calls);
         if (case.requested) {
             const forwarded = try fake_daemon.read(home_dir, "restarted-home");
             defer gpa.free(forwarded);
             try std.testing.expectEqualStrings(home, std.mem.trimEnd(u8, forwarded, "\n"));
         }
+    }
+}
+
+test "Scenario: Given a reload-capable daemon then a plain switch applies credentials without restarting" {
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+    const cases = [_]struct { body: []const u8, fragment: []const u8 }{
+        .{ .body = fake_daemon.reload_changed, .fragment = "reloaded the new credentials without a restart" },
+        .{ .body = fake_daemon.reload_busy, .fragment = "deferred the reload" },
+    };
+    for (cases) |case| {
+        var tmp = fs.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realpathAlloc(gpa, ".");
+        defer gpa.free(root);
+        const home = try seedDaemonSwitchFixture(gpa, root, false);
+        defer gpa.free(home);
+        try tmp.dir.makePath("shell-home");
+        const shell_home = try tmp.dir.realpathAlloc(gpa, "shell-home");
+        defer gpa.free(shell_home);
+        var home_dir = try tmp.dir.openDir(".codex", .{});
+        defer home_dir.close();
+        try fake_daemon.install(home_dir, case.body);
+        const result = try runCliWithIsolatedHomeAndCodexHome(gpa, project_root, shell_home, home, &.{ "switch", "beta" });
+        defer gpa.free(result.stdout);
+        defer gpa.free(result.stderr);
+        try expectSuccess(result);
+        try std.testing.expect(std.mem.find(u8, result.stderr, case.fragment) != null);
+        const calls = try fake_daemon.read(home_dir, "lifecycle-calls");
+        defer gpa.free(calls);
+        try std.testing.expectEqualStrings("version\nreload-auth\n", calls);
+        try std.testing.expectError(error.FileNotFound, home_dir.openFile("restarted-home", .{}));
     }
 }
 

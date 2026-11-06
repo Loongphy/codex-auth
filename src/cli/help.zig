@@ -304,7 +304,8 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  --skip-api   Load usage and account data from local data only (may be inaccurate).\n");
             try out.writeAll("  --json       Emit one machine-readable JSON document for non-interactive switch.\n");
             try out.writeAll("  --restart-daemon\n");
-            try out.writeAll("               Restart a responsive daemon after switching, including unchanged-file recovery.\n");
+            try out.writeAll("               Restart a responsive daemon after switching when its auth reload cannot apply,\n");
+            try out.writeAll("               including unchanged-file recovery.\n");
             try out.writeAll("               Can interrupt attached sessions; cannot be combined with --live.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("               Switch directly when the target resolves to one account.\n");

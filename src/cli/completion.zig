@@ -325,7 +325,7 @@ const switch_flags = [_]FlagSpec{
     .{ .name = "--api", .desc = "Load usage and account data from APIs", .conflicts = &.{ "--skip-api", "--json" } },
     .{ .name = "--skip-api", .desc = "Load usage and account data from local data only", .conflicts = &.{ "--api", "--json" } },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
-    .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
+    .{ .name = "--restart-daemon", .desc = "Restart the running daemon to apply the selected credentials" },
 };
 const remove_flags = [_]FlagSpec{
     .{ .name = "--live", .desc = "Open the live remove UI", .conflicts = &.{ "--json", "--all" } },
@@ -348,7 +348,7 @@ const config_live_flags = [_]FlagSpec{
 const dash_cands = [_]Cand{.{ .value = "-", .desc = "Switch to the previous active account" }};
 const dash_flags = [_]FlagSpec{
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive switch" },
-    .{ .name = "--restart-daemon", .desc = "Apply the selected credentials to the running daemon" },
+    .{ .name = "--restart-daemon", .desc = "Restart the running daemon to apply the selected credentials" },
 };
 const clean_cands = [_]Cand{.{ .value = "background", .desc = "Delete stale background files" }};
 const shell_cands = [_]Cand{

@@ -267,7 +267,7 @@ fn activateSelection(
     const outcome = if (opts.restart_daemon)
         try client.ensure(daemon.restart_timeout_ms)
     else
-        try client.probe();
+        try client.reload();
     try cli.output.printCodexDaemonDiagnostic(codex_home, client.executable, outcome, opts.restart_daemon);
     if (opts.restart_daemon and (outcome == .unknown or outcome == .restart_failed or outcome == .timed_out))
         return error.CodexDaemonRestartFailed;
