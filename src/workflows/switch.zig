@@ -254,9 +254,16 @@ fn activateSelection(
     if (!opts.json) try cli.output.printSwitchedAccount(allocator, reg, account_key);
     var client = daemon.Client.init(allocator, codex_home) catch |err| {
         if (err == error.OutOfMemory) return err;
-        cli.output.printCodexDaemonDiagnostic(codex_home, "codex", .unknown) catch {};
+        // A missing executable is only absence when the control socket is
+        // gone too; a live endpoint with an unlaunchable helper stays
+        // unconfirmed, because that daemon may still serve old credentials.
+        const outcome: daemon.Outcome = if (err == error.ExecutableRequired)
+            (if (try daemon.Client.controlEndpointPresent(codex_home)) .unknown else .not_running)
+        else
+            .unknown;
+        cli.output.printCodexDaemonDiagnostic(codex_home, "codex", outcome) catch {};
         if (!opts.json) return;
-        var result = results.buildSwitchResult(allocator, reg, account_key, .unknown) catch |build_err| return printJsonWorkflowError(build_err);
+        var result = results.buildSwitchResult(allocator, reg, account_key, outcome) catch |build_err| return printJsonWorkflowError(build_err);
         defer result.deinit(allocator);
         try cli.json_output.printSwitchResult(&result);
         return;

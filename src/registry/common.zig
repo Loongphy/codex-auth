@@ -24,9 +24,45 @@ pub fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
     return app_runtime.getEnvVarOwned(allocator, name);
 }
 
+/// Terminal-untrusted text (API fields and auth-file values rendered into
+/// table cells) must not carry control characters: C0/C1/DEL codepoints and
+/// invalid UTF-8 bytes become a plain space so nothing stored can emit an
+/// escape sequence or a line break when it is displayed.
+pub fn sanitizeDisplayAlloc(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.ensureTotalCapacity(allocator, text.len);
+    var index: usize = 0;
+    while (index < text.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(text[index]) catch {
+            out.appendAssumeCapacity(' ');
+            index += 1;
+            continue;
+        };
+        if (index + cp_len > text.len) {
+            out.appendAssumeCapacity(' ');
+            break;
+        }
+        const cp = std.unicode.utf8Decode(text[index..][0..cp_len]) catch {
+            out.appendAssumeCapacity(' ');
+            index += 1;
+            continue;
+        };
+        if (cp < 0x20 or cp == 0x7f or (cp >= 0x80 and cp <= 0x9f)) {
+            out.appendAssumeCapacity(' ');
+        } else {
+            out.appendSliceAssumeCapacity(text[index .. index + cp_len]);
+        }
+        index += cp_len;
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
 pub fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
-    var buf = try allocator.alloc(u8, email.len);
-    for (email, 0..) |ch, i| {
+    const sanitized = try sanitizeDisplayAlloc(allocator, email);
+    defer allocator.free(sanitized);
+    var buf = try allocator.alloc(u8, sanitized.len);
+    for (sanitized, 0..) |ch, i| {
         buf[i] = std.ascii.toLower(ch);
     }
     return buf;
@@ -565,3 +601,72 @@ pub fn writeFile(path: []const u8, data: []const u8) !void {
 }
 
 pub const max_backups: usize = 5;
+
+/// Directories under `accounts/` managed by features other than the account
+/// registry; `clean` must preserve them alongside `backups` and the live
+/// snapshots.
+pub const default_export_dir_name = "backup";
+pub const codext_cache_dir_name = "codext-cli";
+
+/// Why an alias value is unusable; shared by `alias set` and `import --alias`
+/// so both reject the same selector-conflicting or unsafe values.
+pub const AliasIssue = enum {
+    empty,
+    digit_only,
+    flag_like,
+    colon_prefix,
+    control_char,
+    duplicate_alias,
+    account_key_collision,
+};
+
+pub const AliasConflict = struct {
+    issue: AliasIssue,
+    index: usize,
+};
+
+fn aliasIsDigitOnly(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |ch| {
+        if (ch < '0' or ch > '9') return false;
+    }
+    return true;
+}
+
+/// Format rules shared by `alias set` and `import --alias`: non-empty, never a
+/// number (digits select displayed rows), never flag- or colon-prefixed
+/// (selectors and completion protocols reserve those), and free of the same
+/// control characters `sanitizeDisplayAlloc` strips — accepting a codepoint
+/// the loader would remove would let a saved alias silently disappear.
+pub fn aliasFormatIssue(alias_value: []const u8) ?AliasIssue {
+    if (alias_value.len == 0) return .empty;
+    if (aliasIsDigitOnly(alias_value)) return .digit_only;
+    if (std.mem.startsWith(u8, alias_value, "-")) return .flag_like;
+    if (std.mem.startsWith(u8, alias_value, ":")) return .colon_prefix;
+    var index: usize = 0;
+    while (index < alias_value.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(alias_value[index]) catch return .control_char;
+        if (index + cp_len > alias_value.len) return .control_char;
+        const cp = std.unicode.utf8Decode(alias_value[index..][0..cp_len]) catch return .control_char;
+        if (cp < 0x20 or cp == 0x7f or (cp >= 0x80 and cp <= 0x9f)) return .control_char;
+        index += cp_len;
+    }
+    return null;
+}
+
+/// `alias_value` conflicts when another account already carries it
+/// (case-insensitive) or when it equals an account key, because keys resolve
+/// before aliases. `exclude_idx` skips the slot being updated — a record may
+/// keep the alias it already has.
+pub fn findAliasConflict(reg: *const Registry, alias_value: []const u8, exclude_idx: ?usize) ?AliasConflict {
+    for (reg.accounts.items, 0..) |rec, idx| {
+        if (exclude_idx != null and idx == exclude_idx.?) continue;
+        if (rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, alias_value)) {
+            return .{ .issue = .duplicate_alias, .index = idx };
+        }
+        if (std.ascii.eqlIgnoreCase(rec.account_key, alias_value)) {
+            return .{ .issue = .account_key_collision, .index = idx };
+        }
+    }
+    return null;
+}

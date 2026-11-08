@@ -47,13 +47,7 @@ const CpaAuthJson = struct {
     last_refresh: ?[]const u8,
 };
 
-fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
-    var buf = try allocator.alloc(u8, email.len);
-    for (email, 0..) |ch, i| {
-        buf[i] = std.ascii.toLower(ch);
-    }
-    return buf;
-}
+const normalizeEmailAlloc = registry.normalizeEmailAlloc;
 
 fn recordKeyAlloc(
     allocator: std.mem.Allocator,

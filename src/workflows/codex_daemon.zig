@@ -36,11 +36,29 @@ pub const Client = struct {
         self.allocator.free(self.executable);
     }
 
+    fn controlSocketPathAlloc(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
+        return std.Io.Dir.path.join(allocator, &.{ codex_home, "app-server-control", "app-server-control.sock" });
+    }
+
+    /// The control endpoint is the only presence signal that survives a
+    /// missing or moved helper executable: callers that cannot resolve one
+    /// must still consult the socket before reporting the daemon absent. A
+    /// probe error is conservatively presence, not absence.
+    pub fn controlEndpointPresent(codex_home: []const u8) !bool {
+        const socket = try controlSocketPathAlloc(runtime.scratchAllocator(), codex_home);
+        defer runtime.scratchAllocator().free(socket);
+        std.Io.Dir.cwd().access(runtime.io(), socket, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return true,
+        };
+        return true;
+    }
+
     /// A socket path alone never establishes responsiveness. A missing endpoint
     /// is a best-effort absence check; errors and stale endpoints stay unknown.
     pub fn probe(self: *const Client) !Outcome {
         if (!supported()) return .unsupported;
-        const socket = try std.Io.Dir.path.join(self.allocator, &.{ self.codex_home, "app-server-control", "app-server-control.sock" });
+        const socket = try controlSocketPathAlloc(self.allocator, self.codex_home);
         defer self.allocator.free(socket);
         std.Io.Dir.cwd().access(runtime.io(), socket, .{}) catch |err| switch (err) {
             error.FileNotFound => return .not_running,
@@ -243,6 +261,9 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
     defer env.deinit();
     var paths = std.mem.splitScalar(u8, env.get("PATH") orelse "", if (builtin.target.os.tag == .windows) ';' else ':');
     while (paths.next()) |dir| {
+        // Empty PATH segments resolve relative to the current directory, which
+        // must never be searched for a lifecycle helper.
+        if (dir.len == 0) continue;
         const path = try std.Io.Dir.path.join(allocator, &.{ dir, name });
         if (isExecutable(path)) {
             defer allocator.free(path);
@@ -250,7 +271,9 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
         }
         allocator.free(path);
     }
-    return try allocator.dupe(u8, name);
+    // Spawning a bare name would let the OS search the current directory, so
+    // an unresolvable daemon executable stays an init failure instead.
+    return error.ExecutableRequired;
 }
 
 fn isExecutable(path: []const u8) bool {

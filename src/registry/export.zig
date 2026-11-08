@@ -23,7 +23,7 @@ pub const ExportSummary = struct {
 };
 
 pub fn defaultExportDirectory(allocator: std.mem.Allocator, codex_home: []const u8) ![]u8 {
-    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", "backup" });
+    return try std.Io.Dir.path.join(allocator, &[_][]const u8{ codex_home, "accounts", common.default_export_dir_name });
 }
 
 pub fn exportAccounts(

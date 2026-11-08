@@ -1,5 +1,6 @@
 const std = @import("std");
 const http = @import("http.zig");
+const registry = @import("../registry/root.zig");
 
 pub const default_me_endpoint = "https://api.openai.com/v1/me";
 
@@ -52,9 +53,9 @@ pub fn parseMeResponse(allocator: std.mem.Allocator, body: []const u8) !MeResult
 
     const owned_user_id = try allocator.dupe(u8, id);
     errdefer allocator.free(owned_user_id);
-    const owned_email = try normalizeEmailAlloc(allocator, email);
+    const owned_email = try registry.normalizeEmailAlloc(allocator, email);
     errdefer allocator.free(owned_email);
-    const owned_name = if (name) |value| try allocator.dupe(u8, value) else null;
+    const owned_name = if (name) |value| try registry.sanitizeDisplayAlloc(allocator, value) else null;
     errdefer if (owned_name) |value| allocator.free(value);
 
     return .{
@@ -70,12 +71,4 @@ fn nonEmptyStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
         .string => |s| if (s.len > 0) s else null,
         else => null,
     };
-}
-
-fn normalizeEmailAlloc(allocator: std.mem.Allocator, email: []const u8) ![]u8 {
-    var buf = try allocator.alloc(u8, email.len);
-    for (email, 0..) |ch, i| {
-        buf[i] = std.ascii.toLower(ch);
-    }
-    return buf;
 }

@@ -39,6 +39,8 @@ pub fn isImportValidationError(err: anyerror) bool {
         error.AccountIdMismatch,
         error.InvalidJwt,
         error.InvalidBase64,
+        error.InvalidAlias,
+        error.DuplicateAlias,
         => true,
         else => false,
     };

@@ -189,6 +189,8 @@ pub fn isAllowedCurrentSnapshot(reg: *const Registry, entry_name: []const u8) bo
 pub fn isAllowedAccountsEntry(reg: *const Registry, entry_name: []const u8) bool {
     if (std.mem.eql(u8, entry_name, "registry.json")) return true;
     if (std.mem.eql(u8, entry_name, "backups")) return true;
+    if (std.mem.eql(u8, entry_name, common.default_export_dir_name)) return true;
+    if (std.mem.eql(u8, entry_name, common.codext_cache_dir_name)) return true;
     return isAllowedCurrentSnapshot(reg, entry_name);
 }
 
@@ -225,19 +227,37 @@ pub fn cleanAccountsBackupsWithLoader(allocator: std.mem.Allocator, codex_home: 
     var reg = try load_registry(allocator, codex_home);
     defer reg.deinit(allocator);
 
-    var stale_snapshot_files_removed: usize = 0;
+    // Collect the stale entries first: deleting while the directory iterator is
+    // live can skip siblings depending on the filesystem.
+    var stale_names: std.ArrayList(struct { name: []u8, kind: std.Io.File.Kind }) = .empty;
+    defer {
+        for (stale_names.items) |item| allocator.free(item.name);
+        stale_names.deinit(allocator);
+    }
     var accounts_dir = try std.Io.Dir.cwd().openDir(app_runtime.io(), dir, .{ .iterate = true });
     defer accounts_dir.close(app_runtime.io());
     var it = accounts_dir.iterate();
     while (try it.next(app_runtime.io())) |entry| {
+        switch (entry.kind) {
+            .file, .sym_link, .directory => {},
+            else => continue,
+        }
         if (isAllowedAccountsEntry(&reg, entry.name)) {
             continue;
         }
+        const owned_name = try allocator.dupe(u8, entry.name);
+        stale_names.append(allocator, .{ .name = owned_name, .kind = entry.kind }) catch |err| {
+            allocator.free(owned_name);
+            return err;
+        };
+    }
 
-        switch (entry.kind) {
-            .file, .sym_link => try accounts_dir.deleteFile(app_runtime.io(), entry.name),
-            .directory => try accounts_dir.deleteTree(app_runtime.io(), entry.name),
-            else => continue,
+    var stale_snapshot_files_removed: usize = 0;
+    for (stale_names.items) |item| {
+        switch (item.kind) {
+            .file, .sym_link => try accounts_dir.deleteFile(app_runtime.io(), item.name),
+            .directory => try accounts_dir.deleteTree(app_runtime.io(), item.name),
+            else => unreachable,
         }
         stale_snapshot_files_removed += 1;
     }

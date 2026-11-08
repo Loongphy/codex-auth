@@ -68,46 +68,28 @@ fn replaceAlias(allocator: std.mem.Allocator, rec: *registry.AccountRecord, alia
     rec.alias = owned_alias;
 }
 
-fn isDigitOnly(value: []const u8) bool {
-    if (value.len == 0) return false;
-    for (value) |ch| {
-        if (ch < '0' or ch > '9') return false;
-    }
-    return true;
-}
-
 fn validateAlias(reg: *registry.Registry, alias_value: []const u8, selected_idx: usize) !void {
-    if (alias_value.len == 0) {
-        try cli.output.printInvalidAliasError("alias cannot be empty; use `codex-auth alias clear <selector>` to remove one.");
-        return error.InvalidAlias;
-    }
-    if (isDigitOnly(alias_value)) {
-        try cli.output.printInvalidAliasError("alias cannot be only digits because numbers select displayed rows.");
-        return error.InvalidAlias;
-    }
-    if (std.mem.startsWith(u8, alias_value, "-")) {
-        try cli.output.printInvalidAliasError("alias cannot start with '-' because flag-like words are never read as selectors.");
-        return error.InvalidAlias;
-    }
-    if (std.mem.startsWith(u8, alias_value, ":")) {
-        try cli.output.printInvalidAliasError("alias cannot start with ':' because completion protocols reserve leading colons.");
-        return error.InvalidAlias;
-    }
-    for (alias_value) |ch| {
-        if (ch < 0x20 or ch == 0x7f) {
-            try cli.output.printInvalidAliasError("alias cannot contain control characters.");
-            return error.InvalidAlias;
+    if (registry.aliasFormatIssue(alias_value)) |issue| {
+        switch (issue) {
+            .empty => try cli.output.printInvalidAliasError("alias cannot be empty; use `codex-auth alias clear <selector>` to remove one."),
+            .digit_only => try cli.output.printInvalidAliasError("alias cannot be only digits because numbers select displayed rows."),
+            .flag_like => try cli.output.printInvalidAliasError("alias cannot start with '-' because flag-like words are never read as selectors."),
+            .colon_prefix => try cli.output.printInvalidAliasError("alias cannot start with ':' because completion protocols reserve leading colons."),
+            .control_char => try cli.output.printInvalidAliasError("alias cannot contain control characters."),
+            else => unreachable,
         }
+        return error.InvalidAlias;
     }
-    for (reg.accounts.items, 0..) |rec, idx| {
-        if (idx == selected_idx) continue;
-        if (rec.alias.len != 0 and std.ascii.eqlIgnoreCase(rec.alias, alias_value)) {
-            try cli.output.printDuplicateAliasError(alias_value, rec.email);
-            return error.DuplicateAlias;
-        }
-        if (std.ascii.eqlIgnoreCase(rec.account_key, alias_value)) {
-            try cli.output.printInvalidAliasError("alias cannot equal another account's key because keys resolve before aliases.");
-            return error.InvalidAlias;
+    if (registry.findAliasConflict(reg, alias_value, selected_idx)) |conflict| {
+        switch (conflict.issue) {
+            .duplicate_alias => {
+                try cli.output.printDuplicateAliasError(alias_value, reg.accounts.items[conflict.index].email);
+                return error.DuplicateAlias;
+            },
+            else => {
+                try cli.output.printInvalidAliasError("alias cannot equal another account's key because keys resolve before aliases.");
+                return error.InvalidAlias;
+            },
         }
     }
 }

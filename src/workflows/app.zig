@@ -18,7 +18,7 @@ const desktop_section_name = "desktop";
 const wsl_desktop_setting_key = "runCodexInWindowsSubsystemForLinux";
 const codext_repo_latest_url = "https://api.github.com/repos/Loongphy/codext/releases/latest";
 const codext_repo_url = "https://github.com/Loongphy/codext";
-const codext_cache_dir_name = "codext-cli";
+const codext_cache_dir_name = registry.codext_cache_dir_name;
 const windows_app_id_resolver_script =
     "function Resolve-CodexAppPackage { param([string]$AppId) " ++
     "if ([string]::IsNullOrWhiteSpace($AppId)) { throw 'Codex App ID is empty' }; " ++
@@ -82,7 +82,14 @@ pub fn handleApp(allocator: std.mem.Allocator, resolved_codex_home: []const u8, 
     defer effective_app_id.deinit(allocator);
     try requireAppId(effective_app_id);
     try validateConfiguredOptions(allocator, effective_platform.value, effective_app_id, opts);
-    if (try isCodexAppRunning(allocator, effective_platform.value, effective_app_id)) {
+    const app_running = try isCodexAppRunning(allocator, effective_platform.value, effective_app_id);
+    if (app_running == null) {
+        // A failed probe is not evidence the app is absent; launching is still
+        // attempted because a packaged second launch usually just activates the
+        // existing instance, but the user should know the check was skipped.
+        try writeAppStep("Could not confirm whether Codex App is running; launching anyway.");
+    }
+    if (app_running == true) {
         try writeAppAlreadyRunning();
         return;
     }
@@ -362,18 +369,20 @@ fn platformLabel(platform: types.AppPlatform) []const u8 {
     };
 }
 
-fn isCodexAppRunning(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: ResolvedValue) !bool {
-    const value = app_id.value orelse return false;
+/// `null` means the running-state probe itself failed, which is different from
+/// a confirmed "not running" and must not silently take the launch path.
+fn isCodexAppRunning(allocator: std.mem.Allocator, platform: ?types.AppPlatform, app_id: ResolvedValue) !?bool {
+    const value = app_id.value orelse return null;
     return switch (builtin.target.os.tag) {
         .windows => try isCodexAppRunningOnWindows(allocator, value),
         .macos => try isCodexAppRunningOnMac(allocator, value),
-        else => switch (platform orelse return false) {
+        else => switch (platform orelse return null) {
             .win, .wsl, .mac => false,
         },
     };
 }
 
-fn isCodexAppRunningOnWindows(allocator: std.mem.Allocator, app_id: []const u8) !bool {
+fn isCodexAppRunningOnWindows(allocator: std.mem.Allocator, app_id: []const u8) !?bool {
     const script = try windowsAppIdRunningScriptAlloc(allocator, app_id);
     defer allocator.free(script);
 
@@ -382,13 +391,13 @@ fn isCodexAppRunningOnWindows(allocator: std.mem.Allocator, app_id: []const u8) 
         &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script },
         3000,
         null,
-    ) catch return false;
+    ) catch return null;
     defer result.deinit(allocator);
-    if (result.timed_out) return false;
+    if (result.timed_out or !childExitedSuccessfully(result.term)) return null;
     return std.mem.trim(u8, result.stdout, " \t\r\n").len != 0;
 }
 
-fn isCodexAppRunningOnMac(allocator: std.mem.Allocator, app_id: []const u8) !bool {
+fn isCodexAppRunningOnMac(allocator: std.mem.Allocator, app_id: []const u8) !?bool {
     var result = http_child.runChildCapture(
         allocator,
         &[_][]const u8{
@@ -403,9 +412,9 @@ fn isCodexAppRunningOnMac(allocator: std.mem.Allocator, app_id: []const u8) !boo
         },
         3000,
         null,
-    ) catch return false;
+    ) catch return null;
     defer result.deinit(allocator);
-    if (result.timed_out or !childExitedSuccessfully(result.term)) return false;
+    if (result.timed_out or !childExitedSuccessfully(result.term)) return null;
     return std.mem.eql(u8, std.mem.trim(u8, result.stdout, " \t\r\n"), "true");
 }
 
@@ -479,9 +488,68 @@ fn writeAppPlatformSetting(allocator: std.mem.Allocator, home: []const u8, value
     const updated = try updateDesktopWslSettingTomlAlloc(allocator, data, use_wsl);
     defer allocator.free(updated);
 
-    var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), config_path, .{ .truncate = true });
-    defer file.close(app_runtime.io());
-    try file.writeStreamingAll(app_runtime.io(), updated);
+    try writeConfigFileAtomic(config_path, updated);
+}
+
+/// config.toml is user-edited state shared with Codex itself; a crash mid-write
+/// must leave either the old or the new file, never a truncated or missing one.
+/// A symlinked config stays linked: the rewrite targets the real path, so the
+/// link keeps pointing at the updated file instead of becoming a plain copy.
+/// POSIX gets a single atomic rename; Windows keeps the backup-and-swap dance
+/// because its rename cannot overwrite a destination.
+fn writeConfigFileAtomic(path: []const u8, data: []const u8) !void {
+    const allocator = app_runtime.scratchAllocator();
+    const target = app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path) catch try allocator.dupe(u8, path);
+    defer allocator.free(target);
+
+    if (builtin.target.os.tag != .windows) {
+        var buf: [4096]u8 = undefined;
+        var atomic_file = try std.Io.Dir.cwd().createFileAtomic(app_runtime.io(), target, .{ .replace = true });
+        defer atomic_file.deinit(app_runtime.io());
+        var file_writer = atomic_file.file.writer(app_runtime.io(), &buf);
+        try file_writer.interface.writeAll(data);
+        try file_writer.interface.flush();
+        try atomic_file.replace(app_runtime.io());
+        return;
+    }
+
+    return writeConfigFileWindowsReplace(target, data);
+}
+
+fn writeConfigFileWindowsReplace(path: []const u8, data: []const u8) !void {
+    const allocator = app_runtime.scratchAllocator();
+    const temp_path = try allocator.print("{s}.tmp.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
+    defer allocator.free(temp_path);
+    const backup_path = try allocator.print("{s}.bak.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
+    defer allocator.free(backup_path);
+
+    {
+        var file = try std.Io.Dir.cwd().createFile(app_runtime.io(), temp_path, .{ .truncate = true });
+        defer file.close(app_runtime.io());
+        try file.writeStreamingAll(app_runtime.io(), data);
+        try file.sync(app_runtime.io());
+    }
+
+    const had_original = blk: {
+        std.Io.Dir.cwd().rename(path, std.Io.Dir.cwd(), backup_path, app_runtime.io()) catch |err| switch (err) {
+            error.FileNotFound => break :blk false,
+            else => return err,
+        };
+        break :blk true;
+    };
+    errdefer {
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), temp_path) catch {};
+        if (had_original) {
+            std.Io.Dir.cwd().rename(backup_path, std.Io.Dir.cwd(), path, app_runtime.io()) catch {};
+        }
+    }
+    try std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), path, app_runtime.io());
+    if (had_original) {
+        std.Io.Dir.cwd().deleteFile(app_runtime.io(), backup_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
 }
 
 const TomlLocation = struct {
@@ -828,19 +896,34 @@ fn cachedCodextCliPath(allocator: std.mem.Allocator, home: []const u8, platform:
 
 fn downloadDefaultCodextCli(allocator: std.mem.Allocator, home: []const u8, platform: types.AppPlatform, quiet: bool) !CodextInstallResult {
     if (!quiet) try writeAppStep("Checking latest " ++ codext_repo_url ++ " release...");
-    const release = try fetchLatestCodextRelease(allocator);
+    const release = fetchLatestCodextRelease(allocator) catch |err| {
+        // The freshness check is the only step that needs the network, so an
+        // already-installed codext keeps working offline.
+        if (try cachedCodextCliPath(allocator, home, platform)) |cached| {
+            if (!quiet) try writeAppStep("Release check failed; using the cached Codext CLI.");
+            return .{ .path = cached, .source = .cached };
+        }
+        if (err == error.InvalidCodextReleaseResponse) {
+            try writeAppError("Codext release lookup returned an unexpected response.\n");
+        }
+        return err;
+    };
     defer release.deinit(allocator);
 
     const cache_root = try std.Io.Dir.path.join(allocator, &.{ home, "accounts", codext_cache_dir_name });
     defer allocator.free(cache_root);
     try std.Io.Dir.cwd().createDirPath(app_runtime.io(), cache_root);
 
-    const asset = release.assetFor(platform) orelse return error.CodextReleaseAssetNotFound;
+    const asset = release.assetFor(platform) orelse {
+        try writeAppError("No Codext release asset matches this platform.\n");
+        return error.CodextReleaseAssetNotFound;
+    };
     const target_downloaded = try ensureCodextAssetInstalled(allocator, cache_root, release.tag, platform, asset, quiet);
 
     const installed = try managedCodextExecutablePath(allocator, home, platform);
     if (!fileExists(installed)) {
         allocator.free(installed);
+        try writeAppError("Codext CLI install did not produce the expected executable.\n");
         return error.CodextReleaseInstallFailed;
     }
     return .{
@@ -1042,7 +1125,15 @@ fn downloadAndInstallCodextAsset(
         120000,
     );
     defer download.deinit(allocator);
-    try checkedChildResult(download);
+    checkedChildResult(download) catch |err| {
+        try writeAppStep("Codext download failed.");
+        const detail = std.mem.trim(u8, download.stderr, " \t\r\n");
+        if (detail.len != 0) {
+            try writeAppError(detail);
+            try writeAppError("\n");
+        }
+        return err;
+    };
     if (platform == .win) {
         const archive_quoted = try psSingleQuoteAlloc(allocator, archive_path);
         defer allocator.free(archive_quoted);
@@ -1050,9 +1141,15 @@ fn downloadAndInstallCodextAsset(
         defer allocator.free(dest_quoted);
         const script = try allocator.print("Expand-Archive -LiteralPath {s} -DestinationPath {s} -Force", .{ archive_quoted, dest_quoted });
         defer allocator.free(script);
-        try runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 120000);
+        runChecked(allocator, &[_][]const u8{ "pwsh.exe", "-NoProfile", "-Command", script }, 120000) catch |err| {
+            try writeAppError("Codext archive extraction failed.\n");
+            return err;
+        };
     } else {
-        try runChecked(allocator, &[_][]const u8{ tarExecutable(), "-xzf", archive_path, "-C", extract_dir }, 120000);
+        runChecked(allocator, &[_][]const u8{ tarExecutable(), "-xzf", archive_path, "-C", extract_dir }, 120000) catch |err| {
+            try writeAppError("Codext archive extraction failed.\n");
+            return err;
+        };
     }
     try installManagedCodextExecutable(allocator, cache_root, extract_dir, platform);
     try writeManagedCodextVersion(allocator, cache_root, tag, platform, asset);
@@ -1161,7 +1258,10 @@ fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []co
     // codex-package.json.
     const metadata_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, "codex-package.json" });
     defer allocator.free(metadata_path);
-    if (!fileExists(metadata_path)) return error.CodextReleaseInstallFailed;
+    if (!fileExists(metadata_path)) {
+        try writeAppError("codext release archive did not contain the expected package layout (codex-package.json is missing).\n");
+        return error.CodextReleaseInstallFailed;
+    }
 
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
     const archive_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, archive_name });

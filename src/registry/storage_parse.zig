@@ -39,7 +39,20 @@ pub fn parseAccountRecord(allocator: std.mem.Allocator, obj: std.json.ObjectMap,
             else => return error.MissingChatgptUserId,
         },
         .email = try normalizeEmailAlloc(allocator, email),
-        .alias = try allocator.dupe(u8, alias),
+        // Older builds stored aliases without validation. A control-containing
+        // alias can never be typed as a selector, so drop it rather than
+        // silently renaming it to a different value.
+        .alias = blk: {
+            const cleaned = try common.sanitizeDisplayAlloc(allocator, alias);
+            if (!std.mem.eql(u8, cleaned, alias)) {
+                allocator.free(cleaned);
+                break :blk try allocator.dupe(u8, "");
+            }
+            break :blk cleaned;
+        },
+        // Stored display names predate the entry-point sanitization, so they
+        // still get cleaned here: every render path consumes the loaded
+        // record, not the raw JSON.
         .account_name = try parseOptionalStoredStringAlloc(allocator, obj.get("account_name")),
         .plan = null,
         .auth_mode = null,
@@ -81,5 +94,5 @@ fn parseOptionalStoredStringAlloc(allocator: std.mem.Allocator, value: ?std.json
         else => return null,
     };
     if (text.len == 0) return null;
-    return try allocator.dupe(u8, text);
+    return try common.sanitizeDisplayAlloc(allocator, text);
 }

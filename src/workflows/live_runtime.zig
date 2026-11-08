@@ -566,6 +566,10 @@ fn runDaemonRound(worker: *DaemonWorker) void {
     const text: ?[]const u8 = blk: {
         var client = daemon.Client.init(allocator, worker.codex_home) catch |err| {
             if (err == error.OutOfMemory) break :blk "out of memory";
+            // No executable is only absence when the control socket is gone
+            // too; a live endpoint with an unlaunchable helper stays
+            // unconfirmed.
+            if (err == error.ExecutableRequired and !(daemon.Client.controlEndpointPresent(worker.codex_home) catch true)) break :blk null;
             break :blk "daemon state unconfirmed";
         };
         defer client.deinit();

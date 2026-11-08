@@ -1440,6 +1440,39 @@ test "clean uses a whitelist and only removes non-current entries under accounts
     preserved_backup.close();
 }
 
+test "clean preserves the default export and codext cache directories" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("accounts");
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "keep@example.com", "", .business, .chatgpt, 1));
+    try registry.saveRegistry(gpa, codex_home, &reg);
+
+    try tmp.dir.makePath("accounts/backup");
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/backup/user@example.com.auth.json", .data = "exported" });
+    try tmp.dir.makePath("accounts/codext-cli");
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/codext-cli/codext", .data = "bin" });
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/junk.txt", .data = "junk" });
+    try tmp.dir.makePath("accounts/stray-dir");
+    try tmp.dir.writeFile(.{ .sub_path = "accounts/stray-dir/old.txt", .data = "junk" });
+
+    const summary = try registry.cleanAccountsBackups(gpa, codex_home);
+    try std.testing.expect(summary.stale_snapshot_files_removed == 2);
+
+    var exported = try tmp.dir.openFile("accounts/backup/user@example.com.auth.json", .{});
+    exported.close();
+    var codext = try tmp.dir.openFile("accounts/codext-cli/codext", .{});
+    codext.close();
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openFile("accounts/junk.txt", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp.dir.openDir("accounts/stray-dir", .{}));
+}
+
 test "clean preserves account snapshots when registry is missing" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -1756,6 +1789,95 @@ test "import auth path with repeated single file reports updated on second impor
     try std.testing.expect(second.events.items[0].outcome == .updated);
 }
 
+test "import auth path rejects explicit aliases that conflict with selector rules" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const auth_json = try authJsonWithEmailPlan(gpa, "aliased@example.com", "plus");
+    defer gpa.free(auth_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/aliased.json", .data = auth_json });
+
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "aliased.json" });
+    defer gpa.free(auth_path);
+
+    const bad_aliases = [_][]const u8{ "", "123", "-flag", ":colon", "bad\talias", "bad\x01alias" };
+    for (bad_aliases) |bad_alias| {
+        var reg = makeEmptyRegistry();
+        defer reg.deinit(gpa);
+
+        var report = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, bad_alias);
+        defer report.deinit(gpa);
+        try std.testing.expectEqual(@as(usize, 0), report.appliedCount());
+        try std.testing.expectEqual(@as(usize, 1), report.skipped);
+        const failure = report.failure orelse return error.TestExpectedEqual;
+        try std.testing.expect(failure == error.InvalidAlias);
+        try std.testing.expectEqual(@as(usize, 0), reg.accounts.items.len);
+    }
+}
+
+test "import auth path rejects an explicit alias already taken by another account" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const auth_json = try authJsonWithEmailPlan(gpa, "incoming@example.com", "plus");
+    defer gpa.free(auth_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/incoming.json", .data = auth_json });
+
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "incoming.json" });
+    defer gpa.free(auth_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+    try reg.accounts.append(gpa, try makeAccountRecord(gpa, "other@example.com", "taken", .plus, .chatgpt, 1));
+
+    var report = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, "taken");
+    defer report.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), report.appliedCount());
+    const failure = report.failure orelse return error.TestExpectedEqual;
+    try std.testing.expect(failure == error.DuplicateAlias);
+    try std.testing.expectEqual(@as(usize, 1), reg.accounts.items.len);
+}
+
+test "import auth path accepts re-import with the same explicit alias on the same account" {
+    const gpa = std.testing.allocator;
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const codex_home = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(codex_home);
+    try tmp.dir.makePath("imports");
+
+    const auth_json = try authJsonWithEmailPlan(gpa, "same@example.com", "plus");
+    defer gpa.free(auth_json);
+    try tmp.dir.writeFile(.{ .sub_path = "imports/same.json", .data = auth_json });
+
+    const auth_path = try fs.path.join(gpa, &[_][]const u8{ codex_home, "imports", "same.json" });
+    defer gpa.free(auth_path);
+
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    var first = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, "mine");
+    defer first.deinit(gpa);
+    try std.testing.expect(first.imported == 1);
+
+    var second = try registry.importAuthPath(gpa, codex_home, &reg, auth_path, "mine");
+    defer second.deinit(gpa);
+    try std.testing.expect(second.updated == 1);
+    try std.testing.expect(second.skipped == 0);
+    try std.testing.expectEqualStrings("mine", reg.accounts.items[0].alias);
+}
+
 test "import auth path with invalid single file keeps failure for non-zero exit handling" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
@@ -2013,4 +2135,34 @@ test "export accounts writes cpa token files to default backup directory" {
     defer gpa.free(exported);
     try std.testing.expect(std.mem.find(u8, exported, "\"refresh_token\": \"refresh-export-cpa@example.com\"") != null);
     try std.testing.expect(std.mem.find(u8, exported, "\"tokens\"") == null);
+}
+
+test "sanitizeDisplayAlloc replaces control characters and invalid utf-8" {
+    const gpa = std.testing.allocator;
+
+    const plain = try registry.sanitizeDisplayAlloc(gpa, "Alice Example");
+    defer gpa.free(plain);
+    try std.testing.expectEqualStrings("Alice Example", plain);
+
+    const controls = try registry.sanitizeDisplayAlloc(gpa, "line\nbreak\x1b[31m red\x7f\x80");
+    defer gpa.free(controls);
+    try std.testing.expect(std.mem.indexOfScalar(u8, controls, '\n') == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, controls, 0x1b) == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, controls, 0x7f) == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, controls, 0x80) == null);
+    try std.testing.expectEqualStrings("line break [31m red  ", controls);
+
+    const truncated = try registry.sanitizeDisplayAlloc(gpa, "emoji \xf0\x9f");
+    defer gpa.free(truncated);
+    try std.testing.expect(std.mem.indexOfScalar(u8, truncated, 0xf0) == null);
+    try std.testing.expect(std.ascii.isPrint(truncated[truncated.len - 1]));
+}
+
+test "aliasFormatIssue rejects c1 controls and malformed utf-8 like the loader does" {
+    const c1 = "bad\xc2\x85alias";
+    try std.testing.expect(registry.aliasFormatIssue(c1) == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("bad\xf0\x9f") == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("bad\x80alias") == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("fine-alias_1") == null);
+    try std.testing.expect(registry.aliasFormatIssue("emoji-\xe2\x9c\x93") == null);
 }

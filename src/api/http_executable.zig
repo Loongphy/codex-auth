@@ -82,12 +82,16 @@ pub fn resolveExecutablePathEntryForLaunchAlloc(
     return null;
 }
 fn accessPath(path: []const u8) bool {
+    // A PATH entry that exists but cannot be launched (e.g. a data file named
+    // `curl`) must not shadow later, usable candidates. Windows has no execute
+    // permission bit, so existence stays the check there.
+    const options: std.Io.Dir.AccessOptions = if (builtin.target.os.tag == .windows) .{} else .{ .execute = true };
     if (std.Io.Dir.path.isAbsolute(path)) {
-        std.Io.Dir.accessAbsolute(app_runtime.io(), path, .{}) catch return false;
+        std.Io.Dir.accessAbsolute(app_runtime.io(), path, options) catch return false;
         return true;
     }
 
-    std.Io.Dir.cwd().access(app_runtime.io(), path, .{}) catch return false;
+    std.Io.Dir.cwd().access(app_runtime.io(), path, options) catch return false;
     return true;
 }
 

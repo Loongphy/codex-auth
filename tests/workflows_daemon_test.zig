@@ -5,9 +5,25 @@ const fs = @import("codex_auth").core.compat_fs;
 const runtime = @import("codex_auth").core.runtime;
 const fake = @import("support/codex_daemon.zig");
 
+/// A managed executable placeholder with no control endpoint: enough for
+/// Client.init to resolve the helper while every probe still reports
+/// not_running, so no lifecycle command can run.
+fn installStubExecutable(dir: fs.Dir) !void {
+    const name = if (builtin.target.os.tag == .windows) "codex.exe" else "codex";
+    const sub_path = try fs.path.join(std.testing.allocator, &.{ "packages", "app-server-daemon", "current", "bin", name });
+    defer std.testing.allocator.free(sub_path);
+    try dir.makePath("packages/app-server-daemon/current/bin");
+    try dir.writeFile(.{ .sub_path = sub_path, .data = "stub" });
+    if (builtin.target.os.tag == .windows) return;
+    var file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+    try file.chmod(0o700);
+}
+
 test "Scenario: Given a missing daemon endpoint then lifecycle commands are not invoked" {
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
+    try installStubExecutable(tmp.dir);
     const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(home);
     var client = try daemon.Client.init(std.testing.allocator, home);
@@ -153,6 +169,7 @@ test "Scenario: Given a slow reload then ensure reports unconfirmed without rest
 test "Scenario: Given a missing daemon endpoint then the default reload stays a no-op" {
     var tmp = fs.tmpDir(.{});
     defer tmp.cleanup();
+    try installStubExecutable(tmp.dir);
     const home = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
     defer std.testing.allocator.free(home);
     var client = try daemon.Client.init(std.testing.allocator, home);

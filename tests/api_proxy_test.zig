@@ -73,10 +73,18 @@ test "scheme of endpoint follows the url prefix" {
 test "bare proxy server applies to every scheme" {
     const picked_https = proxy.pickProxyServer(.https, "127.0.0.1:7890").?;
     try std.testing.expectEqualStrings("127.0.0.1:7890", picked_https.hostport);
-    try std.testing.expect(!picked_https.socks);
+    try std.testing.expectEqualStrings("", picked_https.scheme);
 
     const picked_http = proxy.pickProxyServer(.http, "  127.0.0.1:7890  ").?;
     try std.testing.expectEqualStrings("127.0.0.1:7890", picked_http.hostport);
+}
+
+test "bare pac failover list yields the first entry only" {
+    const picked = proxy.pickProxyServer(.https, "proxy1.example:8080; proxy2.example:8080").?;
+    try std.testing.expectEqualStrings("proxy1.example:8080", picked.hostport);
+    try std.testing.expectEqualStrings("", picked.scheme);
+
+    try std.testing.expect(proxy.pickProxyServer(.https, " ; ; ") == null);
 }
 
 test "per protocol proxy server picks the matching entry" {
@@ -103,13 +111,24 @@ test "opposite http scheme outranks socks as a fallback" {
 test "socks only system proxy is still usable" {
     const picked = proxy.pickProxyServer(.https, "socks=127.0.0.1:7892").?;
     try std.testing.expectEqualStrings("127.0.0.1:7892", picked.hostport);
-    try std.testing.expect(picked.socks);
+    try std.testing.expectEqualStrings("socks5h://", picked.scheme);
+}
+
+test "explicit socks protocol keys map to their curl schemes" {
+    const picked_v4 = proxy.pickProxyServer(.https, "socks4=127.0.0.1:7892").?;
+    try std.testing.expectEqualStrings("socks4://", picked_v4.scheme);
+
+    const picked_v5 = proxy.pickProxyServer(.https, "socks5=127.0.0.1:7892").?;
+    try std.testing.expectEqualStrings("socks5h://", picked_v5.scheme);
+
+    const picked_v5h = proxy.pickProxyServer(.https, "socks5h=127.0.0.1:7892").?;
+    try std.testing.expectEqualStrings("socks5h://", picked_v5h.scheme);
 }
 
 test "exact scheme match is not flagged as socks" {
     const picked = proxy.pickProxyServer(.https, "https=127.0.0.1:7890;socks=127.0.0.1:7892").?;
     try std.testing.expectEqualStrings("127.0.0.1:7890", picked.hostport);
-    try std.testing.expect(!picked.socks);
+    try std.testing.expectEqualStrings("", picked.scheme);
 }
 
 test "empty proxy server yields nothing" {
@@ -122,7 +141,7 @@ test "bypass list translates the wininet local shorthand" {
     const allocator = std.testing.allocator;
     const translated = (try proxy.translateBypass(allocator, "<local>;*.internal;127.0.0.1")).?;
     defer allocator.free(translated);
-    try std.testing.expectEqualStrings("localhost,*.internal,127.0.0.1", translated);
+    try std.testing.expectEqualStrings("localhost,internal,127.0.0.1", translated);
 }
 
 test "bypass list drops duplicates and accepts either separator" {
@@ -287,6 +306,40 @@ test "resolved proxy is written into the curl config document" {
     try std.testing.expect(std.mem.find(u8, config.items, "url = \"https://chatgpt.com/backend-api/wham/usage\"") != null);
     try std.testing.expect(std.mem.find(u8, config.items, "proxy = \"127.0.0.1:7890\"") != null);
     try std.testing.expect(std.mem.find(u8, config.items, "noproxy = \"localhost,*.internal\"") != null);
+}
+
+test "scutil parser keeps wanted keys past the unrelated field budget" {
+    const allocator = std.testing.allocator;
+    const text =
+        \\<dictionary> {
+        \\  ExceptionsList : <array> {
+        \\    0 : *.local
+        \\  }
+        \\  FTPPassive : 1
+        \\  ProxyAutoConfigEnable : 0
+        \\  ProxyAutoConfigURLString :
+        \\  ProxyAutoDiscoveryEnable : 0
+        \\  ExcludeSimpleHostnames : 0
+        \\  FTPEnable : 0
+        \\  FTPProxy :
+        \\  FTPPort : 0
+        \\  GopherEnable : 0
+        \\  GopherProxy :
+        \\  GopherPort : 0
+        \\  HTTPEnable : 0
+        \\  HTTPSProxy : 10.0.0.2
+        \\  HTTPSPort : 8888
+        \\  HTTPSEnable : 1
+        \\}
+        \\
+    ;
+
+    const values = try scutil.parse(allocator, text);
+    defer if (values.server) |server| allocator.free(server);
+    defer if (values.bypass) |bypass| allocator.free(bypass);
+
+    try std.testing.expectEqualStrings("https=10.0.0.2:8888", values.server.?);
+    try std.testing.expectEqualStrings("*.local", values.bypass.?);
 }
 
 test "curl config document omits proxy options when none resolved" {

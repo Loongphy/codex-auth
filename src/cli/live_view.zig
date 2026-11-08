@@ -249,10 +249,15 @@ pub fn selectAccountWithLiveUpdates(
                             },
                             .enter => {
                                 if (parsedDisplayedIndex(number_buf[0..number_len], total_accounts)) |displayed_idx| {
-                                    return try dupSelectedAccountKeyForDisplayedAccount(allocator, rows, borrowed.reg, displayed_idx);
+                                    if (try dupSelectedAccountKeyForDisplayedAccount(allocator, rows, borrowed.reg, displayed_idx)) |account_key| return account_key;
+                                    // The numbered row is not selectable (for
+                                    // example an errored account): keep the
+                                    // view open instead of treating it as quit.
+                                    continue;
                                 }
                                 if (selected_idx) |idx| return try dupSelectedAccountKey(allocator, rows, borrowed.reg, idx);
-                                return null;
+                                // Nothing selected to confirm; ignore.
+                                continue;
                             },
                             .quit => return null,
                             .backspace => {
