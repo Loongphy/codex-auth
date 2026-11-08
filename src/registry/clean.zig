@@ -245,7 +245,11 @@ pub fn cleanAccountsBackupsWithLoader(allocator: std.mem.Allocator, codex_home: 
         if (isAllowedAccountsEntry(&reg, entry.name)) {
             continue;
         }
-        try stale_names.append(allocator, .{ .name = try allocator.dupe(u8, entry.name), .kind = entry.kind });
+        const owned_name = try allocator.dupe(u8, entry.name);
+        stale_names.append(allocator, .{ .name = owned_name, .kind = entry.kind }) catch |err| {
+            allocator.free(owned_name);
+            return err;
+        };
     }
 
     var stale_snapshot_files_removed: usize = 0;

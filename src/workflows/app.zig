@@ -393,7 +393,7 @@ fn isCodexAppRunningOnWindows(allocator: std.mem.Allocator, app_id: []const u8) 
         null,
     ) catch return null;
     defer result.deinit(allocator);
-    if (result.timed_out) return null;
+    if (result.timed_out or !childExitedSuccessfully(result.term)) return null;
     return std.mem.trim(u8, result.stdout, " \t\r\n").len != 0;
 }
 
@@ -492,10 +492,31 @@ fn writeAppPlatformSetting(allocator: std.mem.Allocator, home: []const u8, value
 }
 
 /// config.toml is user-edited state shared with Codex itself; a crash mid-write
-/// must leave either the old or the new file, never a truncated one. Mirrors
-/// the registry replace dance so it works on Windows, where rename does not
-/// overwrite an existing destination.
+/// must leave either the old or the new file, never a truncated or missing one.
+/// A symlinked config stays linked: the rewrite targets the real path, so the
+/// link keeps pointing at the updated file instead of becoming a plain copy.
+/// POSIX gets a single atomic rename; Windows keeps the backup-and-swap dance
+/// because its rename cannot overwrite a destination.
 fn writeConfigFileAtomic(path: []const u8, data: []const u8) !void {
+    const allocator = app_runtime.scratchAllocator();
+    const target = app_runtime.realPathFileAlloc(allocator, std.Io.Dir.cwd(), path) catch try allocator.dupe(u8, path);
+    defer allocator.free(target);
+
+    if (builtin.target.os.tag != .windows) {
+        var buf: [4096]u8 = undefined;
+        var atomic_file = try std.Io.Dir.cwd().createFileAtomic(app_runtime.io(), target, .{ .replace = true });
+        defer atomic_file.deinit(app_runtime.io());
+        var file_writer = atomic_file.file.writer(app_runtime.io(), &buf);
+        try file_writer.interface.writeAll(data);
+        try file_writer.interface.flush();
+        try atomic_file.replace(app_runtime.io());
+        return;
+    }
+
+    return writeConfigFileWindowsReplace(target, data);
+}
+
+fn writeConfigFileWindowsReplace(path: []const u8, data: []const u8) !void {
     const allocator = app_runtime.scratchAllocator();
     const temp_path = try allocator.print("{s}.tmp.{d}", .{ path, @as(i128, std.Io.Timestamp.now(app_runtime.io(), .real).toNanoseconds()) });
     defer allocator.free(temp_path);
@@ -1237,7 +1258,10 @@ fn installManagedCodextExecutable(allocator: std.mem.Allocator, cache_root: []co
     // codex-package.json.
     const metadata_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, "codex-package.json" });
     defer allocator.free(metadata_path);
-    if (!fileExists(metadata_path)) return error.CodextReleaseInstallFailed;
+    if (!fileExists(metadata_path)) {
+        try writeAppError("codext release archive did not contain the expected package layout (codex-package.json is missing).\n");
+        return error.CodextReleaseInstallFailed;
+    }
 
     const archive_name = if (platform == .win) "codext.zip" else "codext.tar.gz";
     const archive_path = try std.Io.Dir.path.join(allocator, &.{ extract_dir, archive_name });

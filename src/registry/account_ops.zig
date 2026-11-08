@@ -388,7 +388,11 @@ pub fn deleteRemovedAccountBackups(
         const record_key = info.record_key orelse continue;
         if (!isRemovedAccountKey(reg, removed, record_key)) continue;
 
-        try stale_names.append(allocator, try allocator.dupe(u8, entry.name));
+        const owned_name = try allocator.dupe(u8, entry.name);
+        stale_names.append(allocator, owned_name) catch |err| {
+            allocator.free(owned_name);
+            return err;
+        };
     }
 
     for (stale_names.items) |name| {
