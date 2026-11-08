@@ -143,21 +143,6 @@ pub fn loadActiveAuthInfoForAccountRefresh(allocator: std.mem.Allocator, codex_h
     };
 }
 
-pub fn refreshAccountNamesForActiveAuth(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    fetcher: AccountFetchFn,
-) !bool {
-    return try refreshAccountNamesForActiveAuthWithAccountApiEnabled(
-        allocator,
-        codex_home,
-        reg,
-        fetcher,
-        reg.api.account,
-    );
-}
-
 pub fn refreshAccountNamesForActiveAuthWithAccountApiEnabled(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -248,10 +233,6 @@ pub fn refreshAccountNamesForListWithAccountApiEnabled(
         fetcher,
         account_api_enabled,
     );
-}
-
-pub fn shouldRefreshWorkspaceAccountNamesForUserScope(reg: *registry.Registry, chatgpt_user_id: []const u8) bool {
-    return shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(reg, chatgpt_user_id, reg.api.account);
 }
 
 pub fn shouldRefreshWorkspaceAccountNamesForUserScopeWithAccountApiEnabled(

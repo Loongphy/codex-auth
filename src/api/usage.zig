@@ -66,23 +66,6 @@ const ParsedCurlHttpOutput = struct {
     status_code: ?u16,
 };
 
-pub fn fetchActiveUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
-    const result = try fetchActiveUsageDetailed(allocator, codex_home);
-    return result.snapshot;
-}
-
-pub fn fetchActiveUsageDetailed(allocator: std.mem.Allocator, codex_home: []const u8) !UsageFetchResult {
-    const auth_path = try registry.activeAuthPath(allocator, codex_home);
-    defer allocator.free(auth_path);
-
-    return try fetchUsageForAuthPathDetailed(allocator, auth_path);
-}
-
-pub fn fetchUsageForAuthPath(allocator: std.mem.Allocator, auth_path: []const u8) !?registry.RateLimitSnapshot {
-    const result = try fetchUsageForAuthPathDetailed(allocator, auth_path);
-    return result.snapshot;
-}
-
 pub fn fetchUsageForAuthPathDetailed(allocator: std.mem.Allocator, auth_path: []const u8) !UsageFetchResult {
     const info = try auth.parseAuthInfo(allocator, auth_path);
     defer info.deinit(allocator);
@@ -274,16 +257,6 @@ pub fn fetchUsageForAuthPathsDetailedBatchWithRunner(
     }
 
     return results;
-}
-
-pub fn fetchUsageForToken(
-    allocator: std.mem.Allocator,
-    endpoint: []const u8,
-    access_token: []const u8,
-    account_id: []const u8,
-) !?registry.RateLimitSnapshot {
-    const result = try fetchUsageForTokenDetailed(allocator, endpoint, access_token, account_id);
-    return result.snapshot;
 }
 
 pub fn fetchUsageForTokenDetailed(

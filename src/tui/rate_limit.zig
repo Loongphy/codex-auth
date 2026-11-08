@@ -35,45 +35,6 @@ pub fn formatRateLimitFullAlloc(allocator: std.mem.Allocator, window: ?registry.
     return allocator.print("{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
 }
 
-pub fn formatRateLimitUiAlloc(allocator: std.mem.Allocator, window: ?registry.RateLimitWindow, width: usize) ![]u8 {
-    if (window == null) return try allocator.print("-", .{});
-    if (window.?.resets_at == null) return try allocator.print("-", .{});
-    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
-    const reset_at = window.?.resets_at.?;
-    if (now >= reset_at) {
-        return try allocator.print("100%", .{});
-    }
-    const remaining = remainingPercent(window.?.used_percent);
-    var parts = try resetPartsAlloc(allocator, reset_at, now);
-    defer parts.deinit(allocator);
-
-    const candidates_same = [_][]const u8{
-        try allocator.print("{d}% ({s})", .{ remaining, parts.time }),
-        try allocator.print("{d}%", .{remaining}),
-    };
-    defer allocator.free(candidates_same[0]);
-    defer allocator.free(candidates_same[1]);
-
-    if (parts.same_day) {
-        if (width >= candidates_same[0].len or width == 0) return allocator.print("{s}", .{candidates_same[0]});
-        return allocator.print("{s}", .{candidates_same[1]});
-    }
-
-    const candidate_full = try allocator.print("{d}% ({s} on {s})", .{ remaining, parts.time, parts.date });
-    defer allocator.free(candidate_full);
-    const candidate_date = try allocator.print("{d}% ({s})", .{ remaining, parts.date });
-    defer allocator.free(candidate_date);
-    const candidate_time = try allocator.print("{d}% ({s})", .{ remaining, parts.time });
-    defer allocator.free(candidate_time);
-    const candidate_percent = try allocator.print("{d}%", .{remaining});
-    defer allocator.free(candidate_percent);
-
-    if (width >= candidate_full.len or width == 0) return allocator.print("{s}", .{candidate_full});
-    if (width >= candidate_date.len) return allocator.print("{s}", .{candidate_date});
-    if (width >= candidate_time.len) return allocator.print("{s}", .{candidate_time});
-    return allocator.print("{s}", .{candidate_percent});
-}
-
 fn resetPartsAlloc(allocator: std.mem.Allocator, reset_at: i64, now: i64) !ResetParts {
     var tm: localtime.struct_tm = undefined;
     if (!localtime.compat(reset_at, &tm)) {

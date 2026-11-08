@@ -62,20 +62,6 @@ pub fn codexLoginArgs(opts: types.LoginOptions) []const []const u8 {
         &[_][]const u8{ "codex", "login" };
 }
 
-pub fn resolveWindowsCodexPathEntryAlloc(
-    allocator: std.mem.Allocator,
-    entry: []const u8,
-) !?WindowsCodexPath {
-    var candidates = try collectWindowsCodexPathEntriesAlloc(allocator, &[_][]const u8{entry});
-    errdefer deinitWindowsCodexPathList(allocator, &candidates);
-
-    if (candidates.items.len == 0) return null;
-
-    const resolved = candidates.orderedRemove(0);
-    deinitWindowsCodexPathList(allocator, &candidates);
-    return resolved;
-}
-
 pub fn resolveWindowsCodexPathEntriesAlloc(
     allocator: std.mem.Allocator,
     entries: []const []const u8,

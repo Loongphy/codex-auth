@@ -18,10 +18,6 @@ pub const ConsumeOutcome = enum {
     unexpected_response,
     http_error,
     request_error,
-
-    pub fn isSuccess(self: ConsumeOutcome) bool {
-        return self == .reset or self == .already_redeemed;
-    }
 };
 
 pub const ConsumeResult = struct {

@@ -369,20 +369,6 @@ pub const Selection = struct {
         self.spent_cards = .empty;
     }
 
-    /// `setStatusFor` from a formatted message, freeing the temporary.
-    pub fn setStatusForf(
-        self: *Selection,
-        allocator: std.mem.Allocator,
-        account_key: []const u8,
-        kind: StatusKind,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) !void {
-        const text = try allocator.print(fmt, args);
-        defer allocator.free(text);
-        try self.setStatusFor(allocator, account_key, text, kind);
-    }
-
     /// The status text only for the account the rail is attached to; any
     /// other account row sees no message.
     pub fn statusFor(self: *const Selection, account_key: []const u8) ?[]const u8 {

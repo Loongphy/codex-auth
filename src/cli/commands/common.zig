@@ -44,30 +44,6 @@ pub fn argsContainFlag(args: []const [:0]const u8, flag: []const u8) bool {
     return false;
 }
 
-pub fn parseSimpleCommandArgs(
-    allocator: std.mem.Allocator,
-    command_name: []const u8,
-    topic: types.HelpTopic,
-    command: types.Command,
-    rest: []const [:0]const u8,
-) !types.ParseResult {
-    if (rest.len == 0) return .{ .command = command };
-    if (rest.len == 1 and isHelpFlag(std.mem.sliceTo(rest[0], 0))) {
-        return .{ .command = .{ .help = topic } };
-    }
-    const arg = std.mem.sliceTo(rest[0], 0);
-    if (arg.len > 1 and std.mem.startsWith(u8, arg, "-")) {
-        return usageErrorResult(allocator, topic, "unknown flag `{s}` for `{s}`.", .{ arg, command_name });
-    }
-    return usageErrorResult(allocator, topic, "unexpected argument `{s}` for `{s}`.", .{ arg, command_name });
-}
-
-pub fn parsePercentArg(raw: []const u8) ?u8 {
-    const value = std.fmt.parseInt(u8, raw, 10) catch return null;
-    if (value == 0 or value > 100) return null;
-    return value;
-}
-
 pub fn freeImportOptions(allocator: std.mem.Allocator, auth_path: ?[]u8, alias: ?[]u8) void {
     if (auth_path) |value| allocator.free(value);
     if (alias) |value| allocator.free(value);

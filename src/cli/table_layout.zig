@@ -539,12 +539,6 @@ pub fn writeTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize
     try writeRepeat(out, ' ', width - written);
 }
 
-pub fn writeAccountTruncatedPadded(out: *std.Io.Writer, value: []const u8, width: usize) !void {
-    if (width == 0) return;
-    const written = try writeAccountCell(out, value, width);
-    try writeRepeat(out, ' ', width - written);
-}
-
 /// Writes `indent` spaces then `text`, bounded to `max_cols` display columns
 /// with a `...` tail. Group header rows use this so a long shared email may
 /// span the line instead of fighting the ACCOUNT column for width.

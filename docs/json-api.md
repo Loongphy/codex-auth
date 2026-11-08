@@ -160,9 +160,15 @@ presence or balance.
 {
   "schema_version": 1,
   "command": "switch",
-  "switched_to": {}
+  "switched_to": {},
+  "daemon": "restarted"
 }
 ```
+
+`daemon` reports the daemon coordination outcome for the switch (for example
+`reloaded`, `deferred`, `restarted`, or `restart_failed`; the emitted values
+are exercised in `tests/cli_integration_test.zig`). The document can still
+accompany exit code 1 when the daemon restart fails.
 
 ### Remove
 

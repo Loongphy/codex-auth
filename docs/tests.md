@@ -58,12 +58,12 @@ A small library compile test may be included to validate the package surface wit
 
 `b.addRunArtifact` on a test compile enables Zig's server-mode test runner:
 the binary is spawned with `--listen=-` and talks `std.zig.Server` over stdio,
-giving per-test timeouts, crash respawn, and result metadata. On Windows, Zig
-0.16's implementation of that protocol intermittently deadlocks: the build
-runner spawns the test server and then never services it, so the child waits
-on stdin forever while the runner emits no output — CI then shows only
-`zig version` until the job is cancelled (upstream race, also seen on
-ziglang's own `x86_64-windows` CI in ziglang/zig#25029).
+giving per-test timeouts, crash respawn, and result metadata. On Windows, that
+protocol intermittently deadlocks: the build runner spawns the test server and
+then never services it, so the child waits on stdin forever while the runner
+emits no output — CI then shows only `zig version` until the job is cancelled
+(upstream race, also seen on ziglang's own `x86_64-windows` CI in
+ziglang/zig#25029).
 
 Each test step is therefore a plain `std.Build.Step.Run` with
 `addArtifactArg`, which runs the binary in terminal mode and treats its exit

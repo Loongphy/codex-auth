@@ -164,23 +164,6 @@ pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledAndActiveO
     );
 }
 
-pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicy(
-    allocator: std.mem.Allocator,
-    codex_home: []const u8,
-    reg: *registry.Registry,
-    usage_api_enabled: bool,
-    batch_fetch_failures_are_fatal: bool,
-) !ForegroundUsageRefreshState {
-    return refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicyAndActiveOnly(
-        allocator,
-        codex_home,
-        reg,
-        usage_api_enabled,
-        batch_fetch_failures_are_fatal,
-        false,
-    );
-}
-
 pub fn refreshForegroundUsageForDisplayWithBatchFetcherUsingApiEnabledWithBatchFailurePolicyAndActiveOnly(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
