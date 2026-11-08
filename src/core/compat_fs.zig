@@ -5,9 +5,10 @@ pub const path = std.Io.Dir.path;
 pub const max_path_bytes = std.Io.Dir.max_path_bytes;
 pub const max_name_bytes = std.Io.Dir.max_name_bytes;
 
-// Zig 0.16's global_single_threaded Io uses Allocator.failing. That works
-// for simple file and mutex operations, but process spawning allocates argv/env
-// through the Io implementation and will otherwise fail with error.OutOfMemory.
+// The Io implementation comes from the runtime: `init.io` in the app,
+// `std.testing.io` in tests. A statically initialized default such as
+// `Io.Threaded.global_single_threaded` is configured without a process
+// environ and with `Allocator.failing`, so it must not be used here.
 pub fn io() std.Io {
     return app_runtime.io();
 }
