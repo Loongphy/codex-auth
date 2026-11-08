@@ -681,6 +681,7 @@ pub fn mergeAccountRecord(allocator: std.mem.Allocator, dest: *AccountRecord, in
     }
     if (dest.plan == null) dest.plan = merged_incoming.plan;
     if (dest.auth_mode == null) dest.auth_mode = merged_incoming.auth_mode;
+    if (dest.access_token_expires_at == null) dest.access_token_expires_at = merged_incoming.access_token_expires_at;
     if (dest.plan_expires_at == null) dest.plan_expires_at = merged_incoming.plan_expires_at;
     freeAccountRecord(allocator, &merged_incoming);
 }

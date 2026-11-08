@@ -1761,6 +1761,92 @@ test "list JSON includes the stored plan expiry timestamp" {
     try std.testing.expectEqual(@as(i64, 1_785_326_940), accounts[0].object.get("plan_expires_at").?.integer);
 }
 
+test "list JSON emits null reset_credit when card details are unknown" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .pro);
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 12.5, .window_minutes = 300, .resets_at = 1730010000 },
+        .secondary = null,
+        .credits = null,
+        .plan_type = null,
+    };
+    reg.accounts.items[0].last_usage_at = 1730002000;
+
+    const overrides = try gpa.alloc(?[]const u8, 1);
+    const outcomes = try gpa.alloc(main_mod.ForegroundUsageOutcome, 1);
+    overrides[0] = null;
+    outcomes[0] = .{};
+    var state = main_mod.ForegroundUsageRefreshState{
+        .usage_overrides = overrides,
+        .outcomes = outcomes,
+    };
+    defer state.deinit(gpa);
+
+    var result = try main_mod.results.buildListResult(gpa, &reg, &state);
+    defer result.deinit(gpa);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try cli.json_output.writeListResult(&writer, &result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, writer.buffered(), .{});
+    defer parsed.deinit();
+    const accounts = parsed.value.object.get("accounts").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), accounts.len);
+    const usage = accounts[0].object.get("usage").?.object;
+    try std.testing.expect(usage.get("reset_credit").? == .null);
+}
+
+test "list JSON emits a reset_credit array when card details are stored" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .pro);
+    const cards = try gpa.alloc(registry.ResetCreditCard, 1);
+    cards[0] = .{
+        .id = try gpa.dupe(u8, "credit-1"),
+        .status = try gpa.dupe(u8, "available"),
+        .expires_at = null,
+        .title = null,
+    };
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .reset_credits = 1,
+        .reset_credit = cards,
+        .plan_type = null,
+    };
+    reg.accounts.items[0].last_usage_at = 1730002000;
+
+    const overrides = try gpa.alloc(?[]const u8, 1);
+    const outcomes = try gpa.alloc(main_mod.ForegroundUsageOutcome, 1);
+    overrides[0] = null;
+    outcomes[0] = .{};
+    var state = main_mod.ForegroundUsageRefreshState{
+        .usage_overrides = overrides,
+        .outcomes = outcomes,
+    };
+    defer state.deinit(gpa);
+
+    var result = try main_mod.results.buildListResult(gpa, &reg, &state);
+    defer result.deinit(gpa);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try cli.json_output.writeListResult(&writer, &result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, writer.buffered(), .{});
+    defer parsed.deinit();
+    const accounts = parsed.value.object.get("accounts").?.array.items;
+    const usage = accounts[0].object.get("usage").?.object;
+    const reset_credit = usage.get("reset_credit").?.array.items;
+    try std.testing.expectEqual(@as(usize, 1), reset_credit.len);
+    try std.testing.expectEqualStrings("credit-1", reset_credit[0].object.get("id").?.string);
+}
+
 test "Scenario: Given test builds when requesting runtime tier allocators then all route to the checked allocator" {
     try std.testing.expectEqual(std.testing.allocator.ptr, app_runtime.gpa().ptr);
     try std.testing.expectEqual(std.testing.allocator.ptr, app_runtime.fastAllocator().ptr);
