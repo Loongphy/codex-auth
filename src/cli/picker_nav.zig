@@ -172,15 +172,6 @@ pub fn accountKeyForSelectableAlloc(
     return try allocator.dupe(u8, accountIdForSelectable(rows, reg, selectable_idx));
 }
 
-pub fn firstSelectableAccountKeyAlloc(
-    allocator: std.mem.Allocator,
-    rows: *const SwitchRows,
-    reg: *registry.Registry,
-) !?[]u8 {
-    if (rows.selectable_row_indices.len == 0) return null;
-    return try accountKeyForSelectableAlloc(allocator, rows, reg, 0);
-}
-
 pub fn removeOwnedAccountKey(
     allocator: std.mem.Allocator,
     keys: *std.ArrayList([]u8),

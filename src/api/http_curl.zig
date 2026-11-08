@@ -108,10 +108,6 @@ pub fn ensureCurlExecutableAvailable(allocator: std.mem.Allocator) !void {
     defer allocator.free(curl_executable);
 }
 
-pub fn resolveCurlExecutableAlloc(allocator: std.mem.Allocator) ![]u8 {
-    return resolveCurlExecutableForLaunchAlloc(allocator);
-}
-
 fn runCurlBearerGetJsonCommand(
     allocator: std.mem.Allocator,
     endpoint: []const u8,

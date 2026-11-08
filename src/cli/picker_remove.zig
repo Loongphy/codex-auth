@@ -27,10 +27,6 @@ pub fn shouldUseNumberedRemoveSelector(is_windows: bool, stdin_is_tty: bool, std
     return !stdin_is_tty or !stdout_is_tty;
 }
 
-pub fn selectAccountsToRemove(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]usize {
-    return selectAccountsToRemoveWithUsageOverrides(allocator, reg, null);
-}
-
 pub fn selectAccountsToRemoveWithUsageOverrides(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
