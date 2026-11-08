@@ -243,6 +243,9 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
     defer env.deinit();
     var paths = std.mem.splitScalar(u8, env.get("PATH") orelse "", if (builtin.target.os.tag == .windows) ';' else ':');
     while (paths.next()) |dir| {
+        // Empty PATH segments resolve relative to the current directory, which
+        // must never be searched for a lifecycle helper.
+        if (dir.len == 0) continue;
         const path = try std.Io.Dir.path.join(allocator, &.{ dir, name });
         if (isExecutable(path)) {
             defer allocator.free(path);
@@ -250,7 +253,9 @@ fn resolveExecutable(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
         }
         allocator.free(path);
     }
-    return try allocator.dupe(u8, name);
+    // Spawning a bare name would let the OS search the current directory, so
+    // an unresolvable daemon executable stays an init failure instead.
+    return error.ExecutableRequired;
 }
 
 fn isExecutable(path: []const u8) bool {

@@ -121,7 +121,9 @@ fn parseResetCreditCard(allocator: std.mem.Allocator, obj: std.json.ObjectMap) !
     errdefer allocator.free(status);
     const expires_at = optionalStringAlloc(allocator, obj.get("expires_at"));
     errdefer if (expires_at) |value| allocator.free(value);
-    const title = optionalStringAlloc(allocator, obj.get("title"));
+    const title_raw = optionalStringAlloc(allocator, obj.get("title"));
+    defer if (title_raw) |value| allocator.free(value);
+    const title = if (title_raw) |raw| try common.sanitizeDisplayAlloc(allocator, raw) else null;
     errdefer if (title) |value| allocator.free(value);
     return .{
         .id = id,

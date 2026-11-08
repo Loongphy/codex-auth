@@ -942,7 +942,7 @@ test "Scenario: Given a reload-capable daemon then a plain switch applies creden
     }
 }
 
-test "Scenario: Given no managed executable then daemon restart resolves relative and empty PATH entries" {
+test "Scenario: Given no managed executable then daemon restart resolves relative PATH entries but never the current directory" {
     if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const project_root = try projectRootAlloc(gpa);
@@ -973,6 +973,15 @@ test "Scenario: Given no managed executable then daemon restart resolves relativ
         defer gpa.free(result.stdout);
         defer gpa.free(result.stderr);
         try expectSuccess(result);
+        if (path.len == 0) {
+            // An empty PATH segment would resolve `codex` relative to the
+            // working directory; the resolver must refuse that implicit
+            // search path, so the switch skips daemon coordination silently.
+            try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon") == null);
+            try std.testing.expectError(error.FileNotFound, fake_daemon.read(dir, "lifecycle-calls"));
+            try std.testing.expectError(error.FileNotFound, dir.openFile("restarted-home", .{}));
+            continue;
+        }
         try std.testing.expect(std.mem.find(u8, result.stderr, "daemon restart completed") != null);
         const calls = try fake_daemon.read(dir, "lifecycle-calls");
         defer gpa.free(calls);

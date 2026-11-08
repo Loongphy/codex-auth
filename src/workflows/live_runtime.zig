@@ -566,6 +566,9 @@ fn runDaemonRound(worker: *DaemonWorker) void {
     const text: ?[]const u8 = blk: {
         var client = daemon.Client.init(allocator, worker.codex_home) catch |err| {
             if (err == error.OutOfMemory) break :blk "out of memory";
+            // No executable means there is nothing to coordinate, matching the
+            // silent absence of a control socket.
+            if (err == error.ExecutableRequired) break :blk null;
             break :blk "daemon state unconfirmed";
         };
         defer client.deinit();

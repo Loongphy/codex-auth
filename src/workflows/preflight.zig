@@ -50,7 +50,13 @@ pub fn isHandledCliError(err: anyerror) bool {
         err == error.WindowsAppLaunchRequiresWindows or
         err == error.WindowsAppPlatformRequiresWindows or
         err == error.MacAppPlatformRequiresMacOS or
-        err == error.WindowsPassthroughArgsUnsupported;
+        err == error.WindowsPassthroughArgsUnsupported or
+        err == error.UnsupportedPlatform or
+        err == error.ChildProcessFailed or
+        err == error.ChildProcessTimedOut or
+        err == error.InvalidCodextReleaseResponse or
+        err == error.CodextReleaseAssetNotFound or
+        err == error.CodextReleaseInstallFailed;
 }
 
 pub fn ensureLiveTty(target: LiveTtyTarget) !void {

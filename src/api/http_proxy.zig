@@ -17,6 +17,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const app_runtime = @import("../core/runtime.zig");
 const env = @import("http_env.zig");
 
 const no_system_proxy = struct {
@@ -66,9 +67,9 @@ const no_proxy_env_keys = [_][]const u8{ "NO_PROXY", "no_proxy" };
 /// A proxy entry selected for one scheme.
 pub const Picked = struct {
     hostport: []const u8,
-    /// `curl` needs an explicit scheme to treat an entry as SOCKS; `socks5h`
-    /// keeps DNS resolution on the proxy side.
-    socks: bool,
+    /// `curl` needs an explicit scheme prefix to treat an entry as SOCKS; an
+    /// empty prefix means the default HTTP-proxy scheme.
+    scheme: []const u8 = "",
 };
 
 /// Resolve the proxy to use for `endpoint` in this process.
@@ -108,11 +109,13 @@ pub fn decide(
 
     var url: std.ArrayList(u8) = .empty;
     errdefer url.deinit(allocator);
-    if (picked.socks) try url.appendSlice(allocator, "socks5h://");
+    try url.appendSlice(allocator, picked.scheme);
     try url.appendSlice(allocator, picked.hostport);
 
+    const url_owned = try url.toOwnedSlice(allocator);
+    errdefer allocator.free(url_owned);
     return Proxy{
-        .url = try url.toOwnedSlice(allocator),
+        .url = url_owned,
         .noproxy = try noproxyValue(allocator, env_map, system.bypass),
     };
 }
@@ -138,7 +141,17 @@ fn noproxyValue(
 pub fn pickProxyServer(scheme: Scheme, raw: []const u8) ?Picked {
     const trimmed = std.mem.trim(u8, raw, " \t");
     if (trimmed.len == 0) return null;
-    if (std.mem.findScalar(u8, trimmed, '=') == null) return .{ .hostport = trimmed, .socks = false };
+    if (std.mem.findScalar(u8, trimmed, '=') == null) {
+        // WinHTTP reports a PAC failover list as a bare `host:port;host:port`
+        // string; only the first entry can be handed to curl, and WinHTTP has
+        // already ordered them by preference.
+        var it = std.mem.splitScalar(u8, trimmed, ';');
+        while (it.next()) |entry| {
+            const item = std.mem.trim(u8, entry, " \t");
+            if (item.len != 0) return .{ .hostport = item };
+        }
+        return null;
+    }
 
     const wanted = switch (scheme) {
         .https => "https",
@@ -155,10 +168,10 @@ pub fn pickProxyServer(scheme: Scheme, raw: []const u8) ?Picked {
         if (value.len == 0) continue;
         const picked = Picked{
             .hostport = value,
-            .socks = std.ascii.eqlIgnoreCase(key, "socks") or std.ascii.eqlIgnoreCase(key, "socks5"),
+            .scheme = socksSchemeForKey(key) orelse "",
         };
         if (std.ascii.eqlIgnoreCase(key, wanted)) return picked;
-        if (picked.socks) {
+        if (picked.scheme.len != 0) {
             if (socks_fallback == null) socks_fallback = picked;
         } else if (fallback == null and
             (std.ascii.eqlIgnoreCase(key, "https") or std.ascii.eqlIgnoreCase(key, "http")))
@@ -167,6 +180,18 @@ pub fn pickProxyServer(scheme: Scheme, raw: []const u8) ?Picked {
         }
     }
     return fallback orelse socks_fallback;
+}
+
+/// WinINET's legacy `socks` entry was SOCKS4, but every modern consumer of the
+/// shared format (the macOS `SOCKSProxy` key included) speaks SOCKS5, so it
+/// maps to `socks5h`; explicit `socks4`/`socks5`/`socks5h` keys are honoured
+/// literally. `socks5h` keeps DNS resolution on the proxy side.
+fn socksSchemeForKey(key: []const u8) ?[]const u8 {
+    if (std.ascii.eqlIgnoreCase(key, "socks4")) return "socks4://";
+    if (std.ascii.eqlIgnoreCase(key, "socks") or
+        std.ascii.eqlIgnoreCase(key, "socks5") or
+        std.ascii.eqlIgnoreCase(key, "socks5h")) return "socks5h://";
+    return null;
 }
 
 /// Translate a platform bypass list into curl's comma separated `noproxy` list.
@@ -185,6 +210,9 @@ pub fn translateBypass(allocator: std.mem.Allocator, raw: []const u8) !?[]u8 {
         if (std.ascii.eqlIgnoreCase(part, "<local>") or std.ascii.eqlIgnoreCase(part, "<loopback>")) {
             part = "localhost";
         }
+        // `curl`'s noproxy list matches by domain suffix and does not read the
+        // WinINET `*.` wildcard prefix, so `*.internal` becomes `internal`.
+        if (std.mem.startsWith(u8, part, "*.")) part = part[2..];
         if (containsEntry(seen.items, part)) continue;
         if (out.items.len != 0) try out.append(allocator, ',');
         try out.appendSlice(allocator, part);
@@ -215,7 +243,7 @@ fn envValue(env_map: *const std.process.Environ.Map, key: []const u8) ?[]const u
     return value;
 }
 
-var system_proxy_mutex: std.atomic.Mutex = .unlocked;
+var system_proxy_mutex: std.Io.Mutex = .init;
 var system_proxy_cached: ?*const SystemProxy = null;
 
 /// Platform proxy settings, read once per process. Every endpoint codex-auth
@@ -226,10 +254,9 @@ var system_proxy_cached: ?*const SystemProxy = null;
 pub fn systemProxy(endpoint: []const u8) SystemProxy {
     if (@atomicLoad(?*const SystemProxy, &system_proxy_cached, .acquire)) |cached| return cached.*;
 
-    while (!system_proxy_mutex.tryLock()) {
-        std.Thread.yield() catch {};
-    }
-    defer system_proxy_mutex.unlock();
+    const io = app_runtime.io();
+    system_proxy_mutex.lockUncancelable(io);
+    defer system_proxy_mutex.unlock(io);
     if (@atomicLoad(?*const SystemProxy, &system_proxy_cached, .acquire)) |cached| return cached.*;
 
     // The cached struct and the server/bypass slices inside it live for the

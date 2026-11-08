@@ -1,5 +1,6 @@
 const std = @import("std");
 const chatgpt_http = @import("http.zig");
+const registry = @import("../registry/root.zig");
 
 pub const default_account_endpoint = "https://chatgpt.com/backend-api/accounts";
 
@@ -104,5 +105,5 @@ fn parseAccountNameAlloc(allocator: std.mem.Allocator, value: ?std.json.Value) !
         else => return null,
     };
     if (raw.len == 0) return null;
-    return try allocator.dupe(u8, raw);
+    return try registry.sanitizeDisplayAlloc(allocator, raw);
 }

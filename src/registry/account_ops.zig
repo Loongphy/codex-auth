@@ -367,6 +367,13 @@ pub fn deleteRemovedAccountBackups(
     };
     defer dir.close(app_runtime.io());
 
+    // Collect matching entries first: deleting while the directory iterator is
+    // live can skip siblings depending on the filesystem.
+    var stale_names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (stale_names.items) |name| allocator.free(name);
+        stale_names.deinit(allocator);
+    }
     var it = dir.iterate();
     while (try it.next(app_runtime.io())) |entry| {
         if (entry.kind != .file and entry.kind != .sym_link) continue;
@@ -381,7 +388,11 @@ pub fn deleteRemovedAccountBackups(
         const record_key = info.record_key orelse continue;
         if (!isRemovedAccountKey(reg, removed, record_key)) continue;
 
-        dir.deleteFile(app_runtime.io(), entry.name) catch {};
+        try stale_names.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+
+    for (stale_names.items) |name| {
+        dir.deleteFile(app_runtime.io(), name) catch {};
     }
 }
 

@@ -311,6 +311,21 @@ fn importCpaFile(
     return try importConvertedAuthInfo(allocator, codex_home, reg, explicit_alias, &info, converted);
 }
 
+/// `import --alias` applies the same rules as `alias set`, checked before the
+/// auth snapshot is written or the registry record is touched. The record
+/// being replaced keeps its slot exempt, so re-importing with the same alias
+/// is not a false duplicate.
+fn checkImportAlias(reg: *const Registry, explicit_alias: ?[]const u8, replace_idx: ?usize) !void {
+    const alias_value = explicit_alias orelse return;
+    if (common.aliasFormatIssue(alias_value) != null) return error.InvalidAlias;
+    if (common.findAliasConflict(reg, alias_value, replace_idx)) |conflict| {
+        return switch (conflict.issue) {
+            .duplicate_alias => error.DuplicateAlias,
+            else => error.InvalidAlias,
+        };
+    }
+}
+
 fn importConvertedAuthInfo(
     allocator: std.mem.Allocator,
     codex_home: []const u8,
@@ -327,7 +342,9 @@ fn importConvertedAuthInfo(
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
     const alias = explicit_alias orelse "";
-    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+    const replace_idx = findAccountIndexByAccountKey(reg, record_key);
+    const existed = replace_idx != null;
+    try checkImportAlias(reg, explicit_alias, replace_idx);
 
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
@@ -380,7 +397,9 @@ fn importAuthInfo(
     const record_key = info.record_key orelse return error.MissingChatgptUserId;
 
     const alias = explicit_alias orelse "";
-    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+    const replace_idx = findAccountIndexByAccountKey(reg, record_key);
+    const existed = replace_idx != null;
+    try checkImportAlias(reg, explicit_alias, replace_idx);
 
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
@@ -408,7 +427,9 @@ fn importApiKeyAuthData(
     const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
     defer allocator.free(record_key);
     const alias = explicit_alias orelse "";
-    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+    const replace_idx = findAccountIndexByAccountKey(reg, record_key);
+    const existed = replace_idx != null;
+    try checkImportAlias(reg, explicit_alias, replace_idx);
 
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
@@ -436,7 +457,9 @@ fn importApiKeyAuthFile(
     const record_key = try account_ops.apiKeyAccountKeyAlloc(allocator, me.user_id, api_key);
     defer allocator.free(record_key);
     const alias = explicit_alias orelse "";
-    const existed = findAccountIndexByAccountKey(reg, record_key) != null;
+    const replace_idx = findAccountIndexByAccountKey(reg, record_key);
+    const existed = replace_idx != null;
+    try checkImportAlias(reg, explicit_alias, replace_idx);
 
     const dest = try accountAuthPath(allocator, codex_home, record_key);
     defer allocator.free(dest);
