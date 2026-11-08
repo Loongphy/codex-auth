@@ -635,15 +635,21 @@ fn aliasIsDigitOnly(value: []const u8) bool {
 
 /// Format rules shared by `alias set` and `import --alias`: non-empty, never a
 /// number (digits select displayed rows), never flag- or colon-prefixed
-/// (selectors and completion protocols reserve those), and free of control
-/// characters.
+/// (selectors and completion protocols reserve those), and free of the same
+/// control characters `sanitizeDisplayAlloc` strips — accepting a codepoint
+/// the loader would remove would let a saved alias silently disappear.
 pub fn aliasFormatIssue(alias_value: []const u8) ?AliasIssue {
     if (alias_value.len == 0) return .empty;
     if (aliasIsDigitOnly(alias_value)) return .digit_only;
     if (std.mem.startsWith(u8, alias_value, "-")) return .flag_like;
     if (std.mem.startsWith(u8, alias_value, ":")) return .colon_prefix;
-    for (alias_value) |ch| {
-        if (ch < 0x20 or ch == 0x7f) return .control_char;
+    var index: usize = 0;
+    while (index < alias_value.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(alias_value[index]) catch return .control_char;
+        if (index + cp_len > alias_value.len) return .control_char;
+        const cp = std.unicode.utf8Decode(alias_value[index..][0..cp_len]) catch return .control_char;
+        if (cp < 0x20 or cp == 0x7f or (cp >= 0x80 and cp <= 0x9f)) return .control_char;
+        index += cp_len;
     }
     return null;
 }

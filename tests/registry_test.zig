@@ -2157,3 +2157,12 @@ test "sanitizeDisplayAlloc replaces control characters and invalid utf-8" {
     try std.testing.expect(std.mem.indexOfScalar(u8, truncated, 0xf0) == null);
     try std.testing.expect(std.ascii.isPrint(truncated[truncated.len - 1]));
 }
+
+test "aliasFormatIssue rejects c1 controls and malformed utf-8 like the loader does" {
+    const c1 = "bad\xc2\x85alias";
+    try std.testing.expect(registry.aliasFormatIssue(c1) == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("bad\xf0\x9f") == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("bad\x80alias") == .control_char);
+    try std.testing.expect(registry.aliasFormatIssue("fine-alias_1") == null);
+    try std.testing.expect(registry.aliasFormatIssue("emoji-\xe2\x9c\x93") == null);
+}
