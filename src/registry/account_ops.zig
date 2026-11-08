@@ -465,14 +465,6 @@ pub fn inAccountNameRefreshScope(reg: *const Registry, chatgpt_user_id: []const 
     return std.mem.eql(u8, rec.chatgpt_user_id, chatgpt_user_id);
 }
 
-pub fn hasMissingAccountNameForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
-    for (reg.accounts.items) |rec| {
-        if (!inAccountNameRefreshScope(reg, chatgpt_user_id, &rec)) continue;
-        if (isWorkspaceAccount(&rec) and !hasStoredAccountName(&rec)) return true;
-    }
-    return false;
-}
-
 pub fn shouldFetchWorkspaceAccountNamesForUser(reg: *const Registry, chatgpt_user_id: []const u8) bool {
     var account_count: usize = 0;
     var has_workspace_account = false;

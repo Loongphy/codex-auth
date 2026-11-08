@@ -200,24 +200,6 @@ pub fn buildSwitchResult(
     };
 }
 
-pub fn buildRemoveResult(
-    allocator: std.mem.Allocator,
-    reg_before_remove: *const registry.Registry,
-    selected: []const usize,
-    new_active_account_key: ?[]const u8,
-) !RemoveResult {
-    const removed = try buildAccountViewsForIndices(allocator, reg_before_remove, null, selected);
-    errdefer deinitAccountViews(allocator, removed);
-
-    const new_active = try dupeOptional(allocator, new_active_account_key);
-    errdefer if (new_active) |key| allocator.free(key);
-
-    return .{
-        .removed = removed,
-        .new_active_account_key = new_active,
-    };
-}
-
 pub fn buildAccountViewsForIndices(
     allocator: std.mem.Allocator,
     reg: *const registry.Registry,
@@ -323,11 +305,6 @@ fn buildUsageView(
         .reset_credit = try registry.cloneResetCreditCards(allocator, snapshot.reset_credit orelse &.{}),
         .refresh = refresh,
     };
-}
-fn cloneResetCreditCardsView(allocator: std.mem.Allocator, snapshot: ?registry.RateLimitSnapshot) !?[]registry.ResetCreditCard {
-    const snapshot_value = snapshot orelse return null;
-    const cards = snapshot_value.reset_credit orelse return null;
-    return try registry.cloneResetCreditCards(allocator, cards);
 }
 
 fn cloneCreditsView(allocator: std.mem.Allocator, credits: ?registry.CreditsSnapshot) !?CreditsView {

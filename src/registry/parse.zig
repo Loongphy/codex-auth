@@ -170,19 +170,6 @@ pub fn parseLiveConfig(cfg: *LiveConfig, v: std.json.Value) void {
     }
 }
 
-pub fn liveConfigNeedsRewrite(v: std.json.Value) bool {
-    const obj = switch (v) {
-        .object => |o| o,
-        else => return true,
-    };
-    if (obj.get("interval_seconds")) |interval| {
-        if (parseLiveIntervalSeconds(interval)) |_| {
-            return false;
-        }
-    }
-    return true;
-}
-
 pub fn parseRolloutSignature(allocator: std.mem.Allocator, v: std.json.Value) ?RolloutSignature {
     const obj = switch (v) {
         .object => |o| o,
@@ -251,15 +238,6 @@ pub fn readInt(v: ?std.json.Value) ?i64 {
         .number_string, .string => |s| return std.fmt.parseInt(i64, s, 10) catch null,
         else => return null,
     }
-}
-
-pub fn parseThresholdPercent(v: std.json.Value) ?u8 {
-    const raw = switch (v) {
-        .integer => |i| i,
-        else => return null,
-    };
-    if (raw < 1 or raw > 100) return null;
-    return @as(u8, @intCast(raw));
 }
 
 pub fn parseLiveIntervalSeconds(v: std.json.Value) ?u16 {

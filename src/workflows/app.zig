@@ -1274,22 +1274,6 @@ fn launchMarker() []const u8 {
     return "";
 }
 
-fn writeAppInfo(comptime format: []const u8, args: anytype) !void {
-    var buffer: [1024]u8 = undefined;
-    var writer = std.Io.File.stderr().writer(app_runtime.io(), &buffer);
-    const out = &writer.interface;
-    try out.print(format, args);
-    try out.flush();
-}
-
-fn writeAppOutput(comptime format: []const u8, args: anytype) !void {
-    var buffer: [1024]u8 = undefined;
-    var writer = std.Io.File.stdout().writer(app_runtime.io(), &buffer);
-    const out = &writer.interface;
-    try out.print(format, args);
-    try out.flush();
-}
-
 fn launchWindowsViaPowerShell(
     allocator: std.mem.Allocator,
     app_id: []const u8,

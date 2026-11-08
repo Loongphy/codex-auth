@@ -55,10 +55,6 @@ pub fn realpathAlloc(allocator: std.mem.Allocator, file_path: []const u8) ![]u8 
     return try cwd().realpathAlloc(allocator, file_path);
 }
 
-pub fn selfExePathAlloc(allocator: std.mem.Allocator) ![]u8 {
-    return try std.process.executablePathAlloc(io(), allocator);
-}
-
 pub const TmpDir = struct {
     inner: std.testing.TmpDir,
     dir: Dir,
@@ -145,13 +141,6 @@ pub const File = struct {
         try self.toIoFile().setPermissions(io(), .fromMode(mode));
     }
 
-    pub fn updateTimes(self: File, atime_ns: i128, mtime_ns: i128) !void {
-        try self.toIoFile().setTimestamps(io(), .{
-            .access_timestamp = .{ .new = .{ .nanoseconds = @intCast(atime_ns) } },
-            .modify_timestamp = .{ .new = .{ .nanoseconds = @intCast(mtime_ns) } },
-        });
-    }
-
     pub fn stat(self: File) !Stat {
         return try self.toIoFile().stat(io());
     }
@@ -206,24 +195,6 @@ pub const Dir = struct {
             self.inner.leave(io());
         }
     };
-    pub const AtomicFileOptions = struct {
-        write_buffer: []u8 = &.{},
-        permissions: File.Permissions = .default_file,
-    };
-    pub const AtomicFile = struct {
-        inner: std.Io.File.Atomic,
-        file_writer: std.Io.File.Writer,
-
-        pub fn deinit(self: *AtomicFile) void {
-            self.inner.deinit(io());
-        }
-
-        pub fn finish(self: *AtomicFile) !void {
-            try self.file_writer.interface.flush();
-            try self.inner.replace(io());
-        }
-    };
-
     pub fn openFile(self: Dir, sub_path: []const u8, options: OpenFileOptions) !File {
         return wrapFile(try self.inner.openFile(io(), sub_path, options));
     }
@@ -289,17 +260,6 @@ pub const Dir = struct {
 
     pub fn walk(self: Dir, allocator: std.mem.Allocator) !Walker {
         return .{ .inner = try self.inner.walk(allocator) };
-    }
-
-    pub fn atomicFile(self: Dir, sub_path: []const u8, options: AtomicFileOptions) !AtomicFile {
-        var atomic = try self.inner.createFileAtomic(io(), sub_path, .{
-            .permissions = options.permissions,
-            .replace = true,
-        });
-        return .{
-            .file_writer = atomic.file.writer(io(), options.write_buffer),
-            .inner = atomic,
-        };
     }
 
     pub fn close(self: Dir) void {

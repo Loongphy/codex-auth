@@ -21,10 +21,6 @@ const ansi = struct {
     const cyan = "\x1b[36m";
 };
 
-pub fn printAccounts(reg: *registry.Registry) !void {
-    try printAccountsWithUsageOverrides(reg, null);
-}
-
 pub fn printAccountsWithUsageOverrides(
     reg: *registry.Registry,
     usage_overrides: ?[]const ?[]const u8,

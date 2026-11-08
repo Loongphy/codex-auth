@@ -111,13 +111,6 @@ pub const RolloutScanCache = struct {
     }
 };
 
-pub fn scanLatestUsage(allocator: std.mem.Allocator, codex_home: []const u8) !?registry.RateLimitSnapshot {
-    const latest = try scanLatestUsageWithSource(allocator, codex_home);
-    if (latest == null) return null;
-    allocator.free(latest.?.path);
-    return latest.?.snapshot;
-}
-
 pub fn scanLatestUsageWithSource(allocator: std.mem.Allocator, codex_home: []const u8) !?LatestUsage {
     var latest_rollout = (try scanLatestRolloutEventWithSource(allocator, codex_home)) orelse return null;
     errdefer latest_rollout.deinit(allocator);

@@ -465,7 +465,3 @@ fn jsonNonEmptyStringField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8
     if (trimmed.len == 0) return null;
     return trimmed;
 }
-
-fn jsonStringFieldOrDefault(obj: std.json.ObjectMap, key: []const u8) []const u8 {
-    return jsonStringField(obj, key) orelse "";
-}
