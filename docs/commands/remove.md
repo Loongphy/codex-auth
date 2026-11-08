@@ -14,15 +14,16 @@ codex-auth remove (<query> [<query>...]|--all) --json
 
 `codex-auth remove` opens the remove picker.
 
-- The default picker stays local-only so deletion is not blocked by refresh work.
-- `--api` attempts a best-effort foreground refresh for picker display.
-- `--skip-api` explicitly forbids remote refresh.
+- The picker performs a strict foreground refresh over stored accounts by default (the same rules as interactive `switch`); an error from the refresh itself — for example, a missing `curl` — aborts `remove` with an error instead of showing a picker. Per-account request failures are not fatal and mark the affected rows instead.
+- `--api` explicitly selects the API path (equivalent to the default when the usage API is enabled).
+- `--skip-api` keeps the picker local-only: no foreground usage refresh.
 - `q` quits without deleting accounts.
 
 ## Live Remove
 
 `codex-auth remove --live` keeps the picker open after each deletion.
 
+- It follows the same refresh policy as `switch --live`: an error from the initial refresh itself falls back to stored rows, `--api` makes the initial load strict, and `--skip-api` keeps it local-only.
 - Removed rows disappear from the current display immediately.
 - Existing row overlays stay in place until the next scheduled refresh.
 - The active account shown after deletion comes from the persisted registry state.

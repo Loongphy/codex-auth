@@ -2,8 +2,6 @@ const std = @import("std");
 const app_runtime = @import("runtime.zig");
 
 pub const path = std.Io.Dir.path;
-pub const max_path_bytes = std.Io.Dir.max_path_bytes;
-pub const max_name_bytes = std.Io.Dir.max_name_bytes;
 
 // The Io implementation comes from the runtime: `init.io` in the app,
 // `std.testing.io` in tests. A statically initialized default such as
@@ -30,14 +28,6 @@ pub fn wrapFile(file: std.Io.File) File {
 
 pub fn accessAbsolute(absolute_path: []const u8, options: Dir.AccessOptions) !void {
     try std.Io.Dir.accessAbsolute(io(), absolute_path, options);
-}
-
-pub fn openFileAbsolute(absolute_path: []const u8, options: Dir.OpenFileOptions) !File {
-    return wrapFile(try std.Io.Dir.openFileAbsolute(io(), absolute_path, options));
-}
-
-pub fn deleteFileAbsolute(absolute_path: []const u8) !void {
-    try std.Io.Dir.deleteFileAbsolute(io(), absolute_path);
 }
 
 fn dupeOwnedNoSentinel(allocator: std.mem.Allocator, z_path: [:0]u8) ![]u8 {
@@ -77,12 +67,8 @@ pub const File = struct {
     handle: std.Io.File.Handle,
     flags: std.Io.File.Flags,
 
-    pub const Writer = std.Io.File.Writer;
     pub const Reader = std.Io.File.Reader;
-    pub const MemoryMap = std.Io.File.MemoryMap;
-    pub const Lock = std.Io.File.Lock;
     pub const Permissions = std.Io.File.Permissions;
-    pub const Stat = std.Io.File.Stat;
 
     pub fn toIoFile(self: File) std.Io.File {
         return .{
@@ -91,36 +77,8 @@ pub const File = struct {
         };
     }
 
-    pub fn stdout() File {
-        return wrapFile(std.Io.File.stdout());
-    }
-
-    pub fn stderr() File {
-        return wrapFile(std.Io.File.stderr());
-    }
-
-    pub fn stdin() File {
-        return wrapFile(std.Io.File.stdin());
-    }
-
-    pub fn writer(self: File, buffer: []u8) Writer {
-        return self.toIoFile().writer(io(), buffer);
-    }
-
     pub fn reader(self: File, buffer: []u8) Reader {
         return self.toIoFile().reader(io(), buffer);
-    }
-
-    pub fn isTty(self: File) bool {
-        return self.toIoFile().isTty(io()) catch false;
-    }
-
-    pub fn read(self: File, buffer: []u8) !usize {
-        var buffers = [_][]u8{buffer};
-        return self.toIoFile().readStreaming(io(), &buffers) catch |err| switch (err) {
-            error.EndOfStream => 0,
-            else => |e| return e,
-        };
     }
 
     pub fn readToEndAlloc(self: File, allocator: std.mem.Allocator, max_bytes: usize) ![]u8 {
@@ -133,28 +91,8 @@ pub const File = struct {
         try self.toIoFile().writeStreamingAll(io(), bytes);
     }
 
-    pub fn sync(self: File) !void {
-        try self.toIoFile().sync(io());
-    }
-
     pub fn chmod(self: File, mode: std.posix.mode_t) !void {
         try self.toIoFile().setPermissions(io(), .fromMode(mode));
-    }
-
-    pub fn stat(self: File) !Stat {
-        return try self.toIoFile().stat(io());
-    }
-
-    pub fn createMemoryMap(self: File, options: MemoryMap.CreateOptions) !MemoryMap {
-        return try self.toIoFile().createMemoryMap(io(), options);
-    }
-
-    pub fn tryLock(self: File, lock: Lock) !bool {
-        return try self.toIoFile().tryLock(io(), lock);
-    }
-
-    pub fn unlock(self: File) void {
-        self.toIoFile().unlock(io());
     }
 
     pub fn close(self: File) void {
@@ -177,22 +115,6 @@ pub const Dir = struct {
 
         pub fn next(self: *Iterator) !?std.Io.Dir.Entry {
             return try self.inner.next(io());
-        }
-    };
-    pub const Walker = struct {
-        inner: std.Io.Dir.Walker,
-        pub const Entry = std.Io.Dir.Walker.Entry;
-
-        pub fn next(self: *Walker) !?Entry {
-            return try self.inner.next(io());
-        }
-
-        pub fn deinit(self: *Walker) void {
-            self.inner.deinit();
-        }
-
-        pub fn leave(self: *Walker) void {
-            self.inner.leave(io());
         }
     };
     pub fn openFile(self: Dir, sub_path: []const u8, options: OpenFileOptions) !File {
@@ -242,24 +164,12 @@ pub const Dir = struct {
         try self.inner.deleteFile(io(), sub_path);
     }
 
-    pub fn deleteDir(self: Dir, sub_path: []const u8) !void {
-        try self.inner.deleteDir(io(), sub_path);
-    }
-
-    pub fn deleteTree(self: Dir, sub_path: []const u8) !void {
-        try self.inner.deleteTree(io(), sub_path);
-    }
-
     pub fn symLink(self: Dir, target_path: []const u8, sym_link_path: []const u8, flags: SymLinkFlags) !void {
         try self.inner.symLink(io(), target_path, sym_link_path, flags);
     }
 
     pub fn iterate(self: Dir) Iterator {
         return .{ .inner = self.inner.iterate() };
-    }
-
-    pub fn walk(self: Dir, allocator: std.mem.Allocator) !Walker {
-        return .{ .inner = try self.inner.walk(allocator) };
     }
 
     pub fn close(self: Dir) void {

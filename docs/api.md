@@ -116,11 +116,13 @@ A non-`2xx` status is a failure regardless of the body, and the request shares t
 - when a stored account snapshot cannot make a ChatGPT usage request because it is missing the required ChatGPT auth fields, the corresponding `list` / `switch` row shows `MissingAuth` in both usage columns until a later successful refresh replaces it
 - with `--skip-api`, foreground refresh still uses only the active local rollout data because local session files do not identify the other stored accounts
 - `list` and interactive `switch` use the API-backed path by default; `--api` is accepted as an explicit equivalent
+- single-shot `list` and interactive `switch` abort when the refresh itself fails — for example, when no usable `curl` is available; per-account request failures are not fatal and surface as row markers under the status rules above
 - `list --skip-api` and interactive `switch --skip-api` disable the foreground usage API path for that command
 - `switch --live` still excludes errored rows from candidate selection, and it also skips candidates whose current displayed 5h or weekly value is already `0%`
 - single-shot `switch --skip-api` skips the pre-render refresh round entirely and shows the stored registry picker directly
 - `switch <query>` always resolves selectors locally from stored data and does not accept `--live`, `--api`, or `--skip-api`
-- interactive `remove`, including `remove --live`, always stays local-only and never makes foreground usage API requests
+- single-shot interactive `remove` runs the same strict foreground refresh as `switch` — an error from the refresh itself aborts the command; `--api` is an explicit equivalent and `--skip-api` keeps it local-only
+- `remove --live` follows the `switch --live` refresh policy: an error from the refresh itself falls back to stored rows, while `--api` makes the initial load strict
 - `remove <query>` and `remove --all` always resolve selectors from stored local data and do not accept `--live`
 - single-shot `switch` does not perform another foreground usage refresh after the new account is activated
 - in `switch --live`, a successful selection patches the current picker state in memory instead of rebuilding it from disk; the active account and `Switched to ...` message both come from the persisted registry state after the local switch succeeds, while the current display keeps its existing usage/account overlays, including any overlay already shown on the newly active row, until the next scheduled live refresh reapplies fresh data asynchronously

@@ -39,10 +39,6 @@ pub fn shouldUseNumberedSwitchSelector(is_windows: bool, stdin_is_tty: bool, std
     return !stdin_is_tty or !stdout_is_tty;
 }
 
-pub fn selectAccount(allocator: std.mem.Allocator, reg: *registry.Registry) !?[]const u8 {
-    return selectAccountWithUsageOverrides(allocator, reg, null);
-}
-
 pub fn selectAccountWithUsageOverrides(
     allocator: std.mem.Allocator,
     reg: *registry.Registry,
@@ -59,10 +55,6 @@ pub fn selectAccountWithUsageOverrides(
         error.TuiRequiresTty => selectWithNumbers(allocator, reg, usage_overrides),
         else => return err,
     };
-}
-
-pub fn selectAccountFromIndices(allocator: std.mem.Allocator, reg: *registry.Registry, indices: []const usize) !?[]const u8 {
-    return selectAccountFromIndicesWithUsageOverrides(allocator, reg, indices, null);
 }
 
 pub fn selectAccountFromIndicesWithUsageOverrides(
