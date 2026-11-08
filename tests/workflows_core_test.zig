@@ -1799,6 +1799,45 @@ test "list JSON emits null reset_credit when card details are unknown" {
     try std.testing.expect(usage.get("reset_credit").? == .null);
 }
 
+test "list JSON emits an empty reset_credit array when fetched details are empty" {
+    const gpa = std.testing.allocator;
+    var reg = makeRegistry();
+    defer reg.deinit(gpa);
+    try appendAccount(gpa, &reg, primary_record_key, "user@example.com", "", .pro);
+    reg.accounts.items[0].last_usage = .{
+        .primary = null,
+        .secondary = null,
+        .credits = null,
+        .reset_credits = 0,
+        .reset_credit = try gpa.alloc(registry.ResetCreditCard, 0),
+        .plan_type = null,
+    };
+    reg.accounts.items[0].last_usage_at = 1730002000;
+
+    const overrides = try gpa.alloc(?[]const u8, 1);
+    const outcomes = try gpa.alloc(main_mod.ForegroundUsageOutcome, 1);
+    overrides[0] = null;
+    outcomes[0] = .{};
+    var state = main_mod.ForegroundUsageRefreshState{
+        .usage_overrides = overrides,
+        .outcomes = outcomes,
+    };
+    defer state.deinit(gpa);
+
+    var result = try main_mod.results.buildListResult(gpa, &reg, &state);
+    defer result.deinit(gpa);
+
+    var buffer: [4096]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try cli.json_output.writeListResult(&writer, &result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, writer.buffered(), .{});
+    defer parsed.deinit();
+    const accounts = parsed.value.object.get("accounts").?.array.items;
+    const usage = accounts[0].object.get("usage").?.object;
+    try std.testing.expectEqual(@as(usize, 0), usage.get("reset_credit").?.array.items.len);
+}
+
 test "list JSON emits a reset_credit array when card details are stored" {
     const gpa = std.testing.allocator;
     var reg = makeRegistry();
