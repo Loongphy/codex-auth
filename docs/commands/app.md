@@ -3,7 +3,7 @@
 ## Usage
 
 ```shell
-codex-auth app [--id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac]
+codex-auth app [--id <id>] [--codex-cli-path <path>] [--codex-home <path>] [--platform win|wsl|mac] [--std]
 ```
 
 Value flags also accept the joined `--flag=<value>` form.

@@ -61,9 +61,9 @@ The same translation applies to the Codext release lookup and download in
 
 See [api.md](./api.md) for the full resolution order.
 
-## Test runner deadlock (Zig 0.16)
+## Test runner deadlock
 
-Zig 0.16's server-mode test runner (`--listen=-`, `std.zig.Server` over stdio)
+Zig's server-mode test runner (`--listen=-`, `std.zig.Server` over stdio)
 can deadlock the build runner on Windows: the spawned `test.exe` waits on
 stdin forever while the runner prints nothing, so CI appears stuck right
 after `zig version`. `zig build test` therefore runs test binaries through
