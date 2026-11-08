@@ -302,7 +302,7 @@ fn buildUsageView(
         .secondary = snapshot.secondary,
         .credits = credits,
         .reset_credits = snapshot.reset_credits,
-        .reset_credit = try registry.cloneResetCreditCards(allocator, snapshot.reset_credit orelse &.{}),
+        .reset_credit = if (snapshot.reset_credit) |cards| try registry.cloneResetCreditCards(allocator, cards) else null,
         .refresh = refresh,
     };
 }

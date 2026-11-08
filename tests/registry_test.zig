@@ -366,6 +366,25 @@ test "setting same active account preserves previous active account key" {
     try std.testing.expectEqualStrings(alpha_key, reg.previous_active_account_key.?);
 }
 
+test "upsertAccount backfills missing expiry fields when merging a staler record" {
+    const gpa = std.testing.allocator;
+    var reg = makeEmptyRegistry();
+    defer reg.deinit(gpa);
+
+    const dest = try makeAccountRecord(gpa, "merge@example.com", "work", .pro, .chatgpt, 100);
+    try reg.accounts.append(gpa, dest);
+
+    var incoming = try makeAccountRecord(gpa, "merge@example.com", "work", .pro, .chatgpt, 1);
+    incoming.access_token_expires_at = 1_700_000_001;
+    incoming.plan_expires_at = 1_700_000_002;
+    try registry.upsertAccount(gpa, &reg, incoming);
+
+    try std.testing.expectEqual(@as(usize, 1), reg.accounts.items.len);
+    const rec = reg.accounts.items[0];
+    try std.testing.expectEqual(@as(?i64, 1_700_000_001), rec.access_token_expires_at);
+    try std.testing.expectEqual(@as(?i64, 1_700_000_002), rec.plan_expires_at);
+}
+
 test "plan labels are human-readable while registry stores canonical plan values" {
     const gpa = std.testing.allocator;
     var tmp = fs.tmpDir(.{});
