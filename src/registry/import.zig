@@ -270,6 +270,10 @@ fn appendAuthArrayData(
         const outcome = importConvertedAuthInfo(allocator, codex_home, reg, item_alias, &info, item_data) catch |err| {
             if (!isImportValidationError(err)) return err;
             try report.addItemEvent(allocator, label, item_index, .skipped, importReasonLabel(err), detail);
+            // An explicit --alias rejection on the single aliased item fails
+            // the import: without a failure, a purge run would still save the
+            // rebuilt registry and drop the rejected account for good.
+            if (item_alias != null) report.failure = err;
             continue;
         };
         try report.addItemEvent(allocator, label, item_index, outcome, null, detail);

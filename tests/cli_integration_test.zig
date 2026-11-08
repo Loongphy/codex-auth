@@ -976,8 +976,10 @@ test "Scenario: Given no managed executable then daemon restart resolves relativ
         if (path.len == 0) {
             // An empty PATH segment would resolve `codex` relative to the
             // working directory; the resolver must refuse that implicit
-            // search path, so the switch skips daemon coordination silently.
-            try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon") == null);
+            // search path. The control socket still exists, so the switch
+            // reports the daemon state as unconfirmed rather than absent —
+            // but no lifecycle helper may ever run.
+            try std.testing.expect(std.mem.indexOf(u8, result.stderr, "daemon responsiveness could not be confirmed") != null);
             try std.testing.expectError(error.FileNotFound, fake_daemon.read(dir, "lifecycle-calls"));
             try std.testing.expectError(error.FileNotFound, dir.openFile("restarted-home", .{}));
             continue;
