@@ -48,7 +48,7 @@ jobs:
       - name: Setup Zig
         uses: Loongphy/setup-zig@node24-lts-runtime
         with:
-          version: 0.17.0
+          version: 0.17.1
 
       - name: Zig test
         run: |
