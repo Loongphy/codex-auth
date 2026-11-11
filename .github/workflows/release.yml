@@ -139,27 +139,27 @@ jobs:
           - id: linux-x64
             zig_target: x86_64-linux-gnu
             binary_name: codex-auth
-            archive_name: codex-auth-Linux-X64.tar.gz
+            archive_name: codex-auth-linux-x64.tar.gz
           - id: linux-arm64
             zig_target: aarch64-linux-gnu
             binary_name: codex-auth
-            archive_name: codex-auth-Linux-ARM64.tar.gz
+            archive_name: codex-auth-linux-arm64.tar.gz
           - id: darwin-x64
             zig_target: x86_64-macos-none
             binary_name: codex-auth
-            archive_name: codex-auth-macOS-X64.tar.gz
+            archive_name: codex-auth-macos-x64.tar.gz
           - id: darwin-arm64
             zig_target: aarch64-macos-none
             binary_name: codex-auth
-            archive_name: codex-auth-macOS-ARM64.tar.gz
+            archive_name: codex-auth-macos-arm64.tar.gz
           - id: win32-x64
             zig_target: x86_64-windows-gnu
             binary_name: codex-auth.exe
-            archive_name: codex-auth-Windows-X64.zip
+            archive_name: codex-auth-windows-x64.zip
           - id: win32-arm64
             zig_target: aarch64-windows-gnu
             binary_name: codex-auth.exe
-            archive_name: codex-auth-Windows-ARM64.zip
+            archive_name: codex-auth-windows-arm64.zip
 
     steps:
       - name: Checkout
