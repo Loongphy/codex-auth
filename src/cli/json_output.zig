@@ -32,6 +32,15 @@ pub fn printRemoveResult(result: *const results.RemoveResult) !void {
     try out.flush();
 }
 
+pub fn printResetResult(result: *const results.ResetResult) !void {
+    var stdout: io_util.Stdout = undefined;
+    stdout.init();
+    const out = stdout.out();
+    try writeResetResult(out, result);
+    try out.writeAll("\n");
+    try out.flush();
+}
+
 pub fn printError(code: []const u8, message: []const u8, candidates: ?[]const results.AccountView) !void {
     var stdout: io_util.Stdout = undefined;
     stdout.init();
@@ -90,6 +99,23 @@ pub fn writeRemoveResult(out: *std.Io.Writer, result: *const results.RemoveResul
     try writeAccountArray(&jw, result.removed);
     try jw.objectField("new_active_account_key");
     try jw.write(result.new_active_account_key);
+    try jw.endObject();
+}
+
+pub fn writeResetResult(out: *std.Io.Writer, result: *const results.ResetResult) !void {
+    var jw: std.json.Stringify = .{ .writer = out, .options = .{} };
+    try jw.beginObject();
+    try writeSchemaVersion(&jw);
+    try jw.objectField("command");
+    try jw.write("reset");
+    try jw.objectField("redeemed");
+    try writeAccount(&jw, &result.redeemed);
+    try jw.objectField("outcome");
+    try jw.write(@tagName(result.outcome));
+    try jw.objectField("remaining_credits");
+    try jw.write(result.remaining_credits);
+    try jw.objectField("next_expires_at");
+    try jw.write(result.next_expires_at);
     try jw.endObject();
 }
 

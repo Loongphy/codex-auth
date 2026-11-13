@@ -140,6 +140,7 @@ fn commandWantsJson(cmd: *const cli.types.Command) bool {
         .list => |opts| opts.json,
         .switch_account => |opts| opts.json,
         .remove_account => |opts| opts.json,
+        .reset_credits => |opts| opts.json,
         else => false,
     };
 }

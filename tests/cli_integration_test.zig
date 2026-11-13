@@ -5592,6 +5592,177 @@ test "Scenario: Given no available reset credits when running reset then it repo
     try std.testing.expect(std.mem.find(u8, result.stderr, "no available reset credits") != null);
 }
 
+test "Scenario: Given reset credits when running reset json then the success document reports the consume" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "json-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email, "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset --json", result);
+    try expectSuccess(result);
+    try std.testing.expectEqualStrings("", result.stderr);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expectEqual(@as(i64, 1), root.get("schema_version").?.integer);
+    try std.testing.expectEqualStrings("reset", root.get("command").?.string);
+    try std.testing.expectEqualStrings(email, root.get("redeemed").?.object.get("email").?.string);
+    try std.testing.expectEqualStrings("reset", root.get("outcome").?.string);
+    try std.testing.expectEqual(@as(i64, 1), root.get("remaining_credits").?.integer);
+    try std.testing.expectEqualStrings("2027-01-01T00:00:00Z", root.get("next_expires_at").?.string);
+    try expectConsumeRequestLogged(gpa, tmp.dir, "credit-soon");
+}
+
+test "Scenario: Given a named credit when running reset json then that card is consumed and the next expiry shifts" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "json-credit-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email, "--credit", "credit-later", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset --credit --json", result);
+    try expectSuccess(result);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const root = parsed.value.object;
+    try std.testing.expectEqualStrings("reset", root.get("command").?.string);
+    try std.testing.expectEqualStrings("reset", root.get("outcome").?.string);
+    try std.testing.expectEqual(@as(i64, 1), root.get("remaining_credits").?.integer);
+    try std.testing.expectEqualStrings("2026-11-01T00:00:00Z", root.get("next_expires_at").?.string);
+    try expectConsumeRequestLogged(gpa, tmp.dir, "credit-later");
+}
+
+test "Scenario: Given a named credit when running reset then the named card is consumed" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "named-credit-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email, "--credit=credit-later" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    logRunResultIfFailed("reset --credit", result);
+    try expectSuccess(result);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "reset credit redeemed") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "1 left (next exp ") != null);
+    try expectConsumeRequestLogged(gpa, tmp.dir, "credit-later");
+}
+
+test "Scenario: Given an unknown credit id when running reset json then reset_credit_not_found is returned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "unknown-credit-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "ok", &[_][]const u8{ "reset", email, "--credit", "credit-gone", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("reset_credit_not_found", err.get("code").?.string);
+}
+
+test "Scenario: Given a missing account when running reset json then account_not_found is returned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    try seedRegistryWithAccounts(gpa, home_root, "present@example.com", &.{
+        .{ .email = "present@example.com", .alias = "present" },
+    });
+
+    const result = try runCliWithIsolatedHome(gpa, project_root, home_root, &[_][]const u8{ "reset", "missing@example.com", "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("account_not_found", err.get("code").?.string);
+}
+
+test "Scenario: Given a spent credit when running reset json then no_reset_credit is returned" {
+    const gpa = std.testing.allocator;
+    const project_root = try projectRootAlloc(gpa);
+    defer gpa.free(project_root);
+    try buildCliBinary(gpa, project_root);
+
+    var tmp = fs.tmpDir(.{});
+    defer tmp.cleanup();
+    const home_root = try tmp.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(home_root);
+
+    const email = "json-gone-reset@example.com";
+    try seedResetCreditsFixture(gpa, home_root, email);
+    try writeResetCreditsAuthFile(gpa, home_root, email);
+
+    const result = try runCliWithMockBackend(gpa, project_root, home_root, tmp.dir, "no_credit", &[_][]const u8{ "reset", email, "--json" });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try expectExitCode(result, 1);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.stdout, .{});
+    defer parsed.deinit();
+    const err = parsed.value.object.get("error").?.object;
+    try std.testing.expectEqualStrings("no_reset_credit", err.get("code").?.string);
+}
+
 fn writeMockFixtureNamed(
     gpa: std.mem.Allocator,
     tmp_dir: fs.Dir,
