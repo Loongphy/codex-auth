@@ -46,6 +46,8 @@ pub const RemoveOptions = struct {
 };
 pub const ResetOptions = struct {
     selector: []u8,
+    credit: ?[]u8 = null,
+    json: bool = false,
 };
 pub const AliasSetOptions = struct {
     selector: []u8,

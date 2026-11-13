@@ -226,7 +226,7 @@ fn writeUsageLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("  codex-auth remove --all\n");
             try out.writeAll("  codex-auth remove (<selector>...|--all) --json\n");
         },
-        .reset_credits => try out.writeAll("  codex-auth reset <alias|email|display-number|query>\n"),
+        .reset_credits => try out.writeAll("  codex-auth reset <alias|email|display-number|query> [--credit <id>] [--json]\n"),
         .alias => {
             try out.writeAll("  codex-auth alias set <alias|email|display-number|query> <alias>\n");
             try out.writeAll("  codex-auth alias clear <alias|email|display-number|query>\n");
@@ -319,6 +319,9 @@ fn writeOptionLines(out: *std.Io.Writer, topic: HelpTopic) !void {
             try out.writeAll("               Remove one or more matching accounts.\n");
         },
         .reset_credits => {
+            try out.writeAll("  --credit <id>   Redeem the stored reset-credit card with this id instead of the\n");
+            try out.writeAll("                  soonest-expiring one.\n");
+            try out.writeAll("  --json          Emit one machine-readable JSON document.\n");
             try out.writeAll("  <alias|email|display-number|query>\n");
             try out.writeAll("                    Select one stored account with an available reset credit.\n");
         },

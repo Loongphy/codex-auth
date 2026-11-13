@@ -2,6 +2,7 @@ const std = @import("std");
 const app_runtime = @import("../core/runtime.zig");
 const display_rows = @import("../tui/display.zig");
 const registry = @import("../registry/root.zig");
+const reset_credits_api = @import("../api/reset_credits.zig");
 const usage_refresh = @import("usage.zig");
 const codex_daemon = @import("codex_daemon.zig");
 
@@ -120,6 +121,19 @@ pub const SwitchResult = struct {
     }
 };
 
+pub const ResetResult = struct {
+    redeemed: AccountView,
+    outcome: reset_credits_api.ConsumeOutcome,
+    remaining_credits: usize,
+    next_expires_at: ?[]u8,
+
+    pub fn deinit(self: *ResetResult, allocator: std.mem.Allocator) void {
+        self.redeemed.deinit(allocator);
+        if (self.next_expires_at) |text| allocator.free(text);
+        self.* = undefined;
+    }
+};
+
 pub const RemoveResult = struct {
     removed: []AccountView,
     new_active_account_key: ?[]u8,
@@ -197,6 +211,30 @@ pub fn buildSwitchResult(
     return .{
         .switched_to = switched_to,
         .daemon = daemon,
+    };
+}
+
+/// `next_expires_at` is the stored ISO 8601 expiry of the soonest-expiring
+/// card still available after the consume, or null when no dated card remains.
+pub fn buildResetResult(
+    allocator: std.mem.Allocator,
+    reg: *const registry.Registry,
+    account_key: []const u8,
+    outcome: reset_credits_api.ConsumeOutcome,
+    remaining_credits: usize,
+    next_expires_at: ?[]const u8,
+) !ResetResult {
+    var redeemed = try buildAccountViewForKey(allocator, reg, null, account_key);
+    errdefer redeemed.deinit(allocator);
+
+    const next = try dupeOptional(allocator, next_expires_at);
+    errdefer if (next) |text| allocator.free(text);
+
+    return .{
+        .redeemed = redeemed,
+        .outcome = outcome,
+        .remaining_credits = remaining_credits,
+        .next_expires_at = next,
     };
 }
 

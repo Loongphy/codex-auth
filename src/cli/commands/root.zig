@@ -83,7 +83,10 @@ fn freeCommand(allocator: std.mem.Allocator, cmd: *types.Command) void {
             common.freeOwnedStringList(allocator, opts.selectors);
             allocator.free(opts.selectors);
         },
-        .reset_credits => |opts| allocator.free(opts.selector),
+        .reset_credits => |opts| {
+            allocator.free(opts.selector);
+            if (opts.credit) |credit| allocator.free(credit);
+        },
         .alias => |opts| switch (opts) {
             .set => |set_opts| {
                 allocator.free(set_opts.selector);

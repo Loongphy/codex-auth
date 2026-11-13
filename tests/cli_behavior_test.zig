@@ -2596,6 +2596,132 @@ test "Scenario: Given reset help when parsing then the reset credits topic is re
     try expectHelp(result, .reset_credits);
 }
 
+test "Scenario: Given reset with json flag when parsing then the flag is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| {
+                try std.testing.expectEqualStrings("work@example.com", opts.selector);
+                try std.testing.expect(opts.json);
+                try std.testing.expect(opts.credit == null);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset with a credit flag when parsing then the card id is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--credit", "credit-123" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| try std.testing.expectEqualStrings("credit-123", opts.credit.?),
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset with an inline credit flag when parsing then the card id is preserved" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--credit=credit-123", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .command => |cmd| switch (cmd) {
+            .reset_credits => |opts| {
+                try std.testing.expectEqualStrings("credit-123", opts.credit.?);
+                try std.testing.expect(opts.json);
+            },
+            else => return error.TestExpectedEqual,
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset with a missing credit value when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--credit" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "missing value for `--credit`");
+}
+
+test "Scenario: Given reset with a flag in the credit position when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    // `--json` after `--credit` is the forgotten value, not the card id; the
+    // automation caller keeps the JSON error contract.
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--credit", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "missing value for `--credit`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset with duplicate credit flags when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--credit", "a", "--credit=b" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "duplicate `--credit`");
+}
+
+test "Scenario: Given reset with duplicate json flags when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--json", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "duplicate `--json`") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
+test "Scenario: Given reset with an unknown flag when parsing then usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "work@example.com", "--bogus" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    try expectUsageError(result, .reset_credits, "unknown flag `--bogus`");
+}
+
+test "Scenario: Given reset json without a selector when parsing then json usage error is returned" {
+    const gpa = std.testing.allocator;
+    const args = [_][:0]const u8{ "codex-auth", "reset", "--json" };
+    var result = try cli.commands.parseArgs(gpa, &args);
+    defer cli.commands.freeParseResult(gpa, &result);
+
+    switch (result) {
+        .usage_error => |usage_err| {
+            try std.testing.expect(usage_err.json);
+            try std.testing.expect(std.mem.find(u8, usage_err.message, "requires an account selector") != null);
+        },
+        else => return error.TestExpectedEqual,
+    }
+}
+
 test "reset summary line matches the documented examples on both platforms" {
     const gpa = std.testing.allocator;
 

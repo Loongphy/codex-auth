@@ -334,6 +334,10 @@ const remove_flags = [_]FlagSpec{
     .{ .name = "--all", .desc = "Remove every stored account" },
     .{ .name = "--json", .desc = "Emit one machine-readable JSON document for non-interactive remove" },
 };
+const reset_flags = [_]FlagSpec{
+    .{ .name = "--credit", .desc = "Redeem the reset-credit card with this id", .value = .freeform },
+    .{ .name = "--json", .desc = "Emit one machine-readable JSON document" },
+};
 const app_flags = [_]FlagSpec{
     .{ .name = "--id", .desc = "Set the Windows package/AUMID or macOS bundle identifier", .value = .freeform },
     .{ .name = "--codex-cli-path", .desc = "Set CODEX_CLI_PATH for the app launch", .value = .path },
@@ -386,7 +390,7 @@ const command_specs = [_]CmdSpec{
     .{ .name = "export", .desc = "Export stored account auth files", .flags = &export_flags, .positionals = &export_positionals },
     .{ .name = "switch", .desc = "Switch the active account", .flags = &switch_flags, .positionals = &switch_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api" } },
     .{ .name = "remove", .desc = "Remove one or more accounts", .flags = &remove_flags, .positionals = &remove_positionals, .pos_blocks_flags = &.{ "--live", "--api", "--skip-api", "--all" } },
-    .{ .name = "reset", .desc = "Use the available reset credit that expires first", .positionals = &reset_positionals },
+    .{ .name = "reset", .desc = "Use the available reset credit that expires first", .flags = &reset_flags, .positionals = &reset_positionals },
     .{ .name = "alias", .desc = "Set or clear account aliases", .subs = &alias_subs },
     .{ .name = "clean", .desc = "Delete backup and stale files under accounts/", .positionals = &clean_positionals },
     .{ .name = "completion", .desc = "Generate shell completion scripts", .positionals = &completion_positionals },
