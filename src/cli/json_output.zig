@@ -165,7 +165,10 @@ fn writeAccount(jw: *std.json.Stringify, account: *const results.AccountView) !v
     try jw.objectField("account_name");
     try jw.write(account.account_name);
     try jw.objectField("plan");
-    try writeOptionalText(jw, planName(account.plan));
+    // `plan` emits the normalized tier name — the enum tag, same as the
+    // registry file's `Stringify` output; wire aliases like `team`
+    // collapsed at parse time.
+    try writeOptionalText(jw, if (account.plan) |p| @tagName(p) else null);
     try jw.objectField("auth_mode");
     try writeOptionalText(jw, authModeName(account.auth_mode));
     try jw.objectField("access_token_expires_at");
@@ -302,15 +305,6 @@ fn writeOptionalText(jw: *std.json.Stringify, value: ?[]const u8) !void {
     } else {
         try jw.write(null);
     }
-}
-
-/// `plan` in `list --json` is the normalized tier name — the enum tag,
-/// same as the registry file's `Stringify` output. Wire aliases like
-/// `team`/`self_serve_business_usage_based` have already collapsed at
-/// parse time, so the tag name is the contract.
-fn planName(plan: ?registry.PlanType) ?[]const u8 {
-    const value = plan orelse return null;
-    return @tagName(value);
 }
 
 fn writeSelectorResolution(
