@@ -3,7 +3,32 @@ const app_runtime = @import("../core/runtime.zig");
 const builtin = @import("builtin");
 const account_api = @import("../api/account.zig");
 
-pub const PlanType = enum { free, go, plus, prolite, pro, business, enterprise, edu, unknown };
+/// Normalized plan tiers, shaped by upstream's display mapping rather
+/// than raw wire values: upstream remaps several wire names onto the
+/// same label (`team`/`self_serve_business_usage_based` → "Business",
+/// `business`/`ent26`/`hc`/`enterprise`/`enterprise_cbp_usage_based` →
+/// "Enterprise"), so `business` here is upstream's "Business" tier and
+/// `enterprise` is upstream's "Enterprise" tier.
+pub const PlanType = enum {
+    free,
+    go,
+    plus,
+    prolite,
+    pro,
+    promax,
+    business,
+    /// Upstream `self_serve_business_prolite`.
+    business_premium,
+    enterprise,
+    /// Upstream `enterprise_cbp_automation`.
+    enterprise_automation,
+    edu,
+    edu_plus,
+    edu_pro,
+    sci,
+    sci_plus,
+    unknown,
+};
 pub const AuthMode = enum { chatgpt, apikey };
 pub const current_schema_version: u32 = 4;
 pub const min_supported_schema_version: u32 = 2;
@@ -159,15 +184,25 @@ pub fn resolveDisplayPlan(rec: *const AccountRecord) ?PlanType {
 }
 
 pub fn planLabel(plan: PlanType) []const u8 {
+    // Display labels mirror upstream's /status mapping
+    // (codex-rs/tui/src/subscription.rs): prolite→Pro 100, pro→Pro 200,
+    // promax→Pro 500.
     return switch (plan) {
         .free => "Free",
         .go => "Go",
         .plus => "Plus",
-        .prolite => "Pro Lite",
-        .pro => "Pro",
+        .prolite => "Pro 100",
+        .pro => "Pro 200",
+        .promax => "Pro 500",
         .business => "Business",
+        .business_premium => "Business Premium",
         .enterprise => "Enterprise",
+        .enterprise_automation => "Enterprise (Automation)",
         .edu => "Edu",
+        .edu_plus => "Edu Plus",
+        .edu_pro => "Edu Pro",
+        .sci => "Academic Researchers",
+        .sci_plus => "Academic Researchers Plus",
         .unknown => "Unknown",
     };
 }

@@ -470,7 +470,7 @@ pub fn hasStoredAccountName(rec: *const AccountRecord) bool {
 pub fn isWorkspaceAccount(rec: *const AccountRecord) bool {
     const plan = resolveDisplayPlan(rec) orelse return false;
     return switch (plan) {
-        .business, .enterprise, .edu => true,
+        .business, .business_premium, .enterprise, .enterprise_automation, .edu, .edu_plus, .edu_pro, .sci, .sci_plus => true,
         else => false,
     };
 }
