@@ -11,33 +11,53 @@ const CreditsSnapshot = common.CreditsSnapshot;
 const RateLimitResetCredit = common.RateLimitResetCredit;
 const ResetCreditCard = common.ResetCreditCard;
 
+/// Wire `plan_type`/`chatgpt_plan_type` string → normalized tier,
+/// mirroring upstream's KnownPlan::from_raw_value + display mapping.
 pub fn normalizePlanType(s: []const u8) PlanType {
     if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
     if (std.ascii.eqlIgnoreCase(s, "go")) return .go;
     if (std.ascii.eqlIgnoreCase(s, "plus")) return .plus;
     if (std.ascii.eqlIgnoreCase(s, "prolite")) return .prolite;
+    if (std.ascii.eqlIgnoreCase(s, "promax")) return .promax;
     if (std.ascii.eqlIgnoreCase(s, "pro")) return .pro;
+    if (std.ascii.eqlIgnoreCase(s, "self_serve_business_prolite")) return .business_premium;
     if (std.ascii.eqlIgnoreCase(s, "team") or
         std.ascii.eqlIgnoreCase(s, "self_serve_business_usage_based")) return .business;
     if (std.ascii.eqlIgnoreCase(s, "business") or
+        std.ascii.eqlIgnoreCase(s, "ent26") or
         std.ascii.eqlIgnoreCase(s, "enterprise_cbp_usage_based") or
         std.ascii.eqlIgnoreCase(s, "enterprise") or
         std.ascii.eqlIgnoreCase(s, "hc")) return .enterprise;
+    if (std.ascii.eqlIgnoreCase(s, "enterprise_cbp_automation")) return .enterprise_automation;
     if (std.ascii.eqlIgnoreCase(s, "education") or std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
+    if (std.ascii.eqlIgnoreCase(s, "edu_plus")) return .edu_plus;
+    if (std.ascii.eqlIgnoreCase(s, "edu_pro")) return .edu_pro;
+    if (std.ascii.eqlIgnoreCase(s, "sci")) return .sci;
+    if (std.ascii.eqlIgnoreCase(s, "sci_plus")) return .sci_plus;
     return .unknown;
 }
 
 pub fn parseStoredPlanType(s: []const u8, schema_version: u32) PlanType {
     if (schema_version < 4) return normalizePlanType(s);
 
+    // Stored values are enum tag names; match them before wire aliases
+    // so "business" reads as .business (the wire "business" normalizes
+    // to .enterprise instead).
     if (std.ascii.eqlIgnoreCase(s, "free")) return .free;
     if (std.ascii.eqlIgnoreCase(s, "go")) return .go;
     if (std.ascii.eqlIgnoreCase(s, "plus")) return .plus;
     if (std.ascii.eqlIgnoreCase(s, "prolite")) return .prolite;
+    if (std.ascii.eqlIgnoreCase(s, "promax")) return .promax;
     if (std.ascii.eqlIgnoreCase(s, "pro")) return .pro;
     if (std.ascii.eqlIgnoreCase(s, "business")) return .business;
+    if (std.ascii.eqlIgnoreCase(s, "business_premium")) return .business_premium;
     if (std.ascii.eqlIgnoreCase(s, "enterprise")) return .enterprise;
+    if (std.ascii.eqlIgnoreCase(s, "enterprise_automation")) return .enterprise_automation;
     if (std.ascii.eqlIgnoreCase(s, "edu")) return .edu;
+    if (std.ascii.eqlIgnoreCase(s, "edu_plus")) return .edu_plus;
+    if (std.ascii.eqlIgnoreCase(s, "edu_pro")) return .edu_pro;
+    if (std.ascii.eqlIgnoreCase(s, "sci")) return .sci;
+    if (std.ascii.eqlIgnoreCase(s, "sci_plus")) return .sci_plus;
     return .unknown;
 }
 

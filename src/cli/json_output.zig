@@ -304,6 +304,9 @@ fn writeOptionalText(jw: *std.json.Stringify, value: ?[]const u8) !void {
     }
 }
 
+/// `plan` in `list --json` is the normalized tier name (the enum tag):
+/// `team`/`self_serve_business_usage_based` wire values arrive as
+/// `"business"`, matching the existing `plan` contract.
 fn planName(plan: ?registry.PlanType) ?[]const u8 {
     const value = plan orelse return null;
     return switch (value) {
@@ -312,9 +315,16 @@ fn planName(plan: ?registry.PlanType) ?[]const u8 {
         .plus => "plus",
         .prolite => "prolite",
         .pro => "pro",
+        .promax => "promax",
         .business => "business",
+        .business_premium => "business_premium",
         .enterprise => "enterprise",
+        .enterprise_automation => "enterprise_automation",
         .edu => "edu",
+        .edu_plus => "edu_plus",
+        .edu_pro => "edu_pro",
+        .sci => "sci",
+        .sci_plus => "sci_plus",
         .unknown => "unknown",
     };
 }

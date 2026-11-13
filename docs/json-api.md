@@ -107,8 +107,15 @@ period end.
 | Input observed by the CLI | JSON plan |
 |---------------------------|-----------|
 | `team`, `self_serve_business_usage_based` | `business` |
-| `business`, `enterprise_cbp_usage_based`, `enterprise`, `hc` | `enterprise` |
+| `self_serve_business_prolite` | `business_premium` |
+| `business`, `ent26`, `enterprise_cbp_usage_based`, `enterprise`, `hc` | `enterprise` |
+| `enterprise_cbp_automation` | `enterprise_automation` |
 | `education`, `edu` | `edu` |
+| `edu_plus`, `edu_pro`, `sci`, `sci_plus`, `promax` | unchanged |
+
+The stored `plan` value (schema version 4+) keeps these same normalized
+tag names; only registries written before schema version 4 still carry
+raw backend identifiers and are normalized on load.
 
 The GUI must not repeat this mapping. When both auth and stored usage provide a
 plan, the usage plan wins.

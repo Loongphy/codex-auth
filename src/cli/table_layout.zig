@@ -292,9 +292,12 @@ fn writeTruncated(out: *std.Io.Writer, text: []const u8, width: usize) !usize {
         try out.writeAll(".");
         return 1;
     }
-    try out.writeAll(text[0..text_width.prefixByteLength(text, width - 1)]);
+    // A prefix ending on a word boundary would render `word .`, which reads
+    // like a standalone dot cell; trim the gap so the marker hugs the text.
+    const prefix = std.mem.trimEnd(u8, text[0..text_width.prefixByteLength(text, width - 1)], " ");
+    try out.writeAll(prefix);
     try out.writeAll(".");
-    return width;
+    return text_width.displayWidth(prefix) + 1;
 }
 
 /// Usage cells read `N% (HH:MM on D Mon)`, `N% (HH:MM)` or a bare label such
