@@ -319,6 +319,34 @@ test "plain and live views keep shared columns in the same relative order" {
     }
 }
 
+test "usage cell truncation keeps a stale marker instead of a bare percent" {
+    const table_layout = cli.table_layout;
+    var buffer: [64]u8 = undefined;
+
+    var writer: std.Io.Writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.rate_5h, &writer, "75% (stale)", 11);
+    try std.testing.expectEqualStrings("75% (stale)", writer.buffered());
+
+    writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.rate_5h, &writer, "75% (stale)", 6);
+    try std.testing.expectEqualStrings("75%!", writer.buffered());
+
+    writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.rate_5h, &writer, "75% (stale)", 4);
+    try std.testing.expectEqualStrings("75%!", writer.buffered());
+
+    // Below the marker's width the cell still renders as truncated text,
+    // never as a clean bare percent.
+    writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.rate_week, &writer, "100% (stale)", 4);
+    try std.testing.expect(std.mem.find(u8, writer.buffered(), "100%") == null);
+
+    // A reset-time parenthetical still sheds cleanly to the bare percent.
+    writer = .fixed(&buffer);
+    _ = try table_layout.writeCellFor(.rate_5h, &writer, "75% (21:40)", 4);
+    try std.testing.expectEqualStrings("75%", writer.buffered());
+}
+
 test "account cell truncation follows the documented width table" {
     const table_layout = cli.table_layout;
     const label = "very-long-account-name@example.com";
