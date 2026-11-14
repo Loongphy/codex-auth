@@ -421,6 +421,69 @@ test "plan labels are human-readable while registry stores canonical plan values
     try std.testing.expectEqualStrings("Academic Researchers Plus", registry.planLabel(.sci_plus));
 }
 
+test "remainingPercentAt keeps the elapsed-window inference for decisions" {
+    const now: i64 = 1_800_000_000;
+    const window = registry.RateLimitWindow{
+        .used_percent = 40.0,
+        .window_minutes = 300,
+        .resets_at = now - 60,
+    };
+    // Auto-switch scoring still treats an elapsed positive resets_at as
+    // refilled; the display layer does not consume this inference.
+    try std.testing.expectEqual(@as(?i64, 100), registry.remainingPercentAt(window, now));
+
+    const pending = registry.RateLimitWindow{
+        .used_percent = 40.0,
+        .window_minutes = 300,
+        .resets_at = now + 60,
+    };
+    try std.testing.expectEqual(@as(?i64, 60), registry.remainingPercentAt(pending, now));
+}
+
+test "remainingPercentAt treats a non-positive resets_at as measured data" {
+    const now: i64 = 1_800_000_000;
+    for ([_]i64{ 0, -5000 }) |resets_at| {
+        const exhausted = registry.RateLimitWindow{
+            .used_percent = 100.0,
+            .window_minutes = 300,
+            .resets_at = resets_at,
+        };
+        try std.testing.expectEqual(@as(?i64, 0), registry.remainingPercentAt(exhausted, now));
+
+        const partial = registry.RateLimitWindow{
+            .used_percent = 30.0,
+            .window_minutes = 300,
+            .resets_at = resets_at,
+        };
+        try std.testing.expectEqual(@as(?i64, 70), registry.remainingPercentAt(partial, now));
+    }
+}
+
+test "measuredRemainingPercent reports the stored point value without reset inference" {
+    try std.testing.expectEqual(@as(?i64, null), registry.measuredRemainingPercent(null));
+
+    const window = registry.RateLimitWindow{
+        .used_percent = 12.5,
+        .window_minutes = 300,
+        .resets_at = null,
+    };
+    try std.testing.expectEqual(@as(?i64, 87), registry.measuredRemainingPercent(window));
+
+    const elapsed = registry.RateLimitWindow{
+        .used_percent = 40.0,
+        .window_minutes = 300,
+        .resets_at = 1,
+    };
+    try std.testing.expectEqual(@as(?i64, 60), registry.measuredRemainingPercent(elapsed));
+
+    const over_used = registry.RateLimitWindow{
+        .used_percent = 140.0,
+        .window_minutes = 300,
+        .resets_at = null,
+    };
+    try std.testing.expectEqual(@as(?i64, 0), registry.measuredRemainingPercent(over_used));
+}
+
 test "resolveDisplayPlan prefers a usage snapshot plan over the stored auth plan" {
     const gpa = std.testing.allocator;
     var reg = makeEmptyRegistry();

@@ -117,7 +117,12 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - Rollout events older than the current account activation time are ignored.
 - Each account stores its own last consumed rollout signature.
 - Rate limits map `window_minutes = 300` to 5h and `window_minutes = 10080` to weekly.
-- Past reset timestamps render as `100%`.
+- Usage cells always show the last measured remaining percent; a missing,
+  invalid, or already-elapsed reset timestamp marks the value as stale
+  instead of implying a refilled quota. Auto-switch scoring keeps its own
+  inference: an elapsed positive reset timestamp still counts as restored
+  when picking accounts, and a non-positive one falls back to the measured
+  value.
 
 
 ## Display Model
@@ -129,7 +134,9 @@ When API usage refresh is disabled, local usage refresh reads Codex rollout file
 - `PLAN` comes from the auth claim when available, then falls back to usage snapshot plan data.
 - `PLAN EXPIRE` comes from the stored `id_token` subscription claim. Missing or already-expired
   timestamps render as `-`; the column is omitted on narrow terminals.
-- Usage cells show remaining percentage plus reset time when reset data is known.
+- Usage cells show the measured remaining percentage plus reset time when a
+  usable future reset timestamp is known; otherwise the measured value is
+  marked stale.
 - `LAST ACTIVITY` is rendered as relative time from `last_usage_at`.
 
 Command-specific display behavior lives in the relevant file under [docs/commands/](./commands/).

@@ -94,7 +94,7 @@ test "writeTruncatedPadded preserves UTF-8 codepoint boundaries" {
     try std.testing.expect(std.unicode.utf8ValidateSlice(writer.buffered()));
 }
 
-test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
+test "formatRateLimitFullAlloc shows measured remaining plus a stale marker after reset elapsed" {
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const window = registry.RateLimitWindow{
         .used_percent = 100.0,
@@ -105,7 +105,46 @@ test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed v
     const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
     defer std.heap.page_allocator.free(formatted);
 
-    try std.testing.expectEqualStrings("100%", formatted);
+    // The elapsed reset window must not impersonate a refilled quota: the
+    // cell shows the last measured remaining percent, marked stale.
+    try std.testing.expectEqualStrings("0% (stale)", formatted);
+}
+
+test "formatRateLimitFullAlloc marks usage stale when resets_at is missing or invalid" {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    for ([_]?i64{ null, 0, -5000, now - 1 }) |resets_at| {
+        const window = registry.RateLimitWindow{
+            .used_percent = 25.0,
+            .window_minutes = 300,
+            .resets_at = resets_at,
+        };
+        const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
+        defer std.heap.page_allocator.free(formatted);
+        try std.testing.expectEqualStrings("75% (stale)", formatted);
+    }
+}
+
+test "formatRateLimitFullAlloc shows remaining and reset time only for a future reset" {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    const window = registry.RateLimitWindow{
+        .used_percent = 25.0,
+        .window_minutes = 300,
+        .resets_at = now + 3600,
+    };
+
+    const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expect(std.mem.startsWith(u8, formatted, "75% ("));
+    try std.testing.expect(std.mem.endsWith(u8, formatted, ")"));
+    try std.testing.expect(std.mem.find(u8, formatted, "stale") == null);
+}
+
+test "formatRateLimitFullAlloc renders a dash when no window snapshot exists" {
+    const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, null);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expectEqualStrings("-", formatted);
 }
 
 test "writeAccountsTable shows right-aligned row numbers for selectable accounts" {

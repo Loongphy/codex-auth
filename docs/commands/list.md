@@ -60,7 +60,11 @@ When local-only refresh is active, only the active account can be updated from l
 - Singleton rows with aliases render as `alias(email)`.
 - Singleton rows with both alias and account name render as `alias(account name, email)`.
 - Grouped rows keep the shared email in the header; child rows with both alias and account name render as `alias(account name)`.
-- Usage cells show remaining percent and reset time when that data is known.
+- Usage cells show the last measured remaining percent, plus the reset time
+  when a usable future reset timestamp is known. A snapshot whose reset
+  timestamp is missing, invalid, or already elapsed renders the measured
+  percent with a stale marker instead of a reset time or an inferred full
+  quota; the exact marker is pinned in `tests/tui_table_test.zig`.
 - In non-live output, `CREDITS` shows the integer part of the current `credits.balance` value.
 - `PLAN EXP` renders the local date from the stored `id_token` subscription claim.
   Missing or past timestamps render as `-` in both plain and live tables.
