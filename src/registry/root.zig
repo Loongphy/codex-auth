@@ -106,6 +106,7 @@ pub const removeAccounts = account_ops.removeAccounts;
 pub const selectBestAccountIndexByUsage = account_ops.selectBestAccountIndexByUsage;
 pub const usageScoreAt = account_ops.usageScoreAt;
 pub const remainingPercentAt = account_ops.remainingPercentAt;
+pub const measuredRemainingPercent = account_ops.measuredRemainingPercent;
 pub const resolveRateWindow = account_ops.resolveRateWindow;
 pub const shouldFetchWorkspaceAccountNamesForUser = account_ops.shouldFetchWorkspaceAccountNamesForUser;
 pub const activeChatgptUserId = account_ops.activeChatgptUserId;

@@ -440,11 +440,25 @@ pub fn usageScoreAt(usage: ?RateLimitSnapshot, now: i64) ?i64 {
     return null;
 }
 
+/// Decision-facing remaining percent. An elapsed positive `resets_at` counts
+/// as fully restored: an optimistic inference kept for auto-switch scoring so
+/// an account whose window ended is treated as usable again. It is not a
+/// measurement — display paths must use `measuredRemainingPercent` instead.
+/// `resets_at <= 0` is not a real timestamp and falls through to the measured
+/// value like a missing `resets_at`.
 pub fn remainingPercentAt(window: ?RateLimitWindow, now: i64) ?i64 {
     if (window == null) return null;
     if (window.?.resets_at) |resets_at| {
-        if (resets_at <= now) return 100;
+        if (resets_at > 0 and resets_at <= now) return 100;
     }
+    return measuredRemainingPercent(window);
+}
+
+/// Last-measured remaining percent: `100 - used_percent` clamped to
+/// `0...100`, with no reset-window inference. `null` only when there is no
+/// window snapshot at all.
+pub fn measuredRemainingPercent(window: ?RateLimitWindow) ?i64 {
+    if (window == null) return null;
     const remaining = 100.0 - window.?.used_percent;
     if (remaining <= 0.0) return 0;
     if (remaining >= 100.0) return 100;

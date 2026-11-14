@@ -94,7 +94,7 @@ test "writeTruncatedPadded preserves UTF-8 codepoint boundaries" {
     try std.testing.expect(std.unicode.utf8ValidateSlice(writer.buffered()));
 }
 
-test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed value" {
+test "formatRateLimitFullAlloc shows measured remaining plus a stale marker after reset elapsed" {
     const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
     const window = registry.RateLimitWindow{
         .used_percent = 100.0,
@@ -105,7 +105,84 @@ test "formatRateLimitFullAlloc shows 100% after reset instead of dash-prefixed v
     const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
     defer std.heap.page_allocator.free(formatted);
 
-    try std.testing.expectEqualStrings("100%", formatted);
+    // The elapsed reset window must not impersonate a refilled quota: the
+    // cell shows the last measured remaining percent, marked stale.
+    try std.testing.expectEqualStrings("0% (stale)", formatted);
+}
+
+test "formatRateLimitFullAlloc marks usage stale when resets_at is missing or invalid" {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    for ([_]?i64{ null, 0, -5000, now - 1 }) |resets_at| {
+        const window = registry.RateLimitWindow{
+            .used_percent = 25.0,
+            .window_minutes = 300,
+            .resets_at = resets_at,
+        };
+        const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
+        defer std.heap.page_allocator.free(formatted);
+        try std.testing.expectEqualStrings("75% (stale)", formatted);
+    }
+}
+
+test "formatRateLimitFullAlloc shows remaining and reset time only for a future reset" {
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    const window = registry.RateLimitWindow{
+        .used_percent = 25.0,
+        .window_minutes = 300,
+        .resets_at = now + 3600,
+    };
+
+    const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, window);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expect(std.mem.startsWith(u8, formatted, "75% ("));
+    try std.testing.expect(std.mem.endsWith(u8, formatted, ")"));
+    try std.testing.expect(std.mem.find(u8, formatted, "stale") == null);
+}
+
+test "formatRateLimitFullAlloc renders a dash when no window snapshot exists" {
+    const formatted = try formatRateLimitFullAlloc(std.heap.page_allocator, null);
+    defer std.heap.page_allocator.free(formatted);
+
+    try std.testing.expectEqualStrings("-", formatted);
+}
+
+test "writeAccountsTableForCols keeps a stale marker on usage cells at every width" {
+    const gpa = std.testing.allocator;
+    const now = std.Io.Timestamp.now(app_runtime.io(), .real).toSeconds();
+    var reg = makeTestRegistry();
+    defer reg.deinit(gpa);
+    try appendTestAccount(gpa, &reg, "user-1::acc-1", "very-long-account-name@example.com", "", .pro);
+    reg.accounts.items[0].last_usage = .{
+        .primary = .{ .used_percent = 100, .window_minutes = 300, .resets_at = now - 60 },
+        .secondary = .{ .used_percent = 30, .window_minutes = 10080, .resets_at = now - 60 },
+        .credits = null,
+        .plan_type = .pro,
+    };
+
+    var saw_full_marker = false;
+    var saw_compact_marker = false;
+    var width: usize = 5;
+    while (width <= 130) : (width += 1) {
+        var buffer: [8192]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        try writeAccountsTableWithUsageOverridesForCols(&writer, &reg, false, null, width);
+        const output = writer.buffered();
+
+        var lines = std.mem.splitScalar(u8, output, '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            try std.testing.expect(line.len <= width);
+            // A bare percent (cell boundary or end of line) must never render:
+            // stale data always carries "(stale)", "!" or a truncation mark.
+            try std.testing.expect(std.mem.find(u8, line, "%  ") == null);
+            try std.testing.expect(!std.mem.endsWith(u8, line, "%"));
+        }
+        if (std.mem.find(u8, output, "(stale)") != null) saw_full_marker = true;
+        if (std.mem.find(u8, output, "%!") != null) saw_compact_marker = true;
+    }
+    try std.testing.expect(saw_full_marker);
+    try std.testing.expect(saw_compact_marker);
 }
 
 test "writeAccountsTable shows right-aligned row numbers for selectable accounts" {

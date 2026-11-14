@@ -136,6 +136,11 @@ Snapshot fields remain present after refresh failure. `updated_at` is the
 stored snapshot update timestamp and may remain unchanged after an equal
 successful response.
 
+`used_percent` is the last-measured point value stored in the snapshot; it is
+not recomputed for display. Once `resets_at` has elapsed the snapshot is
+stale: the CLI's own usage cells mark such rows stale instead of assuming a
+refilled quota, and consumers decide their own display policy.
+
 `usage.refresh` describes only the current invocation:
 
 | Field | Values |
