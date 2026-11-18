@@ -13,6 +13,7 @@ export const rootReadmePath = path.join(repoRoot, "README.md");
 export const rootLicensePath = path.join(repoRoot, "LICENSE");
 export const rootBinPath = path.join(repoRoot, "bin", "codex-auth.js");
 export const zigVersionPath = path.join(repoRoot, "src", "version.zig");
+export const zonManifestPath = path.join(repoRoot, "build.zig.zon");
 
 export const platformPackages = [
   {
@@ -92,6 +93,15 @@ export function readZigVersion() {
   const match = contents.match(/app_version\s*=\s*"([^"]+)"/);
   if (!match) {
     throw new Error(`Unable to parse version from ${zigVersionPath}`);
+  }
+  return match[1];
+}
+
+export function readZonVersion() {
+  const contents = fs.readFileSync(zonManifestPath, "utf8");
+  const match = contents.match(/\.version\s*=\s*"([^"]+)"/);
+  if (!match) {
+    throw new Error(`Unable to parse version from ${zonManifestPath}`);
   }
   return match[1];
 }

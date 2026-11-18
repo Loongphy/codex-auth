@@ -1,6 +1,6 @@
 .{
     .name = .codex_auth,
-    .version = "0.3.0-alpha.2",
+    .version = "0.4.0",
     .fingerprint = 0x5307ec8012c039c4, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.1",
     .dependencies = .{},

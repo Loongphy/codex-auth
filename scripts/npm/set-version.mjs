@@ -5,7 +5,8 @@ import {
   readRootPackage,
   rootPackagePath,
   writeJson,
-  zigVersionPath
+  zigVersionPath,
+  zonManifestPath
 } from "./metadata.mjs";
 
 function fail(message) {
@@ -45,6 +46,18 @@ const updatedZigContents = zigContents.replace(
 );
 if (updatedZigContents !== zigContents) {
   fs.writeFileSync(zigVersionPath, updatedZigContents);
+}
+
+const zonContents = fs.readFileSync(zonManifestPath, "utf8");
+if (!/\.version\s*=\s*"[^"]+"/.test(zonContents)) {
+  fail(`Unable to find .version in ${zonManifestPath}`);
+}
+const updatedZonContents = zonContents.replace(
+  /\.version\s*=\s*"[^"]+"/,
+  `.version = "${version}"`
+);
+if (updatedZonContents !== zonContents) {
+  fs.writeFileSync(zonManifestPath, updatedZonContents);
 }
 
 console.log(`Set version to ${version}`);

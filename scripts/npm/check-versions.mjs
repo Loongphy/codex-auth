@@ -3,6 +3,7 @@ import {
   platformPackages,
   readRootPackage,
   readZigVersion,
+  readZonVersion,
   rootPackageName
 } from "./metadata.mjs";
 
@@ -20,6 +21,11 @@ if (rootPackage.name !== rootPackageName) {
 
 if (rootPackage.version !== zigVersion) {
   fail(`package.json version ${rootPackage.version} does not match src/version.zig ${zigVersion}`);
+}
+
+const zonVersion = readZonVersion();
+if (zonVersion !== rootPackage.version) {
+  fail(`build.zig.zon version ${zonVersion} does not match root version ${rootPackage.version}`);
 }
 
 const optionalDeps = rootPackage.optionalDependencies ?? {};

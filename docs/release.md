@@ -6,6 +6,7 @@ This document describes the repository's CI, preview package publishing, and tag
 
 - The CLI binary version is defined in `src/version.zig`.
 - The root npm package version in `package.json` must match `src/version.zig`.
+- The `build.zig.zon` `.version` field is Zig package metadata unused by the CLI; the version tooling keeps it in sync with `src/version.zig`.
 - Release tags must use the same version with a leading `v`.
   - Example version: `1.2.3-alpha.1`
   - Matching tag: `v1.2.3-alpha.1`
@@ -31,15 +32,15 @@ This document describes the repository's CI, preview package publishing, and tag
 - Create the tag on the latest green `main` commit and push it:
   - `git tag -a v<version> -m "Release <version>"` (the annotation may contain release notes; see Tag Release Workflow)
   - `git push origin v<version>`
-- The tag is the version source of truth. The release workflow runs `scripts/npm/set-version.mjs` inside the CI checkout to stamp `src/version.zig`, `package.json`, and `optionalDependencies` with the tag version before building and publishing. Committed files on `main` are unchanged.
+- The tag is the version source of truth. The release workflow runs `scripts/npm/set-version.mjs` inside the CI checkout to stamp `src/version.zig`, `build.zig.zon`, `package.json`, and `optionalDependencies` with the tag version before building and publishing. Committed files on `main` are unchanged.
 - Stable releases still require the version-bump commit flow below so the tag always matches committed files.
 
 ### Stable releases
 
 3. Update the local version files.
-   - Run `node scripts/npm/set-version.mjs <version>` (without the `v` prefix) to update `src/version.zig`, `package.json`, and every platform package version under `package.json.optionalDependencies`.
+   - Run `node scripts/npm/set-version.mjs <version>` (without the `v` prefix) to update `src/version.zig`, `build.zig.zon`, `package.json`, and every platform package version under `package.json.optionalDependencies`.
 4. Validate the version change before committing.
-   - Keep the version values aligned across `src/version.zig`, `package.json`, and the release tag you intend to create.
+   - Keep the version values aligned across `src/version.zig`, `build.zig.zon`, `package.json`, and the release tag you intend to create.
    - Run `node scripts/npm/check-versions.mjs v<version>`.
    - Run `node scripts/npm/check-release-metadata.mjs`.
    - Run `zig build test`.
@@ -102,7 +103,7 @@ This document describes the repository's CI, preview package publishing, and tag
 - The release workflow validates the code with the same OS matrix used by CI and also builds a native `ReleaseSafe` binary on each matrix host.
 - It then cross-builds release assets for the six supported targets on Ubuntu.
 - Release metadata is checked against `scripts/npm/metadata.mjs` before publishing GitHub release assets or npm packages.
-- For prerelease tags (tag names containing `-`), the workflow stamps the tag version into `src/version.zig` and `package.json` in the CI checkout via `scripts/npm/set-version.mjs`; stable tags must match the committed versions exactly.
+- For prerelease tags (tag names containing `-`), the workflow stamps the tag version into `src/version.zig`, `build.zig.zon`, and `package.json` in the CI checkout via `scripts/npm/set-version.mjs`; stable tags must match the committed versions exactly.
 - Release notes are produced by GitHub's generate-release-notes API: newest entries first, each linked to its pull request and author, with the Full Changelog compare link appended automatically. If the pushed tag is annotated, its message is prepended to the generated notes (separated by `---`).
 - The recommended way to supply hand-written release notes is a local Markdown file passed with `git tag -a v<version> -F <file>`; the gitignored `release-notes/` directory at the repo root is the conventional scratch location (for example `release-notes/v1.2.4.md`). A file keeps Markdown formatting intact and avoids shell quoting and clipboard issues that come with `-m` or pasting from note-taking apps.
 - Boilerplate messages matching `release v<version>` and lightweight tags produce only the generated changelog.
